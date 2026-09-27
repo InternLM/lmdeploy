@@ -13,7 +13,7 @@ from lmdeploy.pytorch.backends.cuda.token_dispatcher import (
     use_deepep,
 )
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
-from lmdeploy.pytorch.backends.moe import FusedMoEBlockedF8Builder, FusedMoEBlockedF8Impl
+from lmdeploy.pytorch.backends.moe import FusedMoEBlockedF8BuildSpec, FusedMoEBlockedF8Impl
 from lmdeploy.pytorch.distributed import get_dist_manager
 from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_masked_post_quant_fwd
 from lmdeploy.pytorch.kernels.cuda.blocked_gemm_fp8 import per_token_group_quant_fp8, quant_fp8
@@ -23,6 +23,7 @@ from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _renormalize
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
+from ..step_metadata import register_piecewise_graph_impl
 from .ep_utils import gather_outputs_by_attn_tp, split_inputs_by_attn_tp
 
 logger = get_logger('lmdeploy')
@@ -240,7 +241,7 @@ class FusedMoELowLatency:
         return self.experts(recv_hidden_states, up_weight, up_scale, down_weight, down_scale, masked_m, expected_m)
 
 
-def build_deepep_moe(
+def _build_deepep_moe(
     low_latency_mode: bool,
     ep_size: int,
     ep_group: dist.ProcessGroup,
@@ -389,6 +390,9 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         # pre-allocate buffer
         self.fusedmoe_build(True)
 
+        self._piecewise_forward: Callable[..., torch.Tensor] | None = None
+        register_piecewise_graph_impl(self)
+
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
         if get_dist_manager().current_context().dist_config.enable_eplb:
@@ -401,6 +405,33 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
             return sliced_phy2log
         else:
             return super().ep_expert_list(world_size=world_size, rank=rank)
+
+    def _forward_moe(self,
+                     hidden_states: torch.Tensor,
+                     topk_weights: torch.Tensor,
+                     topk_ids: torch.LongTensor,
+                     gate_up_weights: torch.Tensor,
+                     gate_up_scale: torch.Tensor,
+                     down_weights: torch.Tensor,
+                     down_scale: torch.Tensor,
+                     gate_up_bias: torch.Tensor = None,
+                     down_bias: torch.Tensor = None,
+                     expert_list: list[int] = None,
+                     act_func: Callable = None,
+                     **kwargs):
+        """forward."""
+        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
+                                                                                    topk_ids)
+
+        topk_weights = self.do_renormalize(topk_weights)
+        step_ctx = get_step_ctx_manager().current_context()
+        low_latency_mode = step_ctx.global_is_decoding() and self.use_deep_gemm
+        moe = self.fusedmoe_build(low_latency_mode)
+        out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
+                                 down_scale, expert_list)
+
+        out_states = gather_outputs_by_attn_tp(out_states, split_size)
+        return out_states
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -416,72 +447,120 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                 act_func: Callable = None,
                 **kwargs):
         """forward."""
-        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
-                                                                                    topk_ids)
+        if self._piecewise_forward is not None:
+            return self._piecewise_forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale,
+                                           down_weights, down_scale, gate_up_bias, down_bias, expert_list, act_func,
+                                           **kwargs)
+        return self._forward_moe(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
+                                 down_scale, gate_up_bias, down_bias, expert_list, act_func, **kwargs)
 
-        topk_weights = self.do_renormalize(topk_weights)
-        step_ctx = get_step_ctx_manager().current_context()
-        low_latency_mode = step_ctx.global_is_decoding() and self.use_deep_gemm
-        moe = self.fusedmoe_build(low_latency_mode)
-        out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
-                                 down_scale, expert_list)
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Return whether this DeepEP FP8 MoE implementation supports PCG."""
+        return True
 
-        out_states = gather_outputs_by_attn_tp(out_states, split_size)
-        return out_states
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Install the DeepEP MoE eager boundary owned by this CUDA op."""
+        if self._piecewise_forward is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            ViewTolerantPaddedAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        @eager_boundary(
+            adapter_factory=ViewTolerantPaddedAdapter,
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager_moe(
+            hidden_states: torch.Tensor,
+            topk_weights: torch.Tensor,
+            topk_ids: torch.LongTensor,
+            gate_up_weights: torch.Tensor,
+            gate_up_scale: torch.Tensor,
+            down_weights: torch.Tensor,
+            down_scale: torch.Tensor,
+            gate_up_bias: torch.Tensor = None,
+            down_bias: torch.Tensor = None,
+            expert_list: list[int] = None,
+            act_func: Callable = None,
+            **kwargs,
+        ):
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            raw_tokens = execution.raw_tokens
+            return self._forward_moe(hidden_states[:raw_tokens], topk_weights[:raw_tokens], topk_ids[:raw_tokens],
+                                     gate_up_weights, gate_up_scale, down_weights, down_scale, gate_up_bias, down_bias,
+                                     expert_list, act_func, **kwargs)
+
+        def piecewise_forward(
+            hidden_states: torch.Tensor,
+            topk_weights: torch.Tensor,
+            topk_ids: torch.LongTensor,
+            gate_up_weights: torch.Tensor,
+            gate_up_scale: torch.Tensor,
+            down_weights: torch.Tensor,
+            down_scale: torch.Tensor,
+            gate_up_bias: torch.Tensor = None,
+            down_bias: torch.Tensor = None,
+            expert_list: list[int] = None,
+            act_func: Callable = None,
+            **kwargs,
+        ):
+            if get_piecewise_graph_execution() is None:
+                return self._forward_moe(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale,
+                                         down_weights, down_scale, gate_up_bias, down_bias, expert_list, act_func,
+                                         **kwargs)
+            return run_eager_moe(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
+                                 down_scale, gate_up_bias, down_bias, expert_list, act_func, **kwargs)
+
+        self._piecewise_forward = piecewise_forward
 
     def do_renormalize(self, topk_weights):
         return _renormalize(topk_weights, self.renormalize)
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
-        deepep_moe = build_deepep_moe(low_latency_mode,
-                                      self.ep_size,
-                                      self.ep_group,
-                                      self.num_experts,
-                                      self.hidden_dim,
-                                      self.block_size,
-                                      self.top_k,
-                                      self.out_dtype,
-                                      fp8_dtype=self.fp8_dtype,
-                                      scale_fmt=self.scale_fmt,
-                                      layer_idx=self.layer_idx,
-                                      num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank,
-                                      chunk_size=16 * 1024)
+        deepep_moe = _build_deepep_moe(low_latency_mode,
+                                       self.ep_size,
+                                       self.ep_group,
+                                       self.num_experts,
+                                       self.hidden_dim,
+                                       self.block_size,
+                                       self.top_k,
+                                       self.out_dtype,
+                                       fp8_dtype=self.fp8_dtype,
+                                       scale_fmt=self.scale_fmt,
+                                       layer_idx=self.layer_idx,
+                                       num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank,
+                                       chunk_size=16 * 1024)
         return deepep_moe
 
 
-class TritonFusedMoEBlockedF8Builder(FusedMoEBlockedF8Builder):
-    """Triton fused moe blocked f8 builder."""
-
-    @staticmethod
-    def build(top_k: int,
-              num_experts: int,
-              hidden_dim: int = 1,
-              renormalize: bool = False,
-              block_size: int = 128,
-              ep_size: int = 1,
-              ep_group: dist.ProcessGroup = None,
-              out_dtype: torch.dtype = torch.float16,
-              fp8_dtype: torch.dtype = torch.float8_e4m3fn,
-              num_max_dispatch_tokens_per_rank: int = 128,
-              layer_idx: int = 0,
-              custom_gateup_act: bool = False):
-        """Build from mlp."""
-        if ep_size > 1:
-            assert custom_gateup_act is False, 'Custom gate up activation is not supported in EP MoE.'
-            return FusedDeepEpMoEBlockedF8Impl(ep_size=ep_size,
-                                               ep_group=ep_group,
-                                               top_k=top_k,
-                                               num_experts=num_experts,
-                                               hidden_dim=hidden_dim,
-                                               renormalize=renormalize,
-                                               block_size=block_size,
-                                               out_dtype=out_dtype,
-                                               fp8_dtype=fp8_dtype,
-                                               num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
-                                               layer_idx=layer_idx)
-        else:
-            return TritonFusedMoEBlockedF8Impl(top_k=top_k,
-                                               num_experts=num_experts,
-                                               renormalize=renormalize,
-                                               block_size=block_size,
-                                               out_dtype=out_dtype)
+def _build_fused_moe_blocked_f8(spec: FusedMoEBlockedF8BuildSpec) -> FusedMoEBlockedF8Impl:
+    """Build a CUDA blocked-FP8 fused MoE implementation."""
+    if spec.ep_size > 1:
+        assert not spec.custom_gateup_act, 'Custom gate up activation is not supported in EP MoE.'
+        impl = FusedDeepEpMoEBlockedF8Impl(
+            ep_size=spec.ep_size,
+            ep_group=spec.ep_group,
+            top_k=spec.top_k,
+            num_experts=spec.num_experts,
+            hidden_dim=spec.hidden_dim,
+            renormalize=spec.renormalize,
+            block_size=spec.block_size,
+            out_dtype=spec.output_dtype,
+            fp8_dtype=spec.fp8_dtype,
+            num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
+            layer_idx=spec.layer_idx,
+        )
+    else:
+        impl = TritonFusedMoEBlockedF8Impl(
+            top_k=spec.top_k,
+            num_experts=spec.num_experts,
+            renormalize=spec.renormalize,
+            block_size=spec.block_size,
+            out_dtype=spec.output_dtype,
+        )
+    impl.set_scale_fmt(spec.scale_fmt)
+    return impl

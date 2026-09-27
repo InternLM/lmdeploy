@@ -3,8 +3,12 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
-from lmdeploy.pytorch.backends import OpType, get_backend
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.cuda.comm.symm_mem_allgather import MultimemAllGatherer
+from lmdeploy.pytorch.backends.embedding import EmbeddingBuildSpec
+from lmdeploy.pytorch.backends.linear import LinearBuildSpec
 from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_tp_world_rank
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 DEFAULT_VOCAB_PADDING_SIZE = 64
@@ -47,6 +51,7 @@ class ParallelEmbedding(nn.Module):
 
         dist_group = get_dist_group(layer_type=layer_type)
         self.tp_group = dist_group.gpu_group
+        self.tp_rank = dist_group.rank
 
         if is_tp and self.tp > 1:
             self.vocab_size_padded = pad_vocab_size(self.vocab_size, self.padding_size)
@@ -63,9 +68,10 @@ class ParallelEmbedding(nn.Module):
         self.register_parameter('weight', self.create_weight(self.vocab_size_padded, hidden_size, weight_dtype, device))
         self.weight.weight_loader = self.weight_loader
 
-        backend = get_backend()
-        builder = backend.get_layer_impl_builder(OpType.Embedding)
-        self.impl = builder.build(self.start_index, self.end_index)
+        self.impl = get_backend().build_op(
+            EmbeddingBuildSpec(self.start_index, self.end_index),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
         self.all_reduce = self.is_tp and self.tp > 1
 
@@ -140,12 +146,30 @@ class ParallelLMHead(ParallelEmbedding):
         else:
             self.register_parameter('bias', None)
 
-        builder = get_backend().get_layer_impl_builder(OpType.Linear)
-        self.impl = builder.build(hidden_size, self.vocab_size_padded, bias, dtype=dtype)
+        self.impl = get_backend().build_op(
+            LinearBuildSpec(in_features=hidden_size,
+                            out_features=self.vocab_size_padded,
+                            bias=bias,
+                            dtype=dtype),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
+
+        self._symm_mem_gatherer = (
+            MultimemAllGatherer(self.tp_group, self.tp_rank,
+                               self.tp * self.vocab_size_padded,
+                               self.weight.device, self.weight.dtype)
+            if self.all_reduce else None)
 
     def tie_weights(self, embedding: ParallelEmbedding):
         """Tie the local LM-head shard to a parallel embedding shard."""
         self.weight = embedding.weight
+
+    def _apply(self, fn, recurse=True):
+        """Notify the provider after coordinated model device/dtype moves."""
+        result = super()._apply(fn, recurse=recurse)
+        if self._symm_mem_gatherer is not None:
+            self._symm_mem_gatherer.reset_for_weight(self.weight)
+        return result
 
     def get_local_logits(self, hidden_states: torch.Tensor):
         """Compute logits for the vocabulary shard owned by this rank."""
@@ -157,6 +181,12 @@ class ParallelLMHead(ParallelEmbedding):
         """All-gather full logits on every TP rank."""
         if not self.all_reduce:
             return local_logits[..., :self.vocab_size]
+
+        if self._symm_mem_gatherer is not None:
+            gathered = self._symm_mem_gatherer(local_logits.reshape(-1, local_logits.shape[-1]))
+            if gathered is not None:
+                output_shape = local_logits.shape[:-1] + (self.tp * local_logits.shape[-1], )
+                return gathered.reshape(output_shape)[..., :self.vocab_size]
 
         input_size = local_logits.size()
         output_size = (input_size[0] * self.tp, ) + input_size[1:]

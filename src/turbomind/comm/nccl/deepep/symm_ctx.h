@@ -56,16 +56,22 @@ public:
         ncclCommProperties props = NCCL_COMM_PROPERTIES_INITIALIZER;
         NCCLCHECK(ncclCommQueryProperties(comm, &props));
         ncclDevCommRequirements_t reqs = NCCL_DEV_COMM_REQUIREMENTS_INITIALIZER;
+        // Rail GIN is only needed for RDMA scale-out signaling; single-node
+        // runs (no scale-out) work without it.
         if (num_ranks > 1) {
-            TM_CHECK(props.railedGinType != NCCL_GIN_TYPE_NONE);
-
-            reqs.ginContextCount      = num_allocated_qps_;
-            reqs.ginExclusiveContexts = true;
-            reqs.ginQueueDepth        = kGinQPDepth;
-            reqs.ginTrafficClass      = GetEnv<COMM_SL_IDX>();
-            // Customized RDMA barrier needs extra signals
-            reqs.ginSignalCount    = num_ranks + 2 * 2;
-            reqs.ginConnectionType = NCCL_GIN_CONNECTION_RAIL;
+            if (props.railedGinType != NCCL_GIN_TYPE_NONE) {
+                reqs.ginContextCount      = num_allocated_qps_;
+                reqs.ginExclusiveContexts = true;
+                reqs.ginQueueDepth        = kGinQPDepth;
+                reqs.ginTrafficClass      = GetEnv<COMM_SL_IDX>();
+                // Customized RDMA barrier needs extra signals
+                reqs.ginSignalCount    = num_ranks + 2 * 2;
+                reqs.ginConnectionType = NCCL_GIN_CONNECTION_RAIL;
+            }
+            else {
+                TM_LOG_WARN("NCCL rail GIN is unavailable; proceeding without GIN contexts. "
+                            "Single-node (no RDMA) runs do not need GIN.");
+            }
         }
 #if NCCL_VERSION_CODE >= NCCL_VERSION(2, 31, 0)
         reqs.useRuntimeVersion = true;

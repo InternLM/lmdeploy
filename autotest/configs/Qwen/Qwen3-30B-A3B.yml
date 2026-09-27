@@ -42,8 +42,6 @@ a100:
     - kvint8
     pytorch:
     - kvint8
-  gen_config:
-    temperature: 0.6
 h:
 - model_type: chat
   engine_config:
@@ -86,8 +84,6 @@ h:
     - kvint8
     pytorch:
     - kvint8
-  gen_config:
-    temperature: 0.6
 ascend:
 - model_type: chat
   engine_config:
@@ -104,5 +100,3 @@ ascend:
   - func
   - longtext_benchmark
   - prefix_cache
-  gen_config:
-    temperature: 0.6

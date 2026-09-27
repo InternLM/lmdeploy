@@ -275,4 +275,4 @@ class DLLMSequenceStrategy(SequenceStrategy):
             msg.update_token_ids(token, dllm_mask=mask, model_meta=model_meta, mode=update_mode)
             if stop:
                 msg.set_stop_pos(stop_pos[idx])
-                msg.state.finish()
+                msg.finish()

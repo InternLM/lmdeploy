@@ -297,7 +297,7 @@ class MemDecodeFusion(nn.Module):
     def _router_config_from_checkpoint(checkpoint_path: Path) -> dict[str, Any]:
         if checkpoint_path.suffix == '.safetensors':
             return {}
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
         if not isinstance(checkpoint, dict):
             return {}
         config = checkpoint.get('router_config', checkpoint.get('config', {}))
@@ -315,7 +315,7 @@ class MemDecodeFusion(nn.Module):
                 raise ValueError('router checkpoint must contain a non-empty state dict.')
             return state_dict
 
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
         if not isinstance(checkpoint, dict):
             raise ValueError('router checkpoint must be a state-dict checkpoint.')
 

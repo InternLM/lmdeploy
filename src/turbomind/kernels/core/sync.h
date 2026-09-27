@@ -4,6 +4,26 @@
 
 namespace turbomind {
 
+__inline__ __device__ void named_barrier_arrive_and_wait(int num_threads, int barrier_id)
+{
+    asm volatile("bar.sync %0, %1;" : : "r"(barrier_id), "r"(num_threads));
+}
+
+__inline__ __device__ void named_barrier_arrive_and_wait_unaligned(int num_threads, int barrier_id)
+{
+    asm volatile("barrier.sync %0, %1;" : : "r"(barrier_id), "r"(num_threads));
+}
+
+__inline__ __device__ void named_barrier_arrive(int num_threads, int barrier_id)
+{
+    asm volatile("bar.arrive %0, %1;" : : "r"(barrier_id), "r"(num_threads));
+}
+
+__inline__ __device__ void named_barrier_arrive_unaligned(int num_threads, int barrier_id)
+{
+    asm volatile("barrier.arrive %0, %1;" : : "r"(barrier_id), "r"(num_threads));
+}
+
 __inline__ __device__ int sem_fetch(int* lock, bool pred)
 {
     int state{};

@@ -7,7 +7,6 @@
 #include <stdexcept>
 
 #include <cuda_runtime.h>
-
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
@@ -25,6 +24,8 @@
 #include "src/turbomind/engine/model_request.h"
 #include "src/turbomind/engine/multimodal_input.h"
 #include "src/turbomind/kernels/copy/copy.h"
+#include "src/turbomind/kernels/gemm/convert.h"
+#include "src/turbomind/kernels/gemm/gemm.h"
 #include "src/turbomind/kernels/norm/norm.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/decoder_layer_weight.h"
@@ -57,6 +58,10 @@ void bind_delta_rule(pybind11::module_& m);
 
 namespace turbomind::python_linear {
 void bind_linear(pybind11::module_& m);
+}
+
+namespace turbomind::python {
+void bind_xgrammar(pybind11::module_& m);
 }
 
 using ft::core::Tensor;
@@ -94,7 +99,7 @@ DLDevice getDLDevice(const Tensor& tensor)
     return device;
 }
 
-DLManagedTensor* TritonTensorToDLManagedTensor(Tensor& tensor)
+DLManagedTensor* ToDLPack(Tensor& tensor)
 {
     DLDevice   device = getDLDevice(tensor);
     DLDataType data_type{0, 0, 1};
@@ -180,18 +185,23 @@ DLManagedTensor* TritonTensorToDLManagedTensor(Tensor& tensor)
 ft::DeviceType getMemoryType(DLDevice device)
 {
     switch (device.device_type) {
+        case DLDeviceType::kDLCPU:
+            return ft::DeviceType::kCPU;
         case DLDeviceType::kDLCUDAHost:
             return ft::DeviceType::kCPUpinned;
         case DLDeviceType::kDLCUDA:
             return ft::DeviceType::kDEVICE;
-        case DLDeviceType::kDLCPU:
         default:
-            return ft::DeviceType::kCPU;
+            throw py::value_error("unsupported DLPack device type");
     }
 }
 
 ft::DataType getDataType(DLDataType data_type)
 {
+    if (data_type.lanes != 1) {
+        throw py::value_error("DLPack vector dtypes are not supported");
+    }
+
     using ft::data_type_v;
     switch (data_type.code) {
         case DLDataTypeCode::kDLUInt:
@@ -205,7 +215,7 @@ ft::DataType getDataType(DLDataType data_type)
                 case 64:
                     return data_type_v<uint64_t>;
                 default:
-                    return data_type_v<void>;
+                    break;
             }
             break;
         case DLDataTypeCode::kDLInt:
@@ -219,7 +229,7 @@ ft::DataType getDataType(DLDataType data_type)
                 case 64:
                     return data_type_v<int64_t>;
                 default:
-                    return data_type_v<void>;
+                    break;
             }
             break;
         case DLDataTypeCode::kDLFloat:
@@ -231,105 +241,69 @@ ft::DataType getDataType(DLDataType data_type)
                 case 64:
                     return data_type_v<double>;
                 default:
-                    return data_type_v<void>;
+                    break;
             }
             break;
         case DLDataTypeCode::kDLBfloat:
-            switch (data_type.bits) {
-                case 16:
-                    return data_type_v<turbomind::bfloat16_t>;
-                default:
-                    return data_type_v<void>;
+            if (data_type.bits == 16) {
+                return data_type_v<turbomind::bfloat16_t>;
             }
             break;
         case DLDataTypeCode::kDLBool:
-            return data_type_v<bool>;
+            if (data_type.bits == 8) {
+                return data_type_v<bool>;
+            }
+            break;
+        case DLDataTypeCode::kDLFloat8_e4m3fn:
+            if (data_type.bits == 8) {
+                return data_type_v<turbomind::fp8_e4m3_t>;
+            }
+            break;
         default:
-            return data_type_v<void>;
+            break;
     }
+    throw py::value_error("unsupported DLPack dtype");
 }
 
-std::shared_ptr<Tensor> DLManagedTensorToTritonTensor(DLManagedTensor* tensor)
+std::shared_ptr<Tensor> FromDLPack(const py::object& object)
 {
-    auto& dl_tensor = tensor->dl_tensor;
-    auto  where     = getMemoryType(dl_tensor.device);
-    auto  dtype     = getDataType(dl_tensor.dtype);
+    py::capsule capsule   = object.attr("__dlpack__")();
+    auto*       managed   = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(capsule.ptr(), kDlTensorCapsuleName));
+    auto&       dl_tensor = managed->dl_tensor;
+
+    const ft::core::Device device{getMemoryType(dl_tensor.device), dl_tensor.device.device_id};
+    const auto             dtype = getDataType(dl_tensor.dtype);
     assert(dl_tensor.ndim > 0);
     std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
-
-    auto*                 data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
-    std::shared_ptr<void> ptr{data, [tensor](void* p) {
-                                  if (tensor->deleter) {
-                                      tensor->deleter(tensor);
-                                  }
-                              }};
-    return std::make_shared<Tensor>(ptr, std::move(shape), dtype, where);
-}
-
-ft::core::ssize_t TorchStorageCapacityElements(py::handle source, ft::DataType dtype, ft::core::ssize_t fallback)
-{
-    if (!source || !py::hasattr(source, "untyped_storage") || !py::hasattr(source, "storage_offset")) {
-        return fallback;
-    }
-
-    try {
-        const auto elem_bytes = ft::byte_size(dtype);
-        if (elem_bytes <= 0) {
-            return fallback;
+    for (const auto extent : shape) {
+        if (extent <= 0) {
+            throw py::value_error("DLPack tensor dimensions must be positive");
         }
-        auto storage       = source.attr("untyped_storage")();
-        auto storage_bytes = py::cast<ft::core::ssize_t>(storage.attr("nbytes")());
-        auto offset        = py::cast<ft::core::ssize_t>(source.attr("storage_offset")());
-        if (storage_bytes < 0 || offset < 0) {
-            return fallback;
-        }
-        const auto offset_bytes = offset * elem_bytes;
-        if (offset_bytes < 0 || offset_bytes > storage_bytes) {
-            return fallback;
-        }
-        const auto capacity = (storage_bytes - offset_bytes) / elem_bytes;
-        return capacity > fallback ? capacity : fallback;
     }
-    catch (py::error_already_set& e) {
-        e.restore();
-        PyErr_Clear();
-        return fallback;
-    }
-}
-
-std::shared_ptr<Tensor> DLManagedTensorToTritonTensorWithStrides(DLManagedTensor* tensor, py::handle source = {})
-{
-    auto& dl_tensor = tensor->dl_tensor;
-    auto  where     = getMemoryType(dl_tensor.device);
-    auto  dtype     = getDataType(dl_tensor.dtype);
-    assert(dl_tensor.ndim > 0);
-    std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
-
-    // Compute row-major strides if DLPack strides are NULL (contiguous tensor)
-    std::vector<ft::core::ssize_t> strides;
+    std::vector<ft::core::ssize_t> stride;
     if (dl_tensor.strides) {
-        strides.assign(dl_tensor.strides, dl_tensor.strides + dl_tensor.ndim);
+        stride.assign(dl_tensor.strides, dl_tensor.strides + dl_tensor.ndim);
     }
     else {
-        strides.resize(dl_tensor.ndim, 1);
-        for (int i = dl_tensor.ndim - 2; i >= 0; --i) {
-            strides[i] = strides[i + 1] * shape[i + 1];
+        stride.resize(dl_tensor.ndim);
+        ft::core::ssize_t value = 1;
+        for (int i = dl_tensor.ndim - 1; i >= 0; --i) {
+            stride[i] = value;
+            value *= shape[i];
         }
     }
 
-    ft::core::Layout layout(std::move(shape), std::move(strides));
+    ft::core::Layout layout{std::move(shape), std::move(stride)};
+    auto*            data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
 
-    auto*                 data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
-    std::shared_ptr<void> ptr{data, [tensor](void* p) {
-                                  if (tensor->deleter) {
-                                      tensor->deleter(tensor);
-                                  }
-                              }};
+    capsule.set_name("used_dltensor");
+    std::shared_ptr<void> owner{data, [managed](void*) {
+                                    if (managed->deleter) {
+                                        managed->deleter(managed);
+                                    }
+                                }};
 
-    const auto capacity =
-        layout.is_contiguous() ? layout.cosize() : TorchStorageCapacityElements(source, dtype, layout.cosize());
-    auto buffer = ft::core::Buffer{ptr, capacity, dtype, where};
-    return std::make_shared<Tensor>(std::move(buffer), std::move(layout), Tensor::PreserveBufferCapacity{});
+    return std::make_shared<Tensor>(std::move(owner), std::move(layout), dtype, device);
 }
 
 static void safe_memcpy(void* dst, const void* src, size_t size)
@@ -422,6 +396,7 @@ void bind_moe_gate_v2(pybind11::module_& m);
 
 PYBIND11_MODULE(_turbomind, m)
 {
+    turbomind::python::bind_xgrammar(m);
     py::module_ multimodal = m.def_submodule("multimodal");
 
     using MMInput        = ft::multimodal::Input;
@@ -598,7 +573,8 @@ PYBIND11_MODULE(_turbomind, m)
             .value("TYPE_BF16", kBfloat16)
             .value("TYPE_FP8_E4M3", kFloat8_e4m3)
             .value("TYPE_FP4_E2M1", kFloat4_e2m1)
-            .value("TYPE_UINT4", kUint4);
+            .value("TYPE_UINT4", kUint4)
+            .value("TYPE_GENERIC_FLOAT", kGenericFloat);
 
         // memory type
         py::enum_<ft::DeviceType>(m, "MemoryType")
@@ -616,23 +592,21 @@ PYBIND11_MODULE(_turbomind, m)
     // DataFormat descriptors
     py::class_<turbomind::QuantParamDesc>(m, "QuantParamDesc")
         .def_readwrite("dtype", &turbomind::QuantParamDesc::dtype)
-        .def_readwrite("transposed", &turbomind::QuantParamDesc::transposed)
         .def("present", &turbomind::QuantParamDesc::present);
 
     py::class_<turbomind::DataFormat>(m, "DataFormat")
+        .def(py::init<turbomind::DataType>(), py::arg("dtype"))
+        .def(py::init<turbomind::DataType, std::vector<int>, turbomind::DataType, turbomind::DataType>(),
+             py::arg("dtype"),
+             py::arg("block_sizes"),
+             py::arg("scales_dtype") = turbomind::kNull,
+             py::arg("zeros_dtype")  = turbomind::kNull)
         .def_readwrite("dtype", &turbomind::DataFormat::dtype)
         .def_readwrite("block_sizes", &turbomind::DataFormat::block_sizes)
         .def_readwrite("scales", &turbomind::DataFormat::scales)
         .def_readwrite("zeros", &turbomind::DataFormat::zeros)
         .def("is_quantized", &turbomind::DataFormat::is_quantized)
         .def("rank", &turbomind::DataFormat::rank);
-
-    m.def("ResolveLinearWeightFormat",
-          &turbomind::ResolveLinearWeightFormat,
-          py::arg("data_type"),
-          py::arg("weight_dtype"),
-          py::arg("block_in"),
-          py::arg("block_out"));
 
     // --- Config struct bindings ---
     py::class_<turbomind::core::ModuleConfig>(m, "ModuleConfig")
@@ -667,27 +641,33 @@ PYBIND11_MODULE(_turbomind, m)
         .def("__bool__", [](const Tensor& t) { return t.byte_size() > 0; })
         .def(
             "copy_from",
-            [](Tensor& self, py::object obj) {
-                py::capsule      cap = obj.attr("__dlpack__")();
-                DLManagedTensor* dlmt =
-                    static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
-                auto src = DLManagedTensorToTritonTensor(dlmt);
-                // take ownership of capsule's payload
-                cap.set_name("used_dltensor");
-
+            [](Tensor& self, const py::object& object) {
+                auto src = FromDLPack(object);
                 TM_CHECK_EQ(self.byte_size(), src->byte_size()) << self << " " << *src;
                 safe_memcpy(self.raw_data(), src->raw_data(), self.byte_size());
             },
             "tensor"_a)
         .def(
+            "copy_from",
+            [](Tensor& self, const py::object& object, std::uintptr_t stream_ptr) {
+                auto src = FromDLPack(object);
+                TM_CUDA_CHECK(cudaMemcpyAsync(self.raw_data(),
+                                              src->raw_data(),
+                                              self.byte_size(),
+                                              cudaMemcpyDefault,
+                                              reinterpret_cast<cudaStream_t>(stream_ptr)));
+            },
+            "tensor"_a,
+            "stream_ptr"_a)
+        .def(
             "__dlpack__",
             [](Tensor& self, long stream) {
-                DLManagedTensor* dlmt = TritonTensorToDLManagedTensor(self);
-                return py::capsule(dlmt, kDlTensorCapsuleName, [](PyObject* obj) {
-                    DLManagedTensor* dlmt =
-                        static_cast<DLManagedTensor*>(PyCapsule_GetPointer(obj, kDlTensorCapsuleName));
-                    if (dlmt) {
-                        dlmt->deleter(dlmt);
+                DLManagedTensor* managed = ToDLPack(self);
+                return py::capsule(managed, kDlTensorCapsuleName, [](PyObject* object) {
+                    DLManagedTensor* managed =
+                        static_cast<DLManagedTensor*>(PyCapsule_GetPointer(object, kDlTensorCapsuleName));
+                    if (managed) {
+                        managed->deleter(managed);
                     }
                     else {
                         // The tensor has been deleted. Clear any error from
@@ -715,37 +695,7 @@ PYBIND11_MODULE(_turbomind, m)
             },
             "dtype"_a,
             "shape"_a);
-    m.def(
-        "from_dlpack",
-        [](py::object obj, py::object stream) {
-            py::capsule cap;
-            if (stream.is_none()) {
-                cap = obj.attr("__dlpack__")();
-            }
-            else {
-                cap = obj.attr("__dlpack__")("stream"_a = stream);
-            }
-            DLManagedTensor* dlmt =
-                static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
-            auto ret = DLManagedTensorToTritonTensor(dlmt);
-            // take ownership of capsule's payload
-            cap.set_name("used_dltensor");
-            return ret;
-        },
-        "dl_managed_tensor"_a,
-        "stream"_a = py::none());
-    m.def(
-        "from_dlpack_with_strides",
-        [](py::object obj) {
-            py::capsule      cap = obj.attr("__dlpack__")();
-            DLManagedTensor* dlmt =
-                static_cast<DLManagedTensor*>(PyCapsule_GetPointer(cap.ptr(), kDlTensorCapsuleName));
-            auto ret = DLManagedTensorToTritonTensorWithStrides(dlmt, obj);
-            // take ownership of capsule's payload
-            cap.set_name("used_dltensor");
-            return ret;
-        },
-        "dl_managed_tensor"_a);
+    m.def("from_dlpack", &FromDLPack, "tensor"_a);
     m.def(
         "generic_copy_on_stream",
         [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst, std::uintptr_t stream_ptr) {
@@ -862,20 +812,13 @@ PYBIND11_MODULE(_turbomind, m)
 
     m.def(
         "create_device_context",
-        [](py::object stream_ptr) {
-            const bool use_external_stream = !stream_ptr.is_none();
-            auto       stream =
-                use_external_stream ?
-                          ft::core::Stream::borrow(reinterpret_cast<cudaStream_t>(py::cast<std::uintptr_t>(stream_ptr))) :
-                          ft::core::Stream::create();
+        [](std::uintptr_t stream_ptr) {
+            auto stream = ft::core::Stream::borrow(reinterpret_cast<cudaStream_t>(stream_ptr));
             return std::make_unique<PyContextGuard>(
-                stream, ft::core::Allocator{ft::kCPU}, ft::core::Allocator{stream, use_external_stream});
+                stream, ft::core::Allocator{ft::kCPU}, ft::core::Allocator{stream, true});
         },
-        "stream_ptr"_a = py::none(),
-        "Create a ContextGuard with stream + host + device allocators. When "
-        "stream_ptr is provided, borrow that externally owned CUDA stream.\n\n"
-        "Objects that use core::Context::stream() in their constructor or destructor "
-        "(notably LlamaLinear) must be destroyed before this context exits.");
+        "stream_ptr"_a,
+        "Create a ContextGuard over a caller-owned CUDA stream and the device default memory pool. The caller retains stream ownership.");
 
     // Param — lightweight handle to a Module parameter slot
     py::class_<ft::core::Param>(m, "Param")
@@ -1002,6 +945,7 @@ PYBIND11_MODULE(_turbomind, m)
                 return std::make_unique<PyContextGuard>(std::move(stream), std::move(alloc));
             },
             "index"_a)
+        .def("gemm", &TurboMind::gemm, py::return_value_policy::reference, "index"_a)
         .def(
             "process_weight",
             [](TurboMind* model, int index) { model->ProcessWeights(index); },

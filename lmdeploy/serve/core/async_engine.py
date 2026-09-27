@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 import torch
 
+from lmdeploy._guided_decoding import ensure_response_format_compilable
 from lmdeploy.archs import get_model_arch
 from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (
@@ -182,7 +183,6 @@ class AsyncEngine:
         # build stat loggers
         self._build_stat_loggers()
         self.epoch = 0
-        self._health_probe_task: asyncio.Task | None = None
         self._last_scheduler_tick: int | None = None
         self._last_scheduler_tick_time: float = time.monotonic()
         self._dispatched_start_time: float | None = None
@@ -204,11 +204,14 @@ class AsyncEngine:
                          trust_remote_code: bool = False,
                          **kwargs):
         """Inner build method for turbomind backend."""
-        from lmdeploy import turbomind as tm
-        return tm.TurboMind.from_pretrained(model_path,
-                                            engine_config=backend_config,
-                                            trust_remote_code=trust_remote_code,
-                                            **kwargs)
+        from lmdeploy import turbomind
+        if not turbomind.is_available():
+            raise RuntimeError(
+                'TurboMind was requested but its native module is unavailable.'
+            ) from turbomind._import_error
+        return turbomind.TurboMind.from_pretrained(
+            model_path, engine_config=backend_config, trust_remote_code=trust_remote_code, **kwargs
+        )
 
     def _build_pytorch(self,
                        model_path: str,
@@ -297,44 +300,15 @@ class AsyncEngine:
     def _make_health_result(status: str, message: str) -> dict:
         return dict(status=status, message=message)
 
-    async def health_probe(self, timeout: float, scheduler_stall_timeout: float) -> dict:
-        """Probe backend health with a bounded, non-overlapping call."""
+    async def health_probe(self, scheduler_stall_timeout: float) -> dict:
+        """Probe backend health and validate scheduler progress."""
         if self.is_sleeping:
             return self._make_health_result(
                 status='sleeping',
                 message='Engine is sleeping.',
             )
 
-        if self._health_probe_task is not None:
-            if not self._health_probe_task.done():
-                return self._make_health_result(
-                    status='pending',
-                    message='Previous backend health probe is still pending.',
-                )
-            try:
-                self._health_probe_task.result()
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-            self._health_probe_task = None
-
-        self._health_probe_task = asyncio.create_task(self.engine.get_health_status(), name='EngineHealthProbe')
-        try:
-            backend_status = await asyncio.wait_for(asyncio.shield(self._health_probe_task), timeout=timeout)
-        except asyncio.TimeoutError:
-            return self._make_health_result(
-                status='unhealthy',
-                message=f'Backend health probe timed out after {timeout:.1f}s.',
-            )
-        except Exception as e:
-            self._health_probe_task = None
-            return self._make_health_result(
-                status='unhealthy',
-                message=f'Backend health probe failed: {e}',
-            )
-
-        self._health_probe_task = None
+        backend_status = await self.engine.get_health_status()
         if not backend_status['alive']:
             return self._make_health_result(
                 status='unhealthy',
@@ -415,6 +389,16 @@ class AsyncEngine:
         if self.backend == 'turbomind' and 'kv_cache' in tags:
             self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)
         self.sleeping_tags = self.sleeping_tags - set(tags)
+        self.is_sleeping = bool(self.sleeping_tags)
+
+    def complete_weights_update(self):
+        """Record that externally supplied weights are ready.
+
+        This does not wake the KV cache or enable inference. The caller must
+        explicitly wake ``kv_cache`` after the weight update succeeds.
+        """
+        self.engine.complete_weights_update()
+        self.sleeping_tags.discard('weights')
         self.is_sleeping = bool(self.sleeping_tags)
 
     def _determine_gen_config(self, input_ids, gen_config: GenerationConfig | None = None) -> GenerationConfig:
@@ -516,6 +500,8 @@ class AsyncEngine:
             if (messages is not None) ^ (input_ids is None):
                 raise RequestError(ErrorCode.INVALID_REQUEST,
                                    'You must specify exactly one of messages or input_ids.')
+            if gen_config is not None and gen_config.response_format is not None:
+                ensure_response_format_compilable(gen_config.response_format)
             if isinstance(session_id, Session):
                 session = session_id
             elif isinstance(session_id, int):

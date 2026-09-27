@@ -530,6 +530,31 @@ class BlockTrie:
 
         self._match_block_prefix(seq)
 
+    @staticmethod
+    def finalize_match(seq: SchedulerSequence) -> None:
+        """Publish accepted current-prompt cache reuse for a sequence.
+
+        Local trie matches and completed external loads share this final accounting step. Recompute-preemption matches
+        remain usable internally but deliberately suppress public cached-token statistics.
+        """
+        prefix_cache = seq.prefix_cache
+        if prefix_cache.suppress_match_stats:
+            seq.cached_tokens = 0
+            prefix_cache.suppress_match_stats = False
+            return
+
+        match_start = prefix_cache.match_start_step
+        if match_start < 0:
+            seq.cached_tokens = 0
+            return
+        cached_end = seq.num_history_ids
+        prompt_start = seq.input_start_pos
+        prompt_end = seq.input_end_pos
+        seq.cached_tokens = max(
+            0,
+            min(cached_end, prompt_end) - max(match_start, prompt_start),
+        )
+
     def _ensure_attached_allocation_cursor(self, seq: SchedulerSequence):
         """Return an attached cursor, resetting a stale sequence cursor."""
         node = seq.prefix_cache.trie_cursor

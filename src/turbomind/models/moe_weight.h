@@ -1,11 +1,15 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 #pragma once
 
+#include <vector>
+
 #include "src/turbomind/core/core.h"
 #include "src/turbomind/core/module.h"
 #include "src/turbomind/models/ffn_weight.h"
 
 namespace turbomind {
+
+void LinkLinearExperts(const std::vector<LinearWeight*>& experts, LinearWeight& destination);
 
 }  // namespace turbomind
 
@@ -70,6 +74,7 @@ public:
 #define MOE_WEIGHT_CHILDREN(X)                                                                                         \
     X(LinearWeight, gate)                                                                                              \
     X(LinearWeight, shared_gate)                                                                                       \
+    X(FfnWeight, shared)                                                                                               \
     X(core::ModuleList, experts)
 
 #define MOE_WEIGHT_PARAMS(X) X(score_correction_bias)

@@ -24,16 +24,11 @@ public:
         Tensor           output;
         std::vector<int> local_token_num;
         const MoeWeight* weights;
-        float            scale;
         int              layer_id;
         const bool*      token_mask;  // [tokens]; invalid tokens route nowhere
     };
 
-    void Forward(ForwardParam& p);
-
-    void Combine(ForwardParam& p);
-
-    Tensor GetShardFfnInput(Tensor& global_hidden_states, const std::vector<int>& local_token_nums);
+    void Forward(ForwardParam p);
 
 private:
     std::unique_ptr<MoeFfnLayerImpl> impl_;

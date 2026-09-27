@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from lmdeploy.pytorch.kv_connector.base import (
     KVConnectorOutput,
     KVConnectorResult,
+    KVConnectorStepInput,
     KVLoadResult,
     RequestId,
 )
@@ -25,7 +26,6 @@ from .lookup import LookupKeyClient
 if TYPE_CHECKING:
     from lmdeploy.pytorch.config import CacheConfig
     from lmdeploy.pytorch.messages import SchedulerSequence
-    from lmdeploy.pytorch.paging.scheduler import SchedulerOutput
 
 
 @dataclass
@@ -40,7 +40,8 @@ class _RequestHashTracker:
 class _LookupPlan:
     """Positive lookup snapshot waiting for paging block allocation.
 
-    The remote boundary and its block hashes must come from the same lookup.
+    The remote boundary has already excluded any recompute overlap. It and
+    its block hashes must come from the same lookup.
     ``update_state_after_alloc`` consumes this snapshot exactly once after the
     paging scheduler has assigned destination GPU blocks.
     """
@@ -111,11 +112,13 @@ class MooncakeStoreScheduler:
             return 0, False
 
         block_size = self._cache_config.block_size
-        token_len = request.get_prefix_cache_max_match_step()
+        token_len = request.clamp_prefix_cache_match_step(
+            request.get_prefix_cache_max_candidate_step())
         # Mooncake stores complete KV blocks, so do not query the incomplete
         # block at the end of the request.
         token_len = token_len // block_size * block_size
-        if token_len < block_size or num_computed_tokens >= token_len:
+        recompute_tokens = max(0, request.prefix_cache.recompute_overlap.recompute_blocks) * block_size
+        if token_len < block_size or num_computed_tokens >= token_len - recompute_tokens:
             return 0, False
 
         req_id = int(request.seq_id)
@@ -148,6 +151,13 @@ class MooncakeStoreScheduler:
         # completed lookup with no remotely reusable suffix.
         if remote_token_len is None:
             return None, False
+
+        # MTP KV at position N-1 depends on token N, outside that block's
+        # target-token hash. Reserve the last actually matched block for
+        # recomputation, even when the remote hit is shorter than the prompt.
+        # Querying the untrimmed candidate above avoids dropping two blocks
+        # on a full hit. Cached plans retain this already-safe boundary.
+        remote_token_len = max(0, int(remote_token_len) - recompute_tokens)
 
         # Keep the exact token delta for scheduler accounting. If the local
         # position is inside a block, paging expands the load start down to the
@@ -229,16 +239,16 @@ class MooncakeStoreScheduler:
 
     def _build_save_requests(
         self,
-        scheduler_output: SchedulerOutput,
+        step_input: KVConnectorStepInput,
     ) -> tuple[MooncakeStoreSaveRequest, ...]:
         """Build newly completed full-block suffixes for prefill work."""
-        token_lens = scheduler_output.connector_token_lens
+        token_lens = step_input.connector_token_lens
         if not self._kv_transfer_config.is_kv_producer or not token_lens:
             return ()
 
-        running = scheduler_output.running
-        block_ids = scheduler_output.connector_block_ids
-        logical_block_ids = scheduler_output.connector_logical_block_ids
+        running = step_input.running
+        block_ids = step_input.connector_block_ids
+        logical_block_ids = step_input.connector_logical_block_ids
         if not (len(running) == len(token_lens) == len(block_ids) == len(logical_block_ids)):
             raise ValueError('connector save fields must contain one value per running request')
 
@@ -283,10 +293,10 @@ class MooncakeStoreScheduler:
 
     def build_connector_meta(
         self,
-        scheduler_output: SchedulerOutput,
+        step_input: KVConnectorStepInput,
     ) -> MooncakeStoreConnectorMetadata | None:
         """Dispatch new work and keep emitting polling steps while I/O runs."""
-        save_requests = self._build_save_requests(scheduler_output)
+        save_requests = self._build_save_requests(step_input)
         if (not save_requests and not self._pending_loads
                 and not self._inflight_loads and not self._inflight_save_ids):
             return None

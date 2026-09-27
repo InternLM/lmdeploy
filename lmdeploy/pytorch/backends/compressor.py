@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from .base import BuildSpec
+
 if TYPE_CHECKING:
     from ..engine.cache_engine.schema import BlockCacheGeometry, BlockCacheRequest
 
@@ -21,7 +23,7 @@ class V4CompressorMetadata:
     max_q_seqlen: int
 
 
-class BaseV4Compressor(ABC):
+class V4CompressorImpl(ABC):
 
     @abstractmethod
     def get_block_cache_requests(self, geometry: 'BlockCacheGeometry') -> tuple['BlockCacheRequest', ...]:
@@ -55,12 +57,11 @@ class BaseV4Compressor(ABC):
         raise NotImplementedError
 
 
-class BaseV4CompressorBuilder:
+@dataclass(frozen=True)
+class V4CompressorBuildSpec(BuildSpec[V4CompressorImpl]):
+    """Immutable requirements for constructing a DeepSeek-V4 compressor."""
 
-    @staticmethod
-    @abstractmethod
-    def build(compress_ratio: int,
-              overlap: bool,
-              head_dim: int,
-              is_indexer: bool = False) -> BaseV4Compressor:
-        raise NotImplementedError
+    compress_ratio: int
+    overlap: bool
+    head_dim: int
+    is_indexer: bool = False

@@ -152,6 +152,23 @@ class GenerationConfig:
                     "regex_schema": "call me [A-Za-z]{1,10}"
                 }
 
+            or, an XGrammar structural tag:
+
+            .. code-block:: json
+
+                {
+                    "type": "structural_tag",
+                    "format": {
+                        "type": "tag",
+                        "begin": "<answer>",
+                        "content": {
+                            "type": "regex",
+                            "pattern": "[0-9]{1,3}"
+                        },
+                        "end": "</answer>"
+                    }
+                }
+
         logits_processors: Custom logit processors.
         repetition_ngram_size: The size of n-grams to consider for repetition early stop.
             Must be non-negative; values below 0 are treated as 0.
@@ -229,8 +246,7 @@ class GenerationConfig:
         if tokenizer_eos_token_id is not None:
             stop_token_ids.add(tokenizer_eos_token_id)
 
-        # add eos_token_id from model's generation_config.json file if there
-        # is any.
+        # add eos_token_id from the model's generation config, if any.
         eos_token_id = generation_config.get('eos_token_id')
         if eos_token_id is not None:
             if isinstance(eos_token_id, int):
@@ -266,6 +282,9 @@ class TurbomindEngineConfig:
             one of the following values, ['auto', 'float16', 'bfloat16']
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
+        gemm_input_dtype: preferred GEMM input dtype. It can be None,
+            'float16', 'bfloat16', or 'float8_e4m3'. This reorders eligible
+            kernel families without changing the model dtype contract.
         model_format: the layout of the deployed model. It can be one
             of the following values [hf, awq, gptq, compressed-tensors,
             fp8, mxfp4]. `hf` means a Hugging Face model (.bin,
@@ -357,6 +376,7 @@ class TurbomindEngineConfig:
     """
 
     dtype: str = 'auto'
+    gemm_input_dtype: str | None = None
     model_format: str | None = None
     tp: int = 1
     dp: int = 1
@@ -403,6 +423,7 @@ class TurbomindEngineConfig:
     def __post_init__(self):
         """Check input validation."""
         assert self.dtype in ['auto', 'float16', 'bfloat16']
+        assert self.gemm_input_dtype in (None, 'float16', 'bfloat16', 'float8_e4m3')
         assert self.tp >= 1, 'tp must be a positive integer'
         assert self.ep >= 1, 'ep must be a positive integer'
         assert self.cache_max_entry_count > 0, 'invalid cache_max_entry_count'
@@ -459,6 +480,9 @@ class PytorchEngineConfig:
             would be allocate according to current environment.
         adapters: The path configs to lora adapters.
         max_prefill_token_num: tokens per iteration.
+        piecewise_cudagraph_max_tokens: Enable piecewise CUDA graph and set its
+            maximum captured prefill token bucket. If not specified, piecewise
+            CUDA graph is disabled.
         cudagraph_capture_batch_sizes: Batch sizes to capture CUDA graphs for.
             If not specified, the engine will infer them from max_batch_size.
             max_batch_size is always captured.
@@ -571,6 +595,7 @@ class PytorchEngineConfig:
     role: EngineRole = EngineRole.Hybrid
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
+    piecewise_cudagraph_max_tokens: int | None = None
 
     def __post_init__(self):
         """Check input validation."""
@@ -585,6 +610,8 @@ class PytorchEngineConfig:
         assert self.num_cpu_blocks >= 0, 'invalid num_cpu_blocks'
         assert self.max_prefill_token_num >= 0, \
             'invalid max_prefill_token_num'
+        assert (self.piecewise_cudagraph_max_tokens is None
+                or self.piecewise_cudagraph_max_tokens > 0), 'invalid piecewise_cudagraph_max_tokens'
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
@@ -838,7 +865,22 @@ class SpeculativeConfig:
         method: the speculative decoding method.
         model: the path of speculative model.
         num_speculative_tokens: number of generated token of draft model per step
+        dflash_block_size: DFlash query/verify window length. When set, this
+            DFlash-specific value overrides ``num_speculative_tokens`` using
+            ``num_speculative_tokens = dflash_block_size - 1``.
     """
     method: str
     model: str = ''
     num_speculative_tokens: int = 1
+    dflash_block_size: int | None = None
+
+    def __post_init__(self):
+        """Resolve the DFlash block-size override."""
+        if self.dflash_block_size is not None:
+            if self.method != 'dflash':
+                raise ValueError('dflash_block_size is supported only when method="dflash".')
+            if self.dflash_block_size < 2:
+                raise ValueError('dflash_block_size must be an integer greater than or equal to 2.')
+            # DFlash's complete query contains the current/next target token in
+            # slot zero followed by the newly proposed draft tokens.
+            self.num_speculative_tokens = self.dflash_block_size - 1

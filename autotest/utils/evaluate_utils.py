@@ -90,6 +90,8 @@ def _is_base_eval_config(eval_config_name: str) -> bool:
 def _should_skip_num_workers_override(eval_config_name: str, case_name: str) -> bool:
     if eval_config_name in ('longtext-256k', 'longtext-512k'):
         return True
+    if _is_base_eval_config(eval_config_name):
+        return True
     if _is_fp8_case(case_name):
         return True
     return False

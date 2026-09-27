@@ -478,6 +478,24 @@ ASYNC_REQUEST_FUNCS = {
     'trt': async_request_trt_llm,
     'gserver': async_request_gserver,
 }
+CHAT_COMPLETION_BACKENDS = {'sglang-oai-chat', 'vllm-chat', 'lmdeploy-chat'}
+
+
+def count_prompt_tokens(prompt: str,
+                        tokenizer: PreTrainedTokenizerBase,
+                        backend: str,
+                        chat_template_kwargs: dict[str, Any] | None = None) -> int:
+    """Count prompt tokens in the same format sent to the selected backend."""
+    if backend in CHAT_COMPLETION_BACKENDS:
+        prompt_token_ids = tokenizer.apply_chat_template(
+            [{'role': 'user', 'content': prompt}],
+            tokenize=True,
+            add_generation_prompt=True,
+            **(chat_template_kwargs or {}),
+        )
+    else:
+        prompt_token_ids = tokenizer.encode(prompt)
+    return len(prompt_token_ids)
 
 
 @dataclass
@@ -564,7 +582,9 @@ class DatasetRow:
 def sample_sharegpt_requests(dataset_path: str,
                              num_requests: int,
                              tokenizer: PreTrainedTokenizerBase,
-                             fixed_output_len: int | None = None) -> list[DatasetRow]:
+                             fixed_output_len: int | None = None,
+                             backend: str = 'lmdeploy',
+                             chat_template_kwargs: dict[str, Any] | None = None) -> list[DatasetRow]:
     if fixed_output_len is not None and fixed_output_len < 4:
         raise ValueError('output_len too small')
 
@@ -591,10 +611,9 @@ def sample_sharegpt_requests(dataset_path: str,
 
         # Tokenize the prompts and completions.
         prompt = dataset[i][0]
-        prompt_token_ids = tokenizer.encode(prompt)
         completion = dataset[i][1]
         completion_token_ids = tokenizer.encode(completion)
-        prompt_len = len(prompt_token_ids)
+        prompt_len = count_prompt_tokens(prompt, tokenizer, backend, chat_template_kwargs)
         output_len = (len(completion_token_ids) if fixed_output_len is None else fixed_output_len)
         if prompt_len < 4 or output_len < 4:
             # Prune too short sequences.
@@ -1270,11 +1289,16 @@ def run_benchmark(args_: argparse.Namespace):
 
     if args.dataset_name == 'sharegpt':
         assert args.random_input_len is None and args.random_output_len is None
+        chat_template_kwargs = extra_request_body.get('chat_template_kwargs')
+        if not isinstance(chat_template_kwargs, dict):
+            chat_template_kwargs = None
         input_requests = sample_sharegpt_requests(
             dataset_path=args.dataset_path,
             num_requests=args.num_prompts,
             tokenizer=tokenizer,
             fixed_output_len=args.sharegpt_output_len,
+            backend=backend,
+            chat_template_kwargs=chat_template_kwargs,
         )
     elif args.dataset_name == 'random':
         assert args.random_input_len is not None and \

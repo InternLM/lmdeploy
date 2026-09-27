@@ -357,8 +357,6 @@ class StepContext:
     # mrope
     mrope_position_ids: torch.Tensor | None = None
 
-    _outputs: dict = field(default_factory=dict)
-
     # chunk with multimodal
     is_chunk_multimodal: bool = False
     is_dummy: bool = False
@@ -513,10 +511,19 @@ class StepContext:
         return attention_mask, position_ids
 
 
+@dataclass(frozen=True)
+class SpecModelBuildContext:
+    """Speculative-decoding metadata needed while building models."""
+
+    target_aux_hidden_state_layers: tuple[int, ...] = ()
+    speculative_mask_token_id: int | None = None
+
+
 @dataclass
 class BuildModelContext:
     """Context for building model."""
     language_model_only: bool = False
+    enable_deterministic: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None
     enable_return_routed_experts: bool = False
@@ -525,6 +532,7 @@ class BuildModelContext:
     tie_word_embeddings: bool = False
     num_spec_tokens: int = 0
     max_batch_size: int = 0
+    spec_model_ctx: SpecModelBuildContext = field(default_factory=SpecModelBuildContext)
 
     @property
     def deep_ep_max_tokens_per_rank(self) -> int:

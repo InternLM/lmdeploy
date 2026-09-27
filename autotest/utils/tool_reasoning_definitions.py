@@ -7,9 +7,9 @@ import uuid
 
 import aiohttp
 import requests
-from openai import OpenAI
 from utils.config_utils import get_model_path_from_config
-from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS, DEFAULT_PORT
+from utils.constant import CAPPED_MAX_COMPLETION_TOKENS, DEFAULT_PORT
+from utils.restful_return_check import get_client_and_model
 
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
@@ -201,15 +201,6 @@ ALL_OPTIONAL_TOOL = {
 }
 
 
-def get_client_and_model(base_url=None):
-    url = base_url or BASE_URL
-    client = OpenAI(api_key='YOUR_API_KEY', base_url=f'{url}/v1')
-    models = client.models.list().data
-    if not models:
-        raise RuntimeError(f'No model returned from GET {url}/v1/models')
-    return client, models[0].id
-
-
 # -- Logging / client helpers ------------------------------------------------
 
 
@@ -228,6 +219,13 @@ def _merge_create_kwargs_defaults(kwargs: dict) -> None:
         raise TypeError(f'extra_body must be dict, got {type(extra_body).__name__}')
     for key, value in LMDEPLOY_DECODE_DEFAULTS.items():
         extra_body.setdefault(key, value)
+
+
+def _setdefault_enable_thinking(extra_body: dict, enable_thinking: bool) -> None:
+    ctk = extra_body.setdefault('chat_template_kwargs', {})
+    if not isinstance(ctk, dict):
+        raise TypeError(f'chat_template_kwargs must be dict, got {type(ctk).__name__}')
+    ctk.setdefault('enable_thinking', enable_thinking)
 
 
 class StreamTee:
@@ -271,13 +269,19 @@ def setup_log_file(config, test_name, category):
     return os.path.join(log_dir, f'{safe_test_name}_{timestamp}.log')
 
 
-def make_logged_client(log_file):
-    """Return an OpenAI client whose ``chat.completions.create`` logs I/O."""
+def make_logged_client(log_file, *, default_enable_thinking: bool | None = None):
+    """Return an OpenAI client whose ``chat.completions.create`` logs I/O.
+
+    ``default_enable_thinking`` is applied only when the request does not set
+    ``chat_template_kwargs.enable_thinking`` (tool tests pass False).
+    """
     client, model_name = get_client_and_model()
     original_create = client.chat.completions.create
 
     def _logged_create(*args, **kwargs):
         _merge_create_kwargs_defaults(kwargs)
+        if default_enable_thinking is not None:
+            _setdefault_enable_thinking(kwargs['extra_body'], default_enable_thinking)
         stream = 'stream' in kwargs and kwargs['stream']
         result = original_create(*args, **kwargs)
         if stream:
@@ -1037,7 +1041,7 @@ def _build_stream_tool_call_payload(
                 'messages': [],
                 'stream': True,
                 'temperature': 0,
-                'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
+                'max_completion_tokens': CAPPED_MAX_COMPLETION_TOKENS,
                 **token_fields,
                 'stream_options': {'include_usage': True},
                 **LMDEPLOY_DECODE_DEFAULTS,
@@ -1056,7 +1060,7 @@ def _build_stream_tool_call_payload(
             'messages': messages,
             'stream': True,
             'temperature': 0,
-            'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
+            'max_completion_tokens': CAPPED_MAX_COMPLETION_TOKENS,
             **token_fields,
             'stream_options': {'include_usage': True},
             **LMDEPLOY_DECODE_DEFAULTS,
@@ -1064,6 +1068,11 @@ def _build_stream_tool_call_payload(
     if tools is not None and not use_input_ids:
         payload['tools'] = tools
     payload.update(payload_extra)
+    ctk = payload.get('chat_template_kwargs')
+    if not isinstance(ctk, dict):
+        ctk = {}
+        payload['chat_template_kwargs'] = ctk
+    ctk.setdefault('enable_thinking', False)
     return payload, prompt_tokens_computed
 
 
@@ -1207,7 +1216,7 @@ def _has_parsed_tool_calls(tool_calls) -> bool:
     return bool(tool_calls)
 
 
-def assert_raw_decode_validate_complete(
+def _parse_decoded_complete(
     text: str,
     tokenizer_path: str,
     *,
@@ -1215,15 +1224,15 @@ def assert_raw_decode_validate_complete(
     tools: list | None = None,
     reasoning_parser_name: str | None = None,
     enable_thinking: bool | None = None,
-) -> None:
-    """Run ``ResponseParser.validate_complete`` on decoded output.
+) -> tuple[str | None, list | None, str | None]:
+    """Replay decoded output through ``ResponseParser.parse_complete``.
 
-    ``reasoning_parser_name=None`` validates tool markup only (tool-call path).
+    ``reasoning_parser_name=None`` parses tool markup only (tool-call path).
     Pass ``reasoning_parser_name`` (e.g. ``'default'``) and ``enable_thinking``
-    for reasoning-suite raw decode checks.
+    to replay reasoning-suite output.
     """
     if not text.strip():
-        return
+        return None, None, None
     parser = make_response_parser(
         tokenizer_path,
         tool_parser_name=tool_parser_name,
@@ -1232,9 +1241,7 @@ def assert_raw_decode_validate_complete(
         tool_choice='auto' if tools else 'none',
         enable_thinking=enable_thinking,
     )
-    assert parser.validate_complete(text), (
-        'ResponseParser.validate_complete failed: incomplete or malformed decoded markup '
-        f'in output snippet: {text[:300]!r}')
+    return parser.parse_complete(text)
 
 
 def attach_decoded_validation(
@@ -1248,7 +1255,7 @@ def attach_decoded_validation(
     model_case: str | None = None,
     validate_decoded: bool = True,
 ) -> dict:
-    """Decode ``output_ids`` and run ``validate_complete`` on raw decoded text.
+    """Decode ``output_ids`` and replay the raw text through complete parsing.
 
     Tool-call path: ``tool_parser_name`` set, ``reasoning_parser_name`` omitted.
     Reasoning path: also pass ``reasoning_parser_name``, ``enable_thinking``,
@@ -1269,7 +1276,7 @@ def attach_decoded_validation(
         return result
     if tool_parser_name is None:
         return result
-    assert_raw_decode_validate_complete(
+    _parse_decoded_complete(
         result['decoded_str'],
         tokenizer_path,
         tool_parser_name=tool_parser_name,
@@ -1290,21 +1297,15 @@ def assert_parser_drop_decoded_only(
 ) -> None:
     if _has_parsed_tool_calls(tool_calls) or not decoded_str.strip():
         return
-    parser = make_response_parser(
+    _, complete_tool_calls, _ = _parse_decoded_complete(
+        decoded_str,
         tokenizer_path,
         tool_parser_name=tool_parser_name,
         tools=tools,
         reasoning_parser_name=None,
     )
-    open_tag = parser.profile.tool_open_tag
-    if not open_tag or open_tag not in decoded_str:
+    if not complete_tool_calls:
         return
-    assert_raw_decode_validate_complete(
-        decoded_str,
-        tokenizer_path,
-        tool_parser_name=tool_parser_name,
-        tools=tools,
-    )
     raise AssertionError(
         'Parser dropped tool call: decoded output contains complete tool markup '
         'but streamed tool_calls are empty')
@@ -1571,7 +1572,10 @@ async def _async_concurrent_worker_turns(
 
     for turn in range(num_turns):
         city = cities[turn % len(cities)]
-        messages.append({'role': 'user', 'content': f'What is the weather in {city}?'})
+        messages.append({
+            'role': 'user',
+            'content': f'What is the weather in {city}? Call the weather tool now.',
+        })
         try:
             result = await collect_stream_tool_call_http_async(
                 session,

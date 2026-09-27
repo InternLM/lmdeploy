@@ -460,7 +460,7 @@ class TestBlockTrie(BlockTrieTestMixin):
 
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        seq.state.free()
+        seq.state.release_paging_resources()
 
         assert seq.num_history_ids == 0
         assert len(seq.logical_blocks) == 0

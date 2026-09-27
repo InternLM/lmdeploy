@@ -4,7 +4,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from ..linear import LinearBuilder, LinearImpl
+from ..linear import LinearImpl
 
 
 class DefaultLinearImpl(LinearImpl):
@@ -27,12 +27,3 @@ class DefaultLinearImpl(LinearImpl):
             else:
                 dist.all_reduce(out, group=group)
         return out
-
-
-class DefaultLinearBuilder(LinearBuilder):
-    """Linear implementation builder."""
-
-    @staticmethod
-    def build(in_features: int, out_features: int, bias: bool = True, dtype: torch.dtype = None):
-        """build."""
-        return DefaultLinearImpl()

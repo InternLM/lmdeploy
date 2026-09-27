@@ -12,7 +12,6 @@ from lmdeploy.pytorch.kv_connector import (
     prepare_kv_connector_config,
     prepare_kv_connector_model_identity,
 )
-from lmdeploy.pytorch.paging.scheduler import Scheduler
 
 
 def _make_cache_config(kv_transfer_config=None):
@@ -193,6 +192,28 @@ def test_prepare_mooncake_binds_resolved_kv_format_and_generation():
         '"model_dtype":"torch.bfloat16","quant_policy":0}')
 
 
+@pytest.mark.parametrize('role', ['kv_producer', 'kv_consumer', 'kv_both'])
+def test_prepare_mooncake_rejects_cpu_paging(role):
+    cache_config = _make_mooncake_cache_config(role)
+    cache_config.num_cpu_blocks = 8
+    original_extra_config = dict(cache_config.kv_transfer_config.kv_connector_extra_config)
+
+    with pytest.raises(ValueError, match='CPU KV paging.*num_cpu_blocks=0'):
+        prepare_kv_connector_config(cache_config)
+
+    assert cache_config.kv_transfer_config.kv_connector_extra_config == original_extra_config
+
+
+@pytest.mark.parametrize('transfer_config', [None, KVTransferConfig()])
+def test_prepare_without_mooncake_allows_cpu_paging(transfer_config):
+    cache_config = _make_cache_config(transfer_config)
+    cache_config.num_cpu_blocks = 8
+
+    prepare_kv_connector_config(cache_config)
+
+    assert cache_config.num_cpu_blocks == 8
+
+
 def test_engine_rejects_effective_mp_backend_before_executor_build(
     tmp_path,
     monkeypatch,
@@ -287,23 +308,6 @@ def test_prepare_kv_connector_config_does_not_change_disabled_config(transfer_co
         assert cache_config.kv_transfer_config is None
     else:
         assert transfer_config.kv_connector_extra_config == original_extra_config
-
-
-def test_scheduler_shutdown_releases_injected_connector_once():
-    connector = Mock()
-    scheduler = Scheduler.__new__(Scheduler)
-    scheduler.kv_connector = connector
-    scheduler.kv_load_coordinator = Mock()
-    scheduler.kv_save_coordinator = Mock()
-
-    scheduler.shutdown()
-    scheduler.shutdown()
-
-    connector.shutdown.assert_called_once_with()
-    assert scheduler.kv_load_coordinator.clear.call_count == 2
-    assert scheduler.kv_save_coordinator.clear.call_count == 2
-    assert scheduler.kv_connector is None
-    assert not scheduler._external_lookup_enabled
 
 
 def test_engine_loop_finally_shuts_down_scheduler_before_executor():

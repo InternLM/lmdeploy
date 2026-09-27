@@ -20,7 +20,8 @@ from .deepseek_v32 import (
     LayerNorm,
     rotate_activation,
 )
-from .patch import get_build_model_context
+from .patch import add_prefix, get_build_model_context
+from .utils.cudagraph import PiecewiseCudaGraphMixin
 
 
 def _get_layer_indexer_type(config: Any, layer_idx: int | None) -> str:
@@ -43,7 +44,12 @@ def _get_layer_idx_from_weight_name(name: str) -> int | None:
 
 class GlmMoeDsaIndexer(nn.Module):
 
-    def __init__(self, config: Any, layer_idx: int, dtype: torch.dtype = None, device: torch.device = None):
+    def __init__(self,
+                 config: Any,
+                 layer_idx: int,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         quant_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
@@ -59,7 +65,8 @@ class GlmMoeDsaIndexer(nn.Module):
                                          dtype=dtype,
                                          device=device,
                                          is_tp=False,
-                                         quant_config=quant_config)
+                                         quant_config=quant_config,
+                                         prefix=add_prefix('wq_b', prefix))
         self.use_fusion = not _envs.disable_dsa_indexer_fusion
         if self.use_fusion:
             self.wk_weights_proj = build_colwise_linear(self.dim,
@@ -91,8 +98,9 @@ class GlmMoeDsaIndexer(nn.Module):
                                            block_size=128,
                                            fill=-1,
                                            # MTP may reuse its first iteration's indices in later drafts.
-                                           allow_short_prefill_scoring_skip=layer_idx
-                                           < config.num_hidden_layers)
+                                           allow_short_prefill_scoring_skip=(
+                                               layer_idx < config.num_hidden_layers
+                                               and _envs.sparse_mla_backend != 'tilelang'))
 
     def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
                               freqs_cis: tuple[torch.Tensor, torch.Tensor]):
@@ -201,11 +209,20 @@ class DSATopKIndicesBuffer(nn.Module):
 
 class GlmMoeDsaAttention(DeepseekV32Attention):
 
-    def _build_indexer(self, config: Any, layer_idx: int, dtype: torch.dtype, device: torch.device):
+    def _build_indexer(self,
+                       config: Any,
+                       layer_idx: int,
+                       dtype: torch.dtype,
+                       device: torch.device,
+                       prefix: str = ''):
         self.indexer_type = _get_layer_indexer_type(config, layer_idx)
         if self.indexer_type == 'shared':
             return None
-        return GlmMoeDsaIndexer(config, layer_idx, dtype=dtype, device=device)
+        return GlmMoeDsaIndexer(config,
+                                layer_idx,
+                                dtype=dtype,
+                                device=device,
+                                prefix=add_prefix('indexer', prefix))
 
     def forward(
         self,
@@ -342,7 +359,7 @@ class GlmMoeDsaModel(DeepseekV32Model):
                             all_routed_experts=all_routed_experts)
 
 
-class GlmMoeDsaForCausalLM(DeepseekV32ForCausalLM):
+class GlmMoeDsaForCausalLM(DeepseekV32ForCausalLM, PiecewiseCudaGraphMixin):
     model_cls = GlmMoeDsaModel
 
     def __init__(self,

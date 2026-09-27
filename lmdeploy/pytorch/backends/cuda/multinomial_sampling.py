@@ -4,7 +4,7 @@ import torch
 
 from lmdeploy.pytorch.kernels.cuda import multinomial_sampling
 
-from ..multinomial_sampling import MultinomialSamplingBuilder, MultinomialSamplingImpl
+from ..multinomial_sampling import MultinomialSamplingImpl
 
 
 class TritonMultinomialSamplingImpl(MultinomialSamplingImpl):
@@ -16,11 +16,3 @@ class TritonMultinomialSamplingImpl(MultinomialSamplingImpl):
                 indices: torch.Tensor = None):
         """forward."""
         return multinomial_sampling(scores, seeds, offsets, indices)
-
-
-class TritonMultinomialSamplingBuilder(MultinomialSamplingBuilder):
-    """Triton multinomial sampling builder."""
-
-    def build():
-        """build."""
-        return TritonMultinomialSamplingImpl()

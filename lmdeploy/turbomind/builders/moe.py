@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from ._base import Builder, ParallelGroup, SplitSide
+from .. import _tm
+from ._base import Builder, ParallelGroup
 
 # ---------------------------------------------------------------------------
 # MoeBuilder -- gate, non-expert params
@@ -31,12 +32,13 @@ class MoeBuilder(Builder):
 
     def add_gate(self, name, linear):
         """Commit a gate linear (broadcast, no split)."""
-        self._add_linear(name, linear, split_side=None)
+        query = self._make_gemm_query(linear)
+        query.output_dtype = _tm.DataType.TYPE_FP32
+        self._add_linear(name, linear, split_side=None,
+                         plan=self._query_gemm(query))
 
     def add_param(self, name, tensor, split_side=None):
         """Commit a non-expert MoE parameter."""
-        if split_side is not None and not isinstance(split_side, SplitSide):
-            split_side = None  # specs may pass None for broadcast
         self._add_tensor(name, tensor, split_side)
 
     def range(self, num_experts):
@@ -52,7 +54,6 @@ class MoeBuilder(Builder):
         if ep_size <= 1:
             return [True] * len(self._ctx.devices)
         ranks = self.ep.ranks
-        assert ranks is not None
         local = self.config.expert_num // ep_size
         return [rank * local <= expert_idx < (rank + 1) * local
                 for rank in ranks]

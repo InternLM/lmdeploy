@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import importlib
 import time
 from collections import deque
 from collections.abc import Mapping
@@ -15,8 +16,10 @@ import pybase64
 import torch
 import torch.distributed as dist
 from torch.profiler import record_function
+from tqdm.auto import tqdm
 
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.graph_runner import prefill_preparation_scope
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
@@ -40,12 +43,17 @@ from lmdeploy.pytorch.spec_decode import build_spec_agent
 from lmdeploy.pytorch.strategies import build_strategy_factory
 from lmdeploy.pytorch.strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from lmdeploy.pytorch.utils import get_gpu_memory, monkey_patch_hf_modules_cache, wait_for_async_tasks
-from lmdeploy.pytorch.weight_loader.model_weight_loader import ModelWeightLoader, load_model_weights
+from lmdeploy.pytorch.weight_loader.model_weight_loader import (
+    ModelWeightLoader,
+    load_model_weights,
+    process_weights_after_loading,
+)
 from lmdeploy.serve.openai.protocol import (
     DestroyWeightsUpdateGroupRequest,
     InitWeightsUpdateGroupRequest,
     UpdateParamsRequest,
     UpdateWeightsFromDistributedRequest,
+    UpdateWeightsFromIPCRequest,
 )
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import FlattenedTensorBucket, FlattenedTensorMetadata, get_logger, init_custom_process_group
@@ -60,6 +68,7 @@ logger = get_logger('lmdeploy')
 
 _H2D_TRANSFER_KEY = '_h2d_transfer'
 _H2D_INPUT_KEYS = ('inputs', 'delta', 'cache_inputs', 'sampling_inputs', 'stopping_criteria', 'extra_inputs')
+_MTP_CACHE_PREFIX = 'mtp.'
 
 
 @dataclass
@@ -390,6 +399,7 @@ class BaseModelAgent:
         # update_params_ipc_buffer
         self._update_params_ipc_tensor: torch.Tensor | None = None
         self._update_params_ipc_event: torch.cuda.Event | None = None
+        self._checkpoint_engine_zmq_ctx: Any = None
 
         # disaggregated weight-update process groups, keyed by group_name
         self._model_update_group: dict[str, dist.ProcessGroup] = {}
@@ -427,7 +437,7 @@ class BaseModelAgent:
             base_model_config=model_config,
         )
         # sleep wakeup state
-        self.state: SleepWakeupState = SleepWakeupState()
+        self.state: SleepWakeupState = SleepWakeupState(is_sleeping=misc_config.empty_init)
 
         self._init_runtime_state()
 
@@ -476,6 +486,41 @@ class BaseModelAgent:
             gpu_mem_physical_free, _ = get_gpu_memory()
             return gpu_mem_physical_free
 
+    def _warmup_prefill(self) -> None:
+        """Warm the prefill shapes requested by the active graph runner."""
+        token_sizes = sorted(self.patched_model.get_prefill_warmup_token_sizes(), reverse=True)
+        if token_sizes:
+            with prefill_preparation_scope():
+                for num_tokens in tqdm(token_sizes, desc='Warming up prefill', disable=self.rank != 0):
+                    inputs = self.inputs_strategy.make_dummy(
+                        1,
+                        is_decoding=False,
+                        device='cuda',
+                        vocab_size=self.model_config.vocab_size,
+                        max_q_seqlen=num_tokens,
+                        meta=self.make_dummy_meta,
+                    )
+                    start = time.perf_counter()
+                    logger.debug('Warmup prefill num_tokens=%d start.', num_tokens)
+                    self._forward_impl(inputs)
+                    torch.cuda.synchronize()
+                    logger.debug('Warmup prefill num_tokens=%d done in %.2f seconds.', num_tokens,
+                                 time.perf_counter() - start)
+        else:
+            inputs = self.inputs_strategy.make_dummy(self.cache_config.max_batches,
+                                                     is_decoding=False,
+                                                     device='cuda',
+                                                     vocab_size=self.model_config.vocab_size,
+                                                     meta=self.make_dummy_meta)
+            if self.dist_config.dp > 1:
+                num_tokens = inputs.input_ids.numel()
+                inputs.build_dp_meta([num_tokens] * self.dist_config.world_size)
+                inputs.dp_meta.dp_is_decoding = False
+            logger.debug('Warmup prefill start.')
+            self._forward_impl(inputs)
+            torch.cuda.synchronize()
+            logger.debug('Warmup prefill done.')
+
     def warmup(self):
         """warmup."""
         from lmdeploy.pytorch.envs import skip_warmup
@@ -490,8 +535,6 @@ class BaseModelAgent:
         with self.all_context(), torch.cuda.stream(self.stream):
             max_batches = self.cache_config.max_batches
             world_size = self.dist_config.world_size
-
-            num_tokens = max_batches
             dp = self.dist_config.dp
 
             if dp > 1:
@@ -499,20 +542,7 @@ class BaseModelAgent:
                 group = self.dist_ctx.cpu_group
                 dist.barrier(group=group)
 
-            # warmup prefill
-            inputs = self.inputs_strategy.make_dummy(max_batches,
-                                                     is_decoding=False,
-                                                     device='cuda',
-                                                     vocab_size=self.model_config.vocab_size,
-                                                     meta=self.make_dummy_meta)
-            if dp > 1:
-                num_tokens = inputs.input_ids.numel()
-                inputs.build_dp_meta([num_tokens] * world_size)
-                inputs.dp_meta.dp_is_decoding = False
-            logger.debug('Warmup prefill start.')
-            self._forward_impl(inputs)
-            torch.cuda.synchronize()
-            logger.debug('Warmup prefill done.')
+            self._warmup_prefill()
 
             # warmup decoding(with cuda graph)
             capture_batch_sizes = self.patched_model.get_capture_batch_sizes()
@@ -520,7 +550,7 @@ class BaseModelAgent:
             if self.cache_config.role == EngineRole.Prefill:
                 # do not warmup decoding for prefill engine
                 capture_batch_sizes = []
-            for num_tokens in capture_batch_sizes:
+            for num_tokens in tqdm(capture_batch_sizes, desc='Warming up decoding', disable=self.rank != 0):
                 inputs = self.inputs_strategy.make_dummy(num_tokens,
                                                          is_decoding=True,
                                                          device='cuda',
@@ -1036,12 +1066,12 @@ class BaseModelAgent:
             return_logits=return_logits or return_ce_loss,
             cache_inputs=cache_inputs,
         )
-        # The forward has now queued its KV writes on the current CUDA stream.
-        # The connector records a readiness event before its sender reads them.
-        start_kv_connector_save(self.kv_connector, connector_step)
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
+            # There is no speculative forward on this path, so the target
+            # model's KV writes are the complete payload for this step.
+            start_kv_connector_save(self.kv_connector, connector_step)
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
             if connector_output is not None:
                 self._push_output(BatchedOutputs.connector_only(connector_output))
@@ -1051,6 +1081,10 @@ class BaseModelAgent:
         # logprob rows, and falling through would wrongly run sampling /
         # sequence-update on a max_tokens=0 request.
         if prefill_input_logprobs:
+            # Scoring-only forwards do not run the speculative model.  Record
+            # the target KV writes here instead of waiting for a postprocess
+            # hook that is intentionally skipped on this path.
+            start_kv_connector_save(self.kv_connector, connector_step)
             model_metas = output.get('model_metas')
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
             if self.need_output:
@@ -1116,6 +1150,11 @@ class BaseModelAgent:
                     sampling_inputs,
                     need_broadcast_next,
                 ))
+
+        # The speculative model writes the MTP cache during postprocess.  The
+        # readiness event must be recorded only after that work has been
+        # queued, otherwise Mooncake may read stale MTP rows.
+        start_kv_connector_save(self.kv_connector, connector_step)
 
         if inputs.is_dummy:
             # skip dummy forward output
@@ -1354,7 +1393,10 @@ class BaseModelAgent:
         # for router replay
         enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
 
+        spec_model_ctx = self.spec_agent.build_model_context()
+
         build_model_ctx = BuildModelContext(language_model_only=self.misc_config.language_model_only,
+                                            enable_deterministic=self.backend_config.enable_deterministic,
                                             dllm_config=self.misc_config.dllm_config,
                                             strategy_factory=self.strategy_factory,
                                             enable_return_routed_experts=enable_return_routed_experts,
@@ -1362,7 +1404,8 @@ class BaseModelAgent:
                                             fp32_lm_head=self.model_config.fp32_lm_head,
                                             tie_word_embeddings=self.model_config.tie_word_embeddings,
                                             num_spec_tokens=self.spec_agent.num_spec_tokens,
-                                            max_batch_size=self.cache_config.max_batches)
+                                            max_batch_size=self.cache_config.max_batches,
+                                            spec_model_ctx=spec_model_ctx)
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
@@ -1435,9 +1478,55 @@ class BaseModelAgent:
         self.kv_connector.shutdown()
         self.kv_connector = None
 
+    def _validate_mtp_parallel_config(self) -> None:
+        """Validate the target and MTP topology used by Mooncake Store."""
+        transfer_config = self.cache_config.kv_transfer_config
+        if (transfer_config is None
+                or transfer_config.kv_connector != 'MooncakeStoreConnector'
+                or not transfer_config.is_kv_transfer_instance):
+            return
+
+        specdecode_config = self.spec_agent.specdecode_config
+        if specdecode_config is None or specdecode_config.cache_config is None:
+            return
+
+        target_config = self.dist_config
+        mtp_config = specdecode_config.dist_config
+        target_parallel = (
+            target_config.attn_tp,
+            target_config.dp,
+            target_config.ep,
+            target_config.world_size,
+        )
+        mtp_parallel = (
+            mtp_config.attn_tp,
+            mtp_config.dp,
+            mtp_config.ep,
+            mtp_config.world_size,
+        )
+        if target_parallel != mtp_parallel:
+            raise ValueError(
+                'Mooncake Store requires target and MTP parallel configs to match: '
+                f'target=(attn_tp={target_parallel[0]}, dp={target_parallel[1]}, '
+                f'ep={target_parallel[2]}, world_size={target_parallel[3]}), '
+                f'mtp=(attn_tp={mtp_parallel[0]}, dp={mtp_parallel[1]}, '
+                f'ep={mtp_parallel[2]}, world_size={mtp_parallel[3]})')
+
+    def _get_connector_kv_caches(self) -> dict[str, torch.Tensor]:
+        """Collect target and MTP cache rows in registration order."""
+        connector_caches = dict(self.cache_engine.connector_kv_caches)
+        mtp_cache_engine = self.spec_agent.cache_engine
+        if mtp_cache_engine is None:
+            return connector_caches
+
+        for name, cache in mtp_cache_engine.connector_kv_caches.items():
+            connector_caches[f'{_MTP_CACHE_PREFIX}{name}'] = cache
+        return connector_caches
+
     def build_cache_engine(self):
         """Build cache engine."""
         with self.all_context():
+            self._validate_mtp_parallel_config()
             self._shutdown_kv_connector()
             dist_ctx = get_dist_manager().current_context()
             dist_cfg = self.dist_config
@@ -1450,6 +1539,7 @@ class BaseModelAgent:
                                             cache_stream=self.cache_stream,
                                             block_cache_plan=self.block_cache_plan)
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
+            self.spec_agent.build_cache_engine(self.cache_stream)
 
             prepare_kv_connector_model_identity(
                 self.cache_config,
@@ -1466,9 +1556,8 @@ class BaseModelAgent:
                 kv_head_replica_num=self.model_config.num_replicate_key_value_heads,
             )
             if self.kv_connector is not None:
-                self.kv_connector.register_kv_caches(self.cache_engine.connector_kv_caches)
+                self.kv_connector.register_kv_caches(self._get_connector_kv_caches())
 
-            self.spec_agent.build_cache_engine(self.cache_stream)
             if self.memdecode_agent is not None:
                 self.memdecode_agent.set_cache_config(self.cache_config)
                 self.memdecode_agent.build_cache_engine(self.cache_stream)
@@ -1530,6 +1619,131 @@ class BaseModelAgent:
             self.spec_agent.reset_graph_runner()
             if self.memdecode_agent is not None:
                 self.memdecode_agent.reset_graph_runner()
+
+    def _split_updated_weights(self, weights: list[tuple[str, torch.Tensor]]):
+        """Split target and draft weights using the existing MTP contract."""
+        if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
+            return weights, []
+        main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
+        draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
+        return main, draft
+
+    def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):
+        """Load one externally supplied bucket into the target and draft
+        models."""
+        model = self.patched_model.get_model() if self.patched_model is not None else None
+        spec_model = self.spec_agent.get_model()
+        main_weights, draft_weights = self._split_updated_weights(weights)
+        for target, target_weights, tag in [(model, main_weights, 'main'),
+                                            (spec_model, draft_weights, 'draft')]:
+            if target is None or not target_weights:
+                continue
+            renamed = list(ModelWeightLoader._rename_weights_iterator(target_weights, target))
+            logger.info(f'{op_name}: {tag}_num_tensors={len(renamed)}')
+            target.load_weights(iter(renamed))
+
+    def _finalize_updated_weights(self):
+        """Finalize module-specific weights and invalidate captured graphs."""
+        model = self.patched_model.get_model() if self.patched_model is not None else None
+        spec_model = self.spec_agent.get_model()
+        for target in filter(None, [model, spec_model]):
+            process_weights_after_loading(target)
+            torch.cuda.synchronize()
+        # FusedMoE finalization may replace Parameter objects, so captured
+        # graphs must not retain pointers to the previous weights.
+        self.reset_graph_runner()
+        # PCG serving never captures missing plans. An active PCG runner must
+        # be refreshed here; a sleeping runner has no cache arena and is
+        # warmed by KV-cache wakeup instead.
+        if not self.state.is_sleeping and self.patched_model.get_prefill_warmup_token_sizes():
+            self.warmup()
+        self._advance_kv_connector_weights_generation()
+
+    def get_checkpoint_engine_status(self) -> dict[str, Any]:
+        """Return local readiness for checkpoint-engine CUDA IPC updates."""
+        with self.all_context():
+            model = self.patched_model.get_model() if self.patched_model is not None else None
+            spec_model = self.spec_agent.get_model()
+            devices = set()
+            for target in filter(None, [model, spec_model]):
+                try:
+                    devices.add(next(target.parameters()).device.type)
+                except StopIteration:
+                    continue
+
+            device_id = torch.cuda.current_device()
+            device_uuid = f'GPU-{torch.cuda.get_device_properties(device_id).uuid!s}'
+            version = None
+            import_error = None
+            try:
+                checkpoint_engine = importlib.import_module('checkpoint_engine')
+                importlib.import_module('checkpoint_engine.worker')
+                version = str(getattr(checkpoint_engine, '__version__', 'unknown'))
+            except Exception as e:  # noqa: BLE001
+                import_error = str(e)
+
+            ready = import_error is None and devices == {'cuda'} and self.memdecode_agent is None
+            if import_error is not None:
+                message = ('checkpoint-engine is unavailable; install '
+                           "'checkpoint-engine==0.4.2': " + import_error)
+            elif self.memdecode_agent is not None:
+                message = 'checkpoint-engine weight updates do not support MemDecode.'
+            elif devices != {'cuda'}:
+                message = f'model weights must be on CUDA before IPC update, got {sorted(devices)}'
+            else:
+                message = 'checkpoint-engine worker is ready.'
+            return {
+                'ready': ready,
+                'message': message,
+                'checkpoint_engine_version': version,
+                'device_uuid': device_uuid,
+                'weight_devices': sorted(devices),
+                'rank': self.rank,
+            }
+
+    @torch.inference_mode()
+    def update_weights_from_ipc(self,
+                                request: UpdateWeightsFromIPCRequest,
+                                reject_reason: str | None = None):
+        """Receive weight buckets through checkpoint-engine CUDA IPC."""
+        with self.all_context():
+            try:
+                zmq = importlib.import_module('zmq')
+                worker = importlib.import_module('checkpoint_engine.worker')
+                if self._checkpoint_engine_zmq_ctx is None:
+                    self._checkpoint_engine_zmq_ctx = zmq.Context()
+
+                device_id = torch.cuda.current_device()
+                device_uuid = f'GPU-{torch.cuda.get_device_properties(device_id).uuid!s}'
+                try:
+                    zmq_handle = request.zmq_handles[device_uuid]
+                except KeyError as e:
+                    raise ValueError(
+                        f'No checkpoint-engine ZMQ handle for local device {device_uuid}. '
+                        f'Available devices: {sorted(request.zmq_handles)}') from e
+
+                def _load_weights(weights: list[tuple[str, torch.Tensor]]):
+                    if reject_reason is not None:
+                        raise RuntimeError(reject_reason)
+                    self._load_updated_weight_bucket(weights, 'update_weights_from_ipc')
+
+                def _post_hook():
+                    self._finalize_updated_weights()
+
+                worker.update_weights_from_ipc(
+                    self._checkpoint_engine_zmq_ctx,
+                    zmq_handle,
+                    device_id=device_id,
+                    run=_load_weights,
+                    post_hook=_post_hook,
+                )
+                torch.cuda.empty_cache()
+                return True, 'Succeeded to update weights from checkpoint-engine IPC.'
+            except Exception as e:  # noqa: BLE001
+                msg = (f'Failed to update weights from checkpoint-engine IPC: {e}. '
+                       'The model weights may be partially updated; discard this instance and reload it.')
+                logger.exception(msg)
+                return False, msg
 
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
@@ -1610,9 +1824,7 @@ class BaseModelAgent:
 
             if request.finished:
                 for m in filter(None, [model, spec_model]):
-                    for _, mod in m.named_modules():
-                        if hasattr(mod, 'update_weights'):
-                            mod.update_weights()
+                    process_weights_after_loading(m)
 
                     torch.cuda.synchronize()
                     self._update_params_ipc_event = None
@@ -1690,35 +1902,10 @@ class BaseModelAgent:
                 else:
                     weights = []
 
-                model = self.patched_model.get_model() if self.patched_model is not None else None
-                spec_model = self.spec_agent.get_model()
-                # Same draft-split rule as update_params (currently only qwen3_5_mtp).
-                if self.spec_agent.is_enabled() and self.spec_agent.method == 'qwen3_5_mtp':
-                    main_weights = [(n, w) for n, w in weights if not n.startswith('mtp.')]
-                    draft_weights = [(n, w) for n, w in weights if n.startswith('mtp.')]
-                else:
-                    main_weights, draft_weights = weights, []
-
-                for m, w, tag in [(model, main_weights, 'main'), (spec_model, draft_weights, 'draft')]:
-                    if m is None or not w:
-                        continue
-                    renamed = list(ModelWeightLoader._rename_weights_iterator(w, m))
-                    logger.info(f'update_weights_from_distributed: {tag}_num_tensors={len(renamed)}')
-                    m.load_weights(iter(renamed))
+                self._load_updated_weight_bucket(weights, 'update_weights_from_distributed')
 
                 if request.finished:
-                    for m in filter(None, [model, spec_model]):
-                        for _, mod in m.named_modules():
-                            if hasattr(mod, 'update_weights'):
-                                mod.update_weights()
-                        torch.cuda.synchronize()
-                    # FusedMoE.update_weights() above replaces the gate_up / down
-                    # Parameter objects (LinearWeights.update_weight registers a new
-                    # nn.Parameter), so any CUDA graph captured before the update
-                    # still references the freed old pointers. Drop the captured
-                    # graphs so the next forward re-captures with the new params.
-                    self.reset_graph_runner()
-                    self._advance_kv_connector_weights_generation()
+                    self._finalize_updated_weights()
 
                 torch.cuda.empty_cache()
                 return True, 'Succeeded to update parameter online.'
@@ -1826,6 +2013,9 @@ class BaseModelAgent:
         """release."""
         self._shutdown_kv_connector()
         self.reset_graph_runner()
+        if self._checkpoint_engine_zmq_ctx is not None:
+            self._checkpoint_engine_zmq_ctx.destroy(linger=0)
+            self._checkpoint_engine_zmq_ctx = None
         if self.memdecode_agent is not None:
             self.memdecode_agent.release()
         self.patched_model = None

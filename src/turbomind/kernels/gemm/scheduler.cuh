@@ -424,12 +424,26 @@ public:
                             swizzle_tiles);
             }
             if (lane_id < Cluster::size) {
-                unswizzle(*tile,  //
-                          cluster_idx - group_beg,
-                          lane_id,
-                          cta_tiles,
-                          cluster_tiles,
-                          swizzle_tiles);
+                // Empty experts still occupy one padded scheduler region so
+                // group boundaries remain monotonic.  Their M tile count is
+                // zero, however, and unswizzle would divide by a zero
+                // swizzled extent.  Publish an invalid tile and let all roles
+                // advance without issuing mainloop transactions.
+                const bool nonempty_group = !is_grouped_gemm || group_m1 > group_m0;
+                if (nonempty_group) {
+                    unswizzle(*tile,  //
+                              cluster_idx - group_beg,
+                              lane_id,
+                              cta_tiles,
+                              cluster_tiles,
+                              swizzle_tiles);
+                }
+                else {
+                    tile->is_valid_cta     = 0;
+                    tile->is_valid_cluster = 0;
+                    tile->offset_m         = 0;
+                    tile->offset_n         = 0;
+                }
                 if constexpr (is_grouped_gemm) {
                     tile->group_idx = group_id;
                     tile->m0        = group_m0;

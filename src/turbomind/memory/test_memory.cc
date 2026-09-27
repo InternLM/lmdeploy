@@ -10,8 +10,8 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <map>
+#include <new>
 #include <random>
 #include <vector>
 
@@ -21,16 +21,14 @@ namespace {
 
 // RAII for a heap region whose base is aligned to `alignment` bytes.
 struct AlignedRegion {
-    AlignedRegion(size_t alignment, size_t bytes): bytes_{bytes}
+    AlignedRegion(size_t alignment, size_t bytes): bytes_{bytes}, alignment_{alignment}
     {
-        // std::aligned_alloc requires bytes to be a multiple of alignment.
-        size_t rounded = (bytes + alignment - 1) / alignment * alignment;
-        ptr_           = std::aligned_alloc(alignment, rounded);
+        ptr_ = ::operator new(bytes, alignment_, std::nothrow);
         TM_CHECK_NOTNULL(ptr_);
     }
     ~AlignedRegion()
     {
-        std::free(ptr_);
+        ::operator delete(ptr_, alignment_);
     }
     AlignedRegion(const AlignedRegion&) = delete;
     AlignedRegion& operator=(const AlignedRegion&) = delete;
@@ -45,8 +43,9 @@ struct AlignedRegion {
     }
 
 private:
-    void*  ptr_;
-    size_t bytes_;
+    void*            ptr_;
+    size_t           bytes_;
+    std::align_val_t alignment_;
 };
 
 inline bool ranges_overlap(const void* a, size_t na, const void* b, size_t nb)

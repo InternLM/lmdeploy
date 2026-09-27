@@ -7,7 +7,7 @@ from lmdeploy.pytorch.kernels.cuda.rejection_sampling import (
     sample_recovered_tokens,
 )
 
-from ..rejection_sampling import RejectionSamplingBuilder, RejectionSamplingImpl
+from ..rejection_sampling import RejectionSamplingImpl
 
 
 def _allocate_outputs(draft_token_ids: torch.LongTensor):
@@ -105,11 +105,3 @@ class CudaRejectionSamplingImpl(RejectionSamplingImpl):
             is_greedy,
         )
         return output_token_ids, num_rejected_tokens, last_token_ids
-
-
-class CudaRejectionSamplingBuilder(RejectionSamplingBuilder):
-    """Build the CUDA rejection sampler."""
-
-    @staticmethod
-    def build() -> RejectionSamplingImpl:
-        return CudaRejectionSamplingImpl()

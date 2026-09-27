@@ -29,6 +29,7 @@ namespace turbomind::gemm {
 static inline decltype(auto) as_tuple(const KernelDesc& d)
 {
     return std::tie(d.arch,
+                    d.family,
                     d.op_class,
                     d.algo,
                     d.raster,
@@ -57,7 +58,7 @@ static inline decltype(auto) as_tuple(const KernelDesc& d)
                     d.c_tile,
                     d.stages,
                     d.split_k,
-                    d.supports_fused_silu,
+                    d.supported_epilogues,
                     d.backend,
                     d.transpose,
                     d.group_axis);
@@ -76,7 +77,7 @@ static inline bool operator==(const KernelDesc& a, const KernelDesc& b)
 namespace {
 
 constexpr char          kDispatchCacheMagic[8] = {'T', 'M', 'G', 'E', 'M', 'M', '2', '\0'};
-constexpr std::uint32_t kDispatchCacheVersion  = 4;
+constexpr std::uint32_t kDispatchCacheVersion  = 6;
 
 struct Header {
     char          magic[sizeof(kDispatchCacheMagic)];
@@ -170,7 +171,8 @@ namespace {
 
 inline decltype(auto) as_tuple(const GemmDesc& d)
 {
-    return std::tie(d.arch,
+    return std::tie(d.family,
+                    d.arch,
                     d.type_a,
                     d.type_b,
                     d.type_c,
@@ -262,8 +264,9 @@ struct DispatchCache::Impl {
             std::lower_bound(idxs.begin(), idxs.end(), std::make_pair(batch_size, 0), [](auto& a, auto& b) {  //
                 return a.first < b.first;
             });
-        // Exact match, skip
+        // Exact match, replace
         if (p != idxs.end() && p->first == batch_size) {
+            specs[p->second] = spec;
             return false;
         }
         // Insert
@@ -292,30 +295,8 @@ struct DispatchCache::Impl {
         std::vector<std::pair<GemmDesc, LaunchSpec>> entries;
         ImportDispatchCache(is, entries, kernels_);
         Summary(entries);
-        for (auto [desc, spec] : entries) {
-            const int batch_size = extract_batch_size(desc);
-            auto      it         = cache_.find(desc);
-            if (it == cache_.end()) {
-                it = cache_.emplace_hint(it, desc, Flat{});
-            }
-            auto& [idxs, specs] = it->second;
-            // Order is not maintained at this point
-            idxs.emplace_back(batch_size, (int)specs.size());
-            specs.push_back(spec);
-        }
-        // Sort indices and deduplicate
-        for (auto& [desc, flat] : cache_) {
-            auto& [idxs, specs] = flat;
-            std::stable_sort(idxs.begin(), idxs.end(), [](auto a, auto b) { return a.first < b.first; });
-            idxs.erase(std::unique(idxs.begin(), idxs.end(), [](auto a, auto b) { return a.first == b.first; }),
-                       idxs.end());
-            // Remove unreferenced specs and update spec indices
-            std::vector<LaunchSpec> tmp;
-            for (auto& [key, val] : idxs) {
-                int old = std::exchange(val, tmp.size());
-                tmp.push_back(specs[old]);
-            }
-            specs = std::move(tmp);
+        for (const auto& [desc, spec] : entries) {
+            Insert(desc, spec);
         }
         return entries.size();
     }

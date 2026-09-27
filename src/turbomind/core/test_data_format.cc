@@ -17,7 +17,7 @@ TEST_CASE("DataFormat default is not quantized", "[data_format]")
 
 TEST_CASE("DataFormat trivial is not quantized", "[data_format]")
 {
-    DataFormat fmt = ResolveLinearWeightFormat(kHalf, kHalf, 1, 1);
+    DataFormat fmt{kHalf};
     REQUIRE(!fmt.is_quantized());
     REQUIRE(fmt.rank() == 2);
     REQUIRE(fmt.block_sizes == std::vector<int>{1, 1});
@@ -27,7 +27,7 @@ TEST_CASE("DataFormat trivial is not quantized", "[data_format]")
 
 TEST_CASE("DataFormat FP8 blocked", "[data_format]")
 {
-    DataFormat fmt = ResolveLinearWeightFormat(kHalf, kFloat8_e4m3, 128, 128);
+    DataFormat fmt{kFloat8_e4m3, {128, 128}, kFloat};
     REQUIRE(fmt.is_quantized());
     REQUIRE(fmt.dtype == kFloat8_e4m3);
     REQUIRE(fmt.block_sizes == std::vector<int>{128, 128});
@@ -38,7 +38,7 @@ TEST_CASE("DataFormat FP8 blocked", "[data_format]")
 
 TEST_CASE("DataFormat FP4", "[data_format]")
 {
-    DataFormat fmt = ResolveLinearWeightFormat(kHalf, kFloat4_e2m1, 128, 1);
+    DataFormat fmt{kFloat4_e2m1, {128, 1}, kUint8};
     REQUIRE(fmt.is_quantized());
     REQUIRE(fmt.dtype == kFloat4_e2m1);
     REQUIRE(fmt.block_sizes == std::vector<int>{128, 1});
@@ -49,7 +49,7 @@ TEST_CASE("DataFormat FP4", "[data_format]")
 
 TEST_CASE("DataFormat AWQ uint4", "[data_format]")
 {
-    DataFormat fmt = ResolveLinearWeightFormat(kHalf, kUint4, 128, 1);
+    DataFormat fmt{kUint4, {128, 1}, kHalf, kHalf};
     REQUIRE(fmt.is_quantized());
     REQUIRE(fmt.dtype == kUint4);
     REQUIRE(fmt.block_sizes == std::vector<int>{128, 1});
@@ -61,7 +61,7 @@ TEST_CASE("DataFormat AWQ uint4", "[data_format]")
 
 TEST_CASE("DataFormat uint8 quantized", "[data_format]")
 {
-    DataFormat fmt = ResolveLinearWeightFormat(kBfloat16, kUint8, 64, 1);
+    DataFormat fmt{kUint8, {64, 1}, kBfloat16, kBfloat16};
     REQUIRE(fmt.is_quantized());
     REQUIRE(fmt.block_sizes == std::vector<int>{64, 1});
     REQUIRE(fmt.scales.dtype == kBfloat16);
@@ -70,7 +70,7 @@ TEST_CASE("DataFormat uint8 quantized", "[data_format]")
 
 TEST_CASE("DataFormat trivial BF16", "[data_format]")
 {
-    DataFormat fmt = ResolveLinearWeightFormat(kBfloat16, kBfloat16, 1, 1);
+    DataFormat fmt{kBfloat16};
     REQUIRE(!fmt.is_quantized());
     REQUIRE(fmt.dtype == kBfloat16);
 }

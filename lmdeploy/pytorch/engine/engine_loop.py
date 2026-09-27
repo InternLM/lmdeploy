@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.engine.model_agent import BatchedOutputs
     from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
     from lmdeploy.pytorch.paging import Scheduler
+    from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import StateCheckpointLifecycle
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
     from .engine import Engine, SeqList
@@ -117,6 +118,7 @@ class EngineLoop:
     def __init__(self,
                  req_manager: 'RequestManager',
                  scheduler: 'Scheduler',
+                 state_checkpoints: 'StateCheckpointLifecycle',
                  executor: 'ExecutorBase',
                  seq_strategy: 'SequenceStrategy',
                  inputs_maker: 'InputsMakerAsync',
@@ -124,6 +126,7 @@ class EngineLoop:
                  engine_conn: Optional['EngineP2PConnection'] = None):
         self.req_manager = req_manager
         self.scheduler = scheduler
+        self.state_checkpoints = state_checkpoints
         self.executor = executor
         self.seq_strategy = seq_strategy
         self.inputs_maker = inputs_maker
@@ -353,7 +356,7 @@ class EngineLoop:
             seq.append_routed_experts(all_routed_experts)
             seq.append_logits(logits)
             seq.append_ce_loss(ce_loss, finish=False)
-            self.scheduler.block_trie.cache_routed_experts_for_seq(seq)
+            self.scheduler.cache_routed_experts([seq])
             return dict()
 
         new_token_timestamp = batched_outputs.new_token_timestamp
@@ -366,7 +369,7 @@ class EngineLoop:
                                          batched_outputs=batched_outputs,
                                          model_inputs=model_inputs,
                                          delta=delta)
-        self.scheduler.block_trie.cache_routed_experts(running)
+        self.scheduler.cache_routed_experts(running)
 
         # generate output
         outputs: dict[int, InferOutput] = dict()
@@ -386,7 +389,7 @@ class EngineLoop:
                     continue
             session_id = msg.session_id
             if msg.resp_cache:
-                cache_block_ids = self.scheduler.block_manager.get_block_table(msg).tolist()
+                cache_block_ids = self.scheduler.get_block_tables([msg])[0].tolist()
             else:
                 cache_block_ids = None
 
@@ -437,14 +440,12 @@ class EngineLoop:
         if self._sleep_requested:
             return None, None
 
-        self.scheduler.collect_migration_done()
         return await self.inputs_maker.send_next_inputs()
 
     async def _prefetch_next_inputs(self):
-        """Collect migration completions before prefetching the next batch."""
+        """Prefetch the next batch unless sleep has started."""
         if self._sleep_requested:
             return None, None
-        self.scheduler.collect_migration_done()
         return await self.inputs_maker.prefetch_next_inputs()
 
     async def _wait_for_schedulable_prefill(self):
@@ -456,21 +457,10 @@ class EngineLoop:
             # warning or adding the full pressure backoff to TTFT.
             await asyncio.sleep(0.001)
             return
+        cache_usage = scheduler.schedule_metrics.cache_usage
         logger.warning(f'no next prefill running request, Maybe cache is full, '
-                       f'free gpu cache blocks: {scheduler.block_manager.get_num_free_gpu_blocks()}, '
-                       f'total gpu cache blocks: {scheduler.block_manager.num_gpu_blocks}')
+                       f'gpu cache usage: {cache_usage:.1%}')
         await asyncio.sleep(0.1)
-
-    def _publish_forward_checkpoints(self, running: 'SeqList', has_state_checkpoint_save: bool):
-        """Publish per-forward prefix-cache ownership before prefetching."""
-        state_checkpoints = self.scheduler.block_trie.state_checkpoints
-        if has_state_checkpoint_save:
-            state_checkpoints.publish_saves(running, pin_saves=True)
-        state_checkpoints.unpin_restores(running)
-
-    def _release_forward_save_pins(self, running: 'SeqList'):
-        """Unpin producers after the forward output/event boundary."""
-        self.scheduler.block_trie.state_checkpoints.unpin_saves(running)
 
     def _finish_forward_output(self,
                                out: 'BatchedOutputs | None',
@@ -480,16 +470,14 @@ class EngineLoop:
         """Apply connector progress and publish model outputs."""
         if out is None:
             return
-        # A connector polling step intentionally has no token output. Consume
-        # its transfer completions first so newly loaded requests become
-        # schedulable even when no model forward ran in this executor step.
+        # Connector-only polls have no token output; apply completions before
+        # returning.
         self.scheduler.update_connector_output(out.kv_connector_output)
         if out.next_token_ids is None:
             return
         step_outputs = self._make_infer_outputs(out, running=running, model_inputs=model_inputs, delta=delta)
-        # Sequence history is advanced by _make_infer_outputs. Only now can the
-        # scheduler prove that a prefill reached its reserved target and release
-        # the soft block reservation used while admitting external KV loads.
+        # _make_infer_outputs advances history; only then can soft reservations
+        # be released.
         self.scheduler.release_completed_prefill_reservations(running)
         self.resp_queue.put_nowait(step_outputs)
 
@@ -515,11 +503,14 @@ class EngineLoop:
         # for GPU output; save checkpoints keep a producer pin until the output
         # event boundary so prefetch cannot evict/reuse their destination slots.
         if has_model_work:
-            self._publish_forward_checkpoints(running, has_state_checkpoint_save)
+            self.state_checkpoints.finish_forward_dispatch(
+                running,
+                has_save_plan=has_state_checkpoint_save,
+            )
         forward_inputs, next_running = await self._prefetch_next_inputs()
         out = await self.executor.get_output_async()
         if has_model_work:
-            self._release_forward_save_pins(running)
+            self.state_checkpoints.unpin_saves(running)
         self._finish_forward_output(out, running, model_inputs, delta)
         # out might come from shared memory, need to explicitly delete to release memory in time
         del out
@@ -562,7 +553,7 @@ class EngineLoop:
                 running=next_running,
                 forward_inputs=forward_inputs,
             )
-            self.inputs_maker.deactivate_evict_seqs()
+            self.inputs_maker.preempt_invalid_decode_seqs()
             has_runable_event.set()
 
     def update_running_migration(self, running: 'SeqList', next_token_ids: np.ndarray, stopped: torch.Tensor,
@@ -580,7 +571,7 @@ class EngineLoop:
             if stop:
                 update_token = _EMPTY_TOKEN
                 msg.update_token_ids(update_token, model_meta=model_meta, mode=UpdateTokenMode.PREFILL)
-                msg.state.finish()
+                msg.finish()
 
     async def _migration_loop_migrate(self, migration_ready: 'SeqList'):
         """Migration loop migrate."""
@@ -592,7 +583,7 @@ class EngineLoop:
             migration_execution_requests: list[tuple[int, list[tuple[int, int]]]] = []
             migration_request = msg.migration_request
             prefill_block_ids = migration_request.remote_block_ids
-            decode_block_ids = list(self.scheduler.block_manager.get_block_table(msg=msg))
+            decode_block_ids = list(self.scheduler.get_block_tables([msg])[0])
 
             assert len(prefill_block_ids) == len(decode_block_ids), (
                 f'#prefill block ids ({len(prefill_block_ids)}) must equal to '
@@ -649,7 +640,7 @@ class EngineLoop:
                 await self._sleep_resume_event.wait()
                 continue
 
-            migration_ready = self.scheduler._schedule_migration()
+            migration_ready = self.scheduler.schedule_migration()
             if not migration_ready and not self.scheduler.has_migration_waiting():
                 await self.migration_event.wait()
             elif migration_ready:
@@ -726,6 +717,7 @@ def build_engine_loop(engine: 'Engine'):
     return EngineLoop(
         req_manager=engine.req_manager,
         scheduler=engine.scheduler,
+        state_checkpoints=engine.scheduler.state_checkpoints,
         executor=engine.executor,
         seq_strategy=engine.seq_strategy,
         inputs_maker=inputs_maker,

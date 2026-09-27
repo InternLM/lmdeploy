@@ -33,8 +33,7 @@ core::Tensor TensorFromObject(const py::object& object, const char* name, bool r
         return *object.cast<TensorPtr>();
     }
     catch (const py::cast_error&) {
-        throw py::type_error(std::string(name)
-                             + " must be a _turbomind.Tensor; use _turbomind.from_dlpack_with_strides");
+        throw py::type_error(std::string(name) + " must be a _turbomind.Tensor; use _turbomind.from_dlpack");
     }
 }
 

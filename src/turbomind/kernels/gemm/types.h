@@ -41,10 +41,12 @@ using Pack = uint32_t;
 
 typedef enum MMA_Tag
 {
-    HMMA_16816 = 0x100,  // sm80+
-    HMMA_1688  = 0x200,  // sm75
-    HMMA_884   = 0x300,  // sm70
-    HMMA_SIMT  = 0x400,  // sm75-
+    HMMA_16816    = 0x100,  // sm80+
+    HMMA_1688     = 0x200,  // sm75
+    HMMA_884      = 0x300,  // sm70
+    HMMA_SIMT     = 0x400,  // sm75-
+    GMMA_64x16_RS = 0x500,  // sm90, register-source A fragment
+    GMMA_64x32_RS = 0x600,  // sm90, native FP8 register-source A fragment
 } MMA_Tag;
 
 typedef enum Op_Tag
@@ -128,6 +130,16 @@ enum class Epilogue : int
     kGatedSilu          = 0x2,
 };
 
+constexpr Epilogue operator|(Epilogue a, Epilogue b)
+{
+    return static_cast<Epilogue>(static_cast<int>(a) | static_cast<int>(b));
+}
+
+constexpr Epilogue operator&(Epilogue a, Epilogue b)
+{
+    return static_cast<Epilogue>(static_cast<int>(a) & static_cast<int>(b));
+}
+
 struct QuantDesc {
     QuantType type;
     int       group_size;
@@ -182,6 +194,7 @@ struct Operation {
     QuantDesc      quant_a;
     QuantDesc      quant_b;
     int            batch_dim;
+    std::uint32_t  family{};
     // void*          reserved;
 };
 
@@ -226,14 +239,41 @@ inline Striding get_mode(const MatrixLayout& m)
     return Striding::kFlat;
 }
 
+// Scratch memory for one in-flight GEMM. Self-contained: constructing with a
+// stream allocates and initializes everything on that stream, then
+// synchronizes it, so the workspace is ready for use on any stream;
+// destruction frees it. Non-copyable, movable; kernels mutate the contents
+// during Run. The stream is used at construction only and never retained.
+//
+// Teardown: owners on a live stream should call `Release(stream)`, which
+// stream-orders the frees after in-flight work. The destructor frees with
+// plain cudaFree (no implicit synchronization for cudaMallocAsync memory), so
+// destroying without Release requires all work to have completed already.
 struct Workspace {
-    void*  barriers;
-    size_t barriers_size;
-    void*  partials;
-    size_t partials_size;
-    void*  tensormaps;
-    size_t tensormaps_size;
-    int*   flags;
+    static constexpr size_t kBarriersSize   = 1 << 20;
+    static constexpr size_t kPartialsSize   = 32 << 20;
+    static constexpr size_t kTensormapsSize = 16384 * 128;  // 16384 tensor maps of 128 bytes
+
+    Workspace() = delete;
+    explicit Workspace(cudaStream_t stream);
+    ~Workspace();
+
+    Workspace(const Workspace&) = delete;
+    Workspace& operator=(const Workspace&) = delete;
+    Workspace(Workspace&&) noexcept;
+    Workspace& operator=(Workspace&&) = delete;
+
+    // Stream-ordered teardown: enqueue the frees on `stream`, after the work
+    // that used this workspace. The destructor then has nothing left to free.
+    void Release(cudaStream_t stream);
+
+    void*  barriers{};
+    size_t barriers_size{};
+    void*  partials{};
+    size_t partials_size{};
+    void*  tensormaps{};
+    size_t tensormaps_size{};
+    int*   flags{};
 };
 
 }  // namespace turbomind::gemm

@@ -5,6 +5,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
@@ -106,6 +107,7 @@ def _bare_model_agent():
     agent.block_cache_plan = object()
     agent.dist_config = SimpleNamespace(attn_tp=8)
     agent.memdecode_agent = None
+    agent._checkpoint_engine_zmq_ctx = None
     return agent
 
 
@@ -124,7 +126,8 @@ def test_weights_update_rotates_mooncake_namespace():
     assert connector.set_weights_generation_calls == [1]
 
 
-def test_finished_serialized_weight_update_rotates_mooncake_namespace(monkeypatch):
+@pytest.mark.parametrize('finished', [False, True])
+def test_serialized_weight_update_rotates_mooncake_namespace(monkeypatch, finished):
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
     events = []
@@ -150,15 +153,16 @@ def test_finished_serialized_weight_update_rotates_mooncake_namespace(monkeypatc
     request = SimpleNamespace(
         serialized_named_tensors='payload',
         load_format='default',
-        finished=True,
+        finished=finished,
     )
 
     agent.update_params(request)
 
-    assert events == ['rotate']
+    assert events == (['rotate'] if finished else [])
 
 
-def test_finished_distributed_weight_update_rotates_mooncake_namespace(monkeypatch):
+@pytest.mark.parametrize('finished', [False, True])
+def test_distributed_weight_update_rotates_mooncake_namespace(monkeypatch, finished):
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
     events = []
@@ -174,6 +178,7 @@ def test_finished_distributed_weight_update_rotates_mooncake_namespace(monkeypat
         is_enabled=lambda: False,
         method=None,
     )
+    agent.state = SimpleNamespace(is_sleeping=True)
     agent.reset_graph_runner = lambda: events.append('reset-graph')
     agent._advance_kv_connector_weights_generation = lambda: events.append('rotate')
     monkeypatch.setattr(agent_module.torch.cuda, 'current_device', lambda: 0)
@@ -185,22 +190,88 @@ def test_finished_distributed_weight_update_rotates_mooncake_namespace(monkeypat
         dtypes=[],
         shapes=[],
         load_format='default',
-        finished=True,
+        finished=finished,
     )
 
     success, message = agent.update_weights_from_distributed(request)
 
     assert success
     assert message == 'Succeeded to update parameter online.'
-    assert events == ['reset-graph', 'rotate']
+    assert events == (['reset-graph', 'rotate'] if finished else [])
+
+
+
+@pytest.mark.parametrize('failure', [None, 'rejected', 'load', 'finalize'])
+def test_ipc_weight_update_rotates_namespace_only_after_success(monkeypatch, failure):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    agent = _bare_model_agent()
+    generations = []
+    agent.kv_connector = SimpleNamespace(set_weights_generation=generations.append)
+    agent.state = SimpleNamespace(is_sleeping=True)
+    events = []
+
+    def load_weights(weights):
+        assert agent._weights_generation == 0
+        assert generations == []
+        events.append('load')
+        if failure == 'load':
+            raise RuntimeError('load failed')
+
+    def finalize_weights(model):
+        assert agent._weights_generation == 0
+        events.append('finalize')
+        if failure == 'finalize':
+            raise RuntimeError('finalize failed')
+
+    model = SimpleNamespace(load_weights=load_weights)
+    agent.patched_model = SimpleNamespace(get_model=lambda: model)
+    agent.spec_agent = SimpleNamespace(get_model=lambda: None, is_enabled=lambda: False)
+    agent.reset_graph_runner = lambda: events.append('reset-graph')
+
+    def receive_weights(ctx, handle, device_id, *, run, post_hook):
+        # Multiple buckets must remain in the old generation until finalization.
+        run([('weight-a', object())])
+        run([('weight-b', object())])
+        post_hook()
+
+    modules = {
+        'zmq': SimpleNamespace(Context=object),
+        'checkpoint_engine.worker': SimpleNamespace(update_weights_from_ipc=receive_weights),
+    }
+    monkeypatch.setattr(agent_module.importlib, 'import_module', lambda name: modules[name])
+    monkeypatch.setattr(agent_module.ModelWeightLoader, '_rename_weights_iterator',
+                        staticmethod(lambda weights, model: iter(weights)))
+    monkeypatch.setattr(agent_module, 'process_weights_after_loading', finalize_weights)
+    monkeypatch.setattr(agent_module.torch.cuda, 'current_device', lambda: 0)
+    monkeypatch.setattr(agent_module.torch.cuda, 'get_device_properties',
+                        lambda device: SimpleNamespace(uuid='test-device'))
+    monkeypatch.setattr(agent_module.torch.cuda, 'synchronize', lambda: None)
+    monkeypatch.setattr(agent_module.torch.cuda, 'empty_cache', lambda: None)
+    request = SimpleNamespace(zmq_handles={'GPU-test-device': 'ipc://test'})
+
+    success, message = agent.update_weights_from_ipc(
+        request, reject_reason='rejected' if failure == 'rejected' else None)
+
+    assert success is (failure is None)
+    assert agent._weights_generation == (1 if success else 0)
+    assert generations == ([1] if success else [])
+    if success:
+        assert events == ['load', 'load', 'finalize', 'reset-graph']
+        extra_config = agent.cache_config.kv_transfer_config.kv_connector_extra_config
+        assert extra_config['weights_generation'] == 1
+    else:
+        assert failure in message
 
 
 def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeypatch):
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
     events = []
-    row_mapping = {'kv': object(), 'index': object()}
-    cache_engine = SimpleNamespace(connector_kv_caches=row_mapping)
+    target_rows = {'kv': object(), 'index': object()}
+    mtp_rows = {'kv': object(), 'index': object()}
+    cache_engine = SimpleNamespace(connector_kv_caches=target_rows)
+    mtp_cache_engine = SimpleNamespace(connector_kv_caches=mtp_rows)
     state_cache_engine = object()
 
     class _OldConnector:
@@ -221,7 +292,16 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
     agent.kv_connector = _OldConnector()
     agent.cache_engine = object()
     agent.state_cache_engine = object()
-    agent.spec_agent = SimpleNamespace(build_cache_engine=lambda stream: events.append(('spec', stream)))
+
+    def build_spec_cache_engine(stream):
+        events.append(('spec', stream))
+        agent.spec_agent.cache_engine = mtp_cache_engine
+
+    agent.spec_agent = SimpleNamespace(
+        cache_engine=None,
+        specdecode_config=None,
+        build_cache_engine=build_spec_cache_engine,
+    )
 
     def fake_cache_engine(*args, **kwargs):
         events.append(('cache', args, kwargs))
@@ -245,12 +325,12 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
     agent.build_cache_engine()
 
     assert events[0] == 'old-shutdown'
-    assert [event[0] for event in events[1:]] == ['cache', 'state', 'factory', 'register', 'spec']
+    assert [event[0] for event in events[1:]] == ['cache', 'state', 'spec', 'factory', 'register']
     cache_call = events[1]
     assert cache_call[2]['rank'] == 7
     assert cache_call[2]['tp_rank'] == 3
     assert cache_call[2]['block_cache_plan'] is agent.block_cache_plan
-    factory_call = events[3]
+    factory_call = events[4]
     assert factory_call[1] is KVConnectorRole.WORKER
     assert factory_call[3] == {
         'global_rank': 7,
@@ -258,7 +338,13 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
         'tp_size': 8,
         'kv_head_replica_num': 4,
     }
-    assert events[4] == ('register', row_mapping)
+    assert events[5] == (
+        'register', {
+            'kv': target_rows['kv'],
+            'index': target_rows['index'],
+            'mtp.kv': mtp_rows['kv'],
+            'mtp.index': mtp_rows['index'],
+        })
     assert agent.kv_connector is new_connector
     assert agent.cache_engine is cache_engine
     assert agent.state_cache_engine is state_cache_engine
@@ -280,7 +366,11 @@ def test_build_cache_engine_propagates_registration_error(monkeypatch):
 
     agent = _bare_model_agent()
     agent.kv_connector = None
-    agent.spec_agent = SimpleNamespace(build_cache_engine=lambda stream: events.append('spec'))
+    agent.spec_agent = SimpleNamespace(
+        cache_engine=None,
+        specdecode_config=None,
+        build_cache_engine=lambda stream: events.append('spec'),
+    )
     cache_engine = SimpleNamespace(connector_kv_caches={'kv': object()})
     dist_ctx = SimpleNamespace(attn_tp_group=SimpleNamespace(rank=3))
     monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: cache_engine)
@@ -292,7 +382,7 @@ def test_build_cache_engine_propagates_registration_error(monkeypatch):
     with pytest.raises(RuntimeError, match='registration failed'):
         agent.build_cache_engine()
 
-    assert events == ['register']
+    assert events == ['spec', 'register']
     assert agent.kv_connector is not None
 
 
@@ -301,34 +391,59 @@ def test_build_cache_engine_propagates_later_initialization_error(monkeypatch):
 
     events = []
 
-    class _Connector:
-
-        def register_kv_caches(self, caches):
-            events.append('register')
-
-        def shutdown(self):
-            events.append('shutdown')
-
     agent = _bare_model_agent()
     agent.kv_connector = None
 
     def fail_spec_cache_build(stream):
+        events.append('spec')
         raise RuntimeError('spec cache failed')
 
-    agent.spec_agent = SimpleNamespace(build_cache_engine=fail_spec_cache_build)
+    agent.spec_agent = SimpleNamespace(
+        cache_engine=None,
+        specdecode_config=None,
+        build_cache_engine=fail_spec_cache_build,
+    )
     cache_engine = SimpleNamespace(connector_kv_caches={'kv': object()})
     dist_ctx = SimpleNamespace(attn_tp_group=SimpleNamespace(rank=3))
     monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: cache_engine)
     monkeypatch.setattr(agent_module, 'StateCacheEngine', lambda *args, **kwargs: object())
-    monkeypatch.setattr(agent_module, 'build_kv_connector', lambda *args, **kwargs: _Connector())
+    monkeypatch.setattr(agent_module, 'build_kv_connector',
+                        lambda *args, **kwargs: events.append('factory'))
     monkeypatch.setattr(agent_module, 'get_dist_manager',
                         lambda: SimpleNamespace(current_context=lambda: dist_ctx))
 
     with pytest.raises(RuntimeError, match='spec cache failed'):
         agent.build_cache_engine()
 
-    assert events == ['register']
-    assert agent.kv_connector is not None
+    assert events == ['spec']
+    assert agent.kv_connector is None
+
+
+def test_build_cache_engine_rejects_mismatched_mtp_parallel_config(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    events = []
+    agent = _bare_model_agent()
+    agent.kv_connector = None
+    agent.dist_config = SimpleNamespace(attn_tp=8, dp=1, ep=1, world_size=8)
+    agent.spec_agent = SimpleNamespace(
+        cache_engine=None,
+        specdecode_config=SimpleNamespace(
+            cache_config=object(),
+            dist_config=SimpleNamespace(attn_tp=1, dp=1, ep=1, world_size=1),
+        ),
+        build_cache_engine=lambda stream: events.append('spec'),
+    )
+
+    monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: events.append('cache'))
+    monkeypatch.setattr(agent_module, 'StateCacheEngine', lambda *args, **kwargs: events.append('state'))
+    monkeypatch.setattr(agent_module, 'build_kv_connector', lambda *args, **kwargs: events.append('factory'))
+
+    with pytest.raises(ValueError, match='parallel configs to match'):
+        agent.build_cache_engine()
+
+    assert events == []
+    assert agent.kv_connector is None
 
 
 def test_sleep_shuts_down_connector_before_dropping_cache(monkeypatch):
@@ -590,6 +705,93 @@ def test_model_agent_connector_save_hook_runs_between_forward_and_progress_poll(
         ('bind', metadata),
         'load',
         'forward',
+        'save',
+        'poll',
+        'clear',
+    ]
+
+
+def test_model_agent_defers_connector_save_until_speculative_forward(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    events = []
+
+    class _Connector:
+
+        def bind_connector_metadata(self, value):
+            events.append(('bind', value))
+
+        def start_load_kv(self):
+            events.append('load')
+
+        def start_save_kv(self):
+            events.append('save')
+
+        def get_finished(self):
+            events.append('poll')
+            return None
+
+        def clear_connector_metadata(self):
+            events.append('clear')
+
+    async def target_forward(_inputs, return_logits, cache_inputs=None):
+        events.append('target')
+        return {'logits': torch.zeros((1, 1, 1))}
+
+    async def speculative_forward(*args, **kwargs):
+        events.append('mtp')
+        inputs = args[0]
+        return inputs, torch.ones(1, dtype=torch.long), None, None
+
+    monkeypatch.setattr(
+        agent_module,
+        'get_dist_manager',
+        lambda: SimpleNamespace(current_context=lambda: SimpleNamespace(
+            dist_config=SimpleNamespace(attn_tp=1, dp=1))),
+    )
+
+    agent = agent_module.BaseModelAgent.__new__(agent_module.BaseModelAgent)
+    agent.rank = 0
+    agent.kv_connector = _Connector()
+    agent.spec_agent = SimpleNamespace(is_enabled=lambda: True)
+    agent.need_output = False
+    agent.memdecode_agent = None
+    agent.cache_engine = None
+    agent.agent_strategy = SimpleNamespace(
+        slice_outputs=lambda value, seq_length: value,
+        slice_extra_inputs=lambda extra, inputs, output: extra,
+    )
+    agent._async_model_forward = target_forward
+    agent._prepare_inputs_prefill = lambda value, delta: value
+    agent._step_postprocess_without_output = speculative_forward
+    agent._push_output = lambda output: pytest.fail('unexpected output')
+
+    inputs = SimpleNamespace(
+        is_dummy=False,
+        is_decoding=False,
+        input_ids=torch.tensor([1]),
+        seq_length=torch.tensor([1]),
+        is_chunk=True,
+        is_first_chunk=False,
+        is_last_chunk=False,
+        dp_meta=None,
+        logits_indices=None,
+        seq_logit_length=None,
+    )
+    sampling_inputs = SimpleNamespace(get_delta=lambda: None)
+
+    metadata = KVConnectorMetadata()
+    asyncio.run(agent._async_step(
+        inputs=inputs,
+        sampling_inputs=sampling_inputs,
+        kv_connector_metadata=metadata,
+    ))
+
+    assert events == [
+        ('bind', metadata),
+        'load',
+        'target',
+        'mtp',
         'save',
         'poll',
         'clear',

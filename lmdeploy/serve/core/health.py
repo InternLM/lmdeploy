@@ -47,13 +47,13 @@ class EngineHealthMonitor:
             async_engine: Engine instance to probe; ``None`` marks the service
                 unhealthy until an engine is attached.
             poll_interval: Seconds between consecutive ``probe_once()`` calls in
-                the background loop (default 12.0). Should be greater than
-                ``probe_timeout`` to reduce overlapping probes. Overridden by
+                the background loop (default 12.0). Overridden by
                 ``LMDEPLOY_HEALTH_POLL_INTERVAL`` when that variable is set.
-            probe_timeout: Maximum seconds to wait for a single
-                ``health_probe()`` (backend ``get_health_status()``) before
-                reporting that probe as unhealthy (default 10.0). Overridden by
-                ``LMDEPLOY_HEALTH_PROBE_TIMEOUT`` when that variable is set.
+            probe_timeout: Maximum seconds to wait for a ``health_probe()``
+                before reporting that probe as unhealthy (default 10.0). The
+                probe continues in the background so a late result can be reused.
+                Overridden by ``LMDEPLOY_HEALTH_PROBE_TIMEOUT`` when that
+                variable is set.
             unhealthy_after: Seconds without a successful probe or scheduler
                 progress before the service is considered unhealthy (default
                 90.0). Overridden by ``LMDEPLOY_HEALTH_UNHEALTHY_AFTER`` when
@@ -67,9 +67,10 @@ class EngineHealthMonitor:
         self.unhealthy_after = _env_override_float(HEALTH_UNHEALTHY_AFTER, unhealthy_after)
         if self.poll_interval <= self.probe_timeout:
             logger.warning('Engine health poll_interval (%.1fs) should be greater than probe_timeout (%.1fs) '
-                             'to avoid overlapping probes.',
+                             'to avoid repeatedly checking a pending probe.',
                              self.poll_interval, self.probe_timeout)
         self._task: asyncio.Task | None = None
+        self._health_probe_task: asyncio.Task | None = None
         self._started_time = time.monotonic()
         self._last_success_time: float | None = None
         # Background polling and on-demand /health refreshes both update the
@@ -107,18 +108,36 @@ class EngineHealthMonitor:
         if self.async_engine is None:
             result = dict(status='unhealthy',
                           message='Async engine is not initialized.')
+        elif self.async_engine.is_sleeping:
+            result = dict(status='sleeping',
+                          message='Engine is sleeping.')
         else:
+            health_probe_task = self._health_probe_task
+            if health_probe_task is not None and not health_probe_task.done():
+                logger.info('Engine health probe skipped: previous backend health probe is still pending.')
+                return
+            if health_probe_task is None:
+                health_probe_task = asyncio.create_task(
+                    self.async_engine.health_probe(scheduler_stall_timeout=self.unhealthy_after),
+                    name='EngineHealthProbe',
+                )
+                self._health_probe_task = health_probe_task
             try:
-                result = await self.async_engine.health_probe(timeout=self.probe_timeout,
-                                                              scheduler_stall_timeout=self.unhealthy_after)
+                if health_probe_task.done():
+                    result = health_probe_task.result()
+                else:
+                    result = await asyncio.wait_for(asyncio.shield(health_probe_task), timeout=self.probe_timeout)
+            except asyncio.TimeoutError:
+                result = dict(status='unhealthy',
+                              message=f'Backend health probe timed out after {self.probe_timeout:.1f}s.')
             except Exception as e:
+                self._health_probe_task = None
                 result = dict(status='unhealthy',
                               message=f'Engine health probe failed: {e}')
+            else:
+                self._health_probe_task = None
 
         status = result['status']
-        if status == 'pending':
-            logger.info('Engine health probe skipped: previous backend health probe is still pending.')
-            return
         if status in ('healthy', 'sleeping'):
             self._last_success_time = probe_time
         self._snapshot = dict(status=status, message=result['message'])

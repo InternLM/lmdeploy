@@ -101,7 +101,7 @@ public:
         }
     };
 
-    KernelImplSm90()
+    explicit KernelImplSm90(const Family& family): Kernel{family}
     {
         desc_.order_a = kRowMajor;  // m, k
         desc_.order_b = kColMajor;  // k, n
@@ -110,7 +110,7 @@ public:
         desc_.type_a              = data_type_v<typename Gemm::Ta>;
         desc_.type_b              = data_type_v<typename Gemm::Tb>;
         desc_.type_c              = data_type_v<typename Gemm::Tc>;
-        desc_.supports_fused_silu = Gemm::kSupportsFusedSilu;
+        desc_.supported_epilogues = Gemm::kSupportsFusedSilu ? Epilogue::kGatedSilu : Epilogue::kNone;
 
         desc_.striding_a = Gemm::kStridingA;
         desc_.striding_b = Gemm::kStridingB;
@@ -129,9 +129,9 @@ public:
 
         info_.chunk_size_k = Gemm::TILE_K;
 
-        desc_.align.x = 1;  // OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
-        desc_.align.y = 1;  // OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
-        desc_.align.z = 1;  // Gemm::TILE_K;
+        desc_.align.x = 1;    // OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
+        desc_.align.y = 1;    // OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
+        desc_.align.z = 128;  // QuantType::kB, group size 128.
 
         desc_.policy_a = 0;                 // (int)IterA::Policy::kEvictPolicy;
         desc_.policy_b = 0;                 // (int)IterB::Policy::kEvictPolicy;
@@ -154,6 +154,10 @@ public:
 
         desc_.arch = Gemm::Arch::value;
 
+        if (!CheckArch()) {
+            return;
+        }
+
         auto func = gemm_kernel_name<Gemm>;
 
         cudaFuncGetAttributes(&info_.attr, func);
@@ -162,9 +166,7 @@ public:
             cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, info_.dynamic_smem_size);
         }
 
-        if (1) {
-            cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
-        }
+        cudaFuncSetAttribute(func, cudaFuncAttributeNonPortableClusterSizeAllowed, 16);
 
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(
             &info_.max_active_ctas, func, Gemm::CTA_SIZE, info_.dynamic_smem_size);
@@ -184,6 +186,8 @@ public:
                const MatrixLayout& _Bdesc,
                const void*         V,
                const MatrixLayout& _Vdesc,
+               const void*         global_scale,
+               const MatrixLayout& global_scale_desc,
                float               beta,
                const void*         C,
                const MatrixLayout& Cdesc,
@@ -196,6 +200,8 @@ public:
                Workspace&          workspace,
                cudaStream_t        stream) override
     {
+        (void)global_scale;
+        (void)global_scale_desc;
         using Sched = typename Gemm::Scheduler;
 
         MatrixLayout Adesc = _Adesc;
@@ -284,19 +290,11 @@ public:
 
         CUtensorMap tm_u{};
         // Indexed-A also gathers U by idxs; no U TMA template.
-        if (U && Gemm::kStridingA != Striding::kIndexed) {
-            // std::cout << "U: " << Udesc << "\n";
+        if (Gemm::kStridingA != Striding::kIndexed) {
             tm_u = make_2d_tma_desc((void*)U, Udesc, {Gemm::kBoxU / kMulticastU, 1}, CU_TENSOR_MAP_SWIZZLE_NONE);
         }
 
-        CUtensorMap            tm_v{};
-        [[maybe_unused]] uint2 box_v{};
-        if (V) {
-            // std::cout << "V: " << Vdesc << "\n";
-            // box_v = {(uint32_t)round_up(cdiv(k, 128), 4), 2};
-            // std::cout << "V: " << Vdesc << ", box: " << box_v.x << "," << box_v.y << "\n";
-            // tm_v = make_2d_tma_desc((void*)V, Vdesc, {box_v.y, box_v.x}, CU_TENSOR_MAP_SWIZZLE_NONE);
-        }
+        CUtensorMap tm_v{};
 
         const auto param_A = to_param((void*)A, Adesc);
         const auto param_B = to_param((void*)B, Bdesc);
@@ -339,13 +337,6 @@ public:
 
         auto func = gemm_kernel_name<Gemm>;
 
-        [[maybe_unused]] static bool _ = [&] {
-            int max_cluster_size = 0;
-            cudaOccupancyMaxPotentialClusterSize(&max_cluster_size, func, &config);
-            // std::cout << "max cluster size: " << max_cluster_size << "\n";
-            return false;
-        }();
-
         cudaLaunchAttribute attrs[1];
 
         attrs[0].id               = cudaLaunchAttributeClusterDimension;
@@ -387,15 +378,8 @@ public:
 
     std::array<size_t, 2> GetWorkspaceSize(int tiles, int splits) const
     {
-        static constexpr bool kSerial = true;
-
         size_t barriers_size = sizeof(int) * tiles;
         size_t partials_size = sizeof(float) * TILE_M * TILE_N * tiles;
-
-        if constexpr (!kSerial) {
-            barriers_size *= splits;
-            partials_size *= splits;
-        }
 
         return {barriers_size, partials_size};
     }

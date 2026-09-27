@@ -1,9 +1,189 @@
+import csv
 import os
+import re
 import subprocess
 import time
+import urllib.request
 
 import fire
 import yaml
+
+SPEC_COUNTER_NAMES = {
+    'drafts': 'lmdeploy:spec_decode_num_drafts_total',
+    'draft_tokens': 'lmdeploy:spec_decode_num_draft_tokens_total',
+    'accepted_tokens': 'lmdeploy:spec_decode_num_accepted_tokens_total',
+    'accepted_tokens_per_pos': 'lmdeploy:spec_decode_num_accepted_tokens_per_pos_total',
+}
+
+def _is_spec_decoding(server_config: dict) -> bool:
+    """Return whether this engine config enables speculative decoding."""
+    return (server_config.get('speculative_algorithm') is not None
+            or server_config.get('speculative_num_draft_tokens') is not None
+            or server_config.get('speculative_draft_model') is not None)
+
+
+def _parse_prometheus_labels(labels_text: str | None) -> dict[str, str]:
+    """Parse the label section of one Prometheus exposition sample."""
+    if not labels_text:
+        return {}
+    labels = {}
+    for match in re.finditer(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:\\.|[^"])*)"', labels_text):
+        labels[match.group(1)] = bytes(match.group(2), 'utf-8').decode('unicode_escape')
+    return labels
+
+
+def _parse_prometheus_metrics(text: str) -> dict[tuple[str, tuple[tuple[str, str], ...]], float]:
+    """Parse numeric samples from Prometheus exposition text."""
+    metrics = {}
+    sample_re = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+([-+0-9.eE]+)(?:\s|$)')
+    for line in text.splitlines():
+        if not line or line.startswith('#'):
+            continue
+        match = sample_re.match(line)
+        if not match:
+            continue
+        name = match.group(1)
+        # Ignore Prometheus client creation timestamps.
+        if name.endswith('_created'):
+            continue
+        try:
+            value = float(match.group(3))
+        except ValueError:
+            continue
+        labels = tuple(sorted(_parse_prometheus_labels(match.group(2)).items()))
+        metrics[(name, labels)] = value
+    return metrics
+
+
+def _scrape_prometheus_metrics(server_ip: str,
+                               server_port: int) -> dict[tuple[str, tuple[tuple[str, str], ...]], float]:
+    """Scrape the API server /metrics endpoint."""
+    metrics_ip = '127.0.0.1' if server_ip in {'0.0.0.0', '::'} else server_ip
+    url = f'http://{metrics_ip}:{server_port}/metrics'
+    with urllib.request.urlopen(url, timeout=5) as response:
+        text = response.read().decode('utf-8', errors='replace')
+    return _parse_prometheus_metrics(text)
+
+
+def _metric_sum(metrics: dict[tuple[str, tuple[tuple[str, str], ...]], float],
+                metric_name: str,
+                position: str | None = None) -> float:
+    total = 0.0
+    for (name, labels_tuple), value in metrics.items():
+        if name != metric_name:
+            continue
+        labels = dict(labels_tuple)
+        if position is not None and labels.get('position') != position:
+            continue
+        total += value
+    return total
+
+
+def _metric_positions(metrics: dict[tuple[str, tuple[tuple[str, str], ...]], float], metric_name: str) -> set[str]:
+    positions = set()
+    for (name, labels_tuple) in metrics:
+        if name != metric_name:
+            continue
+        labels = dict(labels_tuple)
+        if 'position' in labels:
+            positions.add(labels['position'])
+    return positions
+
+
+def _build_specdecode_summary(before: dict[tuple[str, tuple[tuple[str, str], ...]], float],
+                              after: dict[tuple[str, tuple[tuple[str, str], ...]], float]) -> dict[str, str]:
+    """Build a per-client-run speculative decoding summary from Prometheus
+    counter deltas."""
+    num_drafts = _metric_sum(after, SPEC_COUNTER_NAMES['drafts']) - _metric_sum(before, SPEC_COUNTER_NAMES['drafts'])
+    draft_tokens = _metric_sum(after, SPEC_COUNTER_NAMES['draft_tokens']) - _metric_sum(
+        before, SPEC_COUNTER_NAMES['draft_tokens'])
+    accepted_tokens = _metric_sum(after, SPEC_COUNTER_NAMES['accepted_tokens']) - _metric_sum(
+        before, SPEC_COUNTER_NAMES['accepted_tokens'])
+    accept_rate = accepted_tokens / draft_tokens if draft_tokens > 0 else float('nan')
+    mean_accept_length = 1 + accepted_tokens / num_drafts if num_drafts > 0 else float('nan')
+
+    positions = sorted(
+        _metric_positions(before, SPEC_COUNTER_NAMES['accepted_tokens_per_pos'])
+        | _metric_positions(after, SPEC_COUNTER_NAMES['accepted_tokens_per_pos']),
+        key=lambda item: int(item) if item.isdigit() else item)
+    per_position = []
+    for pos in positions:
+        accepted_pos = _metric_sum(after, SPEC_COUNTER_NAMES['accepted_tokens_per_pos'], pos) - _metric_sum(
+            before, SPEC_COUNTER_NAMES['accepted_tokens_per_pos'], pos)
+        rate_pos = accepted_pos / num_drafts if num_drafts > 0 else float('nan')
+        per_position.append(f'{pos}:{rate_pos:.6g}')
+
+    return {
+        'spec_num_drafts': f'{num_drafts:.0f}',
+        'spec_num_draft_tokens': f'{draft_tokens:.0f}',
+        'spec_num_accepted_tokens': f'{accepted_tokens:.0f}',
+        'spec_draft_acceptance_rate': f'{accept_rate:.8g}',
+        'spec_mean_acceptance_length': f'{mean_accept_length:.8g}',
+        'spec_per_position_acceptance_rate': ';'.join(per_position),
+    }
+
+
+def _build_run_metadata(server_config: dict) -> dict[str, str]:
+    """Build lightweight columns that identify the benchmark engine config."""
+    spec_method = server_config.get('speculative_algorithm') or 'none'
+    num_spec = server_config.get('speculative_num_draft_tokens')
+    if num_spec is None:
+        num_spec = 0
+    return {
+        'spec_method': str(spec_method),
+        'num_spec': str(num_spec),
+    }
+
+
+def _enrich_output_csv(output_file: str, extra_columns: dict[str, str]) -> None:
+    """Append lightweight engine-identification columns to the latest benchmark
+    CSV row."""
+    if not os.path.exists(output_file):
+        return
+    with open(output_file, newline='') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        fieldnames = list(reader.fieldnames or [])
+    if not rows:
+        return
+    for field in extra_columns:
+        if field not in fieldnames:
+            fieldnames.append(field)
+    rows[-1].update(extra_columns)
+    with open(output_file, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _append_specdecode_summary_csv(model_path: str,
+                                   backend: str,
+                                   server_config: dict,
+                                   data_config: dict,
+                                   output_file: str,
+                                   spec_summary: dict[str, str]) -> None:
+    """Append a compact per-case speculative decoding summary CSV."""
+    summary_file = 'specdecode_metrics_summary.csv'
+    row = {
+        'backend': backend,
+        'model_name': server_config.get('model_name', os.path.basename(model_path)),
+        'output_file': output_file,
+        'dataset_name': data_config.get('dataset_name', ''),
+        'num_prompts': data_config.get('num_prompts', ''),
+        'random_input_len': data_config.get('random_input_len', ''),
+        'random_output_len': data_config.get('random_output_len', ''),
+        'sharegpt_output_len': data_config.get('sharegpt_output_len', ''),
+        'request_rate': data_config.get('request_rate', ''),
+    }
+    row.update(_build_run_metadata(server_config))
+    row.update(spec_summary)
+    fieldnames = list(row)
+    exists = os.path.exists(summary_file)
+    with open(summary_file, 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not exists:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def get_launching_server_cmd(model_path, backend, server_config):
@@ -74,10 +254,12 @@ def get_server_ip_port(backend: str, server_config: dict) -> tuple[str, int]:
     return server_ip, server_port
 
 
-def wait_server_ready(server_ip: str, server_port: int) -> bool:
+def wait_server_ready(server_ip: str, server_port: int, proc: subprocess.Popen | None = None) -> bool:
     """Wait for the API server to become ready."""
     from openai import OpenAI
     while True:
+        if proc is not None and proc.poll() is not None:
+            raise RuntimeError(f'API server exited before becoming ready, returncode={proc.returncode}')
         try:
             client = OpenAI(api_key='DUMMPY', base_url=f'http://{server_ip}:{server_port}/v1')
             model_name = client.models.list().data[0].id
@@ -92,10 +274,12 @@ def wait_server_ready(server_ip: str, server_port: int) -> bool:
 def get_client_cmd(backend: str, server_ip: str, server_port: int, client_config: dict) -> list[str]:
     """Generate the client benchmark command."""
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    if backend in ['turbomind', 'pytorch']:
-        backend = 'lmdeploy'
+    client_config = client_config.copy()
+    client_backend = client_config.pop('client_backend', None) or client_config.pop('backend', None)
+    if client_backend is None:
+        client_backend = 'lmdeploy' if backend in ['turbomind', 'pytorch'] else backend
     cmd = [
-        'python3', f'{current_dir}/profile_restful_api.py', '--backend', backend, '--host', server_ip, '--port',
+        'python3', f'{current_dir}/profile_restful_api.py', '--backend', client_backend, '--host', server_ip, '--port',
         str(server_port)
     ]
     for key, value in client_config.items():
@@ -134,15 +318,28 @@ def benchmark(model_path: str, backend: str, server_config: dict, data_config: d
         print(f"Starting api_server: {' '.join(server_cmd)}", flush=True)
         proc = subprocess.Popen(server_cmd)
         # Wait for the server to be ready
-        wait_server_ready(server_ip, server_port)
+        wait_server_ready(server_ip, server_port, proc)
         # Run benchmarks
         output_file = get_output_file(model_path, backend, server_config)
         for data in data_config:
             data = data.copy()
+            collect_spec_metrics = _is_spec_decoding(server_config)
             data['output_file'] = output_file
             client_cmd = get_client_cmd(backend, server_ip, server_port, data)
             print(f"Running benchmark: {' '.join(client_cmd)}")
+            spec_metrics_before = _scrape_prometheus_metrics(server_ip, server_port) if collect_spec_metrics else None
             subprocess.run(client_cmd, check=True)
+            _enrich_output_csv(output_file, _build_run_metadata(server_config))
+            if spec_metrics_before is not None:
+                try:
+                    spec_metrics_after = _scrape_prometheus_metrics(server_ip, server_port)
+                    spec_summary = _build_specdecode_summary(spec_metrics_before, spec_metrics_after)
+                    _append_specdecode_summary_csv(model_path, backend, server_config, data, output_file, spec_summary)
+                    print('Recorded specdecode metrics: '
+                          f"accept_rate={spec_summary['spec_draft_acceptance_rate']}, "
+                          f"mean_accept_len={spec_summary['spec_mean_acceptance_length']}")
+                except Exception as e:
+                    print(f'Warning: failed to record specdecode metrics after benchmark: {e}')
     except Exception as e:
         print(f'Unexpected error: {e}')
         raise
@@ -198,20 +395,21 @@ def main(backend: str, config_path: str, model_path: str | None = None):
     """
     with open(config_path) as f:
         config = yaml.safe_load(f)
-        server_config = config['server']
+        base_server_config = config['server']
         engine_configs = config['engine']
         data_config = config['data']
         if isinstance(engine_configs, dict):
             engine_configs = [engine_configs]
         assert isinstance(engine_configs, list) and all(isinstance(s, dict) for s in engine_configs)
+        user_model_path = model_path
         for engine_config in engine_configs:
-            server_config = server_config.copy()
+            server_config = base_server_config.copy()
             server_config.update(engine_config)  # Merge engine config with server config
             # The model_path provided by the user will override the model_path in the config file.
-            model_path = model_path or server_config.pop('model_path')
+            run_model_path = user_model_path or server_config.pop('model_path')
             # Remove model_path from server_config to avoid passing it to the server command
             server_config.pop('model_path', None)
-            benchmark(model_path, backend, server_config, data_config)
+            benchmark(run_model_path, backend, server_config, data_config)
 
 
 if __name__ == '__main__':

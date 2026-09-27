@@ -87,6 +87,14 @@ class UniExecutor(ExecutorBase):
         """Build cache engine."""
         self.model_agent.build_cache_engine()
 
+    def get_checkpoint_engine_status(self):
+        """Get checkpoint-engine readiness."""
+        return [self.model_agent.get_checkpoint_engine_status()]
+
+    def update_weights_from_ipc(self, request, reject_reason: str | None = None):
+        """Receive weights through checkpoint-engine CUDA IPC."""
+        return self.model_agent.update_weights_from_ipc(request, reject_reason)
+
     def warmup(self):
         self.model_agent.warmup()
 

@@ -91,7 +91,6 @@ class Pipeline:
         self.limiter: asyncio.Semaphore = None
         self.session_mgr = self.async_engine.session_mgr
         self.backend_config = self.async_engine.backend_config
-        self.allowed_media_domains = allowed_media_domains
         self.async_engine.start_loop(self.internal_thread.loop, use_async_api=False)
 
     def infer(self,
@@ -117,7 +116,7 @@ class Pipeline:
         """
         is_single = self._is_single(prompts)
         # format prompts to openai message format, which is a list of dicts
-        prompts = MultimodalProcessor.format_prompts(prompts, allowed_media_domains=self.allowed_media_domains)
+        prompts = MultimodalProcessor.format_prompts(prompts)
         pbar = tqdm.tqdm(total=len(prompts)) if use_tqdm else None
         outputs = []
         try:
@@ -167,7 +166,7 @@ class Pipeline:
         Returns:
             Iterator: A generator that yields the output (i.e. instance of class ``Response``) of the inference.
         """
-        prompts = MultimodalProcessor.format_prompts(prompts, allowed_media_domains=self.allowed_media_domains)
+        prompts = MultimodalProcessor.format_prompts(prompts)
         requests = self._request_generator(prompts,
                                            sessions=sessions,
                                            gen_config=gen_config,
@@ -183,11 +182,10 @@ class Pipeline:
         self.async_engine.close()
 
     @staticmethod
-    def _history_to_messages(history, prompt, allowed_media_domains=None):
+    def _history_to_messages(history, prompt):
         def _messages(prompt):
             messages = []
-            for item in MultimodalProcessor.format_prompts(
-                    prompt, allowed_media_domains=allowed_media_domains):
+            for item in MultimodalProcessor.format_prompts(prompt):
                 if isinstance(item, str):
                     messages.append({'role': 'user', 'content': item})
                 elif isinstance(item, dict):
@@ -227,8 +225,7 @@ class Pipeline:
             session = self.session_mgr.get()
         session.update(prompt=prompt, response=None)
 
-        messages = self._history_to_messages(
-            session.history, prompt, allowed_media_domains=self.allowed_media_domains)
+        messages = self._history_to_messages(session.history, prompt)
         generator = self.stream_infer(prompts=messages,
                                       sessions=session,
                                       gen_config=gen_config,

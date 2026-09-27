@@ -249,3 +249,76 @@ class FlashMLASparseImpl(FlashMLAImpl):
             v_scales_zeros=v_scales_zeros,
         )
         return self._prefill_sparse(query, flatten_k, nsa_indices, attn_metadata)
+
+
+class TileLangSparseMLAImpl(FlashMLASparseImpl):
+    """XTuner-compatible TileLang SparseMLA for prefill and BF16 decode."""
+
+    def __init__(self, mla_index_topk: int, **kwargs):
+        super().__init__(mla_index_topk=mla_index_topk, **kwargs)
+        from lmdeploy.pytorch.kernels.cuda.tilelang_sparse_mla import tilelang_sparse_mla_forward
+        self._tilelang_sparse_mla_forward = tilelang_sparse_mla_forward
+
+    def _prefill_sparse(self, query: torch.Tensor, flatten_k: torch.Tensor,
+                        nsa_indices: torch.Tensor,
+                        attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
+        """Run the XTuner TileLang kernel over flattened BF16 KV."""
+        indices = self.index_mapper.map_flat_prefill(nsa_indices,
+                                                     attn_metadata.q_seqlens,
+                                                     attn_metadata.cu_seqlens_k)
+        return self._tilelang_sparse_mla_forward(query, flatten_k, indices,
+                                                 self.scale)
+
+    def _decoding_sparse_bf16(self, query: torch.Tensor, k_cache: torch.Tensor,
+                              nsa_indices: torch.Tensor,
+                              attn_metadata: TritonAttentionMetadata) -> torch.Tensor:
+        """Run decode over a zero-copy flattened BF16 paged-cache view."""
+        if query.dtype != torch.bfloat16 or k_cache.dtype != torch.bfloat16:
+            raise RuntimeError('TileLang SparseMLA decode requires a BF16 query and KV cache.')
+        block_size = k_cache.size(1)
+        max_q_seqlen = self._get_max_q_seqlen(query, attn_metadata)
+
+        # BF16 MLA stores no separate V payload, so physical K blocks are contiguous.
+        storage_k = k_cache.view(-1, *k_cache.shape[2:])
+        indices = self.index_mapper.map_paged_decode(
+            nsa_indices,
+            attn_metadata.block_offsets,
+            max_q_seqlen,
+            block_size,
+        )
+        indices = indices.flatten(0, 1)[:, None]
+        return self._tilelang_sparse_mla_forward(query, storage_k, indices,
+                                                 self.scale)
+
+    def _forward_decoding(self, query: torch.Tensor, k_cache: torch.Tensor,
+                          attn_metadata: TritonAttentionMetadata,
+                          nsa_indices: torch.Tensor = None) -> torch.Tensor:
+        """Run TileLang SparseMLA decoding without a FlashMLA fallback."""
+        if nsa_indices is None:
+            raise RuntimeError('Sparse MLA requires DSA top-k indices.')
+        if k_cache.dtype == torch.float8_e4m3fn:
+            raise RuntimeError('TileLang SparseMLA decode does not support an FP8 MLA KV cache.')
+        return self._decoding_sparse_bf16(query, k_cache, nsa_indices,
+                                          attn_metadata)
+
+    def _forward_prefill(self,
+                         query: torch.Tensor,
+                         k_cache: torch.Tensor,
+                         v_cache: torch.Tensor,
+                         attn_metadata: TritonAttentionMetadata,
+                         nsa_indices: torch.Tensor = None,
+                         k_scales_zeros: torch.Tensor = None,
+                         v_scales_zeros: torch.Tensor = None) -> torch.Tensor:
+        """Use TileLang even when top-k covers the complete sequence."""
+        if nsa_indices is None:
+            raise RuntimeError('TileLang SparseMLA requires DSA top-k indices.')
+        flatten_k, _ = self._flatten_prefill_kv_cache(
+            k_cache,
+            v_cache,
+            attn_metadata,
+            out_dtype=query.dtype,
+            kv_layout='shd',
+            k_scales_zeros=k_scales_zeros,
+            v_scales_zeros=v_scales_zeros,
+        )
+        return self._prefill_sparse(query, flatten_k, nsa_indices, attn_metadata)

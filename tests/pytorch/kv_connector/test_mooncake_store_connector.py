@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 import pickle
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,6 +11,7 @@ from lmdeploy.pytorch.kv_connector import (
     KVConnectorOutput,
     KVConnectorResult,
     KVConnectorRole,
+    KVConnectorStepInput,
 )
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker as worker_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.connector import MooncakeStoreConnector
@@ -123,12 +123,14 @@ def test_scheduler_without_transfer_work_is_fail_closed(cache_config):
     request = MagicMock(seq_id=17)
     request.history_multimodals.empty.return_value = True
     request.history_embeddings = []
-    request.get_prefix_cache_max_match_step.return_value = 0
+    request.get_prefix_cache_max_candidate_step.return_value = 0
+    request.clamp_prefix_cache_match_step.return_value = 0
+    request.prefix_cache.recompute_overlap.recompute_blocks = 0
 
     assert connector.get_num_new_matched_tokens(request, 0) == (0, False)
     assert connector.update_state_after_alloc(request, [1, 2], 0) is None
-    scheduler_output = SimpleNamespace(connector_token_lens=())
-    assert connector.build_connector_meta(scheduler_output) is None
+    step_input = KVConnectorStepInput()
+    assert connector.build_connector_meta(step_input) is None
     assert connector.on_new_request(request) is None
     assert connector.update_connector_output(KVConnectorOutput()) == KVConnectorResult()
     assert connector.request_finished(request) is None
@@ -163,7 +165,7 @@ def test_scheduler_methods_delegate_arguments_and_results(cache_config):
     assert scheduler is not None
 
     request = object()
-    scheduler_output = object()
+    step_input = object()
     metadata = MooncakeStoreConnectorMetadata()
     scheduler.get_num_new_matched_tokens = MagicMock(return_value=(17, True))
     scheduler.update_state_after_alloc = MagicMock(return_value=None)
@@ -183,8 +185,8 @@ def test_scheduler_methods_delegate_arguments_and_results(cache_config):
     assert connector.update_state_after_alloc(request, [4, 5], 14) is None
     scheduler.update_state_after_alloc.assert_called_once_with(request, [4, 5], 14)
 
-    assert connector.build_connector_meta(scheduler_output) is metadata
-    scheduler.build_connector_meta.assert_called_once_with(scheduler_output)
+    assert connector.build_connector_meta(step_input) is metadata
+    scheduler.build_connector_meta.assert_called_once_with(step_input)
 
     assert connector.on_new_request(request) is None
     scheduler.on_new_request.assert_called_once_with(request)
@@ -243,9 +245,9 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
 def test_empty_scheduler_has_no_metadata(cache_config):
     connector = MooncakeStoreConnector(KVConnectorRole.SCHEDULER, cache_config)
 
-    scheduler_output = SimpleNamespace(connector_token_lens=())
-    first = connector.build_connector_meta(scheduler_output)
-    second = connector.build_connector_meta(scheduler_output)
+    step_input = KVConnectorStepInput()
+    first = connector.build_connector_meta(step_input)
+    second = connector.build_connector_meta(step_input)
 
     assert first is None
     assert second is None

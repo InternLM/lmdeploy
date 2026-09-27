@@ -865,17 +865,29 @@ def test_route_major_w4a16_rejects_partial_topk_row():
         )
 
 
-def test_cuda_backend_exposes_direct_packed_w4a16_builder():
-    from lmdeploy.pytorch.backends.base import OpType
+def test_cuda_backend_builds_direct_packed_w4a16():
     from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
-    from lmdeploy.pytorch.backends.moe import FusedMoEW4A16Impl
+    from lmdeploy.pytorch.backends.moe import FusedMoEW4A16BuildSpec, FusedMoEW4A16Impl
 
-    builder = CudaOpsBackend.get_layer_impl_builder(OpType.FusedMoEW4A16)
-    impl = builder.build(top_k=2, num_experts=4, num_bits=4, group_size=32)
+    spec_kwargs = dict(
+        top_k=2,
+        num_experts=4,
+        renormalize=False,
+        num_bits=4,
+        hidden_dim=1,
+        ep_size=1,
+        ep_group=None,
+        output_dtype=torch.bfloat16,
+        num_max_dispatch_tokens_per_rank=128,
+        layer_idx=0,
+    )
+    impl = CudaOpsBackend.build_op(
+        FusedMoEW4A16BuildSpec(group_size=32, **spec_kwargs))
 
     assert isinstance(impl, FusedMoEW4A16Impl)
     assert impl.top_k == 2
     assert impl.num_experts == 4
 
     with pytest.raises(ValueError, match='INT4 group-size 32'):
-        builder.build(top_k=2, num_experts=4, num_bits=4, group_size=64)
+        CudaOpsBackend.build_op(
+            FusedMoEW4A16BuildSpec(group_size=64, **spec_kwargs))

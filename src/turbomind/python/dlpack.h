@@ -158,6 +158,8 @@ typedef enum
     kDLComplex = 5U,
     /*! \brief boolean */
     kDLBool = 6U,
+    /*! \brief 8-bit E4M3 floating point with finite-only NaN encoding */
+    kDLFloat8_e4m3fn = 10U,
 } DLDataTypeCode;
 
 /*!

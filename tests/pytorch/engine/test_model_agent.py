@@ -604,6 +604,89 @@ def test_build_spec_agent_shares_guided_helper_with_proposer(monkeypatch):
     assert spec_agent.guided_helper.manager is guided_manager
     assert proposer.guided_helper is spec_agent.guided_helper
 
+def _make_minimal_build_agent(target_layer_ids, mask_token_id=99):
+    from lmdeploy.pytorch.config import BackendConfig
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+    from lmdeploy.pytorch.spec_decode.base import BaseSpecModelAgent
+
+    spec_agent = SimpleNamespace(
+        _enabled=True,
+        is_enabled=lambda: True,
+        method='dflash',
+        specdecode_config=SimpleNamespace(target_layer_ids=target_layer_ids, mask_token_id=mask_token_id),
+        num_spec_tokens=15,
+    )
+    spec_agent.build_model_context = lambda: BaseSpecModelAgent.build_model_context(spec_agent)
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.model_path = 'target-model'
+    agent.adapters = None
+    agent.device = torch.device('cpu')
+    agent.rank = 0
+    agent.backend_config = BackendConfig()
+    agent.model_config = SimpleNamespace(
+        custom_module_map=None,
+        quant_config=None,
+        fp32_lm_head=False,
+        tie_word_embeddings=False,
+    )
+    agent.misc_config = SimpleNamespace(
+        enable_return_routed_experts=False,
+        language_model_only=False,
+        dllm_config=None,
+        empty_init=True,
+    )
+    agent.need_output = False
+    agent.strategy_factory = None
+    agent.cache_config = SimpleNamespace(max_batches=4)
+    agent.spec_agent = spec_agent
+    return agent
+
+
+def test_model_agent_dflash_layers_flow_through_build_context(monkeypatch):
+    import lmdeploy.pytorch.engine.model_agent.agent as agent_mod
+
+    agent = _make_minimal_build_agent(target_layer_ids=(1, 3, 5))
+    captured = {}
+    patched_model = object()
+
+    def build_patched_model(model_config, device=None, build_model_ctx=None):
+        captured['model_config'] = model_config
+        captured['device'] = device
+        captured['build_model_ctx'] = build_model_ctx
+        return patched_model
+
+    monkeypatch.setattr(agent_mod, 'build_patched_model', build_patched_model)
+
+    agent._build_model()
+
+    assert captured['model_config'] is agent.model_config
+    assert captured['device'] == torch.device('cpu')
+    spec_model_ctx = captured['build_model_ctx'].spec_model_ctx
+    assert spec_model_ctx.target_aux_hidden_state_layers == (1, 3, 5)
+    assert spec_model_ctx.speculative_mask_token_id == 99
+    assert agent.patched_model is patched_model
+    assert agent.build_model_ctx is captured['build_model_ctx']
+
+
+def test_spec_agent_build_model_context_is_capability_based():
+    from lmdeploy.pytorch.model_inputs import SpecModelBuildContext
+    from lmdeploy.pytorch.spec_decode.base import BaseSpecModelAgent
+
+    agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+    agent.method = 'qwen3_5_mtp'
+    agent.specdecode_config = SimpleNamespace(target_layer_ids=None, mask_token_id=None)
+
+    assert agent.build_model_context() == SpecModelBuildContext()
+
+    # Model-build capabilities are propagated independently of the algorithm
+    # name. Algorithm-specific parsing and validation happen upstream.
+    agent.specdecode_config = SimpleNamespace(target_layer_ids=(2, 4), mask_token_id=99)
+    assert agent.build_model_context() == SpecModelBuildContext(
+        target_aux_hidden_state_layers=(2, 4), speculative_mask_token_id=99)
+
+    agent.specdecode_config = None
+    assert agent.build_model_context() == SpecModelBuildContext()
+
 
 def test_spec_agent_reset_runtime_state_discards_chunk_carry():
     from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
@@ -1318,6 +1401,63 @@ class TestResetGraphRunner:
         assert agent._prev_chunk_output is None
         assert agent._prev_chunk_last_logit is None
 
+    @pytest.mark.parametrize(
+        'is_sleeping,prefill_token_sizes,expected_warmup',
+        [
+            (False, [512], True),
+            (False, [], False),
+            (True, [512], False),
+        ],
+        ids=['awake-piecewise', 'awake-without-piecewise', 'sleeping-piecewise'],
+    )
+    def test_completed_distributed_update_refreshes_awake_piecewise_graphs(
+            self, monkeypatch, is_sleeping, prefill_token_sizes, expected_warmup):
+        from lmdeploy.serve.openai.protocol import UpdateWeightsFromDistributedRequest
+
+        events = []
+        model = object()
+        agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent._model_update_group = {'update': object()}
+        agent.cache_config = SimpleNamespace(kv_transfer_config=None)
+        agent.model_config = None
+        agent.kv_connector = None
+        agent.patched_model = SimpleNamespace(
+            get_model=lambda: model,
+            get_prefill_warmup_token_sizes=lambda: prefill_token_sizes,
+        )
+        agent.spec_agent = SimpleNamespace(
+            get_model=lambda: None,
+            is_enabled=lambda: False,
+        )
+        agent.state = SimpleNamespace(is_sleeping=is_sleeping)
+        agent.all_context = nullcontext
+        agent.reset_graph_runner = lambda: events.append('reset')
+        agent.warmup = lambda: events.append('warmup')
+
+        monkeypatch.setattr(torch.cuda, 'current_device', lambda: 0)
+        monkeypatch.setattr(torch.cuda, 'synchronize', lambda: events.append('synchronize'))
+        monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: events.append('empty_cache'))
+        monkeypatch.setattr(
+            'lmdeploy.pytorch.engine.model_agent.agent.process_weights_after_loading',
+            lambda updated_model: events.append(('finalize', updated_model)),
+        )
+
+        request = UpdateWeightsFromDistributedRequest(
+            names=[],
+            dtypes=[],
+            shapes=[],
+            group_name='update',
+            finished=True,
+        )
+        result = agent.update_weights_from_distributed(request)
+
+        expected = [('finalize', model), 'synchronize', 'reset']
+        if expected_warmup:
+            expected.append('warmup')
+        expected.append('empty_cache')
+        assert result == (True, 'Succeeded to update parameter online.')
+        assert events == expected
+
     def test_spec_agent_reset_graph_runner_uses_draft_context(self):
         from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
 
@@ -1552,6 +1692,137 @@ class TestModelAgentWakeup:
         ]
 
 
+class TestCheckpointEngineWeightUpdate:
+
+    @staticmethod
+    def _make_agent(events):
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+        class _Module:
+
+            def update_weights(self):
+                events.append('module_update_weights')
+
+        class _Model:
+
+            def parameters(self):
+                yield SimpleNamespace(device=torch.device('cuda'))
+
+            def load_weights(self, weights):
+                events.append(('load_weights', [name for name, _ in weights]))
+
+            def named_modules(self):
+                return [('', self), ('linear', _Module())]
+
+        class _PatchedModel:
+
+            def __init__(self):
+                self.model = _Model()
+
+            def get_model(self):
+                return self.model
+
+        class _SpecAgent:
+            method = None
+
+            def is_enabled(self):
+                return False
+
+            def get_model(self):
+                return None
+
+        agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.patched_model = _PatchedModel()
+        agent.spec_agent = _SpecAgent()
+        agent.memdecode_agent = None
+        agent._checkpoint_engine_zmq_ctx = None
+        agent.state = SimpleNamespace(is_sleeping=True)
+        agent.cache_config = SimpleNamespace(kv_transfer_config=None)
+        agent.model_config = None
+        agent.kv_connector = None
+
+        @contextmanager
+        def _all_context():
+            yield
+
+        agent.all_context = _all_context
+        agent.reset_graph_runner = lambda: events.append('reset_graph_runner')
+        return agent
+
+    def test_update_receives_buckets_and_finalizes_once(self, monkeypatch):
+        from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+        from lmdeploy.serve.openai.protocol import UpdateWeightsFromIPCRequest
+
+        events = []
+        agent = self._make_agent(events)
+
+        class _Context:
+            pass
+
+        context = _Context()
+
+        def _update_weights_from_ipc(zmq_ctx, zmq_handle, device_id, *, run, post_hook):
+            events.append(('receiver', zmq_ctx, zmq_handle, device_id))
+            run([('model.weight', torch.ones(1))])
+            post_hook()
+
+        modules = {
+            'zmq': SimpleNamespace(Context=lambda: context),
+            'checkpoint_engine.worker': SimpleNamespace(update_weights_from_ipc=_update_weights_from_ipc),
+        }
+        monkeypatch.setattr(agent_module.importlib, 'import_module', lambda name: modules[name])
+        monkeypatch.setattr(agent_module.ModelWeightLoader, '_rename_weights_iterator',
+                            staticmethod(lambda weights, _model: iter(weights)))
+        monkeypatch.setattr(torch.cuda, 'current_device', lambda: 1)
+        monkeypatch.setattr(torch.cuda, 'get_device_properties',
+                            lambda _device: SimpleNamespace(uuid='device-uuid'))
+        monkeypatch.setattr(torch.cuda, 'synchronize', lambda: events.append('synchronize'))
+        monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: events.append('empty_cache'))
+        request = UpdateWeightsFromIPCRequest(
+            zmq_handles={'GPU-device-uuid': 'ipc://checkpoint-engine.sock'})
+
+        success, message = agent.update_weights_from_ipc(request)
+
+        assert success is True
+        assert message == 'Succeeded to update weights from checkpoint-engine IPC.'
+        assert agent._checkpoint_engine_zmq_ctx is context
+        assert events == [
+            ('receiver', context, 'ipc://checkpoint-engine.sock', 1),
+            ('load_weights', ['model.weight']),
+            'module_update_weights',
+            'synchronize',
+            'reset_graph_runner',
+            'empty_cache',
+        ]
+
+    def test_rejected_update_does_not_load_weights(self, monkeypatch):
+        from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+        from lmdeploy.serve.openai.protocol import UpdateWeightsFromIPCRequest
+
+        events = []
+        agent = self._make_agent(events)
+
+        def _update_weights_from_ipc(_ctx, _handle, device_id, *, run, post_hook):
+            run([('model.weight', torch.ones(1))])
+
+        modules = {
+            'zmq': SimpleNamespace(Context=lambda: object()),
+            'checkpoint_engine.worker': SimpleNamespace(update_weights_from_ipc=_update_weights_from_ipc),
+        }
+        monkeypatch.setattr(agent_module.importlib, 'import_module', lambda name: modules[name])
+        monkeypatch.setattr(torch.cuda, 'current_device', lambda: 0)
+        monkeypatch.setattr(torch.cuda, 'get_device_properties',
+                            lambda _device: SimpleNamespace(uuid='device-uuid'))
+        request = UpdateWeightsFromIPCRequest(
+            zmq_handles={'GPU-device-uuid': 'ipc://checkpoint-engine.sock'})
+
+        success, message = agent.update_weights_from_ipc(request, 'engine is awake')
+
+        assert success is False
+        assert 'engine is awake' in message
+        assert not any(isinstance(event, tuple) and event[0] == 'load_weights' for event in events)
+
+
 class TestMemDecodeModelAgentLifecycle:
 
     def _make_agent(self, enabled=True):
@@ -1581,6 +1852,7 @@ class TestMemDecodeModelAgentLifecycle:
         agent.kv_connector = None
         agent.cache_engine = object()
         agent.state_cache_engine = object()
+        agent._checkpoint_engine_zmq_ctx = None
 
         @contextmanager
         def _all_context():

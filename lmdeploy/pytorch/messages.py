@@ -29,8 +29,7 @@ from lmdeploy.vl.constants import Modality
 from .block import LogicalTokenBlocks
 
 if TYPE_CHECKING:
-    from lmdeploy.pytorch.paging.scheduler import Scheduler
-    from lmdeploy.pytorch.paging.seq_states.states import StateBase
+    from lmdeploy.pytorch.paging.seq_states.states import SequenceLifecycle, StateBase
     from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
@@ -211,6 +210,7 @@ class SequenceMeta:
     strategy: 'SequenceStrategy' = None
     sampling_strategy: 'SamplingStrategy' = None
     use_mrope: bool = False
+    enable_prefix_caching: bool = False
 
 
 class SequenceManager:
@@ -223,7 +223,7 @@ class SequenceManager:
         self.seq_meta = seq_meta
         self._seq_count = 0
 
-    def _new_seq_id(self):
+    def new_sequence_id(self):
         seq_id = self._seq_count
         self._seq_count += 1
         return seq_id
@@ -240,16 +240,16 @@ class SequenceManager:
         """Num sequences."""
         return len(self.get_sequences(status))
 
-    def add_sequence(self, seq: 'SchedulerSequence'):
-        """Add sequence."""
+    def register_sequence(self, seq: 'SchedulerSequence'):
+        """Register a sequence in the global and status indexes."""
         seq_id = seq.seq_id
         status = seq.status
         status_map = self._status_seq_map[status]
         self._seq_map[seq_id] = seq
         status_map[seq_id] = seq
 
-    def remove_sequence(self, seq: 'SchedulerSequence'):
-        """Remove sequence."""
+    def unregister_sequence(self, seq: 'SchedulerSequence'):
+        """Remove a sequence from the global and status indexes."""
         seq_id = seq.seq_id
         status = seq.status
         status_map = self._status_seq_map[status]
@@ -284,12 +284,11 @@ def _to_ndarray(token_ids) -> np.ndarray:
 class SchedulerSession:
     """Scheduler session."""
 
-    def __init__(self, session_id: int, seq_manager: SequenceManager, scheduler: 'Scheduler') -> None:
+    def __init__(self, session_id: int, seq_meta: SequenceMeta, lifecycle: 'SequenceLifecycle') -> None:
         self.session_id = session_id
-        self.seq_meta = seq_manager.seq_meta
+        self.seq_meta = seq_meta
         self.sequences: SeqMap = dict()
-        self.seq_manager = seq_manager
-        self.scheduler = scheduler
+        self._lifecycle = lifecycle
 
     def add_sequence(self,
                      token_ids: Tensor,
@@ -301,12 +300,10 @@ class SchedulerSession:
                      resp_cache: bool = False,
                      preserve_cache: bool = False) -> 'SchedulerSequence':
         """Add a new message."""
-        from lmdeploy.pytorch.paging.seq_states.states import build_seq_state
-
         if sampling_param is None:
             sampling_param = SamplingParam()
 
-        seq_id = self.seq_manager._new_seq_id()
+        seq_id = self._lifecycle.new_sequence_id()
         seq = self.seq_meta.strategy.make_sequence(seq_id=seq_id,
                                                    session=self,
                                                    sampling_param=sampling_param,
@@ -320,16 +317,8 @@ class SchedulerSession:
             embeddings=input_embeddings,
             mode=UpdateTokenMode.INPUTS,
         )
-        self.sequences[seq.seq_id] = seq
-
-        # set status
-        # update seq manager
         status = MessageStatus.WAITING if migration_request is None else MessageStatus.MIGRATION_WAITING
-        seq.set_state(build_seq_state(self.scheduler, seq, status))
-        self.seq_manager.add_sequence(seq)
-        connector = self.scheduler.kv_connector
-        if connector is not None:
-            connector.on_new_request(seq)
+        self._lifecycle.add_sequence(seq, status)
 
         # metrics
         seq.record_event(EventType.QUEUED)
@@ -338,10 +327,11 @@ class SchedulerSession:
 
     def remove_sequence(self, seq: 'SchedulerSequence'):
         """Remove sequence."""
-        assert seq.seq_id in self.sequences
-        seq.state.free()
-        self.sequences.pop(seq.seq_id)
-        self.seq_manager.remove_sequence(seq)
+        self._lifecycle.remove_sequence(seq)
+
+    def end_sequence(self, seq: 'SchedulerSequence') -> None:
+        """Notify terminal completion and release the sequence."""
+        self._lifecycle.end_sequence(seq)
 
 
 def _div_up(x, n):
@@ -828,6 +818,14 @@ class SchedulerSequence:
     def status(self):
         return self.state.status
 
+    def activate(self) -> None:
+        """Advance the sequence from its current resumable state."""
+        self.state.activate()
+
+    def finish(self) -> None:
+        """Finish the sequence's current running lifecycle."""
+        self.state.finish()
+
     @property
     def return_logits(self):
         return self.sampling_param.out_logits
@@ -984,7 +982,7 @@ class SchedulerSequence:
         if multimodals is None:
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
-        if self.session.scheduler.cache_config.enable_prefix_caching:
+        if self._seq_meta.enable_prefix_caching:
             self._update_prefix_cache_spans(multimodals)
         self.history_multimodals.add_inputs(multimodals)
 
