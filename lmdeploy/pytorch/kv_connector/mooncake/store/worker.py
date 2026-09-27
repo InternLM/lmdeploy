@@ -477,13 +477,19 @@ class MooncakeStoreWorker:
         )
 
     def lookup(self, token_len: int, block_hashes: Sequence[bytes]) -> int:
-        """Return the longest prefix present for every unique KV-head shard."""
+        """Find a complete FA prefix and, for hybrid, its latest stored
+        state."""
         store = self.store
         if store is None:
             return 0
 
         key_metadata = self.key_metadata
-        full_blocks = min(token_len // key_metadata.block_size, len(block_hashes))
+        block_size = key_metadata.block_size
+        full_blocks = min(token_len // block_size, len(block_hashes))
+        is_hybrid = bool(self._cache_config.states_shapes)
+        if is_hybrid:
+            state_interval_blocks = self._cache_config.mooncake_prefill_save_alignment // block_size
+            full_blocks = full_blocks // state_interval_blocks * state_interval_blocks
         if full_blocks == 0:
             return 0
 
@@ -493,6 +499,15 @@ class MooncakeStoreWorker:
             for block_index in range(full_blocks)
             for rank in range(unique_kv_ranks)
         ]
+        if is_hybrid:
+            # FA remains block-granular: an interval's last key cannot prove
+            # its interior blocks exist. State is sparse and uses every TP rank,
+            # independent of FA's replicated KV-head namespaces.
+            keys.extend(
+                build_store_key(key_metadata, rank, block_hashes[block_index], group_id=1)
+                for block_index in range(state_interval_blocks - 1, full_blocks, state_interval_blocks)
+                for rank in range(self.tp_size)
+            )
         logger.info(
             'Mooncake Store interaction before: operation=lookup_batch_is_exist '
             'global_rank=%d tp_rank=%d tp_size=%d token_len=%d blocks=%d candidate_keys=%d',
@@ -530,16 +545,27 @@ class MooncakeStoreWorker:
                     for rank in range(unique_kv_ranks)):
                 break
             matched_blocks += 1
-        matched_tokens = matched_blocks * key_metadata.block_size
+        fa_matched_tokens = matched_blocks * block_size
+        matched_tokens = fa_matched_tokens
+        if is_hybrid:
+            matched_tokens = 0
+            state_offset = full_blocks * unique_kv_ranks
+            # Only the state at the resume boundary is required. Earlier state
+            # checkpoints may be absent even when the FA prefix is complete.
+            for state_index in range(matched_blocks // state_interval_blocks - 1, -1, -1):
+                offset = state_offset + state_index * self.tp_size
+                if all(exists_states[offset + rank] == 1 for rank in range(self.tp_size)):
+                    matched_tokens = (state_index + 1) * state_interval_blocks * block_size
+                    break
         logger.info(
             'Mooncake Store interaction after: operation=lookup_batch_is_exist '
             'global_rank=%d tp_rank=%d tp_size=%d token_len=%d blocks=%d candidate_keys=%d '
-            'status=ok matched_blocks=%d matched_tokens=%d elapsed_ms=%.3f',
+            'status=ok fa_matched_tokens=%d matched_tokens=%d elapsed_ms=%.3f',
             *self._rank_fields(),
             token_len,
             full_blocks,
             len(keys),
-            matched_blocks,
+            fa_matched_tokens,
             matched_tokens,
             (time.perf_counter() - start) * 1000,
         )

@@ -27,6 +27,7 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     build_store_key,
 )
 from lmdeploy.pytorch.kv_connector.mooncake.store.scheduler import MooncakeStoreScheduler
+from lmdeploy.pytorch.kv_connector.mooncake.store.worker import MooncakeStoreWorker
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta
 from lmdeploy.pytorch.model_inputs import ModelInputs
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
@@ -96,8 +97,8 @@ def _connector_step(
 _scheduler_output = _connector_step
 
 
-def _hybrid_cache_config():
-    return replace(_cache_config('kv_producer'), states_shapes=[((2,), torch.float32)],
+def _hybrid_cache_config(role='kv_producer'):
+    return replace(_cache_config(role), states_shapes=[((2,), torch.float32)],
                    num_state_caches=5, mooncake_state_save_slots=2, mooncake_prefill_save_alignment=8)
 
 
@@ -139,37 +140,134 @@ def test_hybrid_save_slots_survive_request_finish_until_job_completion():
     scheduler.shutdown()
 
 
-def test_hybrid_multimodal_hashes_work_without_local_prefix_cache():
+@pytest.mark.parametrize(('lookup_alignment', 'expected_hit'), [(8, 24), (12, 24), (16, 16)])
+def test_hybrid_multimodal_save_and_lookup_without_local_prefix_cache(lookup_alignment, expected_hit):
     cache_config = _hybrid_cache_config()
     paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache_config,
                        seq_meta=SequenceMeta(4, strategy=ARSequenceStrategy()))
-    store = MooncakeStoreScheduler(cache_config)
-    hashes = []
-    for request_id, content in enumerate((1, 2, 1)):
-        image = MultiModalData(torch.tensor([content]), start=2, end=10)
-        request = paging.add_session(request_id).add_sequence(range(17), multimodals={'image': [image]})
+    producer = MooncakeStoreScheduler(cache_config)
+    image = MultiModalData(torch.tensor([1]), start=2, end=10)
+    source = paging.add_session(0).add_sequence(range(25), multimodals={'image': [image]})
+    metadata = MooncakeStoreKeyMetadata('model', '', 1, 4)
+    stored_keys = set()
+    for end in (8, 16, 24):
+        blocks = tuple(range(end // 4))
+        result = producer.build_connector_meta(_connector_step(
+            (source,), (end,), (blocks,), (blocks,), (1,)))
+        # The first boundary is inside the image; later saves cover its FA
+        # blocks but only persist state at the exact safe boundaries.
+        if end == 8:
+            assert result is None
+            continue
+        save = result.save_requests[0]
+        assert save.state.boundary_tokens == end
+        stored_keys.update(build_store_key(metadata, 0, h) for h in save.block_hashes)
+        stored_keys.add(build_store_key(metadata, 0, save.block_hashes[-1], group_id=1))
+
+    config = replace(_hybrid_cache_config('kv_consumer'), mooncake_prefill_save_alignment=lookup_alignment)
+    consumer = MooncakeStoreScheduler(config)
+    # Exercise the real lookup algorithm over saved keys without CUDA or IPC.
+    worker = MooncakeStoreWorker.__new__(MooncakeStoreWorker)
+    worker._cache_config = config
+    worker.key_metadata = metadata
+    worker.global_rank = worker.tp_rank = 0
+    worker.tp_size = 1
+    worker.store = SimpleNamespace(batch_is_exist=lambda keys: [int(key in stored_keys) for key in keys])
+    consumer.client.lookup = Mock(
+        side_effect=lambda req_id, token_len, hashes, non_block: worker.lookup(token_len, hashes))
+    assert not paging.block_trie.enabled
+    for session_id, (content, span_end, expected) in enumerate(
+            ((1, 10, expected_hit), (2, 10, 0), (1, 11, 0)), start=1):
+        image = MultiModalData(torch.tensor([content]), start=2, end=span_end)
+        request = paging.add_session(session_id).add_sequence(range(25), multimodals={'image': [image]})
         assert request.prefix_cache.multimodal_spans
-        prefix = store._get_request_block_hashes(request, request.seq_id, 12, 4)
-        full = store._get_request_block_hashes(request, request.seq_id, 16, 4)
-        assert prefix == full[:3]
-        fresh = MooncakeStoreScheduler(cache_config)
-        assert fresh._get_request_block_hashes(request, request.seq_id, 16, 4) == full
-        fresh.shutdown()
-        hashes.append(full)
-        # Eight is inside the image. Sixteen has the exact complete state.
-        blocked = _connector_step((request,), (8,), ((0, 1),), ((10, 11),), (1,))
-        assert store.build_connector_meta(blocked) is None
-    assert hashes[0] == hashes[2]
-    assert all(a != b for a, b in zip(hashes[0], hashes[1]))
-    valid = _connector_step((request,), (16,), ((0, 1, 2, 3),), ((10, 11, 12, 13),), (1,))
-    assert store.build_connector_meta(valid).save_requests[0].state.boundary_tokens == 16
-    store.shutdown()
+        assert consumer.get_num_new_matched_tokens(request, 0) == (expected, expected > 0)
+        if expected:
+            plan = consumer._lookup_plans[request.seq_id]
+            state_hash = plan.block_hashes[plan.remote_token_len // 4 - 1]
+            assert build_store_key(metadata, 0, state_hash, group_id=1) in stored_keys
+        consumer.request_finished(request)
+    consumer.shutdown()
+    producer.shutdown()
     paging.shutdown()
 
 
-def test_hybrid_save_alignment_must_be_a_multiple_of_block_size():
+@pytest.mark.parametrize('role', ['kv_producer', 'kv_consumer', 'kv_both'])
+def test_hybrid_save_alignment_must_be_a_multiple_of_block_size(role):
     with pytest.raises(ValueError, match='multiple of block_size'):
-        MooncakeStoreScheduler(replace(_hybrid_cache_config(), mooncake_prefill_save_alignment=6))
+        MooncakeStoreScheduler(replace(_hybrid_cache_config(role), mooncake_prefill_save_alignment=6))
+
+
+@pytest.mark.parametrize(('prompt_len', 'logprob_start', 'expected'), [
+    (8, -1, 0),
+    (9, -1, 8),
+    (16, -1, 8),
+    (17, -1, 16),
+    (25, 12, 8),
+    (25, 7, 0),
+])
+def test_hybrid_lookup_respects_prompt_and_logprob_limits(prompt_len, logprob_start, expected):
+    config = _hybrid_cache_config('kv_consumer')
+    connector = MooncakeStoreConnector(KVConnectorRole.SCHEDULER, config)
+    consumer = connector.connector_scheduler
+    paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), config,
+                       seq_meta=SequenceMeta(4, strategy=ARSequenceStrategy()), kv_connector=connector)
+    request = paging.add_session(0).add_sequence(range(prompt_len))
+    request.sampling_param.num_logprobs = 1
+    request.sampling_param.logprob_start_len = logprob_start
+    consumer.client.lookup = Mock(return_value=expected)
+
+    # Task 3 exposes connector lookup, but paging must wait for hybrid load
+    # support before admitting any external prefix into a running request.
+    assert not paging.kv_load_coordinator.lookup_enabled
+    assert paging.schedule(is_prefill=True).running == [request]
+    consumer.client.lookup.assert_not_called()
+    assert request.num_history_ids == 0
+    assert paging.build_connector_meta([]) is None
+
+    assert consumer.get_num_new_matched_tokens(request, 0) == (expected, expected > 0)
+    if expected:
+        consumer.client.lookup.assert_called_once_with(
+            request.seq_id, expected, build_prefix_block_hashes(request.all_ids[:expected], 4), non_block=True)
+        assert consumer._lookup_plans[request.seq_id].remote_token_len == expected
+    else:
+        consumer.client.lookup.assert_not_called()
+    paging.shutdown()
+
+
+def test_hybrid_lookup_retains_exact_plan_until_local_prefix_catches_up():
+    consumer = MooncakeStoreScheduler(_hybrid_cache_config('kv_consumer'))
+    request = _request(range(25))
+    consumer.client.lookup = Mock(side_effect=(None, 0, 16, 16))
+    assert consumer.get_num_new_matched_tokens(request, 4) == (None, False)
+    assert consumer.get_num_new_matched_tokens(request, 4) == (0, False)
+    assert consumer.get_num_new_matched_tokens(request, 4) == (12, True)
+    plan = consumer._lookup_plans[request.seq_id]
+    assert plan.remote_token_len == 16
+    assert consumer.get_num_new_matched_tokens(request, 8) == (8, True)
+    assert consumer._lookup_plans[request.seq_id] is plan
+    assert consumer.client.lookup.call_count == 3
+    assert consumer.get_num_new_matched_tokens(request, 20) == (0, False)
+    assert request.seq_id not in consumer._lookup_plans
+    consumer.shutdown()
+
+
+@pytest.mark.parametrize('remote_hit', [4, 8])
+def test_hybrid_lookup_rejects_invalid_state_boundary_without_clamping(remote_hit):
+    config = _hybrid_cache_config('kv_consumer')
+    paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), config,
+                       seq_meta=SequenceMeta(4, strategy=ARSequenceStrategy()))
+    image = MultiModalData(torch.tensor([1]), start=6, end=13)
+    request = paging.add_session(0).add_sequence(range(25), multimodals={'image': [image]})
+    consumer = MooncakeStoreScheduler(config)
+    consumer.client.lookup = Mock(return_value=remote_hit)
+
+    # Four is outside the save alignment; eight is inside the image. Neither
+    # can be converted into a shorter, unverified state checkpoint.
+    assert consumer.get_num_new_matched_tokens(request, 0) == (0, False)
+    assert request.seq_id not in consumer._lookup_plans
+    consumer.shutdown()
+    paging.shutdown()
 
 
 @pytest.mark.parametrize('modality', [Modality.IMAGE, Modality.VIDEO])
@@ -416,8 +514,9 @@ def test_scheduler_filters_non_consumers_and_direct_embeddings(
     scheduler.shutdown()
 
 
-def test_scheduler_cancel_retains_hashes_until_request_finishes():
-    scheduler = MooncakeStoreScheduler(_cache_config())
+@pytest.mark.parametrize('hybrid', [False, True])
+def test_scheduler_cancel_retains_hashes_until_request_finishes(hybrid):
+    scheduler = MooncakeStoreScheduler(_hybrid_cache_config('kv_consumer') if hybrid else _cache_config())
     request = _request(range(9))
     scheduler.client.lookup = Mock(return_value=0)
     scheduler.client.discard = Mock()

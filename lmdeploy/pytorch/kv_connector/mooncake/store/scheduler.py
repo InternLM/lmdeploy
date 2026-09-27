@@ -74,20 +74,17 @@ class MooncakeStoreScheduler:
         self._cache_config = cache_config
         self._kv_transfer_config = kv_transfer_config
         self._is_hybrid = bool(cache_config.states_shapes)
+        if self._is_hybrid and cache_config.mooncake_prefill_save_alignment % cache_config.block_size != 0:
+            raise ValueError('mooncake_prefill_save_alignment must be a multiple of block_size')
         num_snapshots = cache_config.num_store_state_caches
         self._state_slots: StateAllocator | None = None
         if num_snapshots:
-            if cache_config.mooncake_prefill_save_alignment % cache_config.block_size != 0:
-                raise ValueError('mooncake_prefill_save_alignment must be a multiple of block_size')
             num_states = cache_config.num_state_caches
             if num_states is None or num_states <= num_snapshots:
                 raise ValueError('Mooncake snapshot slots must be included in num_state_caches')
             self._state_slots = StateAllocator(num_snapshots, offset=num_states - num_snapshots)
         self._num_skipped_state_saves = 0
-        self.client = (
-            LookupKeyClient(cache_config)
-            if kv_transfer_config.is_kv_consumer and not self._is_hybrid else None
-        )
+        self.client = LookupKeyClient(cache_config) if kv_transfer_config.is_kv_consumer else None
         self._request_hash_trackers: dict[int, _RequestHashTracker] = {}
         # Positive lookup snapshots keyed by request ID. A snapshot can survive
         # several schedule attempts while paging waits for allocation capacity.
@@ -120,8 +117,7 @@ class MooncakeStoreScheduler:
         paging aligns the actual load range before calling
         ``update_state_after_alloc``.
         """
-        # Hybrid lookup/load will be enabled with the joint FA/state protocol.
-        if self._is_hybrid or not self._kv_transfer_config.is_kv_consumer:
+        if not self._kv_transfer_config.is_kv_consumer:
             return 0, False
         if len(request.history_embeddings) > 0:
             return 0, False
@@ -129,11 +125,14 @@ class MooncakeStoreScheduler:
         block_size = self._cache_config.block_size
         token_len = request.clamp_prefix_cache_match_step(
             request.get_prefix_cache_max_candidate_step())
-        # Mooncake stores complete KV blocks, so do not query the incomplete
-        # block at the end of the request.
-        token_len = token_len // block_size * block_size
-        recompute_tokens = max(0, request.prefix_cache.recompute_overlap.recompute_blocks) * block_size
-        if token_len < block_size or num_computed_tokens >= token_len - recompute_tokens:
+        # Hybrid reuse needs an exact state checkpoint. Discard the tail past
+        # the last save boundary before hashing or issuing the lookup.
+        lookup_alignment = self._cache_config.mooncake_prefill_save_alignment if self._is_hybrid else block_size
+        token_len = token_len // lookup_alignment * lookup_alignment
+        # Hybrid + speculative decoding is rejected during engine setup.
+        recompute_tokens = (0 if self._is_hybrid else
+                            max(0, request.prefix_cache.recompute_overlap.recompute_blocks) * block_size)
+        if token_len < lookup_alignment or num_computed_tokens >= token_len - recompute_tokens:
             return 0, False
 
         req_id = int(request.seq_id)
@@ -167,15 +166,24 @@ class MooncakeStoreScheduler:
         if remote_token_len is None:
             return None, False
 
-        # MTP KV at position N-1 depends on token N, outside that block's
-        # target-token hash. Reserve the last actually matched block for
-        # recomputation, even when the remote hit is shorter than the prompt.
-        # Querying the untrimmed candidate above avoids dropping two blocks
-        # on a full hit. Cached plans retain this already-safe boundary.
-        remote_token_len = max(0, int(remote_token_len) - recompute_tokens)
-        # A shorter remote hit can end inside a multimodal span even when
-        # the query limit was safe. Retain only a safe, block-aligned plan.
-        remote_token_len = request.clamp_prefix_cache_match_step(remote_token_len)
+        if self._is_hybrid:
+            # Save excludes boundaries inside multimodal spans, whose full
+            # extents also participate in the hash. A matching state must be
+            # safe as-is; shortening it would select an unverified checkpoint.
+            if (remote_token_len % lookup_alignment != 0
+                    or request.clamp_prefix_cache_match_step(remote_token_len) != remote_token_len):
+                logger.error('Mooncake hybrid lookup returned an invalid state boundary: request_id=%s boundary=%d',
+                             req_id, remote_token_len)
+                return 0, False
+        else:
+            # MTP KV at position N-1 depends on token N, outside that block's
+            # target-token hash. Reserve the last actually matched block for
+            # recomputation, even when the remote hit is shorter than the prompt.
+            # Querying the untrimmed candidate avoids dropping two blocks on a
+            # full hit. Cached plans retain this already-safe boundary.
+            remote_token_len = max(0, int(remote_token_len) - recompute_tokens)
+            # FA can reuse a shorter prefix if the hit ends inside a media span.
+            remote_token_len = request.clamp_prefix_cache_match_step(remote_token_len)
 
         # Keep the exact token delta for scheduler accounting. If the local
         # position is inside a block, paging expands the load start down to the

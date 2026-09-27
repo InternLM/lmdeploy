@@ -2,6 +2,7 @@
 import ctypes
 import json
 import sys
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -44,6 +45,7 @@ class FakeStore:
         close_ret=0,
         lookup_results=None,
         lookup_error=None,
+        existing_keys=None,
         get_results=None,
         get_error=None,
         put_results=None,
@@ -57,6 +59,7 @@ class FakeStore:
         self.close_ret = close_ret
         self.lookup_results = lookup_results
         self.lookup_error = lookup_error
+        self.existing_keys = existing_keys
         self.get_results = get_results
         self.get_error = get_error
         self.put_results = put_results
@@ -91,6 +94,8 @@ class FakeStore:
         self.lookup_calls.append(list(keys))
         if self.lookup_error is not None:
             raise self.lookup_error
+        if self.existing_keys is not None:
+            return [int(key in self.existing_keys) for key in keys]
         if self.lookup_results is None:
             return [0] * len(keys)
         return self.lookup_results
@@ -185,6 +190,9 @@ class RecordingLogger:
 
     def debug(self, message, *args, **kwargs):
         self._record('debug', message, *args, **kwargs)
+
+    def info(self, message, *args, **kwargs):
+        self._record('info', message, *args, **kwargs)
 
     def error(self, message, *args, **kwargs):
         self._record('error', message, *args, **kwargs)
@@ -413,7 +421,7 @@ def test_store_create_setup_and_close_are_logged_with_ranks(tmp_path, patch_work
         '127.0.0.1:50051',
     )]
     worker.shutdown()
-    assert {level for level, _ in patch_worker_runtime.messages} == {'debug'}
+    assert {level for level, _ in patch_worker_runtime.messages} == {'info'}
     messages = [message for _, message in patch_worker_runtime.messages]
     for operation in ('create', 'setup', 'close'):
         assert any(f'interaction before: operation={operation}' in message for message in messages)
@@ -548,6 +556,59 @@ def test_lookup_requires_all_namespaces_and_a_contiguous_prefix(tmp_path):
     worker.shutdown()
 
 
+@pytest.mark.parametrize(('state_boundaries', 'missing_key', 'expected'), [
+    pytest.param((128, 256), None, 256, id='full-hit'),
+    pytest.param((256,), None, 256, id='only-last-state'),
+    pytest.param((128,), None, 128, id='earlier-state'),
+    pytest.param((), None, 0, id='fa-only'),
+    pytest.param((64, 192), None, 0, id='states-outside-save-alignment'),
+    pytest.param((128, 256), (1, 7, 256), 128, id='last-state-missing-one-tp-rank'),
+    pytest.param((128, 256), (0, 1, 192), 128, id='fa-interior-hole'),
+    pytest.param((128, 256), (0, 1, 64), 0, id='fa-first-interval-hole'),
+])
+def test_hybrid_lookup_finds_joint_boundary(tmp_path, state_boundaries, missing_key, expected):
+    config = replace(make_cache_config(write_store_config(tmp_path)),
+                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=128)
+    store = FakeStore(existing_keys=set())
+    worker = MooncakeStoreWorker(config, tp_size=8, kv_head_replica_num=4, store_factory=lambda: store)
+    hashes = build_prefix_block_hashes(range(320), 64)
+    fa_keys = [build_store_key(worker.key_metadata, rank, h) for h in hashes for rank in range(2)]
+    store.existing_keys.update(fa_keys)
+    store.existing_keys.update(
+        build_store_key(worker.key_metadata, rank, hashes[end // 64 - 1], group_id=1)
+        for end in state_boundaries for rank in range(8))
+    if missing_key is not None:
+        group, rank, end = missing_key
+        store.existing_keys.remove(build_store_key(worker.key_metadata, rank, hashes[end // 64 - 1], group_id=group))
+
+    assert worker.lookup(320, hashes) == expected
+    # The 320-token tail is outside the last save boundary. FA still checks
+    # every interior block, while GDN probes only 128 and 256 on all TP ranks.
+    assert store.lookup_calls == [fa_keys[:8] + [
+        build_store_key(worker.key_metadata, rank, hashes[index], group_id=1)
+        for index in (1, 3) for rank in range(8)
+    ]]
+    worker.shutdown()
+
+
+@pytest.mark.parametrize(('token_len', 'hash_count', 'expected'), [
+    (127, 5, 0),
+    (320, 1, 0),
+    (320, 3, 128),
+    (192, 5, 128),
+])
+def test_hybrid_lookup_limits_candidates_by_tokens_and_hashes(tmp_path, token_len, hash_count, expected):
+    config = replace(make_cache_config(write_store_config(tmp_path)),
+                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=128)
+    store = FakeStore(lookup_results=[1, 1, 1])  # Two FA blocks and one state at 128.
+    worker = MooncakeStoreWorker(config, store_factory=lambda: store)
+    hashes = build_prefix_block_hashes(range(320), 64)
+
+    assert worker.lookup(token_len, hashes[:hash_count]) == expected
+    assert len(store.lookup_calls) == int(expected > 0)
+    worker.shutdown()
+
+
 @pytest.mark.parametrize(
     'store',
     [
@@ -555,13 +616,17 @@ def test_lookup_requires_all_namespaces_and_a_contiguous_prefix(tmp_path):
         FakeStore(lookup_error=RuntimeError('lookup failed')),
     ],
 )
-def test_lookup_external_errors_fail_closed(tmp_path, store):
+@pytest.mark.parametrize('hybrid', [False, True])
+def test_lookup_external_errors_fail_closed(tmp_path, store, hybrid):
     worker, _ = make_worker(
         tmp_path,
         store=store,
         tp_size=8,
         kv_head_replica_num=4,
     )
+    if hybrid:
+        worker._cache_config.states_shapes = [((2,), torch.float32)]
+        worker._cache_config.mooncake_prefill_save_alignment = 128
 
     assert worker.lookup(128, build_prefix_block_hashes(range(128), 64)) == 0
     worker.shutdown()
@@ -773,7 +838,7 @@ def test_async_load_writes_target_and_mtp_cache_rows(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('fa_exists', [False, True])
-def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(monkeypatch, fa_exists):
+def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(tmp_path, monkeypatch, fa_exists):
     metadata = MooncakeStoreKeyMetadata('model', 'prefix', 8, 64, kv_head_replica_num=4)
     hashes = build_prefix_block_hashes(range(512), 64)
     request = MooncakeStoreSaveRequest(1, 2, 0, tuple(range(8)), tuple(range(8)), hashes,
@@ -808,6 +873,17 @@ def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(monkeyp
         f'prefix@model@tp_rank:{rank}@group:0@{block_hash.hex()}' for rank in range(2) for block_hash in hashes}
     assert len(written) == len(expected_states | expected_fa)
     assert set(written) == expected_states | expected_fa
+
+    # Query the actual save keys, including FA already present before this save.
+    existing_keys = set(written) | {
+        build_store_key(metadata, rank, h) for h in hashes for rank in range(2)}
+    config = replace(make_cache_config(write_store_config(tmp_path)),
+                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=512)
+    config.kv_transfer_config.kv_connector_extra_config.update(model_name='model', cache_prefix='prefix')
+    worker = MooncakeStoreWorker(config, tp_size=8, kv_head_replica_num=4,
+                                store_factory=lambda: FakeStore(existing_keys=existing_keys))
+    assert worker.lookup(512, hashes) == 512
+    worker.shutdown()
 
 
 @pytest.mark.parametrize('put_result', [0, -1])
