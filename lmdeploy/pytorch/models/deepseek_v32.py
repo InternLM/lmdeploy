@@ -251,7 +251,6 @@ class Indexer(nn.Module):
 class DeepseekV32Attention(DeepseekV2Attention):
 
     use_sparse_mla = True
-    mla_head_padding = 0
 
     def __init__(self,
                  config: Any,
@@ -358,8 +357,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 self.softmax_scale = self.softmax_scale * mscale * mscale
 
         self.attn_fwd = Attention(self.num_heads,
-                                  config.kv_lora_rank + self.qk_rope_head_dim
-                                  + type(self).mla_head_padding,
+                                  config.kv_lora_rank + self.qk_rope_head_dim,
                                   scale=self.softmax_scale,
                                   num_kv_heads=num_key_value_heads,
                                   v_head_size=config.kv_lora_rank,
