@@ -73,22 +73,27 @@ class FlashMLAIndexMapper:
                                 block_stride, token_stride, index_stride)
 
     def _map_flat_prefill_impl(self, indices: torch.Tensor, q_seqlens: torch.Tensor,
-                               cu_seqlens_k: torch.Tensor):
+                               cu_seqlens_k: torch.Tensor, index_alignment: int = 1):
         """Map request-local prefill indices into the flattened KV buffer."""
         num_tokens = indices.size(0)
-        kv_offsets = torch.repeat_interleave(cu_seqlens_k[:-1], q_seqlens, output_size=num_tokens)
-        invalid = indices < 0
-        indices = indices + kv_offsets[:, None]
-        indices[invalid] = -1
+        if q_seqlens.numel() == 1:
+            kv_offsets = cu_seqlens_k[:1]
+        else:
+            kv_offsets = torch.repeat_interleave(cu_seqlens_k[:-1], q_seqlens, output_size=num_tokens)
+        indices = torch.where(indices < 0, -1, indices + kv_offsets[:, None])
+        # Compile remapping and the sparse kernel's index-tile padding together.
+        padding = -indices.size(-1) % index_alignment
+        if padding:
+            indices = torch.nn.functional.pad(indices, (0, padding), value=-1)
         return indices[:, None]
 
     def map_flat_prefill(self, indices: torch.Tensor, q_seqlens: torch.Tensor,
-                         cu_seqlens_k: torch.Tensor):
+                         cu_seqlens_k: torch.Tensor, index_alignment: int = 1):
         """Map request-local prefill indices into the flattened KV buffer."""
         if self._map_prefill_func is None:
             self._map_prefill_func = _try_dynamic_compile(self._map_flat_prefill_impl,
-                                                          indices, q_seqlens, cu_seqlens_k)
-        return self._map_prefill_func(indices, q_seqlens, cu_seqlens_k)
+                                                          indices, q_seqlens, cu_seqlens_k, index_alignment)
+        return self._map_prefill_func(indices, q_seqlens, cu_seqlens_k, index_alignment)
 
     @staticmethod
     @functools.cache
@@ -155,7 +160,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
         """Run sparse prefill over flattened BF16 KV."""
         indices = self.index_mapper.map_flat_prefill(nsa_indices,
                                                      attn_metadata.q_seqlens,
-                                                     attn_metadata.cu_seqlens_k)
+                                                     attn_metadata.cu_seqlens_k, index_alignment=128)
         return self._flash_mla_sparse_forward(query, flatten_k, indices)
 
     def _decoding_sparse_bf16(self, query: torch.Tensor, k_cache: torch.Tensor,
