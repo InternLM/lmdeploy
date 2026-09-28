@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from lmdeploy.pytorch import envs as _envs
+from lmdeploy.pytorch.kernels.cuda.linear_bf16xfp32 import linear_bf16xfp32
 from lmdeploy.pytorch.kernels.cuda.moe.route_noaux_tc import fused_noaux_tc_routing
 from lmdeploy.pytorch.kernels.cuda.moe.route_single_group import (
     fused_single_group_topk_router,
@@ -33,6 +34,15 @@ class CudaRouterGemmImpl(RouterGemmImpl):
         # Use the cuBLAS output epilogue when BF16 gates require FP32 logits.
         if self.allow_cublas_router_gemm and hidden_states.dtype == weight.dtype == torch.bfloat16:
             return torch.mm(hidden_states, weight.T, out_dtype=torch.float32)
+
+        # An FP32 gate has no BF16 tensor-core instruction, so the native path
+        # below degrades to FP32 FFMA. Splitting the weight into two BF16
+        # halves keeps the tensor cores busy while still accumulating in FP32.
+        # The kernel declines shapes it cannot win on and then matches the
+        # native path exactly, so this is safe to attempt unconditionally.
+        if (self.out_dtype == torch.float32 and hidden_states.dtype == torch.bfloat16
+                and weight.dtype == torch.float32):
+            return linear_bf16xfp32(hidden_states, weight)
 
         # Other dtype combinations use the native linear path.
         output = F.linear(hidden_states.to(weight.dtype), weight)
