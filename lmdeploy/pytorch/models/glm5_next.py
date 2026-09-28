@@ -19,6 +19,7 @@ from lmdeploy.pytorch.backends.cuda.kpool import (
     kpool_decode_update_cuda,
     kpool_dense_indices_cuda,
     kpool_expand_groups_cuda,
+    kpool_prefill_metadata,
     kpool_prefill_update_cuda,
     kpool_rotate_query_cuda,
     kpool_score_contiguous_cuda,
@@ -1056,6 +1057,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         is_owner = tp_group.rank == 0
         total_rows = hidden_states.size(1)
         output_width = self.index_topk + self.index_kpool - 1
+        broadcast_groups = attn_metadata.is_decoding or (hidden_states.is_cuda and dist_ctx.dist_config.attn_tp > 1)
         if attn_metadata.is_decoding:
             batch_size = attn_metadata.kv_seqlens.numel()
             steps = total_rows // batch_size
@@ -1096,11 +1098,12 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                     query_weight,
                     indexer_k_cache,
                     attn_metadata,
+                    return_groups=broadcast_groups,
                 )
         else:
             logical_indices = torch.empty(
                 total_rows,
-                self.index_topk // self.index_kpool if attn_metadata.is_decoding else output_width,
+                self.index_topk // self.index_kpool if broadcast_groups else output_width,
                 dtype=torch.int32,
                 device=hidden_states.device,
             )
@@ -1109,7 +1112,11 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             group = tp_group.gpu_group
             source_rank = dist_ctx.rank - tp_group.rank
             dist.broadcast(logical_indices, src=source_rank, group=group)
-        if attn_metadata.is_decoding:
+        if broadcast_groups:
+            if not attn_metadata.is_decoding:
+                _, _, seq_lens, group_lengths, _, _ = kpool_prefill_metadata(
+                    attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
+                    total_rows, self.index_kpool)
             expand = kpool_expand_groups_cuda if logical_indices.is_cuda else kpool_expand_selected_groups
             logical_indices = expand(logical_indices, group_lengths,
                                      self.index_kpool, self.index_topk, seq_lens=seq_lens)
@@ -1121,6 +1128,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         query_weight: torch.Tensor,
         indexer_k_cache: torch.Tensor,
         attn_metadata: Any,
+        *,
+        return_groups: bool = False,
     ) -> torch.Tensor:
         """Select request-local pooled history for chunked prefill."""
         if query_fp8.is_cuda:
@@ -1128,7 +1137,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                 query_fp8, query_weight, indexer_k_cache,
                 attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
                 attn_metadata.block_offsets, attn_metadata.kv_flatten_size,
-                self.index_kpool, self.index_topk)
+                self.index_kpool, self.index_topk, return_groups=return_groups)
         q_seqlens = attn_metadata.q_seqlens.tolist()
         kv_seqlens = attn_metadata.kv_seqlens.tolist()
         logical_parts = []

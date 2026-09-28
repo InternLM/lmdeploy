@@ -54,7 +54,7 @@ def kpool_decode_update_cuda(keys, scores, tail_keys, tail_scores, state_ids,
     compress = (compress_kpool if torch.cuda.get_device_capability(keys.device)[0] >= 9
                 else kpool_compress_quantize_cuda)
     values, scales = compress(
-        closed_keys, closed_scores, ape, mode='decode', round_scale=round_scale)
+        closed_keys, closed_scores, ape, mode='decode', round_scale=round_scale, valid=valid)
     cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
     fill_indexed_key_cache(values, scales, groups, valid, block_offsets,
                            cache_keys, cache_scales, page_step=pool_size)
@@ -106,9 +106,15 @@ def kpool_compress_quantize_cuda(
     *,
     mode: str,
     round_scale: bool,
+    valid: Tensor | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Compress and quantize closed pools with LMDeploy's reusable
     semantics."""
+    if valid is not None:
+        # The reference fallback still computes every row, but closed buffers
+        # are only initialized for valid pools by the sequence updater.
+        slot_k = torch.where(valid[:, None, None], slot_k, 0)
+        slot_score = torch.where(valid[:, None, None], slot_score, 0)
     pooled = kpool_compress(slot_k, slot_score, ape, mode=mode)
     return kpool_quantize_fp8(
         pooled,
@@ -119,13 +125,14 @@ def kpool_compress_quantize_cuda(
 
 def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
                               q_seqlens, kv_seqlens, block_offsets, kv_flatten_size,
-                              pool_size, topk):
+                              pool_size, topk, *, return_groups=False):
     """Score and select all ragged prefill requests without host length
     reads."""
     _validate_query(query_fp8, query_weight)
     rows = query_fp8.size(0)
     if not rows:
-        return torch.empty((0, topk + pool_size - 1), device=query_fp8.device, dtype=torch.int32)
+        return torch.empty((0, topk // pool_size if return_groups else topk + pool_size - 1),
+                           device=query_fp8.device, dtype=torch.int32)
     counts, starts, seq, lengths, query_starts, query_ends = kpool_prefill_metadata(
         q_seqlens, kv_seqlens, rows, pool_size)
     keys, scales = kpool_packed_cache_views(packed_cache, query_fp8.size(-1))
@@ -161,6 +168,8 @@ def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
             selected[row_slice].copy_(chunk)
         # Release before allocating the next score chunk, including its padding.
         del logits, chunk
+    if return_groups:
+        return selected
     return kpool_expand_groups_cuda(selected, lengths, pool_size, topk, seq_lens=seq)
 
 

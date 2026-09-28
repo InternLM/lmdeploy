@@ -37,9 +37,9 @@ def _update_kpool_kernel(
         tail_s = tl.where(slot == position, score, tail_s)
         row = step * BATCH + request
         offset = (row * POOL + slot) * WIDTH + d
-        tl.store(ClosedKeys + offset, tail_k, d < WIDTH)
-        tl.store(ClosedScores + offset, tail_s, d < WIDTH)
         close = position == POOL - 1
+        tl.store(ClosedKeys + offset, tail_k, valid & close & (d < WIDTH))
+        tl.store(ClosedScores + offset, tail_s, valid & close & (d < WIDTH))
         tl.store(GroupIds + row, (history + step) // POOL)
         tl.store(Valid + row, valid & close)
         tail_k = tl.where(close, 0, tail_k)
@@ -280,9 +280,12 @@ def rotate_kpool_query(query: torch.Tensor) -> torch.Tensor:
 
 
 @triton.jit
-def _compress_kpool_kernel(K, S, A, O, Scale, WIDTH: tl.constexpr, POOL: tl.constexpr,
+def _compress_kpool_kernel(K, S, A, O, Scale, Valid, HAS_VALID: tl.constexpr, WIDTH: tl.constexpr, POOL: tl.constexpr,
                     ONLINE: tl.constexpr, ROUND: tl.constexpr, LEVELS: tl.constexpr):
     row = tl.program_id(0)
+    if HAS_VALID:
+        if not tl.load(Valid + row):
+            return
     d = tl.arange(0, WIDTH)
     maximum = tl.full((WIDTH,), -float('inf'), tl.float32)
     denominator = tl.full((WIDTH,), 0, tl.float32)
@@ -316,24 +319,30 @@ def _compress_kpool_kernel(K, S, A, O, Scale, WIDTH: tl.constexpr, POOL: tl.cons
 
 
 def compress_kpool(keys: torch.Tensor, scores: torch.Tensor, ape: torch.Tensor,
-                   *, mode: str, round_scale: bool) -> tuple[torch.Tensor, torch.Tensor]:
+                   *, mode: str, round_scale: bool,
+                   valid: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """Fuse weighted pooling, BF16 Hadamard rotation and one-block FP8
     quantization.
 
     The online/two-pass reduction order and both BF16 round trips match the reference KPool operation. Precise libdevice
-    functions and disabled FMA fusion preserve its FP32 arithmetic boundaries.
+    functions and disabled FMA fusion preserve its FP32 arithmetic boundaries. Invalid rows are left unwritten and must
+    be masked by the cache writer.
     """
     if mode not in ('extend', 'decode'):
         raise ValueError(f'Unsupported pool compression mode: {mode}')
     if keys.ndim != 3 or scores.shape != keys.shape or ape.shape != keys.shape[1:]:
         raise ValueError('Expected matching [groups, pool, width] keys/scores and [pool, width] APE.')
     groups, pool, width = keys.shape
+    if valid is not None and (valid.shape != (groups,) or valid.dtype != torch.bool or valid.device != keys.device):
+        raise ValueError('Expected a boolean validity mask with one entry per pool on the same device.')
+    if valid is not None:
+        valid = valid.contiguous()
     if width <= 0 or width & (width - 1):
         raise ValueError('Pool width must be a positive power of two.')
     out = torch.empty(groups, width, device=keys.device, dtype=torch.float8_e4m3fn)
     scale = torch.empty(groups, 1, device=keys.device, dtype=torch.float32)
     if groups:
         _compress_kpool_kernel[(groups,)](
-            keys.contiguous(), scores.contiguous(), ape.contiguous(), out, scale, width, pool,
+            keys.contiguous(), scores.contiguous(), ape.contiguous(), out, scale, valid, valid is not None, width, pool,
             mode == 'extend', round_scale, width.bit_length() - 1, num_warps=4, enable_fp_fusion=False)
     return out, scale
