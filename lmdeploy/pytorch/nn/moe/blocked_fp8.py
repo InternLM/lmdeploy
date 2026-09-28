@@ -160,7 +160,8 @@ class FusedMoEBlockedF8(FusedMoEBase):
                  all_reduce: bool = True,
                  layer_idx: int = 0,
                  act_func: Callable = None,
-                 output_scale: float = 1.0):
+                 output_scale: float = 1.0,
+                 fp32_acc: bool = False):
 
         device = device or torch.device('cpu')
         dtype = dtype or torch.float16
@@ -194,6 +195,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
                 custom_gateup_act=act_func is not None,
                 scale_fmt=scale_fmt,
                 output_scale=output_scale,
+                fp32_acc=fp32_acc,
             ),
             enable_deterministic=build_ctx.enable_deterministic,
         )

@@ -697,7 +697,8 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
                           renormalize: bool = False,
                           act_func: Callable = None,
                           *,
-                          output_scale: float = 1.0) -> torch.Tensor:
+                          output_scale: float = 1.0,
+                          fp32_acc: bool = False) -> torch.Tensor:
     """Fused moe."""
     device = input.device
     M = input.size(0)
@@ -824,5 +825,6 @@ def fused_moe_blocked_fp8(input: torch.Tensor,
         )
 
     ret = moe_reduce(intermediate_cache2, topk_weights,
+                     fp32_acc=fp32_acc,
                      output_scale=output_scale)
     return ret

@@ -311,7 +311,8 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                  renormalize: bool = False,
                  block_size: int = 128,
                  out_dtype: torch.dtype = torch.float16,
-                 output_scale: float = 1.0):
+                 output_scale: float = 1.0,
+                 fp32_acc: bool = False):
         super().__init__()
         self.num_experts = num_experts
         self.top_k = top_k
@@ -319,6 +320,7 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
         self.block_size = block_size
         self.out_dtype = out_dtype
         self.output_scale = output_scale
+        self.fp32_acc = fp32_acc
 
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
@@ -368,7 +370,8 @@ class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
                                        num_experts=num_experts,
                                        renormalize=self.renormalize,
                                        act_func=act_func,
-                                       output_scale=self.output_scale)
+                                       output_scale=self.output_scale,
+                                       fp32_acc=self.fp32_acc)
         output = output.unflatten(0, input_size[:-1])
         return output
 
@@ -389,8 +392,9 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                  fp8_dtype: torch.dtype = torch.float8_e4m3fn,
                  num_max_dispatch_tokens_per_rank: int = 128,
                  layer_idx: int = 0,
-                 output_scale: float = 1.0):
-        super().__init__(top_k, num_experts, renormalize, block_size, out_dtype, output_scale)
+                 output_scale: float = 1.0,
+                 fp32_acc: bool = False):
+        super().__init__(top_k, num_experts, renormalize, block_size, out_dtype, output_scale, fp32_acc)
         self.num_experts = num_experts
         self.ep_size = ep_size
         self.ep_group = ep_group
@@ -563,7 +567,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                                        scale_fmt=self.scale_fmt,
                                        layer_idx=self.layer_idx,
                                        num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank,
-                                       fp32_acc=self.output_scale != 1.0,
+                                       fp32_acc=self.fp32_acc,
                                        chunk_size=16 * 1024)
         return deepep_moe
 
@@ -584,6 +588,7 @@ def _build_fused_moe_blocked_f8(spec: FusedMoEBlockedF8BuildSpec) -> FusedMoEBlo
             num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
             layer_idx=spec.layer_idx,
             output_scale=spec.output_scale,
+            fp32_acc=spec.fp32_acc,
         )
     else:
         impl = TritonFusedMoEBlockedF8Impl(
@@ -593,6 +598,7 @@ def _build_fused_moe_blocked_f8(spec: FusedMoEBlockedF8BuildSpec) -> FusedMoEBlo
             block_size=spec.block_size,
             out_dtype=spec.output_dtype,
             output_scale=spec.output_scale,
+            fp32_acc=spec.fp32_acc,
         )
     impl.set_scale_fmt(spec.scale_fmt)
     return impl

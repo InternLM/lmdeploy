@@ -511,6 +511,7 @@ class Glm5NextMoE(DeepseekV2MoE):
     # scales FP32 combine weights; shared experts remain unscaled.
     router_routed_scaling_factor = 1.0
     fused_moe_output_scale = 2.5
+    fused_moe_fp32_acc = True
     shared_expert_cls = Glm5NextMLP
 
     def __init__(self, config: Any, layer_idx: int, *args, **kwargs):

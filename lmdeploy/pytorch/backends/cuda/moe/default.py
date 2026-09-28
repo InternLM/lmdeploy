@@ -26,11 +26,13 @@ class TritonFusedMoEImpl(FusedMoEImpl):
                  top_k: int,
                  num_experts: int,
                  renormalize: bool = False,
-                 output_scale: float = 1.0):
+                 output_scale: float = 1.0,
+                 fp32_acc: bool = False):
         self.num_experts = num_experts
         self.top_k = top_k
         self.renormalize = renormalize
         self.output_scale = output_scale
+        self.fp32_acc = fp32_acc
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor):
         gate_up_weights = gate_up_weights.transpose(1, 2).contiguous().transpose(1, 2)
@@ -73,7 +75,8 @@ class TritonFusedMoEImpl(FusedMoEImpl):
                          num_experts=num_experts,
                          renormalize=self.renormalize,
                          act_func=act_func,
-                         output_scale=self.output_scale)
+                         output_scale=self.output_scale,
+                         fp32_acc=self.fp32_acc)
 
 
 # modify from dlblas: https://github.com/DeepLink-org/DLBlas
@@ -385,10 +388,11 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         layer_idx: int = 0,
         out_dtype: torch.dtype = torch.bfloat16,
         num_max_dispatch_tokens_per_rank: int = 128,
+        fp32_acc: bool = False,
     ):
-        super().__init__(top_k, num_experts, renormalize, output_scale)
-        if output_scale != 1.0:
-            raise NotImplementedError('DeepEP MoE does not support output_scale.')
+        super().__init__(top_k, num_experts, renormalize, output_scale, fp32_acc)
+        if fp32_acc or output_scale != 1.0:
+            raise NotImplementedError('DeepEP BF16 MoE does not support fp32_acc or output_scale.')
         self.num_experts = num_experts
         self.ep_size = ep_size
         self.ep_group = ep_group
@@ -550,6 +554,7 @@ def _build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
             hidden_dim=spec.hidden_dim,
             renormalize=spec.renormalize,
             output_scale=spec.output_scale,
+            fp32_acc=spec.fp32_acc,
             layer_idx=spec.layer_idx,
             out_dtype=spec.output_dtype,
             num_max_dispatch_tokens_per_rank=spec.num_max_dispatch_tokens_per_rank,
@@ -559,4 +564,5 @@ def _build_fused_moe(spec: FusedMoEBuildSpec) -> FusedMoEImpl:
         num_experts=spec.num_experts,
         renormalize=spec.renormalize,
         output_scale=spec.output_scale,
+        fp32_acc=spec.fp32_acc,
     )
