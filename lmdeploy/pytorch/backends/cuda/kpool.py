@@ -8,6 +8,7 @@ import functools
 import torch
 from torch import Tensor
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_indexed_key_cache
 from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
 from lmdeploy.pytorch.kernels.cuda.kpool import (
@@ -29,6 +30,7 @@ from lmdeploy.pytorch.nn.kpool import (
 )
 
 from .gated_delta_rule import _state_scatter
+from .nsa import _get_max_score_rows
 
 # Fuse the existing integer index expansion instead of materializing its
 # [tokens, topk] masks and int64 temporaries separately during prefill or decode.
@@ -138,15 +140,27 @@ def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
         keys.view(torch.uint8).unsqueeze(2), scales.view(torch.uint8).unsqueeze(2),
         counts, blocks, start_loc=starts, out_size=max(1, kv_flatten_size // pool_size))
     max_groups = block_offsets.size(1) * keys.size(1) // pool_size
-    logits = _get_deep_gemm().fp8_mqa_logits(
-        query_fp8.contiguous(),
-        (flat_keys[0].view(torch.float8_e4m3fn), flat_scales[0].view(torch.float32).flatten()),
-        query_weight.contiguous(), query_starts, query_ends,
-        clean_logits=False, max_seqlen_k=max_groups)
-    # Compressed logits are request-local. The selector masks the unwritten
-    # suffix using each query's causal length, including zero-length rows.
-    selected = kpool_select_groups_cuda(
-        logits, lengths, group_topk=topk // pool_size, max_group_length=max_groups)
+    max_rows = _get_max_score_rows(
+        max_groups, _envs.dsa_indexer_max_logits_mb * (1 << 20), num_heads=query_fp8.size(1))
+    flat_kv = (flat_keys[0].view(torch.float8_e4m3fn), flat_scales[0].view(torch.float32).flatten())
+    selected = None
+    if rows > max_rows:
+        selected = torch.empty((rows, topk // pool_size), device=query_fp8.device, dtype=torch.int32)
+    for start in range(0, rows, max_rows):
+        row_slice = slice(start, min(start + max_rows, rows))
+        logits = _get_deep_gemm().fp8_mqa_logits(
+            query_fp8[row_slice].contiguous(), flat_kv, query_weight[row_slice].contiguous(),
+            query_starts[row_slice], query_ends[row_slice],
+            clean_logits=False, max_seqlen_k=max_groups)
+        # Keep request-local causal lengths and deterministic Top-K unchanged.
+        chunk = kpool_select_groups_cuda(
+            logits, lengths[row_slice], group_topk=topk // pool_size, max_group_length=max_groups)
+        if selected is None:
+            selected = chunk
+        else:
+            selected[row_slice].copy_(chunk)
+        # Release before allocating the next score chunk, including its padding.
+        del logits, chunk
     return kpool_expand_groups_cuda(selected, lengths, pool_size, topk, seq_lens=seq)
 
 

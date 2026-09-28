@@ -443,6 +443,8 @@ class ModelConfig:
     use_flash_mla: bool = False
     mla_kv_cache_dtype: str | None = None
     mla_index_topk: int | None = None
+    # Custom sparse indexers also need score memory without selecting NSA.
+    reserve_dsa_score_workspace: bool = False
 
     # dllm
     model_paradigm: str = 'ar'
