@@ -66,16 +66,21 @@ bool isEnableNvtx()
     return is_enable_ft_nvtx;
 }
 
-void ftNvtxRangePush(std::string name)
+void ftNvtxRangePush(std::string_view name)
 {
 #ifdef USE_NVTX
-    nvtxStringHandle_t    nameId      = nvtxDomainRegisterStringA(NULL, (getScope() + name).c_str());
-    nvtxEventAttributes_t eventAttrib = {0};
-    eventAttrib.messageType           = NVTX_MESSAGE_TYPE_REGISTERED;
-    eventAttrib.message.registered    = nameId;
-    eventAttrib.payloadType           = NVTX_PAYLOAD_TYPE_INT32;
-    eventAttrib.payload.iValue        = getDeviceDomain();
-    nvtxRangePushEx(&eventAttrib);
+    auto registered_name = getScope();
+    registered_name.append(name.data(), name.size());
+
+    nvtxStringHandle_t name_id = nvtxDomainRegisterStringA(nullptr, registered_name.c_str());
+    nvtxEventAttributes_t attributes = {0};
+    attributes.messageType           = NVTX_MESSAGE_TYPE_REGISTERED;
+    attributes.message.registered    = name_id;
+    attributes.payloadType           = NVTX_PAYLOAD_TYPE_INT32;
+    attributes.payload.iValue        = getDeviceDomain();
+    nvtxRangePushEx(&attributes);
+#else
+    (void)name;
 #endif
 }
 

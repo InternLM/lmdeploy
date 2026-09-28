@@ -1,9 +1,27 @@
 cmake_minimum_required(VERSION 3.25)
 
+add_library(target_hidden_projection_kernels STATIC
+        speculative/eagle3/target_hidden_projection_kernels.cu)
+set_property(TARGET target_hidden_projection_kernels PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET target_hidden_projection_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+
 add_library(models STATIC
+        batch_status.cc
         language_model.cc
         input_processor.cc
+        input_processor_speculative.cc
         output_processor.cc
+        speculative/registry.cc
+        speculative/fixed_chain_policy.cc
+        speculative/fixed_chain_setup.cc
+        speculative/fixed_chain_model.cc
+        speculative/collect_hidden_states.cc
+        speculative/eagle3/eagle3_model.cc
+        speculative/eagle3/target_hidden_projection.cc
+        speculative/eagle3/eagle3_weight.cc
+        speculative/qwen3_5_mtp/qwen3_5_mtp_weight.cc
+        speculative/qwen3_5_mtp/target_final_hidden.cc
+        speculative/qwen3_5_mtp/qwen3_5_mtp_model.cc
         linear_weight.cc
         norm_weight.cc
         layer_norm_weight.cc
@@ -57,6 +75,11 @@ target_link_libraries(models PUBLIC
         memory_utils
         cuda_utils
         anomaly_handler)
+target_link_libraries(models PRIVATE
+        target_hidden_projection_kernels
+        draft_carry_kernels
+        speculative_sequence_kernels
+        device_comm)
 target_compile_options(models PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info --threads=${NVCC_THREADS}>)
 
