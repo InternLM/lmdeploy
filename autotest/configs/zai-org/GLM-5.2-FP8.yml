@@ -25,7 +25,5 @@ h:
   - longtext_benchmark
   - prefix_cache
   gen_config:
-    temperature: 1.0
-    top-p: 0.95
     chat-template-kwargs:
       enable_thinking: true

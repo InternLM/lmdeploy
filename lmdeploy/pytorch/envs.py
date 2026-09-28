@@ -103,8 +103,10 @@ def set_envs():
         return _origin_get_env(env_var, default)
 
     os.getenv = _patched_get_env
-    yield
-    os.getenv = _origin_get_env
+    try:
+        yield
+    finally:
+        os.getenv = _origin_get_env
 
 
 with set_envs():

@@ -7,6 +7,8 @@ import json
 import logging
 from enum import Enum
 
+from lmdeploy._guided_decoding import get_interns1_encoded_vocab
+
 from . import _tm
 
 try:
@@ -197,6 +199,14 @@ class TokenizerInfo(_tm.TokenizerInfo):
         tokenizer_vocab_size = max(len(vocab_dict), max_id + 1)
 
         vocab_size = vocab_size or tokenizer_vocab_size
+
+        if type(tokenizer).__name__ == 'InternS1Tokenizer':
+            return TokenizerInfo(
+                get_interns1_encoded_vocab(tokenizer, vocab_size),
+                vocab_type=VocabType.RAW,
+                vocab_size=vocab_size,
+                stop_token_ids=stop_token_ids if stop_token_ids is not None else [tokenizer.eos_token_id],
+            )
 
         # maintain tokenizer's indexing
         encoded_vocab = [''] * vocab_size

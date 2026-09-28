@@ -19,5 +19,3 @@ h:
   test_coverage:
   - evaluate
   - func
-  gen_config:
-    temperature: 0.6

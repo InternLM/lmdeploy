@@ -12,14 +12,15 @@ from transformers import AutoTokenizer
 from utils.config_utils import (
     ROUTED_EXPERTS_UNSUPPORTED_SKIP,
     get_model_path_from_config,
+    get_restful_chat_model_list,
     model_enables_return_routed_experts,
 )
-from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
+from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS
 from utils.toolkit import encode_text, parse_sse_stream
 
 
 @pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_name', RESTFUL_MODEL_LIST)
+@pytest.mark.parametrize('model_name', get_restful_chat_model_list())
 class TestGenerateComprehensive:
 
     @pytest.fixture(autouse=True)

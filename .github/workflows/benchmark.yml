@@ -49,6 +49,9 @@ env:
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
   RUN_ID: ${{ inputs.repo_ref }}_${{ github.run_id }}
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: '*'
 
 jobs:
   linux-build:
@@ -108,7 +111,6 @@ jobs:
       volumes:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /mnt/121:/mnt/121
-        - /mnt/104:/mnt/104
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
       - name: Clone repository
@@ -148,16 +150,16 @@ jobs:
       fail-fast: false
       matrix:
         benchmark_type: ${{fromJSON(github.event.inputs.benchmark_type)}}
-        gpu_num: ['gpu_num_1', 'gpu_num_2', 'gpu_num_4', 'gpu_num_8']
+        layout: ['tp1', 'tp2', 'tp4', 'tp8']
         include:
           - n: 8
-            gpu_num: gpu_num_1
+            layout: tp1
           - n: 4
-            gpu_num: gpu_num_2
+            layout: tp2
           - n: 2
-            gpu_num: gpu_num_4
+            layout: tp4
           - n: 1
-            gpu_num: gpu_num_8
+            layout: tp8
     timeout-minutes: 480
     container:
       image: openmmlab/lmdeploy:${{ inputs.docker_tag || 'nightly-test-cu12.8' }}
@@ -168,7 +170,6 @@ jobs:
         - /nvme/qa_test_models:/nvme/qa_test_models
         - /nvme/huggingface_hub:/nvme/huggingface_hub
         - /mnt/121:/mnt/121
-        - /mnt/104:/mnt/104
         - /mnt/bigdisk:/mnt/bigdisk
         - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
     steps:
@@ -191,15 +192,15 @@ jobs:
       - name: Run other benchmark - all
         if: contains(fromJson(github.event.inputs.backend), 'turbomind') && contains(fromJson(github.event.inputs.backend), 'pytorch')
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.gpu_num}} and not pr_test and not function' --alluredir=${{env.ALLURE_REPORT_DIR}}
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.layout}} and not pr_test and not function' --alluredir=${{env.ALLURE_REPORT_DIR}}
       - name: Run other benchmark - turbomind
         if: contains(fromJson(github.event.inputs.backend), 'turbomind') && !contains(fromJson(github.event.inputs.backend), 'pytorch')
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.gpu_num}} and not pr_test and not function and turbomind' --alluredir=${{env.ALLURE_REPORT_DIR}}
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.layout}} and not pr_test and not function and turbomind' --alluredir=${{env.ALLURE_REPORT_DIR}}
       - name: Run other benchmark - pytorch
         if: contains(fromJson(github.event.inputs.backend), 'pytorch') && !contains(fromJson(github.event.inputs.backend), 'turbomind')
         run: |
-            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.gpu_num}} and not pr_test and not function and pytorch' --alluredir=${{env.ALLURE_REPORT_DIR}}
+            pytest autotest/benchmark/test_${{matrix.benchmark_type}}_performance.py -n ${{matrix.n}} -m '${{matrix.layout}} and not pr_test and not function and pytorch' --alluredir=${{env.ALLURE_REPORT_DIR}}
       - name: Generate result
         if: always()
         run: |

@@ -6,7 +6,7 @@ import torch
 import xgrammar as xgr
 from transformers import PreTrainedTokenizerBase
 
-from lmdeploy._guided_decoding import compile_response_format
+from lmdeploy._guided_decoding import compile_response_format, get_interns1_encoded_vocab
 
 logger = logging.getLogger('lmdeploy')
 
@@ -26,7 +26,15 @@ class GuidedDecodingManager:
             vocab_size = tokenizer_vocab_len
 
         # XGrammar will automatically detect stop tokens from the tokenizer
-        tokenizer_info = xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=vocab_size)
+        if type(tokenizer).__name__ == 'InternS1Tokenizer':
+            tokenizer_info = xgr.TokenizerInfo(
+                get_interns1_encoded_vocab(tokenizer, vocab_size),
+                vocab_type=xgr.VocabType.RAW,
+                vocab_size=vocab_size,
+                stop_token_ids=[tokenizer.eos_token_id],
+            )
+        else:
+            tokenizer_info = xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=vocab_size)
         self.compiler = xgr.GrammarCompiler(tokenizer_info)
         self.vocab_size = vocab_size
         self.processors: dict[int, dict[int, xgr.GrammarMatcher]] = {}

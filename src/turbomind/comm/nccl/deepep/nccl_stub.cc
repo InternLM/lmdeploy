@@ -1,7 +1,7 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <nccl.h>
-#include <nccl_device/core.h>
+#include <nccl_device.h>
 
 #include <cstdio>
 #include <cstdlib>
