@@ -19,7 +19,9 @@ from torch.profiler import record_function
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.long_context import (
+    get_long_context_chunk_capacity,
     get_long_context_chunk_limit,
+    limit_long_context_checkpoint,
     has_long_context_multimodal,
     plan_long_context_chunk,
     sort_long_context_multimodals,
@@ -185,7 +187,10 @@ class LongContextChunker:
 
     def is_long_context(self, seq: 'SchedulerSequence'):
         """Is long context."""
-        return seq.num_token_ids > self.max_prefill_token_num
+        limit = get_long_context_chunk_limit(seq, self.max_prefill_token_num)
+        # Preserve the existing multimodal admission path: set_seq() may
+        # subsequently decide that an enlarged multimodal chunk is final.
+        return seq.num_token_ids > min(self.max_prefill_token_num, limit)
 
     def set_seq(self, seq: 'SchedulerSequence'):
         """Set the sequence currently being chunked."""
@@ -195,7 +200,9 @@ class LongContextChunker:
         input_mm = seq.get_input_multimodals()
         # Only remaining multimodals are emitted by next_chunk_size().
         self.multimodals = sort_long_context_multimodals(input_mm)
-        self.max_prefill_num = get_long_context_chunk_limit(seq, self.max_prefill_token_num)
+        # Input/restore happens before set_seq; each new turn or re-admission
+        # rebuilds this capacity. Only history/checkpoint cuts vary while active.
+        self.max_prefill_num = get_long_context_chunk_capacity(seq, self.max_prefill_token_num)
         self.has_multimodal = has_long_context_multimodal(self.multimodals)
 
     def next_chunk_size(self):
@@ -204,14 +211,16 @@ class LongContextChunker:
         if seq is None:
             return 0, None
 
-        plan = plan_long_context_chunk(seq, self.max_prefill_num, self.multimodals)
+        limit = limit_long_context_checkpoint(seq, self.max_prefill_num)
+        plan = plan_long_context_chunk(seq, limit, self.multimodals)
         return plan.chunk_size, plan.multimodals
 
     def is_last_chunk(self):
         """Is last chunk."""
         if self.seq is None:
             return True
-        return self.seq.num_token_ids <= self.max_prefill_num
+        limit = limit_long_context_checkpoint(self.seq, self.max_prefill_num)
+        return self.seq.num_token_ids <= limit
 
     def clear(self):
         """Clear."""
@@ -425,7 +434,7 @@ class _ForwardInputsTask:
             # do not send an MTP-inclusive save with stale draft rows.
             return ()
         token_lens = inputs.history_lengths + inputs.seq_length
-        if (self.maker.spec_decoding and inputs.is_chunk and not inputs.is_last_chunk):
+        if self.maker.spec_decoding and inputs.is_chunk and not inputs.is_last_chunk:
             token_lens = token_lens.sub(1).clamp_min(0)
         return tuple(token_lens.tolist())
 
@@ -645,6 +654,8 @@ class _ForwardInputsTask:
                                                          is_last_chunk=is_last_chunk)
 
     def _build_prefill_inputs(self, seqs: 'SeqList'):
+        assert all(seq.kv_token_limit is None for seq in seqs), (
+            'Non-final chunks must use exclusive chunk inputs, not full prefill')
         maker = self.maker
         inputs = maker.create_model_inputs(seqs, True)
         cache_inputs = maker._prepare_prefill_cache_inputs(seqs)
@@ -1067,6 +1078,7 @@ class InputsMakerAsync:
             model_metas=model_metas,
         )
         if is_prefill:
+            model_inputs.draft_full_prefill = bool(messages[0]._seq_meta.prefix_cache_token_lookahead)
             model_inputs = fill_logits_indices(model_inputs, messages, [len(ids) for ids in token_ids])
 
         # adapters
@@ -1128,6 +1140,11 @@ class InputsMakerAsync:
             model_metas=model_metas,
             is_chunk=True,
         )
+        if seq._seq_meta.prefix_cache_token_lookahead:
+            model_inputs.draft_full_prefill = True
+            model_inputs.draft_chunk_next_token_ids = torch.as_tensor(seq.token_ids[chunk_size:chunk_size + 1])
+            if model_inputs.draft_chunk_next_token_ids.numel() != 1:
+                raise ValueError('A non-final shifted draft chunk requires one known prompt lookahead token.')
         model_inputs = fill_logits_indices(model_inputs, [seq], [chunk_size])
 
         # adapters

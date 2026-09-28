@@ -107,6 +107,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
     """
 
     _MLA_HEAD_ALIGNMENT = 64
+    _MLA_INDEX_ALIGNMENT = 128
     _BF16_CACHE_INDEX_STRIDE = 64
 
     def __init__(self, mla_index_topk: int, **kwargs):
@@ -140,9 +141,10 @@ class FlashMLASparseImpl(FlashMLAImpl):
         if pad_heads:
             query = torch.nn.functional.pad(query, (0, 0, 0, pad_heads))
 
-        # Sparse FlashMLA consumes pairs of 64-entry index tiles. Invalid
-        # entries preserve the selected keys when top-k is not tile-aligned.
-        pad_indices = -indices.size(-1) % 128
+        # FlashMLA processes two 64-entry top-k tiles at a time. Models such
+        # as GLM can append live KPool tail indices beyond the selected top-k;
+        # retain them and mark only the extra alignment slots as invalid.
+        pad_indices = -indices.size(-1) % self._MLA_INDEX_ALIGNMENT
         if pad_indices:
             indices = torch.nn.functional.pad(indices, (0, pad_indices), value=-1)
 

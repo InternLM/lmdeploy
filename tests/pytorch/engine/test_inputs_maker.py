@@ -2,6 +2,7 @@
 import asyncio
 from dataclasses import dataclass
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -76,6 +77,7 @@ class _DummySeq:
                  all_multimodals: dict,
                  input_multimodals: dict,
                  match_start_step: int = -1):
+        self.kv_token_limit = None
         self.num_history_ids = history_ids
         self.num_token_ids = token_ids
         self.history_multimodals = SimpleNamespace(multimodals=all_multimodals)
@@ -1753,3 +1755,45 @@ def test_create_model_inputs_delta_valid_only_matches_one_decode_advance(max_q_s
     # base kv at the (stale) build state + one canonical decode advance
     assert output.max_kv_seqlen == max(num_all_ids) + max_q_seqlen
     assert output.sum_kv_seqlen == sum(num_all_ids) + len(valid_seqs) * max_q_seqlen
+
+
+def test_chunk_planner_sorts_once_and_text_never_sorts(monkeypatch):
+    from lmdeploy.pytorch import long_context
+    original = long_context._iter_sorted_multimodals
+    calls = []
+    def sorted_items(mm):
+        calls.append(mm)
+        yield from original(mm)
+    monkeypatch.setattr(long_context, '_iter_sorted_multimodals', sorted_items)
+    seq = _DummySeq(0, 2048, {}, {'image': [_DummyMultiModal(600, 700), _DummyMultiModal(511, 550)]})
+    seq._seq_meta = SimpleNamespace(prefix_cache_token_lookahead=1)
+    plan = long_context.plan_long_context_chunk(seq, 512)
+    assert plan.chunk_end == 510 and len(calls) == 1
+    seq._input_multimodals = {}
+    assert long_context.plan_long_context_chunk(seq, 512).chunk_end == 512
+    assert len(calls) == 1
+
+
+def test_chunk_capacity_reused_but_checkpoint_cut_and_new_turn_are_live(monkeypatch):
+    seq = _DummySeq(0, 2050, {}, {})
+    seq.input_end_pos = 2050
+    seq._seq_meta = SimpleNamespace(prefix_cache_token_lookahead=1, prefix_cache_checkpoint_block_size=64)
+    seq.is_prefix_cache_boundary_safe = lambda step: True
+    query = Mock(wraps=seq.get_chunk_limit_multimodals)
+    monkeypatch.setattr(seq, 'get_chunk_limit_multimodals', query)
+    chunker = LongContextChunker(8192)
+    chunker.set_seq(seq)
+    assert chunker.max_prefill_num == 8192  # not the final checkpoint cut
+    assert not chunker.is_last_chunk()
+    assert chunker.next_chunk_size()[0] == 2048
+    seq.num_history_ids, seq.num_token_ids = 2048, 2
+    assert chunker.is_last_chunk()
+    assert chunker.next_chunk_size()[0] == 2
+    assert query.call_count == 1
+    # A new turn/re-admission on the same sequence must rebuild static spans.
+    seq.num_history_ids, seq.num_token_ids, seq.input_end_pos = 0, 13000, 13000
+    seq._input_multimodals = {'image': [_DummyMultiModal(1, 12000)]}
+    chunker.clear()
+    chunker.set_seq(seq)
+    assert chunker.max_prefill_num == 12000
+    assert query.call_count == 2

@@ -122,6 +122,8 @@ def _silu_and_mul_moe_ep_kernel(
     stride_on: tl.constexpr,
     stride_m: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
+    SWIGLU_LIMIT: tl.constexpr,
+    PRECISE_MUL: tl.constexpr,
 ):
     """Silu and mul kernel."""
     n_block_id = tl.program_id(0)
@@ -147,10 +149,17 @@ def _silu_and_mul_moe_ep_kernel(
     for _ in tl.range(m_id_start, mask_m, m_id_stride):
         gate = tl.load(gate_ptrs, mask=mask)
         up = tl.load(up_ptrs, mask=mask)
-        # exp expect fp32
+        if SWIGLU_LIMIT is not None:
+            gate = tl.minimum(gate, SWIGLU_LIMIT)
+            up = tl.maximum(tl.minimum(up, SWIGLU_LIMIT), -SWIGLU_LIMIT)
         gate = gate.to(tl.float32)
-        gate = gate / (1 + fast_expf(-gate))
-        gate = gate.to(gateup_ptr.dtype.element_ty)
+        if PRECISE_MUL:
+            exp_neg_gate = libdevice.exp(-gate)
+        else:
+            exp_neg_gate = fast_expf(-gate)
+        gate = gate / (1 + exp_neg_gate)
+        if not PRECISE_MUL:
+            gate = gate.to(gateup_ptr.dtype.element_ty)
         out = gate * up
 
         tl.store(out_ptrs, out, mask=mask)
@@ -160,7 +169,8 @@ def _silu_and_mul_moe_ep_kernel(
         out_ptrs += m_id_stride * stride_om
 
 
-def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.Tensor = None):
+def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.Tensor = None,
+                       swiglu_limit: float | None = None, precise_mul: bool = False):
     """Silu and mul for moe with expert parallelism."""
     # gate_up: [num_experts, batch_size, 2*hidden_size]
     assert gate_up.dim() == 3
@@ -203,6 +213,8 @@ def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.
                                       stride_on=out.stride(2),
                                       stride_m=mask_m.stride(0),
                                       BLOCK_SIZE_N=BLOCK_SIZE_N,
+                                      SWIGLU_LIMIT=swiglu_limit,
+                                      PRECISE_MUL=precise_mul,
                                       num_warps=num_warps,
                                       num_stages=num_stages)
 
@@ -210,7 +222,7 @@ def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.
 
 
 def silu_and_mul_masked_post_quant_fwd(input: torch.Tensor, output: torch.Tensor, output_scale: torch.Tensor,
-                                       quant_group_size: int, masked_m: torch.Tensor):
+                                       quant_group_size: int, masked_m: torch.Tensor, act_func=None):
     """Apply masked MoE SiLU-and-mul, then quantize to the preallocated FP8
     output."""
     assert input.is_contiguous()
@@ -220,7 +232,10 @@ def silu_and_mul_masked_post_quant_fwd(input: torch.Tensor, output: torch.Tensor
     assert input.shape[-1] % 2 == 0
     size_n = input.shape[-1] // 2
     assert size_n % quant_group_size == 0
-    activated = silu_and_mul_moe_ep(input, masked_m)
+    # Custom EP activations consume the same valid-row counts as masked GEMM;
+    # padded expert rows must not incur activation work or mutate live rows.
+    activated = (silu_and_mul_moe_ep(input, masked_m) if act_func is None
+                 else act_func(input, masked_m=masked_m))
     from .blocked_gemm_fp8 import _quant_fp8_launcher
     _quant_fp8_launcher(activated.reshape(-1, size_n),
                         quant_group_size,

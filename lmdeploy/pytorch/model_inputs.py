@@ -237,6 +237,9 @@ class ModelInputs:
     is_first_chunk: bool = False
     is_last_chunk: bool = False
     is_chunk_multimodal: bool = False
+    # Prompt-conditioned shifted draft chunks keep the same frontier as target.
+    draft_full_prefill: bool = False
+    draft_chunk_next_token_ids: torch.Tensor | None = None
     # mrope, shape(3, sum_seqlens)
     mrope_pos_ids: torch.Tensor | None = None
 
@@ -261,6 +264,8 @@ class ModelInputs:
             sum_kv_seqlen=self.sum_kv_seqlen + self.max_q_seqlen * self.seq_length.numel(),
             logits_indices=None,
             seq_logit_length=None,
+            draft_full_prefill=False,
+            draft_chunk_next_token_ids=None,
             mrope_pos_ids=mrope_pos_ids,
         )
 

@@ -341,3 +341,57 @@ def test_tilelang_sparse_mla_decode_zero_copy_matches_selected_reference(monkeyp
     expected = torch.cat(expected)
 
     assert torch.equal(output, expected)
+
+
+@pytest.mark.parametrize('width', [1, 63, 64, 127, 128, 2048, 2051])
+@pytest.mark.parametrize('heads', [16, 64])
+def test_flash_mla_sparse_pads_index_width(width, heads):
+    impl = object.__new__(FlashMLASparseImpl)
+    impl.scale = 0.5
+    query = torch.zeros(2, heads, 512, dtype=torch.bfloat16)
+    kv = torch.zeros(128, 1, 512, dtype=torch.bfloat16)
+    indices = torch.arange(width, dtype=torch.int32).repeat(2, 1)[:, None]
+    indices[..., 0] = -1
+    original = indices.clone()
+    kernel = Mock(return_value=(torch.empty(2, 64, 512, dtype=torch.bfloat16), ))
+    impl.flash_mla_sparse_fwd = kernel
+
+    output = impl._flash_mla_sparse_forward(query, kv, indices)
+
+    padded_query, passed_kv, padded_indices = kernel.call_args.args
+    assert padded_query.shape == (2, 64, 512)
+    assert passed_kv is kv
+    assert output.shape == query.shape
+    assert padded_indices.shape == (2, 1, ((width + 127) // 128) * 128)
+    assert padded_indices.dtype == indices.dtype
+    assert torch.equal(padded_indices[..., :width], original)
+    assert torch.all(padded_indices[..., width:] == -1)
+    assert torch.equal(indices, original)
+    if width % 128 == 0:
+        assert padded_indices is indices
+
+
+@pytest.mark.parametrize('head_dim', [512, 576])
+@pytest.mark.parametrize('query_len', [1, 4])
+def test_flash_mla_sparse_unaligned_glm_tail_matches_reference(head_dim, query_len):
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip('requires Hopper FlashMLA')
+    impl = object.__new__(FlashMLASparseImpl)
+    impl.scale = head_dim**-0.5
+    impl.flash_mla_sparse_fwd = None
+    torch.manual_seed(4968)
+    query = torch.randn(query_len, 16, head_dim, dtype=torch.bfloat16, device='cuda') * 0.1
+    kv = torch.randn(256, 1, head_dim, dtype=torch.bfloat16, device='cuda') * 0.1
+    # Full selected set plus three live KPool tail slots, with invalid entries
+    # already inside the model's output. Padding must not drop those tail slots.
+    indices = torch.full((query_len, 1, 2051), -1, dtype=torch.int32, device='cuda')
+    indices[..., :97] = torch.arange(97, device='cuda')
+    indices[..., -3:] = torch.tensor([100, 101, 102], device='cuda')
+    selected = torch.cat((torch.arange(97, device='cuda'), torch.tensor([100, 101, 102], device='cuda')))
+    keys = kv[selected, 0].float()
+    scores = torch.einsum('qhd,kd->qhk', query.float(), keys) * impl.scale
+    expected = torch.einsum('qhk,kd->qhd', scores.softmax(-1), keys[:, :512])
+
+    actual = impl._flash_mla_sparse_forward(query, kv, indices)
+
+    torch.testing.assert_close(actual.float(), expected, atol=2e-3, rtol=2e-2)

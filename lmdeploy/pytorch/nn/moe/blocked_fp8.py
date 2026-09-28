@@ -192,7 +192,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
                 fp8_dtype=fp8_dtype,
                 num_max_dispatch_tokens_per_rank=build_ctx.deep_ep_max_tokens_per_rank,
                 layer_idx=layer_idx,
-                custom_gateup_act=act_func is not None,
+                act_func=act_func,
                 scale_fmt=scale_fmt,
                 output_scale=output_scale,
                 fp32_acc=fp32_acc,

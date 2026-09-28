@@ -1039,3 +1039,33 @@ def test_prepare_inputs_from_main_keeps_chunk_carry_for_dp_local_decode_global_p
     agent._prepare_inputs_from_main(inputs, _extra([[9, 90], [8, 80], [7, 70]]))
 
     assert torch.equal(agent._prev_chunk_last['hidden_states'], saved)
+
+
+@pytest.mark.parametrize('first,last,history', [(True, False, 0), (False, False, 256),
+                                               (False, True, 512), (False, False, 768)])
+def test_full_draft_prefill_materializes_same_frontier(first, last, history):
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent._prev_chunk_last = {}
+    inputs = _model_inputs([11, 12, 13], is_chunk=True, is_first_chunk=first, is_last_chunk=last)
+    inputs.history_lengths.fill_(history)
+    inputs.max_kv_seqlen = inputs.sum_kv_seqlen = history + 3
+    inputs.draft_full_prefill = True
+    if not last:
+        inputs.draft_chunk_next_token_ids = torch.tensor([14])
+    extra = _extra([[1, 10], [2, 20], [3, 30]])
+    draft, updated = agent._prepare_inputs_from_main(inputs, extra)
+    assert draft.input_ids.tolist() == [[12, 13, 99 if last else 14]]
+    assert draft.history_lengths.tolist() == [history]
+    assert draft.seq_length.tolist() == [3]
+    assert draft.max_kv_seqlen == draft.sum_kv_seqlen == history + 3
+    assert torch.equal(draft.target_hidden_states, extra.target_hidden_states)
+    assert updated.last_token_indices.tolist() == [2]
+    assert agent._prev_chunk_last == {}
+
+
+def test_full_draft_prefill_missing_lookahead_rejected():
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    inputs = _model_inputs([11, 12, 13], is_chunk=True, is_first_chunk=True)
+    inputs.draft_full_prefill = True
+    with pytest.raises(ValueError, match='Missing known draft lookahead'):
+        agent._prepare_inputs_from_main(inputs, _extra([[1, 10], [2, 20], [3, 30]]))

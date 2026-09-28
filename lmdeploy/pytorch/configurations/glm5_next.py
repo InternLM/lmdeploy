@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """PyTorch engine configuration for GLM-5.3-Flash."""
 
+from functools import partial
+
 import torch
 
 from lmdeploy.pytorch.config import StateCacheSpec
@@ -10,6 +12,8 @@ from lmdeploy.pytorch.consts import (
     GLM5_KPOOL_TAIL_K_STATE,
     GLM5_KPOOL_TAIL_SCORE_STATE,
 )
+from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.utils import get_logger
 
 from .builder import AutoModelConfigBuilder
 from .deepseek_v32 import DeepseekV32ModelConfigBuilder
@@ -20,6 +24,24 @@ _GLM5_FULL_LAYER_TYPES = frozenset({
     'deepseek_sparse_attention',
     'full_attention',
 })
+
+
+def update_cache_config(cache_config, token_lookahead=0):
+    """Keep the 64-token MLA / 16-entry KPool owner under one allocator reference."""
+    if cache_config.role != EngineRole.Hybrid:
+        raise ValueError('GLM-5.3 logical64/kernel64 cache does not support PD migration.')
+    if (cache_config.block_size, cache_config.kernel_block_size) != (64, 64):
+        get_logger('lmdeploy').warning(
+            'GLM-5.3 uses block_size=64 and kernel_block_size=64 '
+            '(requested %s/%s).', cache_config.block_size, cache_config.kernel_block_size)
+    cache_config.block_size = 64
+    cache_config.kernel_block_size = 64
+    cache_config.prefix_cache_block_aligned = True
+    cache_config.prefix_cache_token_lookahead = token_lookahead
+    if token_lookahead and cache_config.prefix_cache_decode_state_interval:
+        raise ValueError("GLM-5.3 MTP prefix caching only publishes prefill checkpoints.")
+    if cache_config.prefix_cache_decode_state_interval % 64:
+        raise ValueError('GLM-5.3 prefix_cache_decode_state_interval must be a multiple of 64.')
 
 
 def is_glm5_kda_layer(text_config, layer_idx: int) -> bool:
@@ -207,6 +229,8 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             raise ValueError('GLM-5.3 config must define `text_config`.')
 
         text_config = hf_config.text_config
+        if text_config.index_kpool != 4:
+            raise ValueError('GLM-5.3 currently requires index_kpool=4 for its 64-token cache owner.')
         quant_config = getattr(hf_config, 'quantization_config', None)
         if quant_config is not None:
             text_config.quantization_config = quant_config
@@ -256,13 +280,13 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             ),
             StateCacheSpec(
                 GLM5_KPOOL_TAIL_K_STATE,
-                (num_full_layers, *ring_shape, text_config.index_kpool,
+                (num_full_layers, text_config.index_kpool + 1 + num_spec_tokens,
                  text_config.index_head_dim),
                 torch.bfloat16,
             ),
             StateCacheSpec(
                 GLM5_KPOOL_TAIL_SCORE_STATE,
-                (num_full_layers, *ring_shape, text_config.index_kpool,
+                (num_full_layers, text_config.index_kpool + 1 + num_spec_tokens,
                  text_config.index_head_dim),
                 torch.bfloat16,
             ),
@@ -274,9 +298,11 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             for spec in config.state_cache_specs
         ]
         config.is_gated_delta = True
-        config.prefix_caching_unsupported_reason = (
-            'GLM-5.3 KPool packs 4-token groups into 256-token owner blocks, '
-            'so scheduler prefix blocks cannot restore exact KPool state.')
+        config.update_cache_config_func = (partial(update_cache_config, token_lookahead=1)
+                                           if num_spec_tokens else update_cache_config)
+        if kwargs.get('spec_method') not in (None, 'deepseek_mtp'):
+            config.prefix_caching_unsupported_reason = (
+                'GLM-5.3 prefix caching supports AR and deepseek_mtp only.')
         config.check_env_func = _check_env_glm5_next
         config.hf_config = hf_config
         config.llm_config = text_config

@@ -145,47 +145,32 @@ def kpool_prefill_metadata(q_seqlens, kv_seqlens, rows, pool_size):
 @triton.jit
 def _partition_kpool_kernel(
     Keys, Scores, TailKeys, TailScores, StateIds, QLens, KVLens,
-    ClosedKeys, ClosedScores, GroupIds, RequestIds, Valid, NextKeys, NextScores,
-    BATCH: tl.constexpr, CAPACITY: tl.constexpr, STATES: tl.constexpr,
+    ClosedKeys, ClosedScores, GroupIds, RequestIds, Valid,
+    BATCH: tl.constexpr, STATES: tl.constexpr,
     POOL: tl.constexpr, WIDTH: tl.constexpr, BLOCK_B: tl.constexpr, BLOCK_D: tl.constexpr,
     STRIDE_TK: tl.constexpr, STRIDE_TS: tl.constexpr,
 ):
     row = tl.program_id(0)
     slots = tl.arange(0, POOL)
     d = tl.arange(0, BLOCK_D)
-    group = tl.full((), 0, tl.int64)
-    if row < CAPACITY:
-        batches = tl.arange(0, BLOCK_B)
-        q = tl.load(QLens + batches, batches < BATCH, other=0)
-        kv = tl.load(KVLens + batches, batches < BATCH, other=0)
-        counts = ((kv - q) % POOL + q) // POOL
-        ends = tl.cumsum(counts)
-        request = tl.minimum(tl.sum(((row >= ends) & (batches < BATCH)).to(tl.int32)), BATCH - 1)
-        group_start = tl.sum(tl.where(batches == request, ends - counts, 0))
-        token_start = tl.sum(tl.where(batches < request, q, 0))
-        valid = row < tl.sum(counts)
-        q_len = tl.load(QLens + request)
-        kv_len = tl.load(KVLens + request)
-        history = kv_len - q_len
-        offsets = (row - group_start) * POOL + slots - history % POOL
-        group = (history // POOL + row - group_start).to(tl.int64)
-    else:
-        request = row - CAPACITY
-        batches = tl.arange(0, BLOCK_B)
-        q = tl.load(QLens + batches, batches < request, other=0)
-        token_start = tl.sum(q)
-        q_len = tl.load(QLens + request)
-        kv_len = tl.load(KVLens + request)
-        history = kv_len - q_len
-        offsets = ((history % POOL + q_len) // POOL) * POOL + slots - history % POOL
-        valid = True
+    batches = tl.arange(0, BLOCK_B)
+    q = tl.load(QLens + batches, batches < BATCH, other=0)
+    kv = tl.load(KVLens + batches, batches < BATCH, other=0)
+    counts = ((kv - q) % POOL + q) // POOL
+    ends = tl.cumsum(counts)
+    request = tl.minimum(tl.sum(((row >= ends) & (batches < BATCH)).to(tl.int32)), BATCH - 1)
+    group_start = tl.sum(tl.where(batches == request, ends - counts, 0))
+    token_start = tl.sum(tl.where(batches < request, q, 0))
+    valid = row < tl.sum(counts)
+    q_len = tl.load(QLens + request)
+    kv_len = tl.load(KVLens + request)
+    history = kv_len - q_len
+    offsets = (row - group_start) * POOL + slots - history % POOL
+    group = (history // POOL + row - group_start).to(tl.int64)
     state_id = tl.load(StateIds + request)
     valid = valid & (state_id >= 0) & (state_id < STATES)
-    active_slots = tl.full((POOL,), True, tl.int1)
-    if row >= CAPACITY:
-        active_slots = slots < kv_len % POOL
-    prior_mask = valid & active_slots & (offsets < 0)
-    token_mask = valid & active_slots & (offsets >= 0) & (offsets < q_len)
+    prior_mask = valid & (offsets < 0)
+    token_mask = valid & (offsets >= 0) & (offsets < q_len)
     prior_offsets = offsets + history % POOL
     old_k = tl.load(TailKeys + state_id * STRIDE_TK + prior_offsets[:, None] * WIDTH + d[None, :],
                     prior_mask[:, None] & (d[None, :] < WIDTH), other=0)
@@ -197,19 +182,15 @@ def _partition_kpool_kernel(
                     token_mask[:, None] & (d[None, :] < WIDTH), other=0)
     key = tl.where((offsets < 0)[:, None], old_k, new_k)
     score = tl.where((offsets < 0)[:, None], old_s, new_s)
-    if row < CAPACITY:
-        tl.store(ClosedKeys + (row * POOL + slots[:, None]) * WIDTH + d[None, :], key, d[None, :] < WIDTH)
-        tl.store(ClosedScores + (row * POOL + slots[:, None]) * WIDTH + d[None, :], score, d[None, :] < WIDTH)
-        tl.store(GroupIds + row, group)
-        tl.store(RequestIds + row, request)
-        tl.store(Valid + row, valid)
-    else:
-        tl.store(NextKeys + (request * POOL + slots[:, None]) * WIDTH + d[None, :], key, d[None, :] < WIDTH)
-        tl.store(NextScores + (request * POOL + slots[:, None]) * WIDTH + d[None, :], score, d[None, :] < WIDTH)
+    tl.store(ClosedKeys + (row * POOL + slots[:, None]) * WIDTH + d[None, :], key, d[None, :] < WIDTH)
+    tl.store(ClosedScores + (row * POOL + slots[:, None]) * WIDTH + d[None, :], score, d[None, :] < WIDTH)
+    tl.store(GroupIds + row, group)
+    tl.store(RequestIds + row, request)
+    tl.store(Valid + row, valid)
 
 
 def partition_kpool(keys, scores, tail_keys, tail_scores, state_ids, q_seqlens, kv_seqlens, pool_size):
-    """Assemble ragged closed pools and next tails without host metadata reads.
+    """Assemble only ragged closed pools without host metadata reads.
 
     Group capacity depends only on input shapes. Invalid group rows are zero padded and masked; persistent state is read
     but never modified here.
@@ -231,15 +212,15 @@ def partition_kpool(keys, scores, tail_keys, tail_scores, state_ids, q_seqlens, 
     groups = state_ids.new_empty(capacity)
     requests = state_ids.new_empty(capacity)
     valid = torch.empty(capacity, device=keys.device, dtype=torch.bool)
-    next_keys = tail_keys.new_empty((batch, pool_size, width))
-    next_scores = tail_scores.new_empty((batch, pool_size, width))
-    _partition_kpool_kernel[(capacity + batch,)](
+    if capacity == 0:
+        return closed_keys, closed_scores, groups, requests, valid
+    _partition_kpool_kernel[(capacity,)](
         keys.contiguous(), scores.contiguous(), tail_keys, tail_scores,
         state_ids.contiguous(), q_seqlens.contiguous(), kv_seqlens.contiguous(),
-        closed_keys, closed_scores, groups, requests, valid, next_keys, next_scores,
-        batch, capacity, tail_keys.size(0), pool_size, width, triton.next_power_of_2(batch),
+        closed_keys, closed_scores, groups, requests, valid,
+        batch, tail_keys.size(0), pool_size, width, triton.next_power_of_2(batch),
         triton.next_power_of_2(width), tail_keys.stride(0), tail_scores.stride(0), num_warps=4)
-    return closed_keys, closed_scores, groups, requests, valid, next_keys, next_scores
+    return closed_keys, closed_scores, groups, requests, valid
 
 
 @triton.jit
@@ -337,3 +318,138 @@ def compress_kpool(keys: torch.Tensor, scores: torch.Tensor, ape: torch.Tensor,
             keys.contiguous(), scores.contiguous(), ape.contiguous(), out, scale, width, pool,
             mode == 'extend', round_scale, width.bit_length() - 1, num_warps=4, enable_fp_fusion=False)
     return out, scale
+
+
+@triton.jit
+def _read_tail(K, S, Ids, History, OutK, OutS,
+               KS: tl.constexpr, SS: tl.constexpr, CAP: tl.constexpr,
+               DIM: tl.constexpr, POOL: tl.constexpr, D: tl.constexpr):
+    b = tl.program_id(0)
+    sid = tl.load(Ids + b)
+    h = tl.load(History + b)
+    slot = tl.arange(0, POOL)
+    d = tl.arange(0, D)
+    n = h % POOL
+    pos = (h - n + slot) % CAP
+    valid = (sid >= 0) & (slot[:, None] < n) & (d[None, :] < DIM)
+    k = tl.load(K + sid * KS + pos[:, None] * DIM + d[None, :], valid, 0)
+    s = tl.load(S + sid * SS + pos[:, None] * DIM + d[None, :], valid, 0)
+    out = b * POOL * DIM + slot[:, None] * DIM + d[None, :]
+    tl.store(OutK + out, k, d[None, :] < DIM)
+    tl.store(OutS + out, s, d[None, :] < DIM)
+
+
+@triton.jit
+def _write_ring(K, S, NewK, NewS, Ids, History, Lengths, Starts,
+                KS: tl.constexpr, SS: tl.constexpr,
+                NK: tl.constexpr, NS: tl.constexpr, CAP: tl.constexpr,
+                DIM: tl.constexpr, C: tl.constexpr, D: tl.constexpr):
+    b = tl.program_id(0)
+    sid = tl.load(Ids + b)
+    h = tl.load(History + b)
+    q = tl.load(Lengths + b)
+    start = tl.load(Starts + b)
+    i = tl.arange(0, C)
+    d = tl.arange(0, D)
+    # One writer per ring cell even when a prefill chunk exceeds capacity.
+    local = tl.maximum(q - CAP, 0) + i
+    valid = (sid >= 0) & (i[:, None] < CAP) & (local[:, None] < q) & (d[None, :] < DIM)
+    k = tl.load(NewK + (start + local[:, None]) * NK + d[None, :], valid, 0)
+    s = tl.load(NewS + (start + local[:, None]) * NS + d[None, :], valid, 0)
+    pos = (h + local) % CAP
+    tl.store(K + sid * KS + pos[:, None] * DIM + d[None, :], k, valid)
+    tl.store(S + sid * SS + pos[:, None] * DIM + d[None, :], s, valid)
+
+
+def read_raw_tail(keys, scores, state_ids, history, pool_size=4):
+    """Read the incomplete pool at the *accepted* history, never trial end.
+
+    Capacity must retain Q new rows plus the previous pool_size-1 rows. Slot
+    strides may include other layers; only the token/dimension axes are dense.
+    Invalid graph rows produce zero scratch and never touch a live state.
+    """
+    shape = (state_ids.numel(), pool_size, keys.size(-1))
+    out_k, out_s = keys.new_empty(shape), scores.new_empty(shape)
+    if keys.is_cuda:
+        _read_tail[(shape[0],)](
+            keys, scores, state_ids, history, out_k, out_s,
+            keys.stride(0), scores.stride(0), keys.size(1), keys.size(2),
+            pool_size, triton.next_power_of_2(keys.size(2)))
+    else:
+        slots = torch.arange(pool_size, device=keys.device)
+        n = history.remainder(pool_size)
+        pos = (history[:, None] - n[:, None] + slots).remainder(keys.size(1))
+        valid = (state_ids[:, None] >= 0) & (slots < n[:, None])
+        out_k.copy_(keys[state_ids.clamp_min(0)[:, None], pos].masked_fill(~valid[..., None], 0))
+        out_s.copy_(scores[state_ids.clamp_min(0)[:, None], pos].masked_fill(~valid[..., None], 0))
+    return out_k, out_s
+
+
+def write_raw_ring(keys, scores, new_keys, new_scores, state_ids, history, lengths, starts):
+    """Persist only the newest capacity rows, after all old-tail consumers.
+
+    Prefill compresses the entire chunk separately. Rejected proposals may
+    remain in storage but cannot be read beyond the subsequent accepted history.
+    """
+    cap, dim = keys.shape[1:]
+    if keys.is_cuda:
+        _write_ring[(state_ids.numel(),)](
+            keys, scores, new_keys, new_scores, state_ids, history, lengths, starts,
+            keys.stride(0), scores.stride(0), new_keys.stride(0), new_scores.stride(0),
+            cap, dim, triton.next_power_of_2(cap), triton.next_power_of_2(dim))
+    else:
+        for b, sid in enumerate(state_ids.tolist()):
+            if sid < 0:
+                continue
+            q, h, start = int(lengths[b]), int(history[b]), int(starts[b])
+            local = torch.arange(max(0, q - cap), q, device=keys.device)
+            pos = (h + local).remainder(cap)
+            keys[sid, pos] = new_keys[start + local]
+            scores[sid, pos] = new_scores[start + local]
+
+
+@triton.jit
+def _score_pages(Q, W, Cache, Lengths, Table, Out,
+                 QS0: tl.constexpr, QS1: tl.constexpr,
+                 WS0: tl.constexpr, TS0: tl.constexpr,
+                 PAGE_STRIDE: tl.constexpr, PAGE: tl.constexpr,
+                 HEADS: tl.constexpr, DIM: tl.constexpr, WIDTH: tl.constexpr,
+                 H: tl.constexpr, D: tl.constexpr, TILE: tl.constexpr):
+    row = tl.program_id(0)
+    groups = tl.program_id(1) * TILE + tl.arange(0, TILE)
+    heads = tl.arange(0, H)
+    ds = tl.arange(0, D)
+    length = tl.load(Lengths + row)
+    valid = (groups < length) & (groups < WIDTH)
+    pages = tl.load(Table + row * TS0 + groups // PAGE, valid, 0)
+    slots = groups % PAGE
+    ptr = Cache + pages[None, :] * PAGE_STRIDE + slots[None, :] * DIM + ds[:, None]
+    k = tl.load(ptr, valid[None, :] & (ds[:, None] < DIM), 0).to(tl.float8e4nv, bitcast=True)
+    q = tl.load(Q + row * QS0 + heads[:, None] * QS1 + ds[None, :],
+                (heads[:, None] < HEADS) & (ds[None, :] < DIM), 0.)
+    dot = tl.dot(q, k, max_num_imprecise_acc=0)
+    weight = tl.load(W + row * WS0 + heads, heads < HEADS, 0)
+    logits = tl.sum(tl.maximum(dot, 0.) * weight[:, None], axis=0)
+    scale_ptr = (Cache + pages * PAGE_STRIDE + PAGE * DIM + slots * 4).to(tl.pointer_type(tl.float32))
+    scale = tl.load(scale_ptr, valid, 0)
+    logits = tl.where(valid, logits * scale, -float('inf'))
+    tl.store(Out + row * WIDTH + groups, logits, groups < WIDTH)
+
+
+def score_paged(query, weight, cache, lengths, table):
+    """Gather four compact 16-entry pages into each 64-key compute tile.
+
+    No global repacking buffer or device-to-host length read. Query strides
+    and fragmented physical page IDs are independent of storage geometry.
+    """
+    rows, heads, dim = query.shape
+    width = table.size(1) * cache.size(1)
+    result = torch.empty((rows, width), dtype=torch.float32, device=query.device)
+    if not rows or not width:
+        return result
+    _score_pages[(rows, triton.cdiv(width, 64))](
+        query, weight, cache, lengths, table, result,
+        query.stride(0), query.stride(1), weight.stride(0), table.stride(0),
+        cache.stride(0), cache.size(1), heads, dim, width,
+        max(16, triton.next_power_of_2(heads)), triton.next_power_of_2(dim), 64)
+    return result

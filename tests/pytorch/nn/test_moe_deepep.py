@@ -376,11 +376,14 @@ def test_fp8_ep_builder_passes_activation_dtype_and_scale_fmt(monkeypatch):
     impl.scale_fmt = 'ue8m0'
     impl.num_max_dispatch_tokens_per_rank = 256
     impl.layer_idx = 3
+    impl.output_scale = 2.5
 
     assert blocked_fp8.FusedDeepEpMoEBlockedF8Impl.fusedmoe_build(impl, low_latency_mode=False) == 'moe'
 
     assert calls[0][1]['fp8_dtype'] == torch.float8_e5m2
     assert calls[0][1]['scale_fmt'] == 'ue8m0'
+    assert 'fp32_acc' not in calls[0][1]
+    assert calls[0][1]['output_scale'] == 2.5
     assert calls[0][1]['num_max_dispatch_tokens_per_rank'] == 256
 
 

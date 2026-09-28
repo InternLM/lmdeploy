@@ -143,6 +143,7 @@ def _fwd_kernel_ep_gather(
     topk_num: tl.constexpr,
     BLOCK_D: tl.constexpr,
     FP32_ACC: tl.constexpr,
+    OUTPUT_SCALE: tl.constexpr,
 ):
     cur_block = tl.program_id(0)
     start_cur_token = tl.program_id(1)
@@ -158,6 +159,8 @@ def _fwd_kernel_ep_gather(
                 acc_weight = tl.load(recv_topk_weight + cur_token * recv_topk_weight_stride0 + topk_index)
                 tmp = tl.load(input_tensor + source_token_index * input_tensor_stride0 + cur_block * BLOCK_D + off_d)
                 accumulator += tmp.to(compute_dtype) * acc_weight.to(compute_dtype)
+        if OUTPUT_SCALE != 1.0:
+            accumulator = accumulator * OUTPUT_SCALE
         tl.store(
             output_tensor + cur_token * output_tensor_stride0 + cur_block * BLOCK_D + off_d,
             accumulator.to(output_tensor.dtype.element_ty),
@@ -172,6 +175,7 @@ def ep_gather(
     input_index: torch.Tensor,
     output_tensor: torch.Tensor,
     fp32_acc: bool = False,
+    output_scale: float = 1.0,
 ):
     BLOCK_D = 1024  # block size of quantization
     num_warps = 2
@@ -200,6 +204,7 @@ def ep_gather(
         num_warps=num_warps,
         BLOCK_D=BLOCK_D,
         FP32_ACC=fp32_acc,
+        OUTPUT_SCALE=output_scale,
     )
     return
 
