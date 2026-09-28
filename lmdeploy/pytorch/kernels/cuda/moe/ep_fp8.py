@@ -156,7 +156,6 @@ def fused_moe_v3_fp8(
     num_recv_tokens_per_expert: list[int] | None,
     act_func: Callable | None = None,
     scale_fmt: str | None = None,
-    fp32_acc: bool = False,
 ):
     hidden_states_fp8, hidden_states_scale = hidden_states_fp8
     if num_recv_tokens_per_expert is None:
@@ -168,9 +167,8 @@ def fused_moe_v3_fp8(
     m, k = hidden_states_fp8.size()
     n = w13_weight_fp8[0].size(1)
     block_size = k // hidden_states_scale.size(1)
-    # ep_gather already accumulates in its output dtype. Reuse that contract
-    # instead of introducing a second reduction kernel for FP32 accumulation.
-    gather_out = torch.empty_like(hidden_states_fp8, dtype=torch.float32 if fp32_acc else torch.bfloat16)
+    # ep_gather accumulates in FP32 and casts once when storing BF16 for DeepEP.
+    gather_out = torch.empty_like(hidden_states_fp8, dtype=torch.bfloat16)
     input_tensor = torch.empty((all_tokens, k), device=hidden_states_fp8.device, dtype=hidden_states_fp8.dtype)
     input_tensor_scale = torch.empty((all_tokens, k // block_size),
                                     device=hidden_states_fp8.device,
@@ -200,6 +198,5 @@ def fused_moe_v3_fp8(
     down_output = torch.empty((all_tokens, k), device=gather_out.device, dtype=torch.bfloat16)
     _deepgemm_grouped_fp8_nt_contiguous((down_input_fp8, down_input_scale), w2_weight_fp8, down_output, m_indices)
     ep_gather(down_output, topk_idx, topk_weights, output_index, gather_out)
-    # DeepEP transports BF16 partial sums. Local expert reduction can be FP32,
-    # but this is not an all-FP32 cross-rank reduction contract.
-    return gather_out.to(torch.bfloat16)
+    # DeepEP transports BF16 partial sums; only the local reduction is FP32.
+    return gather_out

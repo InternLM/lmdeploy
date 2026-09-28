@@ -46,7 +46,6 @@ class FusedMoENormal:
         num_max_dispatch_tokens_per_rank: int = 128,
         chunk_size: int | None = 32 * 1024,
         expert_alignment: int = 128,
-        fp32_acc: bool = False,
     ):
         self.layer_index = layer_index
         self.top_k = top_k
@@ -56,7 +55,6 @@ class FusedMoENormal:
         self.out_dtype = out_dtype
         self.fp8_dtype = fp8_dtype
         self.scale_fmt = scale_fmt
-        self.fp32_acc = fp32_acc
         self.token_dispatcher = DeepEPTokenDispatcherNormal(
             group=ep_group,
             num_experts=num_experts,
@@ -91,7 +89,7 @@ class FusedMoENormal:
         )
         out_states = fused_moe_v3_fp8(x, recv_topk_ids, recv_topk_weights, (up_weights, up_scale),
                                       (down_weights, down_scale), recv_tokens_per_expert,
-                                      act_func=act_func, scale_fmt=self.scale_fmt, fp32_acc=self.fp32_acc)
+                                      act_func=act_func, scale_fmt=self.scale_fmt)
         return self.token_dispatcher.combine(out_states)
 
     def capture(self):
@@ -122,7 +120,7 @@ class FusedMoENormal:
     def fusedmoe_forward(self, state, up_weight, up_scale, down_weight, down_scale, act_func=None):
         return fused_moe_v3_fp8(state['recv_hidden_states'], state['recv_topk_idx'], state['recv_topk_weights'],
                                 (up_weight, up_scale), (down_weight, down_scale), state['recv_tokens_per_expert'],
-                                act_func=act_func, scale_fmt=self.scale_fmt, fp32_acc=self.fp32_acc)
+                                act_func=act_func, scale_fmt=self.scale_fmt)
 
     def per_token_group_quant_fp8(self,
                                   x: torch.Tensor,
@@ -274,7 +272,6 @@ def _build_deepep_moe(
     num_max_dispatch_tokens_per_rank: int = 128,
     chunk_size: int | None = 32 * 1024,
     expert_alignment: int = 128,
-    fp32_acc: bool = False,
 ):
     if low_latency_mode:
         return FusedMoELowLatency(ep_size=ep_size,
@@ -298,8 +295,7 @@ def _build_deepep_moe(
                           scale_fmt=scale_fmt,
                           num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
                           chunk_size=chunk_size,
-                          expert_alignment=expert_alignment,
-                          fp32_acc=fp32_acc)
+                          expert_alignment=expert_alignment)
 
 
 class TritonFusedMoEBlockedF8Impl(FusedMoEBlockedF8Impl):
@@ -563,7 +559,6 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                                        scale_fmt=self.scale_fmt,
                                        layer_idx=self.layer_idx,
                                        num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank,
-                                       fp32_acc=self.output_scale != 1.0,
                                        chunk_size=16 * 1024)
         return deepep_moe
 
