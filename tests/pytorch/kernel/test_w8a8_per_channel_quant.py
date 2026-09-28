@@ -4,14 +4,14 @@ from pathlib import Path
 import pytest
 import torch
 
-MODULE_PATH = Path(__file__).resolve().parents[3] / "lmdeploy/pytorch/kernels/default/w8a8_kernels.py"
-SPEC = importlib.util.spec_from_file_location("w8a8_kernels", MODULE_PATH)
+MODULE_PATH = Path(__file__).resolve().parents[3] / 'lmdeploy/pytorch/kernels/default/w8a8_kernels.py'
+SPEC = importlib.util.spec_from_file_location('w8a8_kernels', MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
-@pytest.mark.parametrize("dtype", [torch.int8, torch.float8_e4m3fn])
+@pytest.mark.parametrize('dtype', [torch.int8, torch.float8_e4m3fn])
 def test_per_channel_quant_zero_row_has_finite_dequantization(dtype):
     x = torch.tensor([[0.0, 0.0, 0.0], [0.5, -1.0, 0.25]])
 
