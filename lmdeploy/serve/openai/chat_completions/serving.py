@@ -274,7 +274,7 @@ def register(router: APIRouter, server_context) -> None:
                     output_token_logprobs = None
                     if request.logprobs and chunk.logprobs:
                         logprobs = _create_chat_completion_logprobs(
-                            tokenizer, chunk.token_ids, chunk.logprobs)
+                            tokenizer, chunk.token_ids, chunk.logprobs, request.top_logprobs or 0)
                     if request.return_logprob and chunk.logprobs:
                         output_token_logprobs = _create_output_token_logprobs(
                             chunk.token_ids, chunk.logprobs)
@@ -344,7 +344,7 @@ def register(router: APIRouter, server_context) -> None:
         logprobs = None
         if request.logprobs and len(res.logprobs):
             logprobs = _create_chat_completion_logprobs(
-                tokenizer, res.token_ids, res.logprobs)
+                tokenizer, res.token_ids, res.logprobs, request.top_logprobs or 0)
         output_token_logprobs = None
         if request.return_logprob and len(res.logprobs):
             output_token_logprobs = _create_output_token_logprobs(
