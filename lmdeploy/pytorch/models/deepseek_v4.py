@@ -22,6 +22,7 @@ from lmdeploy.pytorch.nn import V4Compressor as NativeV4Compressor
 from lmdeploy.pytorch.nn import V4Indexer as NativeV4Indexer
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_down_linear, build_gateup_linear, build_o_proj
 from lmdeploy.pytorch.nn.moe import FusedMoEV4FP4
+from lmdeploy.pytorch.nn.moe.route import RouterGemm
 from lmdeploy.pytorch.nn.rotary_embedding import build_rotary_embedding
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.utils import get_logger
@@ -489,13 +490,18 @@ class Attention(nn.Module):
 
 class Gate(nn.Module):
 
-    def __init__(self, layer_id: int, args: V4Args, device: torch.device | str | None):
+    def __init__(self, layer_id: int, args: V4Args, dtype: torch.dtype, device: torch.device | str | None):
         super().__init__()
         self.topk = args.n_activated_experts
         self.score_func = args.score_func
         self.route_scale = args.route_scale
         self.hash = args.mlp_layer_types[layer_id] == 'hash_moe'
-        self.weight = nn.Parameter(torch.empty(args.n_routed_experts, args.dim, device=device), requires_grad=False)
+        self.weight = nn.Parameter(torch.empty(args.n_routed_experts, args.dim, dtype=dtype, device=device),
+                                   requires_grad=False)
+        # The checkpoint stores this weight in BF16, so routing keeps the model
+        # dtype and only the logits are promoted. `out_dtype` is required: the
+        # scoring/top-k below must run in FP32 or close expert scores can swap.
+        self.router_gemm = RouterGemm(out_dtype=torch.float32)
         if self.hash:
             self.tid2eid = nn.Parameter(torch.empty(args.vocab_size,
                                                     args.n_activated_experts,
@@ -508,7 +514,7 @@ class Gate(nn.Module):
                                      requires_grad=False)
 
     def forward(self, x: torch.Tensor, input_ids: torch.Tensor):
-        scores = F.linear(x.float(), self.weight.float())
+        scores = self.router_gemm(x, self.weight)
         if self.score_func == 'softmax':
             scores = scores.softmax(dim=-1)
         elif self.score_func == 'sigmoid':
@@ -573,7 +579,7 @@ class MoE(nn.Module):
                  device: torch.device | str | None):
         super().__init__()
         self.dim = args.dim
-        self.gate = Gate(layer_id, args, device=device)
+        self.gate = Gate(layer_id, args, dtype=dtype, device=device)
         self.experts = FusedMoEV4FP4(args.dim,
                                     args.moe_inter_dim,
                                     args.n_routed_experts,
