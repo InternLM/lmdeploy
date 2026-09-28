@@ -217,7 +217,8 @@ def causal_conv1d_fn(
 }, )
 def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, width: int, has_bias: bool,
                              activation: str | None, dtype, conv_stride: tuple[int, int, int], is_circular_buffer: bool,
-                             has_state_indices: bool, num_warps: int, weight_dtype=None, bias_dtype=None):
+                             has_state_indices: bool, num_warps: int, weight_dtype=None, bias_dtype=None,
+                             x_stride=None):
     """TileLang kernel for causal convolution forward pass.
 
     Each thread processes one output position for all channels sequentially.
@@ -231,11 +232,13 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
     batch = T.dynamic('batch')
     conv_batch = T.dynamic('conv_batch')
     conv_batch_stride = T.dynamic('conv_batch_stride')
+    if x_stride is None:
+        x_stride = (hidden_size * seqlen, seqlen, 1)
     update_idx_base = -(width - 1)
 
     @T.prim_func
     def causal_conv1d_update_main(
-        X: T.Tensor((batch, hidden_size, seqlen), dtype=dtype),
+        X: T.StridedTensor((batch, hidden_size, seqlen), dtype=dtype, strides=x_stride),
         Conv_State: T.StridedTensor((conv_batch, hidden_size, state_len),
                                     dtype=dtype,
                                     strides=(conv_batch_stride, conv_stride[1], conv_stride[2])),
@@ -372,7 +375,8 @@ def causal_conv1d_update(x,
                                       has_state_indices=conv_state_indices is not None,
                                       num_warps=num_warps,
                                       weight_dtype=weight.dtype,
-                                      bias_dtype=bias.dtype if bias is not None else x.dtype)
+                                      bias_dtype=bias.dtype if bias is not None else x.dtype,
+                                      x_stride=x.stride())
 
     kernel(x, conv_state, weight, bias, out, cache_seqlens, conv_state_indices)
 

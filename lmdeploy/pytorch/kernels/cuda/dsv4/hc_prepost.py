@@ -3,6 +3,8 @@ import torch
 import triton
 import triton.language as tl
 
+from ..rms_norm import _compute_rms_norm
+
 
 def _get_block_d(dim: int) -> int:
     if dim <= 64:
@@ -44,6 +46,52 @@ def _hc_pre_reduce_kernel(
         acc += weight * x
 
     tl.store(out_ptr + row_id * out_stride_n + offs_d * out_stride_d, acc, mask=mask)
+
+
+@triton.jit
+def _hc_pre_reduce_norm_kernel(
+    x_ptr, pre_ptr, weight_ptr, out_ptr,
+    x_stride_n, x_stride_h, x_stride_d,
+    pre_stride_n, pre_stride_h,
+    dim: tl.constexpr, hc_mult: tl.constexpr, eps: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    row_id = tl.program_id(0)
+    offs_d = tl.arange(0, BLOCK_D)
+    mask = offs_d < dim
+    acc = tl.zeros((BLOCK_D,), dtype=tl.float32)
+    for hc_id in range(hc_mult):
+        pre = tl.load(pre_ptr + row_id * pre_stride_n + hc_id * pre_stride_h).to(tl.float32)
+        x = tl.load(x_ptr + row_id * x_stride_n + hc_id * x_stride_h + offs_d * x_stride_d,
+                    mask=mask, other=0.0).to(tl.float32)
+        acc += pre * x
+
+    # Preserve the separate pre-reduction's store/cast before RMSNorm.
+    reduced = acc.to(out_ptr.dtype.element_ty)
+    weight = tl.load(weight_ptr + offs_d, mask=mask, other=0.0)
+    out = _compute_rms_norm(reduced, weight, eps, dim)
+    tl.store(out_ptr + row_id * dim + offs_d, out, mask=mask)
+
+
+def hc_pre_reduce_norm(x: torch.Tensor, pre: torch.Tensor, hc_mult: int,
+                       weight: torch.Tensor, eps: float,
+                       out_dtype: torch.dtype) -> torch.Tensor:
+    """Fuse HC reduction and RMSNorm while retaining the intermediate cast."""
+    dim = x.size(-1)
+    assert weight.shape == (dim,) and weight.is_contiguous()
+    out_shape = (*x.shape[:-2], dim)
+    out = torch.empty(out_shape, device=x.device, dtype=out_dtype)
+    if x.numel() == 0:
+        return out
+    x = x.reshape(-1, hc_mult, dim)
+    pre = pre.reshape(-1, hc_mult)
+    block_d = triton.next_power_of_2(dim)
+    _hc_pre_reduce_norm_kernel[(x.size(0),)](
+        x, pre, weight, out, *x.stride(), *pre.stride(),
+        dim, hc_mult, eps, block_d,
+        num_warps=min(triton.cdiv(block_d, 2048), 4),
+    )
+    return out
 
 
 @triton.jit
@@ -154,6 +202,10 @@ def hc_post_expand(
     out = out.reshape(-1, hc_mult, dim)
     n_rows = x.size(0)
     block_d = _get_block_d(dim)
+    # Large prefills have enough independent rows; use wider memory tiles to
+    # reduce CTA count while retaining the same per-element accumulation.
+    if hc_mult == 4 and n_rows >= 128:
+        block_d = min(triton.next_power_of_2(dim), 1024)
     grid = (n_rows * hc_mult, triton.cdiv(dim, block_d))
     _hc_post_expand_kernel[grid](
         x,

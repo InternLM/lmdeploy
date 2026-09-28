@@ -18,9 +18,11 @@ class HCPrePostImpl(ABC):
         hc_scale: torch.Tensor,
         hc_base: torch.Tensor,
         out_dtype: torch.dtype,
+        norm_weight: torch.Tensor | None = None,
+        norm_eps: float = 1e-6,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Run sinkhorn and reduce HC states from ``[..., hc, dim]`` to ``[...,
-        dim]``."""
+        dim]``, optionally followed by RMSNorm after the output-dtype cast."""
         raise NotImplementedError
 
     @abstractmethod

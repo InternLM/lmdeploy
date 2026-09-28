@@ -135,7 +135,7 @@ class CudaKdaImpl(KdaImpl):
             raise ValueError('KDA verification exceeds the configured state ring.')
         history = metadata.cache_seqlens
         signed_ids = torch.where(metadata.valid_state, ids, -1)
-        values = mixed_qkv.reshape(batch, steps, -1).transpose(1, 2).contiguous()
+        values = mixed_qkv.reshape(batch, steps, -1).transpose(1, 2)
         weight = kwargs['conv_weight']
         if weight.ndim == 3:
             if weight.size(1) != 1:

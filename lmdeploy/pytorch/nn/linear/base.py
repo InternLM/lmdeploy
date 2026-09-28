@@ -214,7 +214,9 @@ class LinearBase(nn.Module):
                 output_dtype = out.dtype
                 if self.tp_reduce_dtype is not None:
                     out = out.to(self.tp_reduce_dtype)
-                dist.all_reduce(out, group=self.tp_group)
+                    get_dist_group(self.layer_type).all_reduce_(out)
+                else:
+                    dist.all_reduce(out, group=self.tp_group)
                 out = out.to(output_dtype)
         return out
 

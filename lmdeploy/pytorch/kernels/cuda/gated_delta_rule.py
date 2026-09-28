@@ -308,7 +308,9 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
         desired = T.ceildiv(V, num_warps)
         v_per_warp = T.ceildiv(min(desired, max_v_per_warp), min_v_per_warp) * min_v_per_warp
         v_per_warp = max(v_per_warp, min_v_per_warp)
-        target_v_per_cta = V
+        # Channelwise KDA has independent V tiles. Distribute them across
+        # CTAs instead of serial state waves, especially for small batches.
+        target_v_per_cta = v_per_warp * num_warps if channelwise_g and K == V == 128 else V
     else:
         target_v_per_cta = max(V, v_per_warp * num_warps * 2)
 

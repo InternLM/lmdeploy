@@ -26,6 +26,7 @@ class HcPrePost(nn.Module):
         hc_scale: torch.Tensor,
         hc_base: torch.Tensor,
         norm_eps: float,
+        norm_weight: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         from lmdeploy.pytorch.nn.norm import rms_scale
         hidden_states, dtype = x, x.dtype
@@ -37,7 +38,8 @@ class HcPrePost(nn.Module):
         else:
             mixes = F.linear(x, hc_fn)
         mixes = rms_scale(mixes, x, eps=norm_eps)
-        return self.impl.pre(hidden_states, mixes, hc_scale, hc_base, dtype)
+        return self.impl.pre(hidden_states, mixes, hc_scale, hc_base, dtype,
+                             norm_weight=norm_weight, norm_eps=norm_eps)
 
     def pre_reduce(self, x: torch.Tensor, pre: torch.Tensor, out_dtype: torch.dtype) -> torch.Tensor:
         return self.impl.pre_reduce(x, pre, out_dtype)

@@ -6,6 +6,88 @@ import triton.language.extra.cuda.libdevice as libdevice
 
 
 @triton.jit
+def _update_kpool_kernel(
+    Keys, Scores, TailKeys, TailScores, StateIds, History,
+    ClosedKeys, ClosedScores, GroupIds, Valid,
+    BATCH: tl.constexpr, STEPS: tl.constexpr, STATES: tl.constexpr, RING: tl.constexpr,
+    POOL: tl.constexpr, WIDTH: tl.constexpr, BLOCK_D: tl.constexpr,
+    stride_kb: tl.constexpr, stride_kt: tl.constexpr, stride_kd: tl.constexpr,
+    stride_sb: tl.constexpr, stride_st: tl.constexpr, stride_sd: tl.constexpr,
+    stride_tkb: tl.constexpr, stride_tkr: tl.constexpr,
+    stride_tsb: tl.constexpr, stride_tsr: tl.constexpr,
+):
+    request = tl.program_id(0)
+    state_id = tl.load(StateIds + request).to(tl.int64)
+    valid = (state_id >= 0) & (state_id < STATES)
+    history = tl.maximum(tl.load(History + request).to(tl.int64), 0)
+    slot = tl.arange(0, POOL)[:, None]
+    d = tl.arange(0, BLOCK_D)[None, :]
+    mask = valid & (d < WIDTH)
+    tail_k = tl.load(TailKeys + state_id * stride_tkb + history % RING * stride_tkr + slot * WIDTH + d,
+                     mask & (slot < history % POOL), other=0)
+    tail_s = tl.load(TailScores + state_id * stride_tsb + history % RING * stride_tsr + slot * WIDTH + d,
+                     mask & (slot < history % POOL), other=0)
+    # A request owns its state row. Keep time sequential in registers, and
+    # persist every checkpoint so rejection can resume at any accepted prefix.
+    for step in range(STEPS):
+        position = (history + step) % POOL
+        key = tl.load(Keys + request * stride_kb + step * stride_kt + d * stride_kd, mask, other=0)
+        score = tl.load(Scores + request * stride_sb + step * stride_st + d * stride_sd, mask, other=0)
+        tail_k = tl.where(slot == position, key, tail_k)
+        tail_s = tl.where(slot == position, score, tail_s)
+        row = step * BATCH + request
+        offset = (row * POOL + slot) * WIDTH + d
+        tl.store(ClosedKeys + offset, tail_k, d < WIDTH)
+        tl.store(ClosedScores + offset, tail_s, d < WIDTH)
+        close = position == POOL - 1
+        tl.store(GroupIds + row, (history + step) // POOL)
+        tl.store(Valid + row, valid & close)
+        tail_k = tl.where(close, 0, tail_k)
+        tail_s = tl.where(close, 0, tail_s)
+        checkpoint = (history + step + 1) % RING
+        tl.store(TailKeys + state_id * stride_tkb + checkpoint * stride_tkr + slot * WIDTH + d, tail_k, mask)
+        tl.store(TailScores + state_id * stride_tsb + checkpoint * stride_tsr + slot * WIDTH + d, tail_s, mask)
+
+
+def update_kpool(keys, scores, tail_keys, tail_scores, state_ids, history_lengths, pool_size):
+    """Update decode/verify tails in place, emitting step-major closed pools.
+
+    Inputs use [batch, steps, width]. State uses [states, pool, width] for AR or [states, ring, pool, width] for
+    verification. Live state ids must be unique; invalid ids never write state. All output shapes depend only on input
+    shapes.
+    """
+    if keys.ndim != 3 or scores.shape != keys.shape:
+        raise ValueError('Expected matching [batch, steps, width] keys and scores.')
+    batch, steps, width = keys.shape
+    if not batch or not steps or pool_size <= 1 or pool_size & (pool_size - 1):
+        raise ValueError('Expected a nonempty batch/sequence and a power-of-two pool size.')
+    if state_ids.shape != (batch,) or history_lengths.shape != (batch,):
+        raise ValueError('Expected one state id and history length per request.')
+    if tail_keys.shape != tail_scores.shape or tail_keys.ndim not in (3, 4):
+        raise ValueError('Expected matching AR or verification tail caches.')
+    if tail_keys.ndim == 3:
+        tail_keys, tail_scores = tail_keys.unsqueeze(1), tail_scores.unsqueeze(1)
+    elif steps > tail_keys.size(1):
+        raise ValueError('The checkpoint ring must hold every verification step.')
+    if tail_keys.shape[2:] != (pool_size, width):
+        raise ValueError('Tail cache geometry does not match decode inputs.')
+    if tail_keys.stride()[2:] != (width, 1) or tail_scores.stride()[2:] != (width, 1):
+        raise ValueError('Tail cache rows must be contiguous.')
+    if keys.dtype != tail_keys.dtype or scores.dtype != tail_scores.dtype:
+        raise ValueError('Keys and scores must match their respective tail cache dtypes.')
+    closed_keys = keys.new_empty((steps * batch, pool_size, width))
+    closed_scores = scores.new_empty((steps * batch, pool_size, width))
+    groups = history_lengths.new_empty(steps * batch)
+    valid = torch.empty(steps * batch, device=keys.device, dtype=torch.bool)
+    _update_kpool_kernel[(batch,)](
+        keys, scores, tail_keys, tail_scores, state_ids.contiguous(), history_lengths.contiguous(),
+        closed_keys, closed_scores, groups, valid,
+        batch, steps, tail_keys.size(0), tail_keys.size(1), pool_size, width, triton.next_power_of_2(width),
+        *keys.stride(), *scores.stride(), *tail_keys.stride()[:2], *tail_scores.stride()[:2], num_warps=4)
+    return closed_keys, closed_scores, groups, valid
+
+
+@triton.jit
 def _prefill_offsets_kernel(Q, KV, Counts, Starts, QEnds,
                             BATCH: tl.constexpr, POOL: tl.constexpr, BLOCK: tl.constexpr):
     request = tl.arange(0, BLOCK)
@@ -161,6 +243,43 @@ def partition_kpool(keys, scores, tail_keys, tail_scores, state_ids, q_seqlens, 
 
 
 @triton.jit
+def _normalized_hadamard(value, WIDTH: tl.constexpr, LEVELS: tl.constexpr):
+    d = tl.arange(0, WIDTH)
+    if len(value.shape) == 2:
+        d = d[None, :]
+    for level in tl.static_range(LEVELS):
+        stride = 1 << level
+        other = tl.gather(value, tl.broadcast_to(d ^ stride, value.shape), axis=len(value.shape) - 1)
+        value = tl.where((d & stride) == 0, value + other, other - value)
+    return value * (WIDTH**-0.5)
+
+
+@triton.jit
+def _rotate_kpool_query_kernel(Query, Out, ROWS: tl.constexpr, WIDTH: tl.constexpr,
+                              LEVELS: tl.constexpr, BLOCK_M: tl.constexpr):
+    rows = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    offsets = rows[:, None] * WIDTH + tl.arange(0, WIDTH)[None, :]
+    value = tl.load(Query + offsets, rows[:, None] < ROWS, other=0).to(tl.float32)
+    value = _normalized_hadamard(value, WIDTH, LEVELS)
+    tl.store(Out + offsets, value, rows[:, None] < ROWS)
+
+
+def rotate_kpool_query(query: torch.Tensor) -> torch.Tensor:
+    """Reuse the compression butterfly, retaining FP32 arithmetic and the
+    output cast."""
+    width = query.size(-1)
+    if width <= 0 or width & (width - 1):
+        raise ValueError('Query width must be a positive power of two.')
+    out = torch.empty_like(query, memory_format=torch.contiguous_format)
+    rows = query.numel() // width
+    if rows:
+        _rotate_kpool_query_kernel[(triton.cdiv(rows, 4),)](
+            query.contiguous(), out, rows, width, width.bit_length() - 1, 4,
+            num_warps=4, enable_fp_fusion=False)
+    return out
+
+
+@triton.jit
 def _compress_kpool_kernel(K, S, A, O, Scale, WIDTH: tl.constexpr, POOL: tl.constexpr,
                     ONLINE: tl.constexpr, ROUND: tl.constexpr, LEVELS: tl.constexpr):
     row = tl.program_id(0)
@@ -187,11 +306,7 @@ def _compress_kpool_kernel(K, S, A, O, Scale, WIDTH: tl.constexpr, POOL: tl.cons
         denominator = denominator + probability
         accumulator = accumulator + key * probability
     value = tl.div_rn(accumulator, denominator).to(tl.bfloat16).to(tl.float32)
-    for level in tl.static_range(LEVELS):
-        stride = 1 << level
-        other = tl.gather(value, d ^ stride, axis=0)
-        value = tl.where((d & stride) == 0, value + other, other - value)
-    value = (value * (WIDTH**-0.5)).to(tl.bfloat16).to(tl.float32)
+    value = _normalized_hadamard(value, WIDTH, LEVELS).to(tl.bfloat16).to(tl.float32)
     scale = tl.maximum(tl.max(tl.abs(value), 0), 1e-4) * (1.0 / 448.0)
     if ROUND:
         scale = libdevice.exp2(libdevice.ceil(libdevice.log2(scale)))

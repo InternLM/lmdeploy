@@ -10,7 +10,13 @@ from torch import Tensor
 
 from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_indexed_key_cache
 from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
-from lmdeploy.pytorch.kernels.cuda.kpool import compress_kpool, kpool_prefill_metadata, partition_kpool
+from lmdeploy.pytorch.kernels.cuda.kpool import (
+    compress_kpool,
+    kpool_prefill_metadata,
+    partition_kpool,
+    rotate_kpool_query,
+    update_kpool,
+)
 from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
     is_sparse_index_topk_supported,
     sparse_index_topk,
@@ -25,8 +31,31 @@ from lmdeploy.pytorch.nn.kpool import (
 from .gated_delta_rule import _state_scatter
 
 # Fuse the existing integer index expansion instead of materializing its
-# [tokens, topk] masks and int64 temporaries separately during batched prefill.
-_expand_prefill_groups = torch.compile(kpool_expand_selected_groups, dynamic=True, fullgraph=True)
+# [tokens, topk] masks and int64 temporaries separately during prefill or decode.
+kpool_expand_groups_cuda = torch.compile(kpool_expand_selected_groups, dynamic=True, fullgraph=True)
+kpool_rotate_query_cuda = rotate_kpool_query
+
+
+def kpool_dense_indices_cuda(q_seqlens, kv_seqlens, rows, pool_size, topk):
+    """Reuse causal expansion when every prefill group fits in the budget."""
+    _, _, seq, lengths, _, _ = kpool_prefill_metadata(q_seqlens, kv_seqlens, rows, pool_size)
+    groups = torch.arange(topk // pool_size, device=q_seqlens.device, dtype=torch.int32)
+    return kpool_expand_groups_cuda(groups.expand(rows, -1), lengths, pool_size, topk, seq_lens=seq)
+
+
+def kpool_decode_update_cuda(keys, scores, tail_keys, tail_scores, state_ids,
+                             history_lengths, packed_cache, block_offsets,
+                             ape, pool_size, round_scale):
+    """Batch verification updates and reuse indexed cache writes."""
+    closed_keys, closed_scores, groups, valid = update_kpool(
+        keys, scores, tail_keys, tail_scores, state_ids, history_lengths, pool_size)
+    compress = (compress_kpool if torch.cuda.get_device_capability(keys.device)[0] >= 9
+                else kpool_compress_quantize_cuda)
+    values, scales = compress(
+        closed_keys, closed_scores, ape, mode='decode', round_scale=round_scale)
+    cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
+    fill_indexed_key_cache(values, scales, groups, valid, block_offsets,
+                           cache_keys, cache_scales, page_step=pool_size)
 
 
 def kpool_prefill_update_cuda(keys, scores, tail_keys, tail_scores, state_ids,
@@ -118,7 +147,7 @@ def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
     # suffix using each query's causal length, including zero-length rows.
     selected = kpool_select_groups_cuda(
         logits, lengths, group_topk=topk // pool_size, max_group_length=max_groups)
-    return _expand_prefill_groups(selected, lengths, pool_size, topk, seq_lens=seq)
+    return kpool_expand_groups_cuda(selected, lengths, pool_size, topk, seq_lens=seq)
 
 
 def kpool_select_groups_cuda(
