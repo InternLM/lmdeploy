@@ -20,16 +20,16 @@ using namespace cute;
 // from runtime shape/stride arrays.
 namespace detail {
 
-template<size_t... Is>
+template<class Index, size_t... Is>
 auto make_cute_shape_impl(const ssize_t* data, std::index_sequence<Is...>)
 {
-    return make_shape(static_cast<int32_t>(data[Is])...);
+    return make_shape(static_cast<Index>(data[Is])...);
 }
 
-template<int kRank>
+template<int kRank, class Index = int64_t>
 auto make_cute_shape(const ssize_t* data)
 {
-    return make_cute_shape_impl(data, std::make_index_sequence<kRank>{});
+    return make_cute_shape_impl<Index>(data, std::make_index_sequence<kRank>{});
 }
 
 template<size_t... Is>
@@ -70,31 +70,25 @@ auto make_vec_factors()
 }
 
 // Compute thread partition: (T0, T1, ..., Tk-1) where T0*...*Tk-1 = 256.
-// T0 is the largest power-of-2 <= shape[0]/kVec.
-// Remaining threads are distributed across outer dims.
+// Use power-of-two factors for inner dimensions and give the outermost
+// dimension all remaining threads, so every thread belongs to this tile.
 template<int kRank>
 auto compute_thr_partition(const ssize_t* shape, int kVec) -> std::array<ssize_t, kRank>
 {
     std::array<ssize_t, kRank> partition{};
     partition.fill(1);
 
-    // Inner dim: largest power-of-2 that divides 256 and <= shape[0]/kVec
-    int64_t max_inner = shape[0] / kVec;
-    ssize_t T0        = 256;
-    while (T0 > 1 && T0 > max_inner) {
-        T0 /= 2;
-    }
-    partition[0] = T0;
-
-    // Distribute remaining threads across outer dims
-    ssize_t remaining = 256 / T0;
-    for (int i = 1; i < kRank; ++i) {
-        partition[i] = std::min<ssize_t>(shape[i], remaining);
-        remaining /= partition[i];
-        if (remaining < 1) {
-            remaining = 1;
+    ssize_t remaining = 256;
+    for (int i = 0; i < kRank - 1; ++i) {
+        const ssize_t extent = shape[i] / (i == 0 ? kVec : 1);
+        ssize_t       threads = remaining;
+        while (threads > 1 && threads > extent) {
+            threads /= 2;
         }
+        partition[i] = threads;
+        remaining /= threads;
     }
+    partition[kRank - 1] = remaining;
     return partition;
 }
 
@@ -169,10 +163,6 @@ void VectorizedCopy(
 
     auto align = [&](auto v) { alignment = std::gcd(alignment, v); };
 
-    if (a.stride(0) > 1 || b.stride(0) > 1) {
-        alignment = byte_size(dtype);
-    }
-
     align(byte_size(dtype, a.shape(0)));
     align(reinterpret_cast<uintptr_t>(data_a));
     align(reinterpret_cast<uintptr_t>(data_b));
@@ -184,7 +174,12 @@ void VectorizedCopy(
 
     // --- vec_size computation ---
     const int elem_size = byte_size(dtype);
-    int       vec_size  = static_cast<int>(alignment / std::max<int64_t>(1, elem_size));
+    // A vector atom copies adjacent elements. Alignment alone cannot make a
+    // broadcast or strided axis contiguous, so those layouts use one element.
+    int vec_size = 1;
+    if (a.stride(0) == 1 && b.stride(0) == 1) {
+        vec_size = static_cast<int>(alignment / elem_size);
+    }
 
     if (vec_size * elem_size > 16) {
         vec_size = 16 / elem_size;
@@ -213,7 +208,9 @@ void VectorizedCopy(
                 auto dst_strides = detail::make_cute_stride<kRank>(b.stride().data());
 
                 auto partition_arr = detail::compute_thr_partition<kRank>(a.shape().data(), kVec);
-                auto thr_partition = detail::make_cute_shape<kRank>(partition_arr.data());
+                // Thread coordinates are bounded by the 256-thread block;
+                // logical data shapes can exceed INT32_MAX after coalescing.
+                auto thr_partition = detail::make_cute_shape<kRank, int32_t>(partition_arr.data());
 
                 auto vec_factors = detail::make_vec_factors<kVec, kRank>();
                 auto tile_sizes  = transform(thr_partition, vec_factors, [](auto tp, auto vf) { return tp * vf; });

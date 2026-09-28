@@ -19,6 +19,7 @@
 #include "src/turbomind/kernels/sampling_kernels.h"
 #include "src/turbomind/kernels/sampling_topk_kernels.h"
 #include "src/turbomind/kernels/sampling_topp_kernels.h"
+#include "src/turbomind/kernels/speculative_sampling_kernels.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 #include "src/turbomind/engine/batch.h"
@@ -37,12 +38,13 @@ struct SamplingData {
         std::shared_ptr<Request> request;
     };
 
-    explicit SamplingData(int max_batch_size, DeviceType device)
+    explicit SamplingData(int parameter_capacity, int max_batch_size, DeviceType device)
     {
-        top_k_buf = {max_batch_size, device};
-        top_p_buf = {max_batch_size, device};
-        min_p_buf = {max_batch_size, device};
-        kept_buf  = {max_batch_size, device};
+        top_k_buf = {parameter_capacity, device};
+        top_p_buf = {parameter_capacity, device};
+        min_p_buf = {parameter_capacity, device};
+        kept_buf  = {parameter_capacity, device};
+        greedy    = {parameter_capacity, device};
 
         sampled_logprobs = {max_batch_size * (ssize_t)kMaxLogProb, device};
         sampled_indices  = {max_batch_size * (ssize_t)kMaxLogProb, device};
@@ -58,7 +60,8 @@ struct SamplingData {
     Buffer_<float> top_p_buf;
     Buffer_<float> min_p_buf;
 
-    Buffer_<int> kept_buf;  // kept sample
+    Buffer_<int>  kept_buf;  // kept sample
+    Buffer_<bool> greedy;
 
     int                        generation_size = 0;
     bool                       output_logprobs = 0;
@@ -69,23 +72,81 @@ struct SamplingData {
     Buffer_<int>   sampled_nums;
 };
 
-Sampling::Sampling(const BaseGenerationParam& base, int phases, int tp_rank):
-    BaseGenerationParam{base}, tp_rank_{tp_rank}
+Sampling::Sampling(const BaseGenerationParam& base, int phases, int tp_rank, int parameter_capacity):
+    BaseGenerationParam{base}, tp_rank_{tp_rank}, parameter_capacity_{parameter_capacity}
 {
-    top_k_ = {max_batch_size_, kCPUpinned};
-    top_p_ = {max_batch_size_, kCPUpinned};
-    min_p_ = {max_batch_size_, kCPUpinned};
-    kept_  = {max_batch_size_, kCPUpinned};
+    top_k_  = {parameter_capacity_, kCPUpinned};
+    top_p_  = {parameter_capacity_, kCPUpinned};
+    min_p_  = {parameter_capacity_, kCPUpinned};
+    kept_   = {parameter_capacity_, kCPUpinned};
+    greedy_ = {parameter_capacity_, kCPUpinned};
 
     sampled_logprobs_buf_ = {max_batch_size_ * (ssize_t)kMaxLogProb, kCPUpinned};
     sampled_indices_buf_  = {max_batch_size_ * (ssize_t)kMaxLogProb, kCPUpinned};
     sampled_nums_buf_     = {max_batch_size_, kCPUpinned};
 
     // constant array
-    std::fill_n(kept_.data(), max_batch_size_, vocab_size_);
+    std::fill_n(kept_.data(), parameter_capacity_, vocab_size_);
 
     for (int i = 0; i < phases; ++i) {
-        data_.push_back(std::make_shared<SamplingData>(max_batch_size_, kDEVICE));
+        data_.push_back(std::make_shared<SamplingData>(parameter_capacity_, max_batch_size_, kDEVICE));
+    }
+}
+
+void Sampling::ProcessDistributions(int phase, Tensor_<float> probabilities, Buffer_<int> token_indices)
+{
+    auto& d = *data_.at(phase);
+
+    const auto bsz = probabilities.shape(0);
+
+    auto stream = core::Context::stream().handle();
+
+    // use topk sort if some request use topk filter
+    if (d.max_topk > 0) {
+        // TODO: top_k >= 64 is much slower than torch.topk()
+        TopKSortFilterParams params{};
+        params.logits            = probabilities.data();
+        params.sorted_logits     = probabilities.data();
+        params.sorted_indices    = token_indices.data();
+        params.kept              = d.kept_buf.data();
+        params.top_ks            = d.top_k_buf.data();
+        params.max_top_k         = d.max_topk;
+        params.batch_size        = bsz;
+        params.vocab_size        = vocab_size_;
+        params.vocab_size_padded = vocab_size_padded_;
+        TM_SCOPE_CALL(invokeTopKSortFilter<float>(params, stream));
+    }
+
+    // use topp sort if some request skip topk filter
+    if (d.min_topk == 0) {
+        TM_SCOPE_CALL(invokeSoftmax<float>(
+            probabilities.data(), vocab_size_padded_, vocab_size_, bsz, d.kept_buf.data(), stream));
+
+        TopPSortParams params{};
+        params.logits            = probabilities.data();
+        params.sorted_logits     = probabilities.data();
+        params.sorted_indices    = token_indices.data();
+        params.kept              = d.kept_buf.data();
+        params.top_ks            = d.top_k_buf.data();
+        params.top_ps            = d.top_p_buf.data();
+        params.batch_size        = bsz;
+        params.vocab_size        = vocab_size_;
+        params.vocab_size_padded = vocab_size_padded_;
+        TM_SCOPE_CALL(invokeTopPSort<float>(params, stream));
+    }
+
+    // apply topp minp filter
+    if (d.max_minp != 0.f || d.min_topp != 1.f) {
+        TopPMinPFilterParams params{};
+        params.sorted_logits     = probabilities.data();
+        params.sorted_indices    = token_indices.data();
+        params.kept              = d.kept_buf.data();
+        params.top_ps            = d.top_p_buf.data();
+        params.min_ps            = d.min_p_buf.data();
+        params.batch_size        = bsz;
+        params.vocab_size        = vocab_size_;
+        params.vocab_size_padded = vocab_size_padded_;
+        TM_SCOPE_CALL(invokeTopPMinPFilter<float>(params, stream));
     }
 }
 
@@ -110,66 +171,20 @@ void Sampling::Forward(int phase, TensorMap& args)
 
     auto stream = core::Context::stream().handle();
 
-    // use topk sort if some request use topk filter
-    if (d.max_topk > 0) {
-        // TODO: top_k >= 64 is much slower than torch.topk()
-        TopKSortFilterParams params{};
-        params.logits            = logits.data();
-        params.sorted_logits     = logits.data();
-        params.sorted_indices    = indices.data();
-        params.kept              = d.kept_buf.data();
-        params.top_ks            = d.top_k_buf.data();
-        params.max_top_k         = d.max_topk;
-        params.batch_size        = bsz;
-        params.vocab_size        = vocab_size_;
-        params.vocab_size_padded = vocab_size_padded_;
-        TM_SCOPE_CALL(invokeTopKSortFilter<float>(params, stream));
-    }
-
-    // use topp sort if some request skip topk filter
-    if (d.min_topk == 0) {
-        TM_SCOPE_CALL(
-            invokeSoftmax<float>(logits.data(), vocab_size_padded_, vocab_size_, bsz, d.kept_buf.data(), stream));
-
-        TopPSortParams params{};
-        params.logits            = logits.data();
-        params.sorted_logits     = logits.data();
-        params.sorted_indices    = indices.data();
-        params.kept              = d.kept_buf.data();
-        params.top_ks            = d.top_k_buf.data();
-        params.top_ps            = d.top_p_buf.data();
-        params.batch_size        = bsz;
-        params.vocab_size        = vocab_size_;
-        params.vocab_size_padded = vocab_size_padded_;
-        TM_SCOPE_CALL(invokeTopPSort<float>(params, stream));
-    }
-
-    // apply topp minp filter
-    if (d.max_minp != 0.f || d.min_topp != 1.f) {
-        TopPMinPFilterParams params{};
-        params.sorted_logits     = logits.data();
-        params.sorted_indices    = indices.data();
-        params.kept              = d.kept_buf.data();
-        params.top_ps            = d.top_p_buf.data();
-        params.min_ps            = d.min_p_buf.data();
-        params.batch_size        = bsz;
-        params.vocab_size        = vocab_size_;
-        params.vocab_size_padded = vocab_size_padded_;
-        TM_SCOPE_CALL(invokeTopPMinPFilter<float>(params, stream));
-    }
+    ProcessDistributions(phase, logits, indices);
 
     // sample
     {
         SamplingParams params{};
-        params.logits              = logits.data();
+        params.probabilities       = logits.data();
         params.stride              = vocab_size_padded_;
         params.indices             = indices.data();
         params.kept                = d.kept_buf.data();
         params.curandstate         = (curandState_t*)args.at("curand_state").raw_data();
         params.curandstate_indices = args.at("curand_state_indices").data<int>();
+        params.sample_mask         = args.contains("sample_mask") ? args.at("sample_mask").data<bool>() : nullptr;
         params.batch_size          = bsz;
-        params.output_ids          = args.at("output_ids").data<int>();  // (B, 1)
-        params.sequence_length     = args.at("sequence_length").data<int>();
+        params.selected_tokens     = args.at("output_ids").data<int>();  // (B, 1)
 
         if (d.output_logprobs) {
             params.sampled_logprobs = d.sampled_logprobs.data();
@@ -181,6 +196,26 @@ void Sampling::Forward(int phase, TensorMap& args)
     }
 
     TM_LOG_DEBUG("{} stop", __PRETTY_FUNCTION__);
+}
+
+void Sampling::VerifyTargetBlock(int phase, Tensor_<float> probabilities, VerifyTargetBlockParams params)
+{
+    auto& d = *data_.at(phase);
+
+    const int rows = probabilities.shape(0);
+
+    Buffer_<int> token_indices(rows * (ssize_t)vocab_size_padded_, kDEVICE);
+
+    ProcessDistributions(phase, probabilities, token_indices);
+
+    params.probabilities         = probabilities.data();
+    params.probability_stride    = probabilities.stride(0);
+    params.probability_token_ids = token_indices.data();
+    params.token_id_stride       = probabilities.stride(0);
+    params.kept_count            = d.kept_buf.data();
+    params.greedy                = d.greedy.data();
+
+    invokeVerifyTargetBlock(params, core::Context::stream().handle());
 }
 
 void Sampling::Setup(int phase, TensorMap& env)
@@ -198,17 +233,16 @@ void Sampling::Setup(int phase, TensorMap& env)
     d.output_logprobs = false;
     d.logprob_outputs.clear();
 
-    for (int i = 0; i < rc.size(); ++i) {
-        auto& c = *rc[i];
-        if (!c.generating) {
+    std::vector<Sequence*> generating_requests;
+    generating_requests.reserve(rc.size());
+    for (Sequence* request : rc) {
+        auto& c = *request;
+        if (!c.submitted->generating) {
             continue;
         }
 
         const int row = d.generation_size++;
-
-        top_k_[row] = c.gen_cfg.top_k;
-        top_p_[row] = c.gen_cfg.top_p;
-        min_p_[row] = c.gen_cfg.min_p;
+        generating_requests.push_back(request);
 
         if (c.gen_cfg.output_logprobs) {
             d.output_logprobs = true;
@@ -216,12 +250,25 @@ void Sampling::Setup(int phase, TensorMap& env)
         }
     }
 
-    const int bsz = d.generation_size;
+    const int G = d.generation_size;
+    const int P = parameter_capacity_ == max_batch_size_ ? 1 : env.at("verification_positions").data<int>()[0];
+    const int bsz = P * G;
     if (bsz == 0) {
         d.max_topk = d.min_topk = 0;
         d.min_topp              = 0.f;
         d.max_minp              = 0.f;
         return;
+    }
+
+    for (int position = 0; position < P; ++position) {
+        for (int g = 0; g < G; ++g) {
+            const int row = position * G + g;
+            const auto& config = generating_requests[g]->gen_cfg;
+            top_k_[row]  = config.top_k;
+            top_p_[row]  = config.top_p;
+            min_p_[row]  = config.min_p;
+            greedy_[row] = config.top_k == 1;
+        }
     }
 
     d.max_topk = *std::max_element(top_k_.begin(), top_k_.begin() + bsz);
@@ -234,6 +281,7 @@ void Sampling::Setup(int phase, TensorMap& env)
 
     copy(min_p_.data(), bsz, d.min_p_buf.data());
     copy(kept_.data(), bsz, d.kept_buf.data());
+    copy(greedy_.data(), bsz, d.greedy.data());
 }
 
 void Sampling::Fetch(int phase, TensorMap& env)

@@ -16,12 +16,14 @@
 
 namespace turbomind {
 
-ModelRequest::ModelRequest(Gateway* gateway, DataType data_type, int session_len, int vocab_size, int hidden_dim):
+ModelRequest::ModelRequest(
+    Gateway* gateway, DataType data_type, int session_len, int vocab_size, int hidden_dim, int speculative_tokens):
     gateway_{gateway},
     data_type_{data_type},
     session_len_{session_len},
+    hidden_dim_{hidden_dim},
     vocab_size_{vocab_size},
-    hidden_dim_{hidden_dim}
+    speculative_tokens_{speculative_tokens}
 {
 }
 
@@ -102,7 +104,7 @@ auto ModelRequest::Forward(InputParam param, std::function<void()> cb) -> Output
 
     auto state = std::make_shared<AtomicRequestState>();
 
-    auto metrics = param.enable_metrics ? std::make_shared<RequestMetrics>() : nullptr;
+    auto metrics = param.enable_metrics ? std::make_shared<RequestMetrics>(speculative_tokens_) : nullptr;
     if (metrics) {
         metrics->enqueue_time.store(RequestMetrics::timestamp(), std::memory_order_relaxed);
         metrics->scheduled_time.store(0, std::memory_order_relaxed);
