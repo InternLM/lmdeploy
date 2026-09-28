@@ -9,8 +9,9 @@ sequence and GPU-block lifetimes without performing worker I/O itself:
    destinations, binds connector metadata, and calls :meth:`start_load`.
 2. While workers may write those blocks, the sequence stays in
    ``WAITING_FOR_REMOTE_KVS`` and cannot be evicted or removed.
-3. :meth:`apply_load_results` publishes a successful load or rolls a
-   failed/cancelled load back to the last block-aligned safe step.
+3. :meth:`apply_load_results` publishes a successful load. Failed/cancelled
+   FA loads retain their local full blocks; hybrid loads release the request
+   to rematch because the runtime state may have been overwritten.
 4. The completed request is admitted for its remaining prefill, after which
    its load record and soft reservation can be released.
 
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
     from .block_manager.base_block_manager import BaseBlockManager
     from .block_trie import BlockTrie
     from .eviction_helper.recompute_eviction_helper import RecomputeEvictionHelper
+    from .state_manager import StateManager
 
 
 class KVLoadAdmission(enum.Enum):
@@ -76,9 +78,9 @@ class _DeferredLoadCleanup(enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class _LoadPlan:
-    """Block-aligned remote interval and its admission rollback boundary."""
+    """Block-aligned remote interval and full-prefill capacity target."""
 
-    fallback_step: int
+    load_start_step: int
     remote_step: int
     target_blocks: int
     original_kv_token_limit: int | None
@@ -88,15 +90,15 @@ class _LoadPlan:
 class _LoadRecord:
     """Paging state retained for one asynchronous load.
 
-    ``fallback_step`` is the block-aligned prefix that remains trustworthy if
-    a worker fails or is cancelled after partially writing a destination.
+    ``load_start_step`` is the first FA block written by the load. Pure FA can
+    roll back there; hybrid needs a new local match after releasing its state.
     ``remote_step`` is published only after every TP rank reports success.
     ``deferred_cleanup`` records the strongest user-requested action until
     device writes are safe; ending a request takes precedence over stopping it.
     """
 
     seq: SchedulerSequence
-    fallback_step: int
+    load_start_step: int
     remote_step: int
     phase: _LoadPhase = _LoadPhase.LOADING
     deferred_cleanup: _DeferredLoadCleanup = _DeferredLoadCleanup.NONE
@@ -126,12 +128,14 @@ class KVLoadCoordinator:
         block_manager: BaseBlockManager,
         block_trie: BlockTrie,
         sessions: dict[int, SchedulerSession],
+        state_manager: StateManager | None = None,
     ) -> None:
         self.lookup_enabled = lookup_enabled
         self.connector = connector
         self.block_manager = block_manager
         self.block_trie = block_trie
         self.sessions = sessions
+        self.state_manager = state_manager
         # Active load lifecycle. Records survive the LOADING -> READY ->
         # PREFILLING transitions so stop/end and preemption can find the owner.
         self._loads: dict[int, _LoadRecord] = {}
@@ -281,15 +285,22 @@ class KVLoadCoordinator:
         local_step = int(seq.num_history_ids)
         # Transfers are block-granular. Reuse a private partial boundary block,
         # publish only full loaded blocks, and leave the final token to compute.
-        fallback_step = local_step // block_size * block_size
+        load_start_step = local_step // block_size * block_size
         remote_step = local_step + num_external_tokens
-        remote_step = min(remote_step, int(seq.get_prefix_cache_max_match_step()))
-        remote_step = remote_step // block_size * block_size
-        if remote_step <= fallback_step:
+        max_step = int(seq.get_prefix_cache_max_match_step())
+        if self.state_manager is not None:
+            # GDN can only resume from the exact checkpoint accepted by lookup.
+            # Clipping it would pair FA with a state from a different boundary.
+            if remote_step > max_step or seq.clamp_prefix_cache_match_step(remote_step) != remote_step:
+                return None
+        else:
+            remote_step = min(remote_step, max_step)
+            remote_step = remote_step // block_size * block_size
+        if remote_step <= load_start_step:
             return None
 
         return _LoadPlan(
-            fallback_step=fallback_step,
+            load_start_step=load_start_step,
             remote_step=remote_step,
             target_blocks=self.prefill_target_blocks(seq, prealloc_size),
             original_kv_token_limit=seq.kv_token_limit,
@@ -329,34 +340,39 @@ class KVLoadCoordinator:
         connector = self.connector
         assert connector is not None
         original_num_blocks = seq.num_blocks
+        original_state_slot = seq.logical_state
         try:
             # Allocate only the checked remote interval. The unallocated local
             # tail remains represented by the plan's soft target.
             seq.kv_token_limit = plan.remote_step
             self.block_manager.allocate(seq)
+            if self.state_manager is not None:
+                self.state_manager.allocate(seq)
             block_table = self.block_manager.get_block_table(seq)
-            fallback_block = plan.fallback_step // seq.block_size
+            load_start_block = plan.load_start_step // seq.block_size
             remote_block = plan.remote_step // seq.block_size
             load_block_ids = tuple(
                 int(block_id)
-                for block_id in block_table[fallback_block:remote_block]
+                for block_id in block_table[load_start_block:remote_block]
             )
             connector.update_state_after_alloc(
                 seq,
                 load_block_ids,
-                plan.remote_step - plan.fallback_step,
+                plan.remote_step - plan.load_start_step,
             )
             # From start_load onward, cleanup must retain destinations until
             # workers report terminal progress or their queues are drained.
             self.start_load(
                 seq,
-                fallback_step=plan.fallback_step,
+                load_start_step=plan.load_start_step,
                 remote_step=plan.remote_step,
                 target_blocks=plan.target_blocks,
             )
         except Exception:
             if seq.num_blocks > original_num_blocks:
                 self.block_manager.truncate(seq, original_num_blocks)
+            if self.state_manager is not None and original_state_slot < 0:
+                self.state_manager.free(seq)
             seq.kv_token_limit = plan.original_kv_token_limit
             raise
         seq.kv_token_limit = None
@@ -365,7 +381,7 @@ class KVLoadCoordinator:
         self,
         seq: SchedulerSequence,
         *,
-        fallback_step: int,
+        load_start_step: int,
         remote_step: int,
         target_blocks: int,
     ) -> None:
@@ -378,11 +394,17 @@ class KVLoadCoordinator:
         request_id = int(seq.seq_id)
         if request_id in self._loads:
             raise RuntimeError(f'request {request_id} already has an external KV load')
+        if self.state_manager is not None:
+            # A tentative local match may have selected an older checkpoint.
+            # Store will fill the runtime slot directly, so no restore copy
+            # may later overwrite it. We do not retain a rollback snapshot.
+            self.block_trie.state_checkpoints.unpin_restore(seq)
+            seq.prefix_cache.restore.clear()
         seq.state.begin_remote_load()
         self.track_prefill(seq, target_blocks=target_blocks)
         self._loads[request_id] = _LoadRecord(
             seq=seq,
-            fallback_step=fallback_step,
+            load_start_step=load_start_step,
             remote_step=remote_step,
         )
 
@@ -423,6 +445,10 @@ class KVLoadCoordinator:
         advances sequence history, and exposes cached-token metrics only after all ranks have valid contents.
         """
         seq = record.seq
+        if self.state_manager is not None:
+            # The old partial local checkpoint no longer needs private blocks:
+            # this load has filled the complete prefix through remote_step.
+            seq.prefix_cache.recompute_overlap.clear_tracking()
         # Limit trie publication to the successfully loaded prefix. The request
         # may already own preallocated blocks after remote_step.
         seq.kv_token_limit = record.remote_step
@@ -440,7 +466,7 @@ class KVLoadCoordinator:
         if seq.prefix_cache.match_start_step < 0:
             # With no preceding local trie hit, the block-aligned load start is
             # the beginning of this request's externally cached interval.
-            seq.prefix_cache.match_start_step = record.fallback_step
+            seq.prefix_cache.match_start_step = record.load_start_step
         self.block_trie.finalize_match(seq)
         seq.state.finish_remote_load()
         record.phase = _LoadPhase.READY
@@ -448,23 +474,25 @@ class KVLoadCoordinator:
     def _rollback(self, record: _LoadRecord) -> None:
         """Discard destinations that a failed/cancelled load may have touched.
 
-        A rank may fail after another rank has already written some blocks, so
-        the original partial boundary block cannot be trusted. Roll back to the
-        block-aligned ``fallback_step`` and move the trie cursor to an ancestor
-        that refers only to retained blocks.
+        Hybrid state cannot be truncated to a token boundary. Release it and
+        let normal admission rematch a complete local checkpoint or recompute.
+        Pure FA retains the untouched full blocks before ``load_start_step``.
         """
         seq = record.seq
-        fallback_blocks = record.fallback_step // seq.block_size
-        if seq.num_blocks > fallback_blocks:
-            self.block_manager.truncate(seq, fallback_blocks)
-        seq.set_step(record.fallback_step)
+        if self.state_manager is not None:
+            seq.state.release_paging_resources()
+            return
+        load_start_blocks = record.load_start_step // seq.block_size
+        if seq.num_blocks > load_start_blocks:
+            self.block_manager.truncate(seq, load_start_blocks)
+        seq.set_step(record.load_start_step)
         seq.kv_token_limit = None
 
         cursor = seq.prefix_cache.trie_cursor
-        while cursor is not None and cursor.prefix_len > record.fallback_step:
+        while cursor is not None and cursor.prefix_len > record.load_start_step:
             cursor = cursor.parent
         seq.prefix_cache.trie_cursor = cursor
-        if seq.prefix_cache.match_start_step > record.fallback_step:
+        if seq.prefix_cache.match_start_step > record.load_start_step:
             seq.prefix_cache.match_start_step = -1
         self.block_trie.finalize_match(seq)
 

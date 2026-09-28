@@ -90,13 +90,12 @@ class Scheduler:
         self.is_ssm = len(self.cache_config.states_shapes) > 0
         transfer_config = cache_config.kv_transfer_config
         # A producer-only connector still needs the save path below, but must
-        # not issue lookups. SSM restore owns a different state-cache protocol
-        # and is deliberately excluded from external KV load admission.
+        # not issue lookups. Hybrid loads also acquire a runtime state slot
+        # before admitting the asynchronous write.
         external_lookup_enabled = (
             kv_connector is not None
             and transfer_config is not None
             and transfer_config.is_kv_consumer
-            and not self.is_ssm
         )
         checkpoint_state_manager = self.state_manager if self.is_ssm else None
         self.block_trie = BlockTrie(allocator=self.block_manager.allocator,
@@ -121,6 +120,7 @@ class Scheduler:
             block_manager=self.block_manager,
             block_trie=self.block_trie,
             sessions=self.sessions,
+            state_manager=self.state_manager if self.is_ssm else None,
         )
         self.eviction_helper = build_eviction_helper(
             self.scheduler_config.eviction_type,

@@ -265,7 +265,7 @@ class _PrefillAdmissionResult:
 class _PrefixMatchStateSnapshot:
     """Committed state restored when a tentative local match is rejected.
 
-    Load failure after worker writes uses its block-aligned fallback instead.
+    Failures after worker writes are handled separately by the load coordinator.
     """
 
     # Committed sequence progress and block ownership before tentative match.
@@ -393,6 +393,11 @@ class _TentativePrefixMatch:
 
     def _restore_snapshot(self, snapshot: _PrefixMatchStateSnapshot) -> None:
         seq = self.seq
+        if self.is_ssm:
+            # External lookup can reject a tentative SSM hit before its restore
+            # is pinned. Neither the selection nor a pin belongs to the baseline.
+            self.block_trie.state_checkpoints.unpin_restore(seq)
+            seq.prefix_cache.restore.clear()
         if seq.num_blocks < snapshot.num_blocks:
             raise RuntimeError(
                 'tentative prefix match removed sequence-owned baseline blocks')
@@ -552,7 +557,8 @@ class _PrefillAdmissionAttempt:
         prefill = self.prefill_scheduler
         seq = self.seq
         state_checkpoints = prefill.block_trie.state_checkpoints
-        if not prefill.is_ssm or state_checkpoints.make_runtime_state_available():
+        if (not prefill.is_ssm or prefill.state_manager.is_allocated(seq)
+                or state_checkpoints.make_runtime_state_available()):
             return None
 
         gate_rejection = self._rollback_match_after_resource_failure(
@@ -571,12 +577,16 @@ class _PrefillAdmissionAttempt:
         prefill = self.prefill_scheduler
         if self._load_ready:
             return None
-        admission = self.load_coordinator.try_load(
-            self.seq,
-            prealloc_size=self.prealloc_size,
-            evictable_seqs=self._evictable_sequences(),
-            eviction_helper=prefill.eviction_helper,
-        )
+        try:
+            admission = self.load_coordinator.try_load(
+                self.seq,
+                prealloc_size=self.prealloc_size,
+                evictable_seqs=self._evictable_sequences(),
+                eviction_helper=prefill.eviction_helper,
+            )
+        except Exception:
+            self._prefix_match.rollback('external load admission failed')
+            raise
         if admission is KVLoadAdmission.NO_LOAD:
             return None
         if admission is KVLoadAdmission.PENDING:

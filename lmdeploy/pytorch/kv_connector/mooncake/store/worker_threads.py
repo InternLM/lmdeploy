@@ -29,6 +29,7 @@ logger = get_logger('lmdeploy')
 class _LoadTask:
     request: MooncakeStoreLoadRequest
     enqueue_time: float
+    ready_event: Any = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,24 @@ def _scatter_block(
         )
     ]
     return addresses, list(row_block_sizes)
+
+
+def _state_row_layout(
+    registrations: tuple[MooncakeStoreStateRegistration, ...],
+) -> tuple[tuple[MooncakeStoreRegistration, ...], tuple[int, ...]]:
+    """Expand owning pools in the same payload order for save and load.
+
+    Packed pools have one row of slots; layer-major pools have one per layer. Each row remains inside the already
+    registered owning storage.
+    """
+    rows = []
+    slot_sizes = []
+    for region in registrations:
+        row_size = region.slot_count * region.slot_size
+        for row in range(region.size // row_size):
+            rows.append(MooncakeStoreRegistration(region.name, region.address + row * row_size, row_size))
+            slot_sizes.append(region.slot_size)
+    return tuple(rows), tuple(slot_sizes)
 
 
 def _new_replicate_config() -> Any:
@@ -119,17 +138,7 @@ class KVCacheStoreSendingThread(threading.Thread):
         self.replica_rank = tp_rank % key_metadata.kv_head_replica_num
         self.completion_callback = completion_callback
         self.replicate_config = replicate_config
-        # A packed pool has one row of slots. A layer-major pool has one
-        # such row per layer; each row is inside the already registered pool.
-        self.state_rows = tuple(
-            MooncakeStoreRegistration(region.name,
-                                     region.address + row * region.slot_count * region.slot_size,
-                                     region.slot_count * region.slot_size)
-            for region in state_registrations
-            for row in range(region.size // (region.slot_count * region.slot_size))
-        )
-        self.state_slot_sizes = tuple(region.slot_size for region in state_registrations
-                                      for _ in range(region.size // (region.slot_count * region.slot_size)))
+        self.state_rows, self.state_slot_sizes = _state_row_layout(state_registrations)
         self.num_state_slots = state_registrations[0].slot_count if state_registrations else 0
         self.request_queue: queue.Queue[_SaveTask | object] = queue.Queue()
         self._state_lock = threading.Lock()
@@ -410,7 +419,7 @@ class KVCacheStoreSendingThread(threading.Thread):
 
 
 class KVCacheStoreRecvingThread(threading.Thread):
-    """Read Mooncake values directly into scheduler-owned GPU blocks."""
+    """Read Mooncake values into private FA blocks and runtime state."""
 
     _STOP = object()
 
@@ -425,7 +434,8 @@ class KVCacheStoreRecvingThread(threading.Thread):
         global_rank: int,
         tp_rank: int,
         tp_size: int,
-        completion_callback: Callable[[RequestId, set[int]], None],
+        completion_callback: Callable[[RequestId, bool], None],
+        state_registrations: tuple[MooncakeStoreStateRegistration, ...] = (),
     ) -> None:
         super().__init__(name='MooncakeKVCacheStoreReceiver', daemon=True)
         if not registrations or len(registrations) != len(row_block_sizes):
@@ -445,24 +455,28 @@ class KVCacheStoreRecvingThread(threading.Thread):
         self.tp_size = tp_size
         self.key_rank = tp_rank // key_metadata.kv_head_replica_num
         self.completion_callback = completion_callback
+        self.state_rows, self.state_slot_sizes = _state_row_layout(state_registrations)
+        self.num_state_slots = state_registrations[0].slot_count if state_registrations else 0
         self.request_queue: queue.Queue[_LoadTask | object] = queue.Queue()
         self._state_lock = threading.Lock()
         self._closed = False
 
-    def add_request(self, request: MooncakeStoreLoadRequest) -> None:
+    def add_request(self, request: MooncakeStoreLoadRequest, ready_event: Any = None) -> None:
         """Enqueue a load without waiting for Store I/O."""
         with self._state_lock:
             if self._closed:
                 raise RuntimeError('Mooncake KV-cache receiver is closed')
-            self.request_queue.put(_LoadTask(request, time.perf_counter()))
+            self.request_queue.put(_LoadTask(request, time.perf_counter(), ready_event))
         logger.info(
             'Mooncake KV load enqueued: global_rank=%d tp_rank=%d tp_size=%d '
-            'request_id=%s blocks=%d',
+            'request_id=%s blocks=%d state_slot=%s state_boundary=%s',
             self.global_rank,
             self.tp_rank,
             self.tp_size,
             request.request_id,
             len(request.block_ids),
+            request.state_slot,
+            request.remote_block_count * self.key_metadata.block_size if request.state_slot is not None else None,
         )
 
     def _scatter_block(self, block_id: int) -> tuple[list[int], list[int]]:
@@ -473,7 +487,7 @@ class KVCacheStoreRecvingThread(threading.Thread):
             block_id,
         )
 
-    def _load(self, request: MooncakeStoreLoadRequest) -> set[int]:
+    def _load(self, request: MooncakeStoreLoadRequest, ready_event: Any = None) -> bool:
         keys = [
             build_store_key(self.key_metadata, self.key_rank, block_hash)
             for block_hash in request.block_hashes
@@ -485,19 +499,36 @@ class KVCacheStoreRecvingThread(threading.Thread):
             addresses.append(block_addresses)
             sizes.append(block_sizes)
 
+        if request.state_slot is not None:
+            if request.state_slot <= 0:
+                raise ValueError('Mooncake load cannot write the reserved state slot')
+            state_addresses, state_sizes = _scatter_block(
+                self.state_rows, self.state_slot_sizes, self.num_state_slots, request.state_slot)
+            keys.append(build_store_key(self.key_metadata, self.tp_rank, request.block_hashes[-1], group_id=1))
+            addresses.append(state_addresses)
+            sizes.append(state_sizes)
+
         total_bytes = sum(sum(block_sizes) for block_sizes in sizes)
         logger.info(
             'Mooncake Store interaction before: operation=load_batch_get_into_multi_buffers '
             'global_rank=%d tp_rank=%d tp_size=%d request_id=%s keys=%d '
-            'fragments_per_key=%d bytes=%d',
+            'fragments=%d bytes=%d state_slot=%s',
             self.global_rank,
             self.tp_rank,
             self.tp_size,
             request.request_id,
             len(keys),
-            len(self.registrations),
+            sum(len(parts) for parts in addresses),
             total_bytes,
+            request.state_slot,
         )
+        # Key/address preparation only touches CPU metadata. Wait after it,
+        # before Store can overwrite bytes still in use by earlier GPU work.
+        ready_wait_ms = 0.0
+        if ready_event is not None:
+            ready_wait_start = time.perf_counter()
+            ready_event.synchronize()
+            ready_wait_ms = (time.perf_counter() - ready_wait_start) * 1000
         start = time.perf_counter()
         try:
             results = self.store.batch_get_into_multi_buffers(keys, addresses, sizes)
@@ -512,36 +543,39 @@ class KVCacheStoreRecvingThread(threading.Thread):
             logger.error(
                 'Mooncake Store interaction after: operation=load_batch_get_into_multi_buffers '
                 'global_rank=%d tp_rank=%d tp_size=%d request_id=%s status=error '
-                'keys=%d elapsed_ms=%.3f error=%s',
+                'keys=%d elapsed_ms=%.3f ready_wait_ms=%.3f error=%s',
                 self.global_rank,
                 self.tp_rank,
                 self.tp_size,
                 request.request_id,
                 len(keys),
                 (time.perf_counter() - start) * 1000,
+                ready_wait_ms,
                 error,
                 exc_info=True,
             )
-            return set(request.block_ids)
+            return False
 
-        failed_indices = [index for index, result in enumerate(results) if result < 0]
-        failed_blocks = {request.block_ids[index] for index in failed_indices}
-        log = logger.info if not failed_blocks else logger.error
+        num_failed = sum(result < 0 for result in results)
+        state_failed = request.state_slot is not None and results[-1] < 0
+        log = logger.info if not num_failed else logger.error
         log(
             'Mooncake Store interaction after: operation=load_batch_get_into_multi_buffers '
             'global_rank=%d tp_rank=%d tp_size=%d request_id=%s status=%s '
-            'keys=%d failed=%d bytes=%d elapsed_ms=%.3f',
+            'keys=%d failed=%d state_failed=%s bytes=%d elapsed_ms=%.3f ready_wait_ms=%.3f',
             self.global_rank,
             self.tp_rank,
             self.tp_size,
             request.request_id,
-            'ok' if not failed_blocks else 'partial_failure',
+            'ok' if not num_failed else 'partial_failure',
             len(keys),
-            len(failed_blocks),
+            num_failed,
+            state_failed,
             total_bytes,
             (time.perf_counter() - start) * 1000,
+            ready_wait_ms,
         )
-        return failed_blocks
+        return num_failed == 0
 
     def run(self) -> None:
         while True:
@@ -561,9 +595,9 @@ class KVCacheStoreRecvingThread(threading.Thread):
                     (time.perf_counter() - item.enqueue_time) * 1000,
                 )
                 try:
-                    failed_blocks = self._load(request)
+                    success = self._load(request, item.ready_event)
                 except Exception:
-                    failed_blocks = set(request.block_ids)
+                    success = False
                     logger.exception(
                         'Mooncake KV load failed before Store completion: '
                         'global_rank=%d tp_rank=%d request_id=%s',
@@ -571,16 +605,15 @@ class KVCacheStoreRecvingThread(threading.Thread):
                         self.tp_rank,
                         request.request_id,
                     )
-                self.completion_callback(request.request_id, failed_blocks)
+                self.completion_callback(request.request_id, success)
                 logger.info(
                     'Mooncake KV load completed: global_rank=%d tp_rank=%d tp_size=%d '
-                    'request_id=%s status=%s failed_blocks=%d',
+                    'request_id=%s status=%s',
                     self.global_rank,
                     self.tp_rank,
                     self.tp_size,
                     request.request_id,
-                    'ok' if not failed_blocks else 'error',
-                    len(failed_blocks),
+                    'ok' if success else 'error',
                 )
             finally:
                 self.request_queue.task_done()

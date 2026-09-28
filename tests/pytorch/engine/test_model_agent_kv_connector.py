@@ -408,8 +408,8 @@ def test_connector_output_aggregator_waits_for_every_tp_rank():
     aggregator = KVConnectorOutputAggregator(world_size=2)
 
     first = aggregator.aggregate([
-        KVConnectorOutput(finished_receiving={11}, invalid_block_ids={3}),
-        KVConnectorOutput(invalid_block_ids={4}),
+        KVConnectorOutput(finished_receiving={11}, failed_receiving={11}),
+        KVConnectorOutput(failed_receiving={12}),
     ])
     second = aggregator.aggregate([
         KVConnectorOutput(completed_save_ids={23}),
@@ -421,7 +421,7 @@ def test_connector_output_aggregator_waits_for_every_tp_rank():
     ])
 
     assert first.finished_receiving is None
-    assert first.invalid_block_ids == {3, 4}
+    assert first.failed_receiving == {11, 12}
     assert second.finished_receiving == {11}
     assert second.completed_save_ids is None
     assert third.completed_save_ids == {23}
@@ -445,7 +445,7 @@ def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(mon
             events.append('finished')
             return KVConnectorOutput(
                 finished_receiving={11},
-                invalid_block_ids={3},
+                failed_receiving={11},
             )
 
         def clear_connector_metadata(self):
@@ -481,7 +481,7 @@ def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(mon
     assert outputs[0].next_token_ids is None
     assert outputs[0].kv_connector_output == KVConnectorOutput(
         finished_receiving={11},
-        invalid_block_ids={3},
+        failed_receiving={11},
     )
 
 

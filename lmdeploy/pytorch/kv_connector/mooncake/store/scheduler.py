@@ -93,9 +93,9 @@ class MooncakeStoreScheduler:
         # so the request ID also uniquely identifies the load operation.
         self._pending_loads: dict[RequestId, MooncakeStoreLoadRequest] = {}
         self._inflight_loads: dict[RequestId, MooncakeStoreLoadRequest] = {}
-        self._invalid_block_ids: set[int] = set()
-        # A failed load falls back to local compute for the rest of this
-        # sequence. A later conversation turn has a new request ID.
+        # Failures may precede all-worker completion. Retain them both for
+        # terminal rollback and to avoid retrying Store for this sequence.
+        # A later conversation turn has a new request ID.
         self._failed_load_requests: set[RequestId] = set()
         # Saves do not block request progress. Chunked prefill may therefore
         # create several in-flight saves for one request, each with its own ID.
@@ -248,7 +248,7 @@ class MooncakeStoreScheduler:
         if num_external_tokens <= 0:
             return
         req_id = int(request.seq_id)
-        plan = self._lookup_plans.pop(req_id)
+        plan = self._lookup_plans[req_id]
         block_size = self._cache_config.block_size
         remote_token_len = plan.remote_token_len
         local_token_len = remote_token_len - int(num_external_tokens)
@@ -266,12 +266,23 @@ class MooncakeStoreScheduler:
                 f'allocated load blocks ({len(block_ids)}) do not match external hashes '
                 f'({len(block_hashes)})')
 
+        state_slot = None
+        if self._is_hybrid:
+            state_slot = int(request.logical_state)
+            runtime_pool_end = self._cache_config.num_state_caches - self._cache_config.num_store_state_caches
+            if not 0 < state_slot < runtime_pool_end:
+                raise ValueError('Mooncake hybrid load requires an allocated runtime state slot')
+
         load_request = MooncakeStoreLoadRequest(
             request_id=req_id,
             block_ids=block_ids,
             block_hashes=block_hashes,
             remote_block_count=remote_block,
+            state_slot=state_slot,
         )
+        # Commit only after every destination has been validated. A failed
+        # binding leaves the lookup available for a later allocation attempt.
+        self._lookup_plans.pop(req_id)
         self._pending_loads[req_id] = load_request
 
     def _build_save_requests(
@@ -395,23 +406,24 @@ class MooncakeStoreScheduler:
         )
         self._release_save_slots(completed_save_ids)
 
-        self._invalid_block_ids.update(connector_output.invalid_block_ids)
+        self._failed_load_requests.update(
+            request_id for request_id in connector_output.failed_receiving
+            if request_id in self._inflight_loads
+        )
         completed = connector_output.finished_receiving or set()
         results = []
         for req_id in sorted(completed):
             request = self._inflight_loads.pop(req_id, None)
             if request is None:
                 continue
-            request_blocks = set(request.block_ids)
-            failed = not request_blocks.isdisjoint(self._invalid_block_ids)
-            self._invalid_block_ids.difference_update(request_blocks)
+            failed = req_id in self._failed_load_requests
             if failed:
-                self._failed_load_requests.add(req_id)
-                local_block_count = (
-                    request.remote_block_count - len(request.block_ids)
-                )
                 if self._kv_transfer_config.is_kv_producer:
-                    self._next_save_block[req_id] = local_block_count
+                    # Hybrid runtime state may be partially overwritten. Paging
+                    # releases the whole request and retries local matching.
+                    self._next_save_block[req_id] = (
+                        0 if self._is_hybrid else request.remote_block_count - len(request.block_ids)
+                    )
             else:
                 self._failed_load_requests.discard(req_id)
                 if self._kv_transfer_config.is_kv_producer:
@@ -432,11 +444,8 @@ class MooncakeStoreScheduler:
             self.client.discard(req_id)
         self._request_hash_trackers.pop(req_id, None)
         self._lookup_plans.pop(req_id, None)
-        pending = self._pending_loads.pop(req_id, None)
-        inflight = self._inflight_loads.pop(req_id, None)
-        load_request = pending or inflight
-        if load_request is not None:
-            self._invalid_block_ids.difference_update(load_request.block_ids)
+        self._pending_loads.pop(req_id, None)
+        self._inflight_loads.pop(req_id, None)
         self._failed_load_requests.discard(req_id)
         self._next_save_block.pop(req_id, None)
         return None
@@ -445,7 +454,6 @@ class MooncakeStoreScheduler:
         """Forget completions whose worker outputs were discarded by sleep."""
         self._pending_loads.clear()
         self._inflight_loads.clear()
-        self._invalid_block_ids.clear()
         self._release_save_slots(tuple(self._inflight_saves))
 
     def _release_save_slots(self, save_ids: Iterable[int]) -> None:
@@ -463,7 +471,6 @@ class MooncakeStoreScheduler:
         self._lookup_plans.clear()
         self._pending_loads.clear()
         self._inflight_loads.clear()
-        self._invalid_block_ids.clear()
         self._failed_load_requests.clear()
         self._next_save_block.clear()
         self._release_save_slots(tuple(self._inflight_saves))

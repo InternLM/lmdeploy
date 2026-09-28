@@ -99,7 +99,7 @@ class MooncakeStoreWorker:
         self._replicate_config = replicate_config
         self._completion_lock = threading.Lock()
         self._inflight_loads: set[RequestId] = set()
-        self._completed_loads: dict[RequestId, set[int]] = {}
+        self._completed_loads: dict[RequestId, bool] = {}
         self._inflight_save_ids: set[int] = set()
         self._completed_save_ids: set[int] = set()
 
@@ -151,11 +151,11 @@ class MooncakeStoreWorker:
     def _mark_load_finished(
         self,
         request_id: RequestId,
-        failed_block_ids: set[int],
+        success: bool,
     ) -> None:
         with self._completion_lock:
             self._inflight_loads.discard(request_id)
-            self._completed_loads[request_id] = failed_block_ids
+            self._completed_loads[request_id] = success
 
     def _mark_save_finished(self, save_id: int) -> None:
         with self._completion_lock:
@@ -183,6 +183,7 @@ class MooncakeStoreWorker:
             tp_rank=self.tp_rank,
             tp_size=self.tp_size,
             completion_callback=self._mark_load_finished,
+            state_registrations=self._registered_state_regions,
         )
         receiver.start()
         self.kv_recv_thread = receiver
@@ -428,6 +429,10 @@ class MooncakeStoreWorker:
         receiver = self.kv_recv_thread
         if connector_metadata.load_requests and receiver is None:
             raise RuntimeError('Mooncake KV-cache receiver is not initialized')
+        ready_event = None
+        if any(request.state_slot is not None for request in connector_metadata.load_requests):
+            ready_event = torch.cuda.Event()
+            ready_event.record()
         for request in connector_metadata.load_requests:
             request_id = request.request_id
             with self._completion_lock:
@@ -435,7 +440,7 @@ class MooncakeStoreWorker:
                     continue
                 self._inflight_loads.add(request_id)
             assert receiver is not None
-            receiver.add_request(request)
+            receiver.add_request(request, ready_event)
 
     def start_save_kv(self, connector_metadata: MooncakeStoreConnectorMetadata) -> None:
         """Fence the compute stream and submit immutable full-block saves."""
@@ -464,16 +469,14 @@ class MooncakeStoreWorker:
         """Return rank-local terminal transfer progress since the last poll."""
         with self._completion_lock:
             completed_loads = set(self._completed_loads)
-            invalid_block_ids = set()
-            for failed_blocks in self._completed_loads.values():
-                invalid_block_ids.update(failed_blocks)
+            failed_receiving = {request_id for request_id, success in self._completed_loads.items() if not success}
             self._completed_loads.clear()
             completed_save_ids = set(self._completed_save_ids)
             self._completed_save_ids.clear()
         return KVConnectorOutput(
             completed_save_ids=completed_save_ids or None,
             finished_receiving=completed_loads or None,
-            invalid_block_ids=invalid_block_ids,
+            failed_receiving=failed_receiving,
         )
 
     def lookup(self, token_len: int, block_hashes: Sequence[bytes]) -> int:

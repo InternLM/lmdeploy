@@ -141,7 +141,7 @@ def test_hybrid_save_slots_survive_request_finish_until_job_completion():
 
 
 @pytest.mark.parametrize(('lookup_alignment', 'expected_hit'), [(8, 24), (12, 24), (16, 16)])
-def test_hybrid_multimodal_save_and_lookup_without_local_prefix_cache(lookup_alignment, expected_hit):
+def test_hybrid_multimodal_save_lookup_and_load_without_local_prefix_cache(lookup_alignment, expected_hit):
     cache_config = _hybrid_cache_config()
     paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache_config,
                        seq_meta=SequenceMeta(4, strategy=ARSequenceStrategy()))
@@ -175,21 +175,50 @@ def test_hybrid_multimodal_save_and_lookup_without_local_prefix_cache(lookup_ali
     worker.store = SimpleNamespace(batch_is_exist=lambda keys: [int(key in stored_keys) for key in keys])
     consumer.client.lookup = Mock(
         side_effect=lambda req_id, token_len, hashes, non_block: worker.lookup(token_len, hashes))
-    assert not paging.block_trie.enabled
+    consumer_paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), config,
+                                seq_meta=SequenceMeta(4, strategy=ARSequenceStrategy()), kv_connector=consumer)
+    assert not consumer_paging.block_trie.enabled
     for session_id, (content, span_end, expected) in enumerate(
             ((1, 10, expected_hit), (2, 10, 0), (1, 11, 0)), start=1):
         image = MultiModalData(torch.tensor([content]), start=2, end=span_end)
-        request = paging.add_session(session_id).add_sequence(range(25), multimodals={'image': [image]})
+        request = consumer_paging.add_session(session_id).add_sequence(range(25), multimodals={'image': [image]})
         assert request.prefix_cache.multimodal_spans
         assert consumer.get_num_new_matched_tokens(request, 0) == (expected, expected > 0)
         if expected:
             plan = consumer._lookup_plans[request.seq_id]
             state_hash = plan.block_hashes[plan.remote_token_len // 4 - 1]
             assert build_store_key(metadata, 0, state_hash, group_id=1) in stored_keys
-        consumer.request_finished(request)
-    consumer.shutdown()
+            output = consumer_paging.schedule(is_prefill=True)
+            load = consumer.build_connector_meta(output).load_requests[0]
+            assert load.block_hashes[-1] == state_hash
+            assert load.state_slot == request.logical_state > 0
+            consumer_paging.update_connector_output(KVConnectorOutput(finished_receiving={request.seq_id}))
+            assert request.num_history_ids == expected
+            assert request.is_prefix_cache_boundary_safe(expected)
+            assert not request.get_input_multimodals().get('image', [])
+            assert consumer_paging.schedule(is_prefill=True).running == [request]
+        consumer_paging.end_session(session_id)
+    consumer_paging.shutdown()
     producer.shutdown()
     paging.shutdown()
+
+
+@pytest.mark.parametrize('invalid_slot', [-1, 0, 3, 4])
+def test_hybrid_load_binding_rejects_non_runtime_slots_without_consuming_lookup(invalid_slot):
+    connector = MooncakeStoreScheduler(_hybrid_cache_config('kv_both'))
+    request = _request(range(17))
+    request.logical_state = invalid_slot
+    connector.client.lookup = Mock(return_value=16)
+    assert connector.get_num_new_matched_tokens(request, 0) == (16, True)
+    with pytest.raises(ValueError, match='allocated runtime state slot'):
+        connector.update_state_after_alloc(request, (0, 1, 2, 3), 16)
+    assert connector.build_connector_meta(_connector_step()) is None
+    request.logical_state = 1
+    connector.update_state_after_alloc(request, (0, 1, 2, 3), 16)
+    load = connector.build_connector_meta(_connector_step()).load_requests[0]
+    assert load.state_slot == 1
+    connector.client.lookup.assert_called_once()
+    connector.shutdown()
 
 
 @pytest.mark.parametrize('role', ['kv_producer', 'kv_consumer', 'kv_both'])
@@ -217,14 +246,7 @@ def test_hybrid_lookup_respects_prompt_and_logprob_limits(prompt_len, logprob_st
     request.sampling_param.logprob_start_len = logprob_start
     consumer.client.lookup = Mock(return_value=expected)
 
-    # Task 3 exposes connector lookup, but paging must wait for hybrid load
-    # support before admitting any external prefix into a running request.
-    assert not paging.kv_load_coordinator.lookup_enabled
-    assert paging.schedule(is_prefill=True).running == [request]
-    consumer.client.lookup.assert_not_called()
-    assert request.num_history_ids == 0
-    assert paging.build_connector_meta([]) is None
-
+    assert paging.kv_load_coordinator.lookup_enabled
     assert consumer.get_num_new_matched_tokens(request, 0) == (expected, expected > 0)
     if expected:
         consumer.client.lookup.assert_called_once_with(
@@ -552,7 +574,7 @@ def test_scheduler_load_failure_falls_back_until_next_request():
     assert scheduler.build_connector_meta(_connector_step()).load_requests == ()
 
     assert scheduler.update_connector_output(
-        KVConnectorOutput(invalid_block_ids={32})) == KVConnectorResult()
+        KVConnectorOutput(failed_receiving={request.seq_id})) == KVConnectorResult()
     result = scheduler.update_connector_output(
         KVConnectorOutput(finished_receiving={request.seq_id})
     )

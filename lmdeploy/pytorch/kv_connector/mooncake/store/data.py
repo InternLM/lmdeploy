@@ -364,12 +364,14 @@ class MooncakeStoreStateRegistration:
 
 @dataclass(frozen=True)
 class MooncakeStoreLoadRequest:
-    """One asynchronous load from Mooncake into allocated GPU blocks."""
+    """One asynchronous load into private FA blocks and an optional runtime
+    state slot at the same remote boundary."""
 
     request_id: int
     block_ids: tuple[int, ...]
     block_hashes: tuple[bytes, ...]
     remote_block_count: int = 0
+    state_slot: int | None = None
 
 
 @dataclass(frozen=True)
