@@ -12,15 +12,20 @@ from .utils import get_device_props, is_cuda
 _SPLIT_SCALE = tl.constexpr(256.0)
 _SPLIT_SCALE_INV = tl.constexpr(1.0 / 256.0)
 
-# ``tl.dot`` requires every dimension to be at least 16. An ``N`` wider than
-# ``_MAX_BLOCK_N`` is tiled along the grid rather than rejected.
+# ``tl.dot`` requires every dimension to be at least 16, and an ``N`` wider than
+# the chosen tile is split along the grid rather than rejected. ``BLOCK_N`` is
+# tuned, so these only bound the candidate set: a tile never has to be wider than
+# ``_MAX_BLOCK_N`` because the two accumulators are ``[BLOCK_M, BLOCK_N]`` fp32
+# and a wide tile spills (measured on H20: ``BLOCK_N=128`` costs 255 registers
+# and spills, ``BLOCK_N=32`` fits in 64).
 _MIN_BLOCK_N = 16
-_MAX_BLOCK_N = 32
+_MAX_BLOCK_N = 64
 
 # Nominal tiles for the launch geometry. The split-K buffer has to be sized
-# before autotune picks the real ``BLOCK_M``/``BLOCK_K``, so the heuristic
-# below works off these instead.
+# before autotune picks the real ``BLOCK_M``/``BLOCK_N``/``BLOCK_K``, so the
+# heuristic below works off these instead.
 _NOMINAL_BLOCK_M = 128
+_NOMINAL_BLOCK_N = 32
 _NOMINAL_BLOCK_K = 128
 _MAX_SPLIT_K = 32
 _MIN_K_TILES_PER_SPLIT = 4
@@ -45,31 +50,43 @@ _MIN_M = 512
 def get_cuda_autotune_config() -> list[triton.Config]:
     """Autotune configs.
 
-    ``BLOCK_N`` follows ``N`` and is fixed by the launcher, so only
-    ``BLOCK_M``/``BLOCK_K`` are tuned. ``num_stages`` matters because the K loop
-    is long and the per-tile compute is too small to hide memory latency.
+    ``num_stages`` matters because the K loop is long and the per-tile compute is
+    too small to hide memory latency.
 
-    Since ``BLOCK_N`` is capped at ``_MAX_BLOCK_N``, a tile is never wide, so the
-    winning shapes are narrow-and-deep: every config that wins a production shape
-    measured on H20 sits at ``BLOCK_M`` 64/128 with ``BLOCK_K`` 32/64. The small
-    ``BLOCK_M``/large ``BLOCK_K`` corners are kept for the tiny-M decode buckets.
+    The winning tiles are narrow-and-deep: the two fp32 accumulators are
+    ``[BLOCK_M, BLOCK_N]`` each, so widening ``N`` costs registers without adding
+    reuse -- ``B`` is tiny and stays in L2 either way. ``BLOCK_N`` is tuned rather
+    than derived because the optimum moves with ``M`` as well as ``N``; configs
+    too wide for the actual ``N`` are dropped by ``_prune_configs``.
     """
-    return [
-        triton.Config({'BLOCK_M': 16, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 16, 'BLOCK_K': 128}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_K': 128}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_K': 32}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_K': 64}, num_stages=3, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_K': 128}, num_stages=3, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_K': 128}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_K': 32}, num_stages=4, num_warps=8),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_K': 128}, num_stages=4, num_warps=8),
-        triton.Config({'BLOCK_M': 256, 'BLOCK_K': 64}, num_stages=4, num_warps=8),
-        triton.Config({'BLOCK_M': 256, 'BLOCK_K': 128}, num_stages=3, num_warps=8),
-    ]
+    configs = []
+    for block_n in (16, 32, 64):
+        configs += [
+            triton.Config({'BLOCK_M': 16, 'BLOCK_N': block_n, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_M': 16, 'BLOCK_N': block_n, 'BLOCK_K': 128}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_M': 32, 'BLOCK_N': block_n, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_M': 32, 'BLOCK_N': block_n, 'BLOCK_K': 128}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_M': 64, 'BLOCK_N': block_n, 'BLOCK_K': 32}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_M': 64, 'BLOCK_N': block_n, 'BLOCK_K': 64}, num_stages=3, num_warps=4),
+            triton.Config({'BLOCK_M': 64, 'BLOCK_N': block_n, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_M': 64, 'BLOCK_N': block_n, 'BLOCK_K': 128}, num_stages=3, num_warps=4),
+            triton.Config({'BLOCK_M': 128, 'BLOCK_N': block_n, 'BLOCK_K': 32}, num_stages=4, num_warps=8),
+            triton.Config({'BLOCK_M': 128, 'BLOCK_N': block_n, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
+            triton.Config({'BLOCK_M': 256, 'BLOCK_N': block_n, 'BLOCK_K': 64}, num_stages=4, num_warps=8),
+        ]
+    return configs
+
+
+def _prune_configs(configs: list[triton.Config], named_args: dict, **kwargs: object) -> list[triton.Config]:
+    """Drop configs whose ``BLOCK_N`` is wider than this ``N`` needs.
+
+    A tile wider than ``next_power_of_2(N)`` only pads with masked-off columns,
+    so it can never win; benchmarking it would just make every cold shape slower
+    to tune. The widest surviving tile is always kept so the list is non-empty.
+    """
+    n = named_args['N']
+    want = min(_MAX_BLOCK_N, max(_MIN_BLOCK_N, triton.next_power_of_2(n)))
+    return [cfg for cfg in configs if cfg.kwargs['BLOCK_N'] <= want]
 
 
 # Autotune benchmarks candidate configs on the fly, which would invalidate an
@@ -77,7 +94,12 @@ def get_cuda_autotune_config() -> list[triton.Config]:
 # capture-shaped inputs first (`CUDASingleGraphRunner.capture`,
 # `PiecewiseGraphManager.prepare`), so every key is already resolved by the time
 # capture starts, exactly as the other autotuned kernels here rely on.
-@triton.autotune(configs=get_cuda_autotune_config(), key=['N', 'K', 'SPLIT_K', 'BLOCK_N', 'M_HINT'])
+#
+# ``BLOCK_N`` is not in the key: it is a tuned constexpr now, and the ``N`` it is
+# chosen for is already there.
+@triton.autotune(configs=get_cuda_autotune_config(),
+                 key=['N', 'K', 'SPLIT_K', 'M_HINT'],
+                 prune_configs_by={'early_config_prune': _prune_configs})
 @triton.jit(do_not_specialize=['M', 'M_HINT'])
 def _linear_bf16xfp32_kernel(
     A,
@@ -153,16 +175,7 @@ def _linear_bf16xfp32_kernel(
     tl.store(c_ptrs, c, mask=m_mask[:, None] & n_mask[None, :])
 
 
-def _get_block_n(n: int) -> int:
-    """Tile width along N.
-
-    A narrow ``N`` (hyper-connection mixing) gets one padded tile so the grid
-    stays flat; a wider ``N`` (router projections) is tiled instead.
-    """
-    return min(_MAX_BLOCK_N, max(_MIN_BLOCK_N, triton.next_power_of_2(n)))
-
-
-def _get_split_k(m: int, n: int, k: int, block_n: int, device: torch.device) -> int:
+def _get_split_k(m: int, n: int, k: int, device: torch.device) -> int:
     """Pick the K-split factor from how much of the device the M/N tiles fill.
 
     ``N`` is small in both target shapes, so the M/N grid alone often leaves
@@ -174,8 +187,13 @@ def _get_split_k(m: int, n: int, k: int, block_n: int, device: torch.device) -> 
     is also what keeps the reduction tree shallow: a deeper split accumulates
     fewer products per fp32 chain, so the same choice that wins here is the one
     that holds accuracy.
+
+    This sizes the partial buffer, so it has to run before autotune picks the
+    real tile and works off ``_NOMINAL_BLOCK_M``/``_NOMINAL_BLOCK_N`` instead.
+    The nominal pair is what ``_TARGET_BLOCK_WAVES`` was fitted against, so the
+    three move together.
     """
-    num_blocks = triton.cdiv(m, _NOMINAL_BLOCK_M) * triton.cdiv(n, block_n)
+    num_blocks = triton.cdiv(m, _NOMINAL_BLOCK_M) * triton.cdiv(n, _NOMINAL_BLOCK_N)
     num_sm = get_device_props(device.index)['multi_processor_count']
     num_k_tiles = triton.cdiv(k, _NOMINAL_BLOCK_K)
     split_k = min(_MAX_SPLIT_K, triton.cdiv(num_sm * _TARGET_BLOCK_WAVES, num_blocks))
@@ -225,8 +243,7 @@ def linear_bf16xfp32(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     if m < _MIN_M or not x.is_cuda or not is_cuda():
         return F.linear(x.to(torch.float32), weight)
 
-    block_n = _get_block_n(n)
-    split_k = _get_split_k(m, n, k, block_n, x.device)
+    split_k = _get_split_k(m, n, k, x.device)
 
     assert weight.is_contiguous(), 'weight must be contiguous'
     x2d = x.reshape(m, k)
@@ -240,7 +257,7 @@ def linear_bf16xfp32(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         stride_ck = 0
 
     def grid(meta):
-        return (triton.cdiv(m, meta['BLOCK_M']) * triton.cdiv(n, block_n), split_k)
+        return (triton.cdiv(m, meta['BLOCK_M']) * triton.cdiv(n, meta['BLOCK_N']), split_k)
 
     _linear_bf16xfp32_kernel[grid](
         x2d,
@@ -257,7 +274,6 @@ def linear_bf16xfp32(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         stride_ck,
         out.stride(-2),
         out.stride(-1),
-        BLOCK_N=block_n,
         SPLIT_K=split_k,
     )
     if split_k > 1:

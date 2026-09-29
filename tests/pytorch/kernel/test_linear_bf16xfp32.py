@@ -55,10 +55,8 @@ def test_linear(n, m, k):
 def test_production_shapes(n, m, k):
     """The two shape families this kernel serves must both take the fast
     path."""
-    import triton
-
     from lmdeploy.pytorch.kernels.cuda import linear_bf16xfp32
-    from lmdeploy.pytorch.kernels.cuda.linear_bf16xfp32 import _MAX_BLOCK_N, _MIN_BLOCK_N, _MIN_M, _get_block_n
+    from lmdeploy.pytorch.kernels.cuda.linear_bf16xfp32 import _MIN_M, _linear_bf16xfp32_kernel
 
     assert m >= _MIN_M, 'this test must exercise the kernel, not the fallback'
     torch.manual_seed(n)
@@ -68,12 +66,9 @@ def test_production_shapes(n, m, k):
     out = linear_bf16xfp32(x, w)
     ref = (x.double() @ w.double().t()).float()
 
-    # Every N is covered by a legal tile, and a wide N is tiled along the grid
-    # rather than rejected. Asserting the covering property instead of recomputing
-    # `_get_block_n` keeps this independent of how `_MAX_BLOCK_N` is tuned.
-    block_n = _get_block_n(n)
-    assert _MIN_BLOCK_N <= block_n <= _MAX_BLOCK_N
-    assert triton.cdiv(n, block_n) * block_n >= n
+    # Autotune must have had a legal tile to pick for this N, i.e. a wide N is
+    # tiled along the grid rather than rejected.
+    assert _linear_bf16xfp32_kernel.best_config is not None
     torch.testing.assert_close(out, ref, rtol=0.0, atol=_budget(ref))
 
 
@@ -178,16 +173,20 @@ def test_wide_n_is_tiled_not_rejected():
     import triton
 
     from lmdeploy.pytorch.kernels.cuda import linear_bf16xfp32
-    from lmdeploy.pytorch.kernels.cuda.linear_bf16xfp32 import _MAX_BLOCK_N, _get_block_n
+    from lmdeploy.pytorch.kernels.cuda.linear_bf16xfp32 import _MAX_BLOCK_N, _linear_bf16xfp32_kernel
 
     n, m, k = _MAX_BLOCK_N * 2 + 1, 512, 256
     torch.manual_seed(0)
     x = torch.randn(m, k, device='cuda').bfloat16()
     w = torch.randn(n, k, device='cuda', dtype=torch.float32)
 
-    assert triton.cdiv(n, _get_block_n(n)) > 1, 'this test must exercise N tiling'
     out = linear_bf16xfp32(x, w)
     ref = (x.double() @ w.double().t()).float()
+
+    # N is wider than the widest candidate tile, so whatever autotune picked must
+    # have been tiled along the grid.
+    block_n = _linear_bf16xfp32_kernel.best_config.kwargs['BLOCK_N']
+    assert triton.cdiv(n, block_n) > 1, 'this test must exercise N tiling'
 
     assert out.shape == (m, n)
     torch.testing.assert_close(out, ref, rtol=0.0, atol=_budget(ref))
