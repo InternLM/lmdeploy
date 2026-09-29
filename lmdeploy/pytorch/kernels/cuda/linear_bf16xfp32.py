@@ -33,11 +33,6 @@ _MIN_K_TILES_PER_SPLIT = 4
 # (N=256, K=4096), so the gate follows the later of the two.
 _MIN_M = 512
 
-# Autotune benchmarks candidate configs on the fly, which is illegal during a
-# CUDA graph capture (it invalidates the capture). Shapes already compiled in
-# eager mode are safe to replay, so remember them and decline anything new.
-_COMPILED_KEYS: set[tuple[int, int, int, int, int]] = set()
-
 
 def get_cuda_autotune_config() -> list[triton.Config]:
     """Autotune configs.
@@ -60,6 +55,11 @@ def get_cuda_autotune_config() -> list[triton.Config]:
     ]
 
 
+# Autotune benchmarks candidate configs on the fly, which would invalidate an
+# in-flight CUDA graph capture. Both capture paths run one eager forward on the
+# capture-shaped inputs first (`CUDASingleGraphRunner.capture`,
+# `PiecewiseGraphManager.prepare`), so every key is already resolved by the time
+# capture starts, exactly as the other autotuned kernels here rely on.
 @triton.autotune(configs=get_cuda_autotune_config(), key=['N', 'K', 'SPLIT_K', 'BLOCK_N', 'M_HINT'])
 @triton.jit(do_not_specialize=['M', 'M_HINT'])
 def _linear_bf16xfp32_kernel(
@@ -184,9 +184,8 @@ def linear_bf16xfp32(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
 
     Falls back to an fp32 ``F.linear``, which reproduces the upcast-then-linear
     behaviour exactly, when the kernel cannot pay for itself or cannot run:
-    non-bf16 activations, a non-fp32 weight, fewer than ``_MIN_M`` rows, no
-    CUDA, or a shape whose autotune configs are not compiled yet while a CUDA
-    graph capture is in progress.
+    non-bf16 activations, a non-fp32 weight, fewer than ``_MIN_M`` rows, or no
+    CUDA.
 
     Args:
         x (torch.Tensor): Activation of shape ``[..., K]``.
@@ -207,9 +206,6 @@ def linear_bf16xfp32(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
 
     block_n = _get_block_n(n)
     split_k = _get_split_k(m, n, k, block_n, x.device)
-    tune_key = (n, k, split_k, block_n, _get_m_hint(m))
-    if tune_key not in _COMPILED_KEYS and torch.cuda.is_current_stream_capturing():
-        return F.linear(x.to(torch.float32), weight)
 
     assert weight.is_contiguous(), 'weight must be contiguous'
     x2d = x.reshape(m, k)
@@ -243,7 +239,6 @@ def linear_bf16xfp32(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         BLOCK_N=block_n,
         SPLIT_K=split_k,
     )
-    _COMPILED_KEYS.add(tune_key)
     if split_k > 1:
         out = out.sum(dim=0)
 

@@ -189,11 +189,15 @@ def test_wide_n_is_tiled_not_rejected():
     torch.testing.assert_close(out, ref, rtol=0.0, atol=_budget(ref))
 
 
-def test_cuda_graph_capture_of_cold_shape_falls_back():
-    """Autotune cannot benchmark mid-capture, so an uncompiled shape declines.
+def test_cuda_graph_capture_after_eager_warmup():
+    """Capture is safe once the shape has run eagerly, as the graph runners
+    guarantee.
 
-    Without the guard the benchmarking sweep invalidates the capture with
-    ``cudaErrorStreamCaptureInvalidated``.
+    Autotune cannot benchmark mid-capture, so a shape whose configs are still
+    unresolved fails with ``cudaErrorStreamCaptureInvalidated``. Both capture
+    paths run one eager forward on the capture-shaped inputs first
+    (``CUDASingleGraphRunner.capture``, ``PiecewiseGraphManager.prepare``);
+    this pins that contract.
     """
     kernel_mod = importlib.import_module('lmdeploy.pytorch.kernels.cuda.linear_bf16xfp32')
 
@@ -201,26 +205,15 @@ def test_cuda_graph_capture_of_cold_shape_falls_back():
     torch.manual_seed(1)
     x = torch.randn(m, k, device='cuda').bfloat16()
     w = torch.randn(n, k, device='cuda', dtype=torch.float32)
-    block_n = kernel_mod._get_block_n(n)
-    split_k = kernel_mod._get_split_k(m, n, k, block_n, x.device)
-    kernel_mod._COMPILED_KEYS.discard((n, k, split_k, block_n, kernel_mod._get_m_hint(m)))
+
+    # The eager warmup a graph runner performs before capturing.
+    kernel_mod.linear_bf16xfp32(x, w)
 
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
-        cold = kernel_mod.linear_bf16xfp32(x, w)
+        out = kernel_mod.linear_bf16xfp32(x, w)
     graph.replay()
     torch.cuda.synchronize()
 
-    # The cold capture must have taken the fp32 fallback, bit for bit.
-    assert torch.equal(cold, F.linear(x.float(), w))
-
-    # Once compiled eagerly the same shape is safe to capture and use.
-    kernel_mod.linear_bf16xfp32(x, w)
-    warm_graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(warm_graph):
-        warm = kernel_mod.linear_bf16xfp32(x, w)
-    warm_graph.replay()
-    torch.cuda.synchronize()
-
     ref = (x.double() @ w.double().t()).float()
-    torch.testing.assert_close(warm, ref, rtol=0.0, atol=_budget(ref))
+    torch.testing.assert_close(out, ref, rtol=0.0, atol=_budget(ref))
