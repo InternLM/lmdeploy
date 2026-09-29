@@ -37,3 +37,9 @@ class TritonHCPrePostImpl(HCPrePostImpl):
     def post_expand(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
                     comb: torch.Tensor) -> torch.Tensor:
         return hc_post_expand(x, residual, post, comb, self.hc_mult)
+
+    def post_expand_with_fp32(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
+                              comb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        fp32 = torch.empty((*x.shape[:-1], self.hc_mult, x.size(-1)), device=x.device, dtype=torch.float32)
+        out = hc_post_expand(x, residual, post, comb, self.hc_mult, out_fp32=fp32)
+        return out, fp32

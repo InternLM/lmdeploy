@@ -14,6 +14,41 @@ from .base import LinearBase
 from .utils import QKVMixin, check_qkv_split_layout
 
 
+class BatchedLinear(torch.nn.Module):
+    """Group projections while retaining their original owners and loaders."""
+
+    def __init__(self, projections):
+        super().__init__()
+        self.projections = tuple(projections)
+        first = self.projections[0]
+        self.in_features = first.in_features
+        self.out_features = first.out_features
+        if any((p.in_features, p.out_features) != (self.in_features, self.out_features)
+               for p in self.projections):
+            raise ValueError('Batched projections must have matching local dimensions.')
+        self.register_buffer('_weight', None, persistent=False)
+
+    def process_weights_after_loading(self):
+        """Pack after backend weight updates; preserve individual
+        parameters."""
+        self._weight = None
+        if all(type(p) is BaseLinear and p.colwise and not p.all_reduce
+               and p.tp_mode != TPMode.DP_TP and p.bias is None
+               and p.weight.is_cuda and p.weight.dtype == torch.bfloat16
+               and p.impl.supports_batched for p in self.projections):
+            self._weight = torch.stack([p.get_unquantized_weight(torch.bfloat16) for p in self.projections])
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        """Project concatenated inputs, retaining the original LoRA path."""
+        if x.size(-1) != len(self.projections) * self.in_features:
+            raise ValueError('Batched input width must match the concatenated projection inputs.')
+        if self._weight is None or x.numel() == 0 or any(p.lora_adapters for p in self.projections):
+            return tuple(p(part) for p, part in zip(self.projections, x.split(self.in_features, dim=-1)))
+        inputs = x.reshape(-1, len(self.projections), self.in_features).transpose(0, 1)
+        output = self.projections[0].impl.forward_batched(inputs, self._weight)
+        return tuple(part.view(*x.shape[:-1], self.out_features) for part in output.unbind(0))
+
+
 class BaseLinear(LinearBase):
     """Linear layer."""
 

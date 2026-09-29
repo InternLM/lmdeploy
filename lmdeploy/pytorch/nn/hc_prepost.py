@@ -33,12 +33,18 @@ class HcPrePost(nn.Module):
         hc_base: torch.Tensor,
         norm_eps: float,
         norm_weight: torch.Tensor | None = None,
+        x_fp32: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         from lmdeploy.pytorch.nn.norm import rms_scale
         hidden_states, dtype = x, x.dtype
+        if x_fp32 is not None:
+            assert x_fp32.shape == x.shape and x_fp32.dtype == torch.float32
         x = x.flatten(2)
         # Long prefills amortize the additional compiled-call overhead.
-        x = _cast_fp32(x) if x.is_contiguous() and x.size(0) * x.size(1) >= 8192 else x.float()
+        if x_fp32 is not None:
+            x = x_fp32.flatten(2)
+        else:
+            x = _cast_fp32(x) if x.is_contiguous() and x.size(0) * x.size(1) >= 8192 else x.float()
         if self.avoid_gemv and x.size(0) == 1 and x.size(1) == 1:
             # Single-token decode otherwise selects GEMV, whose reduction
             # order can differ from multi-token speculative verification.
@@ -55,3 +61,7 @@ class HcPrePost(nn.Module):
     def post_expand(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
                     comb: torch.Tensor) -> torch.Tensor:
         return self.impl.post_expand(x, residual, post, comb)
+
+    def post_expand_with_fp32(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
+                              comb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.impl.post_expand_with_fp32(x, residual, post, comb)

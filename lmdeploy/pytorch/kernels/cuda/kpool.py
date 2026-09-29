@@ -346,3 +346,123 @@ def compress_kpool(keys: torch.Tensor, scores: torch.Tensor, ape: torch.Tensor,
             keys.contiguous(), scores.contiguous(), ape.contiguous(), out, scale, valid, valid is not None, width, pool,
             mode == 'extend', round_scale, width.bit_length() - 1, num_warps=4, enable_fp_fusion=False)
     return out, scale
+
+
+@triton.jit
+def _gather_token_tail_kernel(Cache, Blocks, Q, KV, Keys, Scores, StateIds,
+                              stride_cb: tl.constexpr, stride_ct: tl.constexpr,
+                              stride_cs: tl.constexpr, stride_cd: tl.constexpr,
+                              stride_bb: tl.constexpr, stride_bp: tl.constexpr,
+                              PAGES: tl.constexpr, PAGE_SIZE: tl.constexpr,
+                              POOL: tl.constexpr, WIDTH: tl.constexpr,
+                              BLOCK_D: tl.constexpr):
+    request = tl.program_id(0)
+    history = tl.load(KV + request).to(tl.int64) - tl.load(Q + request).to(tl.int64)
+    tail = history % POOL
+    slot = tl.arange(0, POOL)
+    position = history - tail + slot
+    page = position // PAGE_SIZE
+    valid = (slot < tail) & (position >= 0) & (page < PAGES)
+    block = tl.load(Blocks + request * stride_bb + page * stride_bp, valid, other=0)
+    dim = tl.arange(0, BLOCK_D)
+    ptr = Cache + block[:, None] * stride_cb + (position % PAGE_SIZE)[:, None] * stride_ct
+    ptr += dim[None, :] * stride_cd
+    mask = valid[:, None] & (dim[None, :] < WIDTH)
+    keys = tl.load(ptr, mask, other=0)
+    scores = tl.load(ptr + stride_cs, mask, other=0)
+    out = (request * POOL + slot[:, None]) * WIDTH + dim[None, :]
+    tl.store(Keys + out, keys, dim[None, :] < WIDTH)
+    tl.store(Scores + out, scores, dim[None, :] < WIDTH)
+    tl.store(StateIds + request, request)
+
+
+def gather_kpool_token_tail(cache, block_offsets, q_seqlens, kv_seqlens, pool_size):
+    """Reconstruct private draft tails from pageable accepted token history."""
+    batch, width = q_seqlens.numel(), cache.size(-1)
+    keys = cache.new_empty((batch, pool_size, width))
+    scores = torch.empty_like(keys)
+    state_ids = torch.empty(batch, device=cache.device, dtype=torch.int64)
+    _gather_token_tail_kernel[(batch,)](
+        cache, block_offsets, q_seqlens, kv_seqlens, keys, scores, state_ids,
+        *cache.stride(), *block_offsets.stride(), block_offsets.size(1), cache.size(1),
+        pool_size, width, triton.next_power_of_2(width), num_warps=4)
+    return keys, scores, state_ids
+
+
+@triton.jit
+def _write_token_cache_kernel(Cache, Blocks, Q, KV, Starts, Keys, Scores,
+                               stride_cb: tl.constexpr, stride_ct: tl.constexpr,
+                               stride_cs: tl.constexpr, stride_cd: tl.constexpr,
+                               stride_bb: tl.constexpr, stride_bp: tl.constexpr,
+                               stride_kt: tl.constexpr, stride_kd: tl.constexpr,
+                               stride_st: tl.constexpr, stride_sd: tl.constexpr,
+                               BATCH: tl.constexpr, PAGES: tl.constexpr,
+                               PAGE_SIZE: tl.constexpr, WIDTH: tl.constexpr,
+                               BLOCK_B: tl.constexpr, BLOCK_D: tl.constexpr):
+    row = tl.program_id(0)
+    request_ids = tl.arange(0, BLOCK_B)
+    starts = tl.load(Starts + request_ids, request_ids < BATCH, other=2147483647)
+    request = tl.sum((row >= starts).to(tl.int32), 0) - 1
+    history = tl.load(KV + request).to(tl.int64) - tl.load(Q + request).to(tl.int64)
+    position = history + row - tl.load(Starts + request)
+    page = position // PAGE_SIZE
+    valid = (position >= 0) & (page < PAGES)
+    block = tl.load(Blocks + request * stride_bb + page * stride_bp, valid, other=0)
+    dim = tl.arange(0, BLOCK_D)
+    keys = tl.load(Keys + row * stride_kt + dim * stride_kd, dim < WIDTH, other=0)
+    scores = tl.load(Scores + row * stride_st + dim * stride_sd, dim < WIDTH, other=0)
+    ptr = Cache + block * stride_cb + (position % PAGE_SIZE) * stride_ct + dim * stride_cd
+    tl.store(ptr, keys, valid & (dim < WIDTH))
+    tl.store(ptr + stride_cs, scores, valid & (dim < WIDTH))
+
+
+def write_kpool_token_cache(cache, keys, scores, block_offsets, q_seqlens,
+                            kv_seqlens, cu_seqlens_q):
+    """Write raw draft projections without materializing token index
+    tensors."""
+    batch, width = q_seqlens.numel(), cache.size(-1)
+    _write_token_cache_kernel[(keys.size(0),)](
+        cache, block_offsets, q_seqlens, kv_seqlens, cu_seqlens_q, keys, scores,
+        *cache.stride(), *block_offsets.stride(), *keys.stride(), *scores.stride(),
+        batch, block_offsets.size(1), cache.size(1), width,
+        triton.next_power_of_2(batch), triton.next_power_of_2(width), num_warps=4)
+
+
+@triton.jit
+def _decode_metadata_kernel(Q, KV, Blocks, Seq, Groups, Context, ScheduleLengths, Table,
+                            STEPS: tl.constexpr, POOL: tl.constexpr, PAGES: tl.constexpr,
+                            stride_bb: tl.constexpr, stride_bp: tl.constexpr,
+                            BLOCK: tl.constexpr):
+    row = tl.program_id(0)
+    tile = tl.program_id(1)
+    request, step = row // STEPS, row % STEPS
+    length = tl.load(KV + request).to(tl.int64) - tl.load(Q + request).to(tl.int64) + step + 1
+    # Triton integer division truncates; match Torch floor division for padded rows.
+    groups = (length - tl.where(length < 0, POOL - 1, 0)) // POOL
+    if tile == 0:
+        tl.store(Seq + row, length)
+        tl.store(Groups + row, groups)
+        tl.store(Context + row, groups)
+        tl.store(ScheduleLengths + row, tl.maximum(groups, 1))
+    pages = tile * BLOCK + tl.arange(0, BLOCK)
+    block = tl.load(Blocks + request * stride_bb + pages * POOL * stride_bp,
+                    pages < PAGES, other=0)
+    tl.store(Table + row * PAGES + pages, block, pages < PAGES)
+
+
+def prepare_kpool_decode_metadata(q_seqlens, kv_seqlens, block_offsets, rows,
+                                   pool_size, with_scores=True):
+    """Fill graph-owned sequence and pooled-page metadata once per forward."""
+    batch = q_seqlens.numel()
+    if not batch or rows % batch:
+        raise ValueError('Decode rows must be a multiple of the request count.')
+    pages = triton.cdiv(block_offsets.size(1), pool_size) if with_scores else 0
+    seq = torch.empty(rows, device=q_seqlens.device, dtype=torch.int64)
+    groups = torch.empty_like(seq)
+    context = torch.empty((rows, 1), device=q_seqlens.device, dtype=torch.int32)
+    schedule_lengths = torch.empty_like(context)
+    table = torch.empty((rows, pages), device=q_seqlens.device, dtype=torch.int32)
+    _decode_metadata_kernel[(rows, max(1, triton.cdiv(pages, 256)))](
+        q_seqlens, kv_seqlens, block_offsets, seq, groups, context, schedule_lengths,
+        table, rows // batch, pool_size, pages, *block_offsets.stride(), 256, num_warps=4)
+    return seq, groups, context, schedule_lengths, table

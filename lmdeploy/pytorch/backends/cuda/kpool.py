@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import functools
+from dataclasses import dataclass
 
 import torch
 from torch import Tensor
@@ -13,10 +14,13 @@ from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_indexed_key_cache
 from lmdeploy.pytorch.kernels.cuda.flatten_kv_cache import flatten_kv_cache
 from lmdeploy.pytorch.kernels.cuda.kpool import (
     compress_kpool,
+    gather_kpool_token_tail,
     kpool_prefill_metadata,
     partition_kpool,
+    prepare_kpool_decode_metadata,
     rotate_kpool_query,
     update_kpool,
+    write_kpool_token_cache,
 )
 from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
     is_sparse_index_topk_supported,
@@ -36,6 +40,32 @@ from .nsa import _get_max_score_rows
 # [tokens, topk] masks and int64 temporaries separately during prefill or decode.
 kpool_expand_groups_cuda = torch.compile(kpool_expand_selected_groups, dynamic=True, fullgraph=True)
 kpool_rotate_query_cuda = rotate_kpool_query
+kpool_gather_token_tail_cuda = gather_kpool_token_tail
+kpool_write_token_cache_cuda = write_kpool_token_cache
+
+
+@dataclass(frozen=True)
+class KPoolDecodeMetadata:
+    """Layer-independent metadata owned by one eager or captured forward."""
+
+    seq_lens: Tensor
+    group_lengths: Tensor
+    context_lens: Tensor
+    block_table: Tensor
+    schedule: Tensor | None
+
+
+def kpool_decode_metadata_cuda(attn_metadata, rows, pool_size, with_scores=True):
+    """Prepare decode metadata once; graph replay refills the same buffers."""
+    seq, groups, context, schedule_lengths, table = prepare_kpool_decode_metadata(
+        attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
+        attn_metadata.block_offsets, rows, pool_size, with_scores)
+    schedule = None
+    if with_scores and table.size(1):
+        deep_gemm = _get_deep_gemm()
+        schedule = deep_gemm.get_paged_mqa_logits_metadata(
+            schedule_lengths, 64, deep_gemm.get_num_sms())
+    return KPoolDecodeMetadata(seq, groups, context, table, schedule)
 
 
 def kpool_dense_indices_cuda(q_seqlens, kv_seqlens, rows, pool_size, topk):
@@ -296,6 +326,8 @@ def kpool_score_paged_cuda(
     group_lengths: Tensor,
     pooled_block_offsets: Tensor,
     page_size: int = 64,
+    *,
+    metadata: KPoolDecodeMetadata | None = None,
 ) -> Tensor:
     """Score pooled decode history with DeepGEMM's paged MQA primitive."""
     _validate_query(query_fp8, query_weight)
@@ -320,12 +352,17 @@ def kpool_score_paged_cuda(
             (rows, 0), dtype=torch.float32, device=query_fp8.device)
 
     deep_gemm = _get_deep_gemm()
-    context_lens = group_lengths.to(
-        device=query_fp8.device, dtype=torch.int32).contiguous().view(-1, 1)
-    block_table = pooled_block_offsets.to(
-        device=query_fp8.device, dtype=torch.int32).contiguous()
-    schedule = deep_gemm.get_paged_mqa_logits_metadata(
-        context_lens.clamp(min=1), page_size, deep_gemm.get_num_sms())
+    if metadata is None:
+        context_lens = group_lengths.to(
+            device=query_fp8.device, dtype=torch.int32).contiguous().view(-1, 1)
+        block_table = pooled_block_offsets.to(
+            device=query_fp8.device, dtype=torch.int32).contiguous()
+        schedule = deep_gemm.get_paged_mqa_logits_metadata(
+            context_lens.clamp(min=1), page_size, deep_gemm.get_num_sms())
+    else:
+        context_lens = metadata.context_lens
+        block_table = metadata.block_table
+        schedule = metadata.schedule
     return deep_gemm.fp8_paged_mqa_logits(
         query_fp8.contiguous().unsqueeze(1),
         packed_cache,
