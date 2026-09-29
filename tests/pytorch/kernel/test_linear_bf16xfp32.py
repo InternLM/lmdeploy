@@ -58,7 +58,7 @@ def test_production_shapes(n, m, k):
     import triton
 
     from lmdeploy.pytorch.kernels.cuda import linear_bf16xfp32
-    from lmdeploy.pytorch.kernels.cuda.linear_bf16xfp32 import _MIN_M, _get_block_n
+    from lmdeploy.pytorch.kernels.cuda.linear_bf16xfp32 import _MAX_BLOCK_N, _MIN_BLOCK_N, _MIN_M, _get_block_n
 
     assert m >= _MIN_M, 'this test must exercise the kernel, not the fallback'
     torch.manual_seed(n)
@@ -68,8 +68,12 @@ def test_production_shapes(n, m, k):
     out = linear_bf16xfp32(x, w)
     ref = (x.double() @ w.double().t()).float()
 
-    # A wide N must be tiled rather than rejected.
-    assert triton.cdiv(n, _get_block_n(n)) == triton.cdiv(n, min(128, max(16, triton.next_power_of_2(n))))
+    # Every N is covered by a legal tile, and a wide N is tiled along the grid
+    # rather than rejected. Asserting the covering property instead of recomputing
+    # `_get_block_n` keeps this independent of how `_MAX_BLOCK_N` is tuned.
+    block_n = _get_block_n(n)
+    assert _MIN_BLOCK_N <= block_n <= _MAX_BLOCK_N
+    assert triton.cdiv(n, block_n) * block_n >= n
     torch.testing.assert_close(out, ref, rtol=0.0, atol=_budget(ref))
 
 
