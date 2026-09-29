@@ -8,6 +8,12 @@ from lmdeploy.pytorch.backends.hc_prepost import HCPrePostBuildSpec
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
+@torch.compile(dynamic=True)
+def _cast_fp32(x: torch.Tensor) -> torch.Tensor:
+    """Vectorize the large HC input conversion without changing reductions."""
+    return x.float()
+
+
 class HcPrePost(nn.Module):
     """DeepSeek-V4 hyper-connection pre/post reduction wrapper."""
 
@@ -30,7 +36,9 @@ class HcPrePost(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         from lmdeploy.pytorch.nn.norm import rms_scale
         hidden_states, dtype = x, x.dtype
-        x = x.flatten(2).float()
+        x = x.flatten(2)
+        # Long prefills amortize the additional compiled-call overhead.
+        x = _cast_fp32(x) if x.is_contiguous() and x.size(0) * x.size(1) >= 8192 else x.float()
         if self.avoid_gemv and x.size(0) == 1 and x.size(1) == 1:
             # Single-token decode otherwise selects GEMV, whose reduction
             # order can differ from multi-token speculative verification.
