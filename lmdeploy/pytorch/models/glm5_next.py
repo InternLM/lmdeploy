@@ -83,6 +83,7 @@ from .glm4_1v import (
 from .glm_moe_dsa import DSATopKIndicesBuffer
 from .glm_moe_dsa_mtp import GlmMoeDsaMTPModel, GlmMoeDsaMultiTokenPredictor
 from .qwen3_vl import Qwen3VLInputProcessor
+from .utils.cudagraph import PiecewiseCudaGraphMixin
 from .utils.model import build_embedding, vlm_model
 
 Glm5NextVisionRMSNorm = RMSNorm
@@ -818,6 +819,43 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             v_head_size=dense_mla_impl.v_head_size,
             use_fa3=getattr(dense_mla_impl, 'use_fa3', False),
         )
+        from lmdeploy.pytorch.backends.cuda.step_metadata import register_piecewise_graph_impl
+
+        self._piecewise_forward = None
+        register_piecewise_graph_impl(self)
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Keep KPool updates and sparse/dense attention on live metadata."""
+        return True
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Run selection and cache mutation outside captured graph pieces."""
+        if self._piecewise_forward is not None:
+            return
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            ViewTolerantPaddedAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        original_forward = self.forward
+
+        @eager_boundary(
+            adapter_factory=partial(ViewTolerantPaddedAdapter, token_axis=1),
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager(hidden_states, *args, **kwargs):
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            return original_forward(hidden_states[:, :execution.raw_tokens], *args, **kwargs)
+
+        def piecewise_forward(hidden_states, *args, **kwargs):
+            if get_piecewise_graph_execution() is None:
+                return original_forward(hidden_states, *args, **kwargs)
+            return run_eager(hidden_states, *args, **kwargs)
+
+        self._piecewise_forward = piecewise_forward
+        self.forward = piecewise_forward
 
     def _build_indexer(self, config: Any, layer_idx: int, dtype: torch.dtype,
                        device: torch.device, prefix: str = ''):
@@ -1596,8 +1634,12 @@ class Glm5NextModel(nn.Module):
         return self.embed_tokens
 
 
-class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM):
+class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGraphMixin):
     """GLM-5.3 conditional-generation wrapper for text, image and video."""
+
+    # Padding changes BF16 projection rounding. Preserve the original GEMM
+    # row count; partial prefill buckets retain the eager numerical path.
+    piecewise_cuda_graph_token_padding = False
 
     packed_modules_mapping = {
         'fg_a_proj': ['f_a_proj', 'g_a_proj'],
@@ -1696,6 +1738,13 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM):
 
     def get_input_embeddings(self):
         return self.model.get_input_embeddings()
+
+    def get_outputs_cudagraph(self, output_buffers, input_ids, **kwargs):
+        """Retain prefill embeddings needed by the first MTP draft pass."""
+        outputs = super().get_outputs_cudagraph(output_buffers, input_ids, **kwargs)
+        if 'target_inputs_embeds' in output_buffers:
+            outputs['target_inputs_embeds'] = output_buffers['target_inputs_embeds'][:, :input_ids.size(-1)]
+        return outputs
 
     def get_input_processor(self):
         """Return the model-specific image/video input processor."""
