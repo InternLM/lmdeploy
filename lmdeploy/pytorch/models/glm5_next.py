@@ -1574,7 +1574,7 @@ class Glm5NextModel(nn.Module):
                 get_tp_world_rank('attn')[1] == 0)
         full_layer_row = 0
         hc_input_fp32 = None
-        prepare_hc_fp32 = hidden_states.is_cuda and hidden_states.size(0) * hidden_states.size(1) <= 16
+        prepare_hc_fp32 = hidden_states.is_cuda and hidden_states.size(0) * hidden_states.size(1) <= 32
         for layer, past_key_value in zip(self.layers, past_key_values):
             kpool_tail_state = None
             if not layer.is_linear_attention:
