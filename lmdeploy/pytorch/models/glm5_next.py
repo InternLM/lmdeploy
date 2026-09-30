@@ -39,6 +39,7 @@ from lmdeploy.pytorch.consts import (
 )
 from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest
+from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_masked_post_quant_fwd
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
@@ -115,6 +116,8 @@ def _glm_swiglu_impl(intermediate: torch.Tensor,
 
 _GLM53_COMPACT_FP8_MOE_ACT = partial(
     _glm_swiglu_impl, swiglu_limit=10.0, precise_mul=True)
+_GLM53_COMPACT_FP8_MOE_ACT.masked_post_quant = partial(
+    silu_and_mul_masked_post_quant_fwd, swiglu_limit=10.0, precise_mul=True)
 
 
 class Glm5NextVisionPatchEmbed(Glm4vVisionPatchEmbed):

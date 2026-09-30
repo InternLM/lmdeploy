@@ -194,8 +194,13 @@ class FusedMoELowLatency:
             (gateup_output.shape[0], gateup_output.shape[1], gateup_output.shape[2] // 2 // self.block_size),
             device=gateup_output.device,
             dtype=torch.float32)
-        if act_func is None:
-            silu_and_mul_masked_post_quant_fwd(gateup_output, down_input, down_input_scale, self.block_size, masked_m)
+        # Custom activations can explicitly supply a masked FP8 fusion while
+        # retaining the existing callable fallback for other implementations.
+        masked_post_quant = (silu_and_mul_masked_post_quant_fwd if act_func is None
+                             else getattr(act_func, 'masked_post_quant', None))
+        if masked_post_quant is not None:
+            masked_post_quant(gateup_output, down_input, down_input_scale, self.block_size, masked_m,
+                              scale_fmt=self.scale_fmt)
         else:
             # Only masked_m valid rows are consumed by the following GEMM.
             # Reuse the model's activation and the shared quantizer unchanged.
