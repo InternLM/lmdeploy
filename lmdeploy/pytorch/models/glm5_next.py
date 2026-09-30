@@ -1100,7 +1100,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                     metadata=kpool_metadata,
                 )
                 selected_groups = kpool_select_groups_cuda(
-                    logits.contiguous(),
+                    logits,
                     group_lengths,
                     group_topk=self.index_topk // self.index_kpool,
                 )
@@ -1190,7 +1190,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             )
             group_budget = self.index_topk // self.index_kpool
             selected_groups = kpool_select_groups_cuda(
-                logits.contiguous(),
+                logits,
                 group_lengths,
                 group_topk=group_budget,
                 max_group_length=num_groups,
