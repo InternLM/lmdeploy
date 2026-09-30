@@ -566,10 +566,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         self._piecewise_forward = piecewise_forward
 
     def do_renormalize(self, topk_weights):
-        weights = _renormalize(topk_weights, self.renormalize)
-        # DeepEP owns the final distributed combine. Fold only the routed
-        # scale into FP32 routing weights; the separate shared expert is unscaled.
-        return weights if self.output_scale == 1.0 else weights.float() * self.output_scale
+        return _renormalize(topk_weights, self.renormalize)
 
     def fusedmoe_build(self, low_latency_mode: bool = False):
         deepep_moe = _build_deepep_moe(low_latency_mode,
