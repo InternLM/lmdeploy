@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING
 from lmdeploy.pytorch.kv_connector import KVLoadResult
 from lmdeploy.pytorch.messages import SchedulerSequence, SchedulerSession
 
+from .block_trie import PrefixCacheStats
+
 if TYPE_CHECKING:
     from lmdeploy.pytorch.kv_connector import KVConnectorBase
 
@@ -98,6 +100,8 @@ class _LoadRecord:
     """
 
     seq: SchedulerSequence
+    # Exact query origin before local matching, not the rounded FA load start.
+    match_start_step: int
     load_start_step: int
     remote_step: int
     phase: _LoadPhase = _LoadPhase.LOADING
@@ -136,6 +140,7 @@ class KVLoadCoordinator:
         self.block_trie = block_trie
         self.sessions = sessions
         self.state_manager = state_manager
+        self.prefix_cache_stats = PrefixCacheStats()
         # Active load lifecycle. Records survive the LOADING -> READY ->
         # PREFILLING transitions so stop/end and preemption can find the owner.
         self._loads: dict[int, _LoadRecord] = {}
@@ -213,6 +218,13 @@ class KVLoadCoordinator:
         if not self.lookup_enabled or connector is None:
             return False
         return connector.is_lookup_pending(seq.seq_id)
+
+    def record_cache_query(self, seq: SchedulerSequence, local_step: int, external_tokens: int = 0) -> None:
+        """Record an admitted external query outside recomputation."""
+        if self.connector is None or seq.prefix_cache.suppress_match_stats:
+            return
+        self.prefix_cache_stats.num_query_tokens += seq.num_all_ids - local_step
+        self.prefix_cache_stats.num_hit_tokens += external_tokens
 
     def try_load(
         self,
@@ -402,11 +414,18 @@ class KVLoadCoordinator:
             seq.prefix_cache.restore.clear()
         seq.state.begin_remote_load()
         self.track_prefill(seq, target_blocks=target_blocks)
+        match_start_step = seq.prefix_cache.match_start_step
+        if match_start_step < 0:
+            match_start_step = int(seq.num_history_ids)
         self._loads[request_id] = _LoadRecord(
             seq=seq,
+            match_start_step=match_start_step,
             load_start_step=load_start_step,
             remote_step=remote_step,
         )
+        # Match vLLM's admission-time counters: the reloaded partial FA block
+        # belongs to the external prefix, and transfer outcomes do not undo a hit.
+        self.record_cache_query(seq, load_start_step, remote_step - load_start_step)
 
     def is_remote_ready(self, seq: SchedulerSequence) -> bool:
         """Return whether loaded KV is published but prefill is not
@@ -464,9 +483,7 @@ class KVLoadCoordinator:
         seq.set_step(record.remote_step)
         seq.kv_token_limit = None
         if seq.prefix_cache.match_start_step < 0:
-            # With no preceding local trie hit, the block-aligned load start is
-            # the beginning of this request's externally cached interval.
-            seq.prefix_cache.match_start_step = record.load_start_step
+            seq.prefix_cache.match_start_step = record.match_start_step
         self.block_trie.finalize_match(seq)
         seq.state.finish_remote_load()
         record.phase = _LoadPhase.READY
@@ -494,7 +511,8 @@ class KVLoadCoordinator:
         seq.prefix_cache.trie_cursor = cursor
         if seq.prefix_cache.match_start_step > record.load_start_step:
             seq.prefix_cache.match_start_step = -1
-        self.block_trie.finalize_match(seq)
+        if not seq.prefix_cache.suppress_match_stats:
+            self.block_trie.finalize_match(seq)
 
     def _finish_cancelled_or_failed(self, record: _LoadRecord) -> None:
         """Release accounting and honor cleanup deferred during ``LOADING``."""

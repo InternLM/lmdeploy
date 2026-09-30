@@ -594,6 +594,13 @@ class _PrefillAdmissionAttempt:
             prefill.last_schedule_had_pending_lookup = True
             return _PrefillAdmissionResult.skip()
         if admission is KVLoadAdmission.STARTED:
+            seq = self.seq
+            if self._prefix_match.is_matched and not seq.prefix_cache.suppress_match_stats:
+                # A remote extension overwrites the partial local FA block.
+                # Like vLLM, attribute that tail to the external hit instead.
+                partial_hit = min(seq.num_history_ids % seq.block_size,
+                                  max(0, seq.num_history_ids - seq.prefix_cache.match_start_step))
+                prefill.block_trie.stats.num_hit_tokens -= partial_hit
             self._prefix_match.commit()
             return _PrefillAdmissionResult.load_started()
         if admission is KVLoadAdmission.FULL_PREFILL_UNAVAILABLE:
@@ -739,7 +746,8 @@ class _PrefillAdmissionAttempt:
             prefill.block_trie.allocate(seq)
         if prefill.is_ssm:
             prefill.state_manager.allocate(seq)
-        if prefill.block_trie.enabled:
+        if not self._load_ready and (prefill.block_trie.enabled or self.load_coordinator.connector is not None):
+            self.load_coordinator.record_cache_query(seq, seq.num_history_ids)
             prefill.block_trie.finalize_match(seq)
         self.load_coordinator.track_prefill(
             seq,

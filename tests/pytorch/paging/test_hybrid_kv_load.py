@@ -24,7 +24,7 @@ def make_scheduler():
 
     def create(*, apc=True, role='kv_both', state_budget=1, remote_hit=16, num_gpu_blocks=16,
                max_batches=1, max_prefill_token_num=4):
-        save_slots = 2 if role == 'kv_both' else 0
+        save_slots = 2 if role in ('kv_producer', 'kv_both') else 0
         config = CacheConfig(
             max_batches=max_batches, block_size=4, num_cpu_blocks=0, num_gpu_blocks=num_gpu_blocks,
             max_prefill_token_num=max_prefill_token_num, enable_prefix_caching=apc,
@@ -34,7 +34,8 @@ def make_scheduler():
             mooncake_prefill_save_alignment=8,
             kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role=role))
         connector = MooncakeStoreScheduler(config)
-        connector.client.lookup = Mock(return_value=remote_hit)
+        if connector.client is not None:
+            connector.client.lookup = Mock(return_value=remote_hit)
         scheduler = Scheduler(
             SchedulerConfig(max_batches=max_batches, max_session_len=64, max_request_output_len=16), config,
             SequenceMeta(4, strategy=ARSequenceStrategy()), kv_connector=connector)
@@ -57,6 +58,17 @@ def _publish_local_checkpoint(scheduler, step):
     return checkpoint
 
 
+def test_mooncake_producer_reports_zero_external_hit_rate_without_lookup(make_scheduler):
+    scheduler, connector = make_scheduler(apc=False, role='kv_producer')
+    assert scheduler.schedule_metrics.external_prefix_cache_hit_rate == 0
+    seq = scheduler.add_session(1).add_sequence(torch.arange(21))
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert connector.client is None
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 21
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_hit_rate == 0
+
+
 @pytest.mark.parametrize('local_step', [4, 6, 10])
 @pytest.mark.parametrize('remote_hit', [0, 16])
 def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary(
@@ -70,6 +82,9 @@ def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary
         assert seq.num_history_ids == local_step
         assert seq.prefix_cache.restore.slot == checkpoint.slot
         assert connector.build_connector_meta(output) is None
+        assert scheduler.schedule_metrics.prefix_cache_hit_rate == pytest.approx(local_step / 21)
+        assert scheduler.schedule_metrics.external_prefix_cache_queries == 21 - local_step
+        assert scheduler.schedule_metrics.external_prefix_cache_hits == 0
         return
 
     assert output.running == []
@@ -85,15 +100,29 @@ def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary
     assert checkpoint.pin_count == 0
     assert not seq.prefix_cache.restore.is_selected
     assert scheduler.state_manager.get_num_free_runtime() == 0
+    # Remote loading replaces the partial local block, as in vLLM's adopted
+    # prefix accounting. Count the lookup now, before any worker completes.
+    local_tokens = local_step // 4 * 4
+    metrics = scheduler.schedule_metrics
+    assert scheduler.block_trie.stats.num_query_tokens == 21
+    assert scheduler.block_trie.stats.num_hit_tokens == local_tokens
+    assert metrics.external_prefix_cache_queries == 21 - local_tokens
+    assert metrics.external_prefix_cache_hits == 16 - local_tokens
+    assert metrics.external_prefix_cache_hit_rate == pytest.approx((16 - local_tokens) / (21 - local_tokens))
 
     scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
     assert seq.num_history_ids == seq.cached_tokens == 16
+    assert scheduler.schedule_metrics.prefix_cache_hit_rate == pytest.approx(local_tokens / 21)
     assert seq.logical_state == load.state_slot
     assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
     assert not seq.prefix_cache.restore.is_selected
     # There is no spare runtime capacity. Remote-ready admission must reuse D.
     assert scheduler.schedule(is_prefill=True).running == [seq]
     assert seq.num_history_ids == 16
+    assert scheduler.block_trie.stats.num_query_tokens == 21
+    assert scheduler.block_trie.stats.num_hit_tokens == local_tokens
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == metrics.external_prefix_cache_queries
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == metrics.external_prefix_cache_hits
     connector.client.lookup.assert_called_once()
     # Build the next forward's real copy plans: the earlier local checkpoint
     # must not overwrite the state that was just loaded at H.
@@ -122,6 +151,11 @@ def test_hybrid_load_needs_no_checkpoint_or_save_slot(make_scheduler, apc, role)
     scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
     assert scheduler.schedule(is_prefill=True).running == [seq]
     assert seq.num_history_ids == seq.cached_tokens == 16
+    local_tokens = 4 if apc else 0
+    assert scheduler.block_trie.stats.num_query_tokens == (21 if apc else 0)
+    assert scheduler.block_trie.stats.num_hit_tokens == local_tokens
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 21 - local_tokens
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == 16 - local_tokens
 
 
 @pytest.mark.parametrize('fail_binding', [False, True])
@@ -148,6 +182,11 @@ def test_hybrid_load_reuses_existing_runtime_and_private_partial_block(make_sche
         scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
         assert scheduler.schedule(is_prefill=True).running == [seq]
         assert seq.num_history_ids == 16
+        assert seq.cached_tokens == 10
+        assert scheduler.block_trie.stats.num_query_tokens == 0
+        assert scheduler.block_trie.stats.num_hit_tokens == 0
+        assert scheduler.schedule_metrics.external_prefix_cache_queries == 17
+        assert scheduler.schedule_metrics.external_prefix_cache_hits == 12
     assert seq.logical_state == original_slot
     assert scheduler.state_manager.get_num_runtime_states() == 1
 
@@ -187,6 +226,12 @@ def test_failed_hybrid_load_waits_for_all_ranks_then_rematches(make_scheduler, r
     assert seq.prefix_cache.restore.is_selected == retain_checkpoint
     assert connector.build_connector_meta(output) is None
     connector.client.lookup.assert_called_once()
+    # Failed I/O does not undo an admitted lookup hit. The rematch is a new
+    # admitted query, after hybrid rollback released the entire request state.
+    assert scheduler.block_trie.stats.num_query_tokens == 42
+    assert scheduler.block_trie.stats.num_hit_tokens == 4 + (6 if retain_checkpoint else 0)
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 17 + (15 if retain_checkpoint else 21)
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == 12
 
 
 @pytest.mark.parametrize('apc', [False, True])
@@ -231,6 +276,76 @@ def test_concurrent_hybrid_loads_isolate_mixed_rank_results_at_runtime_capacity(
     assert successful.num_history_ids == 16
     assert tuple(scheduler.block_manager.get_block_table(successful))[:4] == successful_blocks
     assert connector.client.lookup.call_count == 2
+    assert scheduler.block_trie.stats.num_query_tokens == (63 if apc else 0)
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 63
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == 32
+
+
+@pytest.mark.parametrize('apc', [False, True])
+def test_hybrid_hit_rate_counts_admitted_lookups_without_recounting_load_completion(make_scheduler, apc):
+    scheduler, connector = make_scheduler(apc=apc, remote_hit=0)
+    missed = scheduler.add_session(1).add_sequence(torch.arange(21))
+    assert scheduler.schedule(is_prefill=True).running == [missed]
+    scheduler.end_session(1)
+    assert scheduler.block_trie.stats.num_query_tokens == (21 if apc else 0)
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 21
+
+    seq = scheduler.add_session(2).add_sequence(torch.arange(21) + 100)
+    connector.client.lookup.side_effect = [None, 16]
+    # A pending lookup does not count; accepted hits count before load completion.
+    assert scheduler.schedule(is_prefill=True).running == []
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 21
+    assert scheduler.schedule(is_prefill=True).running == []
+    connector.build_connector_meta(KVConnectorStepInput())
+    assert scheduler.block_trie.stats.num_query_tokens == (42 if apc else 0)
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 42
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == 16
+
+    completed = KVConnectorOutput(finished_receiving={seq.seq_id})
+    scheduler.update_connector_output(completed)
+    scheduler.update_connector_output(completed)
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert seq.cached_tokens == 16
+    assert scheduler.block_trie.stats.num_query_tokens == (42 if apc else 0)
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+    assert scheduler.schedule_metrics.prefix_cache_hit_rate == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 42
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == 16
+    assert scheduler.schedule_metrics.external_prefix_cache_hit_rate == pytest.approx(16 / 42)
+
+
+@pytest.mark.parametrize('apc', [False, True])
+@pytest.mark.parametrize('remote_hit', [0, 16])
+def test_hybrid_remote_recompute_does_not_count_hits_again(make_scheduler, apc, remote_hit):
+    scheduler, connector = make_scheduler(apc=apc, remote_hit=0, num_gpu_blocks=6, state_budget=0)
+    seq = scheduler.add_session(1).add_sequence(torch.arange(21))
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    seq.set_step(4)
+    seq.state.evict()
+    # Exercise real eviction with local caching disabled as well: the flag
+    # must be set by paging, not supplied by the test.
+    pressure = scheduler.add_session(2).add_sequence(torch.arange(24) + 100)
+    assert scheduler.eviction_helper.try_make_capacity_for(pressure, [seq], 0)
+    assert seq.prefix_cache.suppress_match_stats
+    scheduler.end_session(2)
+
+    connector.client.lookup.return_value = remote_hit
+    output = scheduler.schedule(is_prefill=True)
+    if remote_hit:
+        connector.build_connector_meta(output)
+        scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+        assert seq.cached_tokens == 0
+        assert scheduler.schedule(is_prefill=True).running == [seq]
+    else:
+        assert output.running == [seq]
+    assert seq.cached_tokens == 0
+    assert not seq.prefix_cache.suppress_match_stats
+    assert scheduler.block_trie.stats.num_query_tokens == (21 if apc else 0)
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 21
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == 0
 
 
 def test_hybrid_load_waits_for_pinned_local_restore_before_reusing_checkpoint_slot(make_scheduler):
@@ -330,6 +445,10 @@ def test_cancelled_hybrid_load_retains_destinations_until_terminal(make_schedule
     assert scheduler.state_manager.get_num_runtime_states() == 0
     assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
     assert (1 in scheduler.sessions) == (cleanup == 'stop')
+    assert scheduler.block_trie.stats.num_query_tokens == 21
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 21
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == 16
 
 
 @pytest.mark.parametrize('rejection', ['pending_lookup', 'capacity', 'metadata_binding'])
@@ -353,3 +472,5 @@ def test_rejected_hybrid_admission_releases_tentative_local_restore(make_schedul
     assert not seq.prefix_cache.restore.is_selected
     assert scheduler.state_manager.get_num_runtime_states() == 0
     assert connector.build_connector_meta(KVConnectorStepInput()) is None
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == 0

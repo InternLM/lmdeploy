@@ -110,7 +110,7 @@ class RecomputeEvictionHelper:
                 and (not self._is_ssm or seq.logical_state < 0)):
             return False
 
-        if self.block_trie.enabled:
+        if self.block_trie.enabled or self.load_coordinator.connector is not None:
             seq.prefix_cache.suppress_match_stats = True
         # Keep soft admission accounting aligned with released resources.
         self.load_coordinator.release_tracking(seq)

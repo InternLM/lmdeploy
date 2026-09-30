@@ -596,10 +596,15 @@ class Scheduler:
         cache_usage = 1.0 - free_blocks / total_blocks if total_blocks else 0.0
         if _envs.enable_request_cache_usage_metric:
             cache_usage = self._get_request_cache_usage(total_blocks)
+        external_stats = self.kv_load_coordinator.prefix_cache_stats
         return ScheduleMetrics(
             active_seqs=self.num_running(),
             waiting_seqs=self.num_waiting() + self.num_ready() + self.num_remote_loading(),
             cache_usage=cache_usage,
             prefix_cache_hit_rate=self.block_trie.stats.hit_rate(),
             scheduler_tick=self.scheduler_tick,
+            external_prefix_cache_hit_rate=(
+                external_stats.hit_rate() if self.cache_config.use_mooncake_store else None),
+            external_prefix_cache_queries=external_stats.num_query_tokens,
+            external_prefix_cache_hits=external_stats.num_hit_tokens,
         )

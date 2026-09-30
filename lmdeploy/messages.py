@@ -808,6 +808,11 @@ class ScheduleMetrics:
     cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0
     scheduler_tick: int = 0
+    # None means external prefix caching is disabled. Counts are cumulative
+    # snapshots; polling metrics must not consume them.
+    external_prefix_cache_hit_rate: float | None = None
+    external_prefix_cache_queries: int = 0
+    external_prefix_cache_hits: int = 0
 
 
 @dataclass

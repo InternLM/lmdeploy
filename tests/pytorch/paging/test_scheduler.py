@@ -58,6 +58,9 @@ class TestScheduler:
     def test_schedule_base(self, scheduler, block_size, num_gpu_blocks):
         block_manager = scheduler.block_manager
         assert scheduler.schedule_metrics.cache_usage == 0.0
+        assert scheduler.schedule_metrics.external_prefix_cache_hit_rate is None
+        assert scheduler.schedule_metrics.external_prefix_cache_queries == 0
+        assert scheduler.schedule_metrics.external_prefix_cache_hits == 0
 
         session_id = 0
         session = scheduler.add_session(session_id)
