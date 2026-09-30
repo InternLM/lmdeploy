@@ -133,7 +133,8 @@ def _silu_and_mul_moe_ep_kernel(
 ):
     """Silu and mul kernel."""
     n_block_id = tl.program_id(0)
-    e_id = tl.program_id(1)
+    # Expert-capacity strides can exceed the signed 32-bit element range.
+    e_id = tl.program_id(1).to(tl.int64)
     m_id_start = tl.program_id(2)
     m_id_stride = tl.num_programs(2)
 
