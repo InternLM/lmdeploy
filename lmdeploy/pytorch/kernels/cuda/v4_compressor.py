@@ -5,6 +5,10 @@ import torch
 import triton
 import triton.language as tl
 
+from .utils import get_device_props, is_cuda
+
+PDL_MIN_PREFILL_TOKENS = 4096
+
 
 @triton.jit
 def _fill_compress_state_kernel(
@@ -31,10 +35,11 @@ def _fill_compress_state_kernel(
     D: tl.constexpr,
     ratio: tl.constexpr,
     overlap: tl.constexpr,
+    USE_PDL: tl.constexpr,
 ):
     """Fill kv_state and score_state for the Compressor ring buffer.
 
-    Called BEFORE score_kv (score_kv reads state, this writes state).
+    Called AFTER score_kv (score_kv reads state, this writes state).
 
     Grid: (max_write, B) for prefill, (1, B) for decode.
     Each CTA handles one token position within a batch sequence.
@@ -97,6 +102,9 @@ def _fill_compress_state_kernel(
     score = tl.load(score_ptrs)
     ape = tl.load(ape_ptrs)
 
+    if USE_PDL:
+        tl.extra.cuda.gdc_wait()
+
     tl.store(kv_state_ptrs, kv)
     tl.store(score_state_ptrs, score + ape)
 
@@ -130,6 +138,7 @@ def _score_kv_kernel(
     ratio: tl.constexpr,
     overlap: tl.constexpr,
     is_decoding: tl.constexpr,
+    USE_PDL: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
     """Compute compressed kv via softmax-weighted sum, write to compressed_kv.
@@ -338,6 +347,9 @@ def _score_kv_kernel(
                         offs_d[None, :] * ape_stride_d).to(tl.float32)
                     prev_score = _prev_score_raw + _prev_ape
 
+                if USE_PDL:
+                    tl.extra.cuda.gdc_launch_dependents()
+
                 _curr_kv_pos = seq_start + (curr_abs_base - start_pos)
                 _curr_abs_pos = curr_abs_base + row_ids
                 curr_kv = tl.load(
@@ -357,6 +369,9 @@ def _score_kv_kernel(
                 sum_exp = tl.sum(exp_prev, 0) + tl.sum(exp_curr, 0)
                 compressed = (tl.sum(prev_kv * exp_prev, 0) + tl.sum(curr_kv * exp_curr, 0)) / sum_exp
             else:
+                if USE_PDL:
+                    tl.extra.cuda.gdc_launch_dependents()
+
                 _abs_pos_base = compress_abs - ratio + 1
                 _kv_pos_base = seq_start + (_abs_pos_base - start_pos)
                 merged_kv = tl.load(
@@ -604,6 +619,7 @@ def _score_kv_tiled_prefill_kernel(
     head_dim: tl.constexpr,
     ratio: tl.constexpr,
     overlap: tl.constexpr,
+    USE_PDL: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
     """Tiled score_kv for prefill. Grid: (num_groups * n_tiles, B).
@@ -684,6 +700,9 @@ def _score_kv_tiled_prefill_kernel(
                 offs_d[None, :] * ape_stride_d).to(tl.float32)
             prev_score = _prev_score_raw + _prev_ape
 
+        if USE_PDL:
+            tl.extra.cuda.gdc_launch_dependents()
+
         _curr_kv_pos = seq_start + (curr_abs_base - start_pos)
         _curr_abs_pos = curr_abs_base + row_ids
         curr_kv = tl.load(
@@ -707,6 +726,9 @@ def _score_kv_tiled_prefill_kernel(
         compressed = (weighted_prev + weighted_curr) / sum_exp
 
     else:
+        if USE_PDL:
+            tl.extra.cuda.gdc_launch_dependents()
+
         _abs_pos_base = compress_abs - ratio + 1
         _kv_pos_base = seq_start + (_abs_pos_base - start_pos)
         merged_kv = tl.load(
@@ -736,11 +758,13 @@ def fill_compress_state(
     state_ids: torch.Tensor,
     cu_q_seqlens: torch.Tensor,
     kv_seqlens: torch.Tensor,
+    use_pdl: bool = False,
     ):
     """Fill kv_state and score_state for the Compressor ring buffer.
 
-    Called AFTER score_kv in the execution order: score_kv reads prev state,
-    then this overwrites state with new values — no synchronization needed.
+    Called AFTER score_kv in the execution order: score_kv reads previous
+    state, then this overwrites it. With PDL enabled, input preparation can
+    overlap score_kv, but state stores wait for score_kv to finish.
 
     Ring buffer layout (overlap=True, ratio=4):
       State shape [N, 2*ratio, D] where D = 2*head_dim.
@@ -770,6 +794,7 @@ def fill_compress_state(
         state_ids: [B] state index per batch.
         cu_q_seqlens: [B + 1] cumulative query sequence lengths.
         kv_seqlens: [B] total kv sequence lengths (history + new).
+        use_pdl: whether this is the PDL consumer of the preceding score_kv.
     """
     assert state_ids.is_contiguous()
     assert cu_q_seqlens.is_contiguous()
@@ -785,6 +810,7 @@ def fill_compress_state(
     max_write = ratio * 2 if overlap else ratio
 
     grid = (1 if is_decoding else max_write, B, )
+    pdl_launch = {'launch_pdl': True} if use_pdl else {}
     _fill_compress_state_kernel[grid](
         kv, score, ape, kv_state, score_state, state_ids, cu_q_seqlens, kv_seqlens,
         *kv.stride(),
@@ -792,7 +818,7 @@ def fill_compress_state(
         *ape.stride(),
         *kv_state.stride(),
         *score_state.stride(),
-        D, ratio, overlap
+        D, ratio, overlap, USE_PDL=use_pdl, **pdl_launch
     )
 
 
@@ -808,6 +834,7 @@ def score_kv(
     compressed_kv: torch.Tensor,
     overlap: bool,
     max_seqlen_q: int = None,
+    use_pdl: bool = False,
     ):
     """Compute compressed kv via softmax-weighted sum, write to compressed_kv.
 
@@ -845,6 +872,7 @@ def score_kv(
             Written at compression point positions.
         overlap: whether overlap mode (True when ratio=4).
         max_seqlen_q: max query seq len (used for prefill grid size).
+        use_pdl: signal the immediately following fill_compress_state launch.
     """
     ratio = ape.size(0)
     D = ape.size(1)
@@ -890,7 +918,7 @@ def score_kv(
                 *score_state.stride(),
                 *compressed_kv.stride(),
                 head_dim=head_dim, ratio=ratio,
-                overlap=overlap, is_decoding=True,
+                overlap=overlap, is_decoding=True, USE_PDL=False,
                 BLOCK_D=BLOCK_D,
             )
     else:
@@ -912,7 +940,7 @@ def score_kv(
                 *score_state.stride(),
                 *compressed_kv.stride(),
                 head_dim=head_dim, ratio=ratio,
-                overlap=overlap, BLOCK_D=BLOCK_D,
+                overlap=overlap, USE_PDL=use_pdl, BLOCK_D=BLOCK_D,
                 num_warps=2,
             )
         else:
@@ -928,8 +956,43 @@ def score_kv(
                 *compressed_kv.stride(),
                 head_dim=head_dim, ratio=ratio,
                 overlap=overlap, is_decoding=False,
-                BLOCK_D=BLOCK_D,
+                USE_PDL=use_pdl, BLOCK_D=BLOCK_D,
             )
+
+
+def score_and_fill_state_prefill(
+    kv: torch.Tensor,
+    score: torch.Tensor,
+    ape: torch.Tensor,
+    kv_state: torch.Tensor,
+    score_state: torch.Tensor,
+    state_ids: torch.Tensor,
+    cu_q_seqlens: torch.Tensor,
+    kv_seqlens: torch.Tensor,
+    compressed_kv: torch.Tensor,
+    overlap: bool,
+    max_seqlen_q: int,
+    use_pdl: bool | None = None,
+):
+    """Prefill score and state fill with an optional PDL anti-dependency."""
+    assert kv.size(0) != state_ids.size(0)
+    if use_pdl is not False:
+        pdl_supported = is_cuda()
+        if pdl_supported:
+            nv_cap = get_device_props(kv.device.index)['compute_capability']
+            pdl_supported = nv_cap[0] >= 9
+        # H200 A/B shows a consistent ratio-4 crossover at roughly 4K
+        # prefill tokens. Ratio-128 and smaller eager launches do not recover
+        # the PDL scheduling overhead.
+        use_pdl = pdl_supported and (use_pdl is True or
+                                     (overlap and kv.size(0) >= PDL_MIN_PREFILL_TOKENS))
+
+    score_kv(
+        kv, score, ape, kv_state, score_state, state_ids, cu_q_seqlens,
+        kv_seqlens, compressed_kv, overlap, max_seqlen_q, use_pdl=use_pdl)
+    fill_compress_state(
+        kv, score, ape, kv_state, score_state, state_ids, cu_q_seqlens,
+        kv_seqlens, use_pdl=use_pdl)
 
 
 def score_and_fill_state_decode(

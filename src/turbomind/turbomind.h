@@ -15,6 +15,10 @@
 
 namespace turbomind {
 
+namespace gemm {
+class Gemm;
+}
+
 class TurboMind {
 public:
     using FFICtxFactory = std::function<std::shared_ptr<void>()>;
@@ -31,6 +35,8 @@ public:
 
     /// Returns the Stream and Allocator for GPU `index`'s weight tree.
     std::pair<core::Stream, core::Allocator> weight_context(int index);
+
+    gemm::Gemm& gemm(int index);
 
     void ProcessWeights(int index);
 

@@ -3,7 +3,7 @@
 LMDeploy 是一个用于大型语言模型（LLMs）和视觉-语言模型（VLMs）压缩、部署和服务的 Python 库。
 其核心推理引擎包括 TurboMind 引擎和 PyTorch 引擎。前者由 C++ 和 CUDA 开发，致力于推理性能的优化，而后者纯 Python 开发，旨在降低开发者的门槛。
 
-LMDeploy 支持在 Linux 和 Windows 平台上部署 LLMs 和 VLMs，最低要求 CUDA 版本为 11.3。此外，它还与以下 NVIDIA GPU 兼容：
+LMDeploy 支持在 Linux 和 Windows 平台上部署 LLMs 和 VLMs。此外，它还与以下 NVIDIA GPU 兼容：
 
 Volta(sm70): V100
 Turing(sm75): 20 系列，T4
@@ -22,7 +22,7 @@ pip install lmdeploy
 
 ## 从源码安装
 
-默认情况下，LMDeploy 将面向 NVIDIA CUDA 环境进行编译安装，并同时启用 Turbomind 和 PyTorch 两种后端引擎。在安装 LMDeploy 之前，请确保已成功安装 CUDA 工具包。
+默认情况下，LMDeploy 将面向 NVIDIA CUDA 环境进行编译安装，并同时启用 Turbomind 和 PyTorch 两种后端引擎。TurboMind 的主机 C++ 和 CUDA 代码均要求使用 C++20，并需要 CMake 3.25.2 或更新版本以及 CUDA 工具包 12.0 或更新版本。主机编译器必须支持 C++20，且受所选 CUDA 工具包支持，例如 Linux 上的 GCC 10 或更新版本，或 Windows 上的 Visual Studio 2022。
 
 成功安装 CUDA 工具包后，您可以使用以下单行命令构建并安装 LMDeploy：
 

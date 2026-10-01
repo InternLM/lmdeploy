@@ -56,8 +56,8 @@ const Kernel* Registry::Find(const AttnDesc& desc) const
 {
     const int threshold = static_cast<int>(kMaxWasteRatio * desc.query_group_sz);
 
-    const Kernel*             best = nullptr;
-    std::tuple<int, int, int> cost{};
+    const Kernel*              best = nullptr;
+    std::tuple<bool, int, int> cost{};
 
     for (const auto* k : ptrs_) {
         const auto& d = k->desc();

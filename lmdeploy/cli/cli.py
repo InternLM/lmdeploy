@@ -58,6 +58,7 @@ class CLI:
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
+        ep_act = ArgumentHelper.ep(pt_group)
         session_len_act = ArgumentHelper.session_len(pt_group)
         cache_max_entry_act = ArgumentHelper.cache_max_entry_count(pt_group)
         prefix_caching_act = ArgumentHelper.enable_prefix_caching(pt_group)
@@ -69,6 +70,7 @@ class CLI:
         # common engine args
         tb_group._group_actions.append(dtype_act)
         tb_group._group_actions.append(tp_act)
+        tb_group._group_actions.append(ep_act)
         tb_group._group_actions.append(session_len_act)
         tb_group._group_actions.append(cache_max_entry_act)
         tb_group._group_actions.append(prefix_caching_act)
@@ -77,6 +79,7 @@ class CLI:
         ArgumentHelper.model_format(tb_group)
         ArgumentHelper.rope_scaling_factor(tb_group)
         ArgumentHelper.communicator(tb_group)
+        ArgumentHelper.moe_a2a_backend(tb_group)
         ArgumentHelper.cp(tb_group)
         ArgumentHelper.async_(tb_group)
 
@@ -167,7 +170,12 @@ class CLI:
 
         kwargs = convert_args(args)
         speculative_config = get_speculative_config(args)
-        to_remove = ['speculative_algorithm', 'speculative_draft_model', 'speculative_num_draft_tokens']
+        to_remove = [
+            'speculative_algorithm',
+            'speculative_draft_model',
+            'speculative_num_draft_tokens',
+            'speculative_dflash_block_size',
+        ]
         for key in to_remove:
             kwargs.pop(key)
         kwargs['speculative_config'] = speculative_config

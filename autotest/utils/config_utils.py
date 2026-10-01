@@ -25,9 +25,13 @@ PARALLEL_LAYOUT_KEYS = ('tp', 'dp', 'ep', 'cp')
 ENGINE_CONFIG_KEY = 'engine_config'
 TEST_COVERAGE_KEY = 'test_coverage'
 INTERFACE_KEY = 'interface'
-INTERFACE_SUITES = frozenset({'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning'})
+INTERFACE_SUITES = frozenset({
+    'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort',
+})
 GENERATE_SUITES = frozenset({'base', 'logprob', 'experts'})
-INTERFACE_SUITE_ORDER = ('base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning')
+INTERFACE_SUITE_ORDER = (
+    'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort',
+)
 INTERFACE_BACKENDS_ENV = 'INTERFACE_BACKENDS'
 
 
@@ -60,9 +64,7 @@ def get_interface_backend_list(backends: list[str] | None = None) -> list[str]:
             f'{INTERFACE_BACKENDS_ENV} unknown backend(s) {unknown}; '
             f'expected subset of {constant.BACKEND_LIST}',
         )
-    # Keep stable order from BACKEND_LIST
     return [b for b in constant.BACKEND_LIST if b in selected]
-
 
 
 def _entry_engine_config(entry: dict[str, Any]) -> dict[str, Any]:
@@ -469,6 +471,8 @@ def _profiles_compatible_for_merge(
     combined = set(suites_a) | set(suites_b)
     if 'anthropic' in combined and combined & {'toolcall', 'reasoning'}:
         return False
+    if combined & {'sleep', 'abort'} and len(combined) > 1:
+        return False
     return True
 
 
@@ -686,8 +690,10 @@ def _suite_launch_extra_defaults(suites: list[str] | set[str]) -> dict[str, Any]
     defaults: dict[str, Any] = {}
     if suite_set & {'logprob', 'experts'}:
         defaults['logprobs-mode'] = 'raw_logprobs'
-    if suite_set & {'experts', 'toolcall'}:
+    if suite_set & {'experts'}:
         defaults['enable-return-routed-experts'] = True
+    if suite_set & {'abort'}:
+        defaults['enable-abort-handling'] = True
     return defaults
 
 
@@ -704,7 +710,8 @@ def build_interface_launch_extra(
     Same structure as tools/pipeline ``engine_config.extra``. Merge order
     (later wins):
 
-    1. suite defaults (``logprobs-mode``, ``enable-return-routed-experts`` only)
+    1. suite defaults (``logprobs-mode``, ``enable-return-routed-experts``,
+       ``enable-abort-handling``)
     2. ``engine_config.extra`` (shared row launch)
     3. ``interface_extra`` if provided, else ``interface.<backend>.extra``
 
@@ -719,6 +726,46 @@ def build_interface_launch_extra(
     merged.update(_parallel_launch_extra(_entry_engine_config(entry)))
     merged.update(copy.deepcopy(extra_src or {}))
     return merged
+
+
+ROUTED_EXPERTS_UNSUPPORTED_SKIP = (
+    'return_routed_experts not enabled in model interface config '
+    '(add experts suite or enable-return-routed-experts: true in yaml)')
+
+
+def iter_model_yaml_entries(model_id: str) -> list[dict[str, Any]]:
+    """All matrix rows for *model_id* under the active ``TEST_ENV``."""
+    env_key = _resolve_paths_env_key(os.environ.get('TEST_ENV'))
+    return [entry for mid, entry in _iter_per_model_entries(env_key) if mid == model_id]
+
+
+def model_enables_return_routed_experts(
+    model_id: str,
+    backend: str,
+    *,
+    required_suites: set[str] | frozenset[str] | None = None,
+) -> bool:
+    """True when yaml interface launch extra enables ``return_routed_experts``.
+
+    When *required_suites* is set (e.g. ``{'toolcall'}`` or ``{'experts'}``),
+    only matching interface profiles are considered.
+    """
+    if backend == 'turbomind':
+        return False
+    for entry in iter_model_yaml_entries(model_id):
+        for prof in get_interface_profiles(entry, backend):
+            suites = set(prof.get('suites') or [])
+            if required_suites and not (required_suites & suites):
+                continue
+            extra = build_interface_launch_extra(
+                entry,
+                backend,
+                suites=prof['suites'],
+                interface_extra=prof.get('extra'),
+            )
+            if extra.get('enable-return-routed-experts'):
+                return True
+    return False
 
 
 def derive_interface_server_extra(
@@ -740,6 +787,124 @@ def derive_interface_server_extra(
         interface_extra=interface_extra,
     )
     return get_cli_str(extra).strip()
+
+
+_RESTFUL_CHAT_PROTOCOL_CASES = frozenset({
+    'chat_completions_v1',
+    'generate',
+    'anthropic_v1',
+    'anthropic_sdk',
+})
+_RESTFUL_BASE_PROTOCOL_CASES = frozenset({'completions_v1'})
+_TOOL_REASONING_PROTOCOL_CASES = frozenset({'toolcall', 'reasoning'})
+_SLEEP_PROTOCOL_CASES = frozenset({'sleep_wakeup'})
+_ABORT_PROTOCOL_CASES = frozenset({'abort_request'})
+
+
+def _interface_case_info_for_entry(entry: dict[str, Any]) -> set[str]:
+    """Union of nested REST protocol case groups from yaml ``interface``."""
+    model_profiles = list(_normalize_profiles(entry.get('model_type', 'chat')))
+    case_info: set[str] = set()
+    for backend in get_interface_backend_list():
+        for prof in get_interface_profiles(entry, backend):
+            suites = prof.get('suites') or []
+            if not suites:
+                continue
+            case_info.update(derive_interface_case_info(model_profiles, suites))
+    return case_info
+
+
+def _interface_protocol_model_list(
+    required_cases: frozenset[str],
+    *,
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """Model ids whose yaml ``interface`` maps to nested REST protocol
+    suites."""
+    config = get_config()
+    matrix_env = _model_matrix_env_key(config)
+    profile = deps_profile if deps_profile is not None else get_deps_profile_selector()
+    out: list[str] = []
+    seen: set[str] = set()
+    for model_id, entry in _iter_per_model_entries(matrix_env, deps_profile=profile):
+        case_info = _interface_case_info_for_entry(entry)
+        if not case_info or not (case_info & required_cases):
+            continue
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        out.append(model_id)
+    return sorted(out)
+
+
+def get_restful_chat_model_list(
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """Chat/VL models for chat-completions / generate / anthropic protocol
+    files."""
+    return _interface_protocol_model_list(
+        _RESTFUL_CHAT_PROTOCOL_CASES,
+        deps_profile=deps_profile,
+    )
+
+
+def get_restful_base_model_list(
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """Base models for ``/v1/completions`` protocol file."""
+    return _interface_protocol_model_list(
+        _RESTFUL_BASE_PROTOCOL_CASES,
+        deps_profile=deps_profile,
+    )
+
+
+def get_tool_reasoning_model_list(
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """Models with tool-call or reasoning parser interface suites."""
+    return _interface_protocol_model_list(
+        _TOOL_REASONING_PROTOCOL_CASES,
+        deps_profile=deps_profile,
+    )
+
+
+def get_sleep_wakeup_model_list(
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """Models with yaml ``sleep`` interface suite."""
+    return _interface_protocol_model_list(
+        _SLEEP_PROTOCOL_CASES,
+        deps_profile=deps_profile,
+    )
+
+
+def get_abort_request_model_list(
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """Models with yaml ``abort`` interface suite."""
+    return _interface_protocol_model_list(
+        _ABORT_PROTOCOL_CASES,
+        deps_profile=deps_profile,
+    )
+
+
+def get_restful_protocol_model_candidates(
+    deps_profile: DepsProfileSelector | None = None,
+) -> list[str]:
+    """All model ids referenced by nested interface REST protocol tests."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for model_id in (
+        *get_restful_chat_model_list(deps_profile=deps_profile),
+        *get_restful_base_model_list(deps_profile=deps_profile),
+        *get_tool_reasoning_model_list(deps_profile=deps_profile),
+        *get_sleep_wakeup_model_list(deps_profile=deps_profile),
+        *get_abort_request_model_list(deps_profile=deps_profile),
+    ):
+        if model_id not in seen:
+            seen.add(model_id)
+            out.append(model_id)
+    return out
 
 
 def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]) -> list[str]:
@@ -765,6 +930,10 @@ def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]
         case_info.append('toolcall')
     if 'reasoning' in suite_set:
         case_info.append('reasoning')
+    if 'sleep' in suite_set:
+        case_info.append('sleep_wakeup')
+    if 'abort' in suite_set:
+        case_info.append('abort_request')
     return case_info
 
 
@@ -898,7 +1067,11 @@ def get_interface_run_config_list(
             (tuple(p.get('suites') or []), tuple(sorted((p.get('extra') or {}).items())))
             for p in launch_profiles
         )
-        key = (model_id, backend, communicator, tuple(sorted(layout.items())), phase_key)
+        engine_extra_key = tuple(sorted((_entry_engine_config(entry).get('extra') or {}).items()))
+        key = (
+            model_id, backend, communicator, tuple(sorted(layout.items())),
+            phase_key, engine_extra_key,
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -1041,7 +1214,7 @@ def _build_run_config_entry(
         'parallel_config': copy.deepcopy(parallel_config),
         'extra_params': merged_extra,
     }
-    if dtype and backend == 'pytorch':
+    if dtype and backend == 'pytorch' and 'dtype' not in run_config['extra_params']:
         run_config['extra_params']['dtype'] = dtype
     if device != 'cuda':
         run_config['extra_params']['device'] = device
@@ -1364,32 +1537,42 @@ def get_config() -> dict[str, Any]:
     return config_copy
 
 
+def get_gpus_per_instance(parallel_config: dict[str, int] | None) -> int:
+    """GPU count for one api_server instance (align with launch_server dp
+    layout)."""
+    parallel_config = parallel_config or {}
+    dp = parallel_config.get('dp', 1)
+    tp = parallel_config.get('tp', 1)
+    ep = parallel_config.get('ep', 1)
+    return max(dp, tp, ep)
+
+
 def get_cuda_prefix_by_workerid(worker_id: str | None, parallel_config: dict[str, int] | None = None) -> str | None:
     """Get cuda/ascend visible devices env prefix by worker id & parallel
     config."""
     para_conf = parallel_config or {}
     device_type = os.environ.get('DEVICE', 'cuda')
 
-    tp_num = para_conf.get('tp')
-    if not tp_num:
+    gpus_per_instance = get_gpus_per_instance(para_conf)
+    if gpus_per_instance <= 0:
         return ''
 
-    cuda_id = get_cuda_id_by_workerid(worker_id, tp_num)
+    cuda_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
     if not cuda_id:
         return ''
 
     return f'ASCEND_RT_VISIBLE_DEVICES={cuda_id}' if device_type == 'ascend' else f'CUDA_VISIBLE_DEVICES={cuda_id}'
 
 
-def get_cuda_id_by_workerid(worker_id: str | None, tp_num: int = 1) -> str | None:
-    """Get cuda id str by worker id and tp num, return None if invalid worker
-    id."""
+def get_cuda_id_by_workerid(worker_id: str | None, gpus_per_instance: int = 1) -> str | None:
+    """Get cuda id str by worker id and GPUs per instance, return None if
+    invalid worker id."""
     if worker_id is None or 'gw' not in worker_id:
         return None
 
     base_id = int(worker_id.replace('gw', ''))
-    cuda_num = base_id * tp_num
-    return ','.join([str(cuda_num + i) for i in range(tp_num)])
+    cuda_num = base_id * gpus_per_instance
+    return ','.join([str(cuda_num + i) for i in range(gpus_per_instance)])
 
 
 def get_workerid(worker_id: str | None) -> int:
@@ -1439,19 +1622,19 @@ def set_device_env_variable(worker_id: str | None, parallel_config: dict[str, in
     """Set device environment variable based on the device type."""
     device = os.environ.get('DEVICE', 'cuda')
 
-    tp_num = 1
+    gpus_per_instance = 1
     if parallel_config is not None:
         if isinstance(parallel_config, int):
-            tp_num = parallel_config
+            gpus_per_instance = parallel_config
         elif isinstance(parallel_config, dict):
-            tp_num = parallel_config.get('tp', 1)
+            gpus_per_instance = get_gpus_per_instance(parallel_config)
 
     if device == 'ascend':
-        device_id = get_cuda_id_by_workerid(worker_id, tp_num)
+        device_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
         if device_id is not None:
             os.environ['ASCEND_RT_VISIBLE_DEVICES'] = device_id
     else:
-        cuda_id = get_cuda_id_by_workerid(worker_id, tp_num)
+        cuda_id = get_cuda_id_by_workerid(worker_id, gpus_per_instance)
         if cuda_id is not None:
             os.environ['CUDA_VISIBLE_DEVICES'] = cuda_id
 
@@ -1520,6 +1703,8 @@ _EVAL_OC_SCALAR_KEYS = frozenset({
     'max_seq_len',
     'batch_size',
     'temperature',
+    'top_p',
+    'top_k',
 })
 
 
@@ -1597,6 +1782,10 @@ def get_eval_preset_config(
         if run_config.get('gen_config'):
             merged.update(_gen_config_to_vlmevalkit_kwargs(run_config['gen_config']))
         return merged
+
+    # Base TurboMindAPIModel: keep scalar sampling fields, skip OpenAISDK mapping.
+    if name == 'base' or name.startswith('base-'):
+        return _eval_table_scalar_params(preset) or copy.deepcopy(preset)
 
     if run_config.get('gen_config'):
         result = _eval_table_scalar_params(preset)

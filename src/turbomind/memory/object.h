@@ -41,6 +41,8 @@ public:
     ObjectAllocator();
 
     explicit ObjectAllocator(Buffer region);
+    // `page_size` is in bytes and may be any positive value, not only a power of two.
+    explicit ObjectAllocator(Buffer region, size_t page_size);
 
     // No longer copyable: trials use ScratchAllocator (copies only capacity).
     ObjectAllocator(const ObjectAllocator&) = delete;

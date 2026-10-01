@@ -4,16 +4,18 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import AsyncGenerator
-from contextlib import aclosing
 from http import HTTPStatus
 
 import shortuuid
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
 
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
+from lmdeploy.serve.core.chat_runner import (
+    ChatRunner,
+    ChatRunnerOptions,
+)
 from lmdeploy.serve.core.exceptions import RequestError
-from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
+from lmdeploy.serve.openai.endpoints.common import validate_request
 from lmdeploy.serve.openai.errors import (
     create_error_response,
     create_request_error_response,
@@ -31,15 +33,13 @@ from lmdeploy.serve.openai.protocol import (
     UsageInfo,
 )
 from lmdeploy.serve.openai.utils import maybe_filter_parallel_tool_calls
-from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
-from lmdeploy.utils import get_logger
+from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
+from .fanout import fanout_chat_completions
 from .logits_processors import logit_bias_logits_processor
 from .logprobs import _create_chat_completion_logprobs, _create_output_token_logprobs
 from .validation import check_request
-
-logger = get_logger('lmdeploy')
 
 
 def register(router: APIRouter, server_context) -> None:
@@ -56,14 +56,14 @@ def register(router: APIRouter, server_context) -> None:
         The request should be a JSON object with the following fields:
 
         - **model**: model name. Available from /v1/models.
-        - **messages**: string prompt or chat history in OpenAI format. Chat history example:
+        - **messages**: chat history in OpenAI format. Chat history example:
           ``[{"role": "user", "content": "hi"}]``.
         - **temperature** (float): to modulate the next token probability
         - **top_p** (float): If set to float < 1, only the smallest set of most
           probable tokens with probabilities that add up to top_p or higher
           are kept for generation.
         - **n** (int): How many chat completion choices to generate for each input
-          message. **Only support one here**.
+          message. Accepts values from 1 to 128.
         - **stream**: whether to stream the results or not. Default to false.
         - **stream_options**: Options for streaming response. Only set this when you
           set stream: true.
@@ -100,10 +100,11 @@ def register(router: APIRouter, server_context) -> None:
           list of functions for which the model can generate JSON inputs.
         - **tool_choice** (str | object): Controls which (if any) tool is called by
           the model. `none` means the model will not call any tool and instead
-          generates a message. Specifying a particular tool via
+          generates a message. `auto` lets the model choose whether to call a
+          tool, while `required` constrains generation to at least one valid
+          call. Specifying a particular tool via
           ``{"type": "function", "function": {"name": "my_function"}}``
-          forces the model to call that tool. `auto` or `required` will put all
-          the tools informationto the model.
+          forces the model to call that tool.
 
         Additional arguments supported by LMDeploy:
 
@@ -131,14 +132,25 @@ def register(router: APIRouter, server_context) -> None:
         - **presence_penalty** (replaced with repetition_penalty)
         - **frequency_penalty** (replaced with repetition_penalty)
         """
-        error_check_ret = validate_request(request, server_context,
-                                           check_request)
+        json_request = await raw_request.json()
+        error_check_ret = validate_request(
+            request,
+            server_context,
+            check_request,
+            json_request=json_request,
+        )
         if error_check_ret is not None:
             return error_check_ret
+        if request.n is not None and request.n > 1:
+            return await fanout_chat_completions(
+                chat_completions_v1,
+                request,
+                raw_request,
+                json_request,
+            )
+
         # Resolve input: messages has priority over input_ids/image_data
-        messages_empty = (request.messages is None or request.messages == ''
-                          or (isinstance(request.messages, list)
-                              and len(request.messages) == 0))
+        messages_empty = request.messages is None or len(request.messages) == 0
         resolved_input_ids = None
         if messages_empty and request.input_ids is not None:
             # /generate-style input: use input_ids (+ optional image_data)
@@ -157,15 +169,14 @@ def register(router: APIRouter, server_context) -> None:
                         image_input.append(
                             dict(type='image_url', image_url=img))
                 text_input = dict(type='text', text=request.input_ids)
-                request.messages = [
-                    dict(role='user', content=[text_input] + image_input)
-                ]
+                request = request.model_copy(
+                    update={
+                        'messages': [dict(role='user', content=[text_input] + image_input)],
+                        'input_ids': None,
+                        'image_data': None,
+                    })
                 resolved_input_ids = None  # image_data conversion takes over
-            else:
-                # input_ids only — engine requires messages=None
-                request.messages = None
 
-        json_request = await raw_request.json()
         migration_request = json_request.pop('migration_request', None)
         with_cache = json_request.pop('with_cache', False)
         preserve_cache = json_request.pop('preserve_cache', False)
@@ -181,11 +192,7 @@ def register(router: APIRouter, server_context) -> None:
         created_time = int(time.time())
 
         tokenizer = server_context.async_engine.tokenizer.model.model
-        gen_logprobs, logits_processors = None, None
-        if request.logprobs:
-            gen_logprobs = request.top_logprobs or 1
-        elif request.return_logprob:
-            gen_logprobs = 1
+        logits_processors = None
         if request.logit_bias is not None:
             try:
                 logits_processors = [
@@ -194,62 +201,28 @@ def register(router: APIRouter, server_context) -> None:
             except Exception as e:
                 return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 
-        parser_cls = server_context.response_parser_cls
         try:
-            response_parser = parser_cls(request)
-        except ValueError as e:
-            return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
-        # request is normalized and may be adjusted by the parser
-        # (e.g. GPT-OSS clears response_format and injects the schema into messages)
-        request = response_parser.request
-
-        gen_config = build_serving_generation_config(
-            request,
-            server_context,
-            logprobs=gen_logprobs,
-            stop_words=request.stop,
-            logits_processors=logits_processors,
-            random_seed=request.seed,
-            migration_request=migration_request,
-            with_cache=with_cache,
-            preserve_cache=preserve_cache,
-        )
-
-        # text completion for string input or input_ids
-        do_preprocess = (False if isinstance(request.messages, str)
-                         or resolved_input_ids is not None else
-                         request.do_preprocess)
-        chat_template_kwargs = request.chat_template_kwargs or {}
-        if request.enable_thinking is not None:
-            logger.warning(
-                '`enable_thinking` will be deprecated in the future, '
-                'please use `chat_template_kwargs` instead.')
-            if chat_template_kwargs.get('enable_thinking') is None:
-                chat_template_kwargs['enable_thinking'] = request.enable_thinking
-            else:
-                logger.warning(
-                    '`enable_thinking` in `chat_template_kwargs` will override the value in request.'
-                )
-
-        session = server_context.create_session(request.session_id)
-        try:
-            preprocessed = await server_context.async_engine.preprocess(
-                request.messages,
-                session,
-                gen_config=gen_config,
-                tools=request.tools,
-                reasoning_effort=request.reasoning_effort,
-                do_preprocess=do_preprocess,
-                adapter_name=adapter_name,
-                chat_template_kwargs=chat_template_kwargs or None,
-                input_ids=resolved_input_ids,
-                media_io_kwargs=request.media_io_kwargs,
-                mm_processor_kwargs=request.mm_processor_kwargs)
+            chat_runner = await ChatRunner.prepare(
+                server_context,
+                request,
+                ChatRunnerOptions(
+                    input_ids=resolved_input_ids,
+                    do_preprocess=resolved_input_ids is None,
+                    adapter_name=adapter_name,
+                    gen_config_kwargs=dict(
+                        logits_processors=logits_processors,
+                        random_seed=request.seed,
+                        migration_request=migration_request,
+                        with_cache=with_cache,
+                        preserve_cache=preserve_cache,
+                    ),
+                ),
+            )
         except RequestError as error:
             return create_request_error_response(error)
-        result_generator = server_context.async_engine.generate(
-            preprocessed,
-            stream_response=True)  # always use stream to enable batching
+        # request is normalized and may be adjusted by the parser
+        # (e.g. GPT-OSS clears response_format and injects the schema into messages)
+        request = chat_runner.request
         include_usage = bool(request.stream_options
                              and request.stream_options.include_usage)
 
@@ -294,84 +267,50 @@ def register(router: APIRouter, server_context) -> None:
             return response.model_dump_json(exclude_none=True)
 
         async def _completion_stream_generator() -> AsyncGenerator[str, None]:
-            streaming_tools = False
-            final_usage = None
-            async for res in result_generator:
-                logprobs = None
-                output_token_logprobs = None
-                if request.logprobs and res.logprobs:
-                    logprobs = _create_chat_completion_logprobs(
-                        tokenizer, res.token_ids, res.logprobs)
-                if request.return_logprob:
-                    output_token_logprobs = _create_output_token_logprobs(
-                        res.token_ids, res.logprobs)
-                delta_token_ids = res.token_ids if res.token_ids is not None else []
-                stream_deltas = response_parser.stream_chunk(
-                    res.response,
-                    delta_token_ids,
-                    final=res.finish_reason is not None,
-                )
-                if res.finish_reason and include_usage:
-                    final_usage = UsageInfo.build(
-                        prompt_tokens=res.input_token_len,
-                        completion_tokens=res.generate_token_len,
-                        cached_tokens=res.cached_tokens,
-                        reasoning_tokens=response_parser.reasoning_tokens,
-                    )
-                if not stream_deltas:
-                    # Parser may buffer partial protocol tags and emit no visible delta
-                    # while the engine still produced new tokens (e.g. MTP batch). Do not
-                    # drop those token ids; emit them once on a placeholder delta.
-                    if res.finish_reason is None and not delta_token_ids:
-                        continue
-                    stream_deltas = [(DeltaMessage(role='assistant',
-                                                   content=''), False)]
-                should_validate_complete = (res.finish_reason
-                                            in ('stop', 'length') and
-                                            (request.return_token_ids
-                                             or request.return_routed_experts))
-                if should_validate_complete and not response_parser.validate_complete():
-                    res.finish_reason = 'parse_error'
-
-                for delta_index, (delta_message,
-                                  tool_emitted) in enumerate(stream_deltas):
-                    if tool_emitted:
-                        streaming_tools = True
-
-                    is_last_delta = delta_index == len(stream_deltas) - 1
+            try:
+                final_usage = None
+                async for chunk in chat_runner.stream():
+                    logprobs = None
+                    output_token_logprobs = None
+                    if request.logprobs and chunk.logprobs:
+                        logprobs = _create_chat_completion_logprobs(
+                            tokenizer, chunk.token_ids, chunk.logprobs)
+                    if request.return_logprob and chunk.logprobs:
+                        output_token_logprobs = _create_output_token_logprobs(
+                            chunk.token_ids, chunk.logprobs)
+                    if chunk.finish_reason and include_usage:
+                        final_usage = UsageInfo.build(
+                            prompt_tokens=chunk.input_token_len,
+                            completion_tokens=chunk.generate_token_len,
+                            cached_tokens=chunk.cached_tokens,
+                            reasoning_tokens=chunk.reasoning_tokens,
+                        )
                     # The chat parser may split one engine yield into multiple protocol deltas,
                     # so attach the engine-level metadata to the last parsed delta.
-                    finish_reason = res.finish_reason if is_last_delta else None
-                    chunk_logprobs = logprobs if is_last_delta else None
-                    chunk_output_token_logprobs = output_token_logprobs if is_last_delta else None
-
-                    if (request.tool_choice != 'none'
-                            and response_parser.tool_parser is not None):
-                        if finish_reason == 'stop' and streaming_tools is True:
-                            finish_reason = 'tool_calls'
-
-                    # Only output routed_experts in the final chunk
-                    routed_experts = res.routed_experts if finish_reason is not None else None
+                    if not chunk.is_last_delta:
+                        logprobs = None
+                        output_token_logprobs = None
                     # Emit token ids once per engine yield on the last parsed delta, when
                     # accumulated delta text and token ids for this step are aligned.
-                    stream_output_ids = delta_token_ids if (
-                        request.return_token_ids and is_last_delta) else None
+                    stream_output_ids = chunk.token_ids if (request.return_token_ids and chunk.is_last_delta) else None
 
                     response_json = create_stream_response_json(
                         index=0,
-                        delta_message=delta_message,
-                        finish_reason=finish_reason,
-                        logprobs=chunk_logprobs,
-                        output_token_logprobs=chunk_output_token_logprobs,
-                        routed_experts=routed_experts,
+                        delta_message=chunk.delta_message,
+                        finish_reason=chunk.finish_reason,
+                        logprobs=logprobs,
+                        output_token_logprobs=output_token_logprobs,
+                        routed_experts=chunk.routed_experts,
                         output_ids=stream_output_ids)
-                    if res.cache_block_ids is not None and is_last_delta:
-                        response_json['cache_block_ids'] = res.cache_block_ids
-                        response_json['remote_token_ids'] = res.token_ids
+                    if chunk.cache_block_ids is not None and chunk.is_last_delta:
+                        response_json['cache_block_ids'] = chunk.cache_block_ids
+                        response_json['remote_token_ids'] = chunk.token_ids
                     yield f'data: {json.dumps(response_json)}\n\n'
-            if final_usage is not None:
-                yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
-            yield 'data: [DONE]\n\n'
+                if final_usage is not None:
+                    yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
+                yield 'data: [DONE]\n\n'
+            finally:
+                await chat_runner.close()
 
         async def completion_stream_generator() -> AsyncGenerator[str, None]:
             try:
@@ -383,62 +322,19 @@ def register(router: APIRouter, server_context) -> None:
 
         # Streaming response
         if request.stream:
-            stream_generator = with_request_cleanup(
-                completion_stream_generator(), [result_generator], [session],
-                server_context.session_manager)
-            return StreamingResponse(stream_generator,
-                                     media_type='text/event-stream')
+            return ManagedStreamingResponse(
+                completion_stream_generator(),
+                cleanup_callbacks=[chat_runner.close],
+                media_type='text/event-stream')
 
         # Non-streaming response
-        final_logprobs = []
-        final_token_ids = []
-        final_res = None
-        text = ''
-        cache_block_ids = []
-        remote_token_ids = []
         try:
-            async with aclosing(
-                    with_request_cleanup(
-                        result_generator, [result_generator], [session],
-                        server_context.session_manager)) as generator:
-                async for res in generator:
-                    if await raw_request.is_disconnected():
-                        # Abort the request if the client disconnects.
-                        await session.async_abort()
-                        return create_error_response(HTTPStatus.BAD_REQUEST, 'Client disconnected')
-                    final_res = res
-                    text += res.response
-                    if res.token_ids:
-                        final_token_ids.extend(res.token_ids)
-                    if res.logprobs:
-                        final_logprobs.extend(res.logprobs)
-                    cache_block_ids.append(res.cache_block_ids)
-                    remote_token_ids.append(res.token_ids)
+            res = await chat_runner.collect(raw_request)
         except RequestError as error:
             return create_request_error_response(error)
-
-        tool_calls = None
-        reasoning_content = None
-
-        try:
-            raw_text = text
-            text, tool_calls, reasoning_content = response_parser.parse_complete(
-                text, final_token_ids)
-            should_validate_complete = (
-                final_res.finish_reason in ('stop', 'length') and
-                (request.return_token_ids or request.return_routed_experts))
-            if should_validate_complete and not response_parser.validate_complete(
-                    raw_text):
-                final_res.finish_reason = 'parse_error'
-            if isinstance(tool_calls, list) and len(tool_calls):
-                if final_res.finish_reason == 'stop':
-                    final_res.finish_reason = 'tool_calls'
-
-        except Exception as e:
-            logger.error(f'Failed to parse {text}. Exception: {e}.')
-            return create_error_response(
-                HTTPStatus.BAD_REQUEST,
-                'Failed to parse fc related info to json format!')
+        text = res.text
+        tool_calls = res.tool_calls
+        reasoning_content = res.reasoning_content
 
         message = ChatMessage(role='assistant',
                               content=text,
@@ -446,38 +342,37 @@ def register(router: APIRouter, server_context) -> None:
                               reasoning_content=reasoning_content)
 
         logprobs = None
-        if request.logprobs and len(final_logprobs):
+        if request.logprobs and len(res.logprobs):
             logprobs = _create_chat_completion_logprobs(
-                tokenizer, final_token_ids, final_logprobs)
+                tokenizer, res.token_ids, res.logprobs)
         output_token_logprobs = None
-        if request.return_logprob and len(final_logprobs):
+        if request.return_logprob and len(res.logprobs):
             output_token_logprobs = _create_output_token_logprobs(
-                final_token_ids, final_logprobs)
+                res.token_ids, res.logprobs)
 
-        assert final_res is not None
         choices = []
         choice_data = ChatCompletionResponseChoice(
             index=0,
             message=message,
             logprobs=logprobs,
             output_token_logprobs=output_token_logprobs,
-            finish_reason=final_res.finish_reason,
-            output_ids=final_token_ids if request.return_token_ids else None,
-            routed_experts=final_res.routed_experts
+            finish_reason=res.finish_reason,
+            output_ids=res.token_ids if request.return_token_ids else None,
+            routed_experts=res.routed_experts
             if request.return_routed_experts else None,
         )
         choice_data = maybe_filter_parallel_tool_calls(choice_data, request)
         choices.append(choice_data)
 
         if with_cache:
-            cache_block_ids = cache_block_ids[0]
-            remote_token_ids = [remote_token_ids[0][-1]]
+            cache_block_ids = res.cache_block_ids[0]
+            remote_token_ids = [res.remote_token_ids[0][-1]]
 
         usage = UsageInfo.build(
-            prompt_tokens=final_res.input_token_len,
-            completion_tokens=final_res.generate_token_len,
-            cached_tokens=final_res.cached_tokens,
-            reasoning_tokens=response_parser.reasoning_tokens,
+            prompt_tokens=res.input_token_len,
+            completion_tokens=res.generate_token_len,
+            cached_tokens=res.cached_tokens,
+            reasoning_tokens=res.reasoning_tokens,
         )
         response = ChatCompletionResponse(
             id=request_id,

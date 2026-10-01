@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <numeric>
+
 #include "src/turbomind/core/data_type.h"
 
 #include "src/turbomind/kernels/core/common.h"
@@ -37,7 +39,7 @@ public:
     using OpU = typename Gemm::OperandU;
     using OpV = typename Gemm::OperandV;
 
-    KernelImpl()
+    explicit KernelImpl(const Family& family): Kernel{family}
     {
         desc_.order_a = OpA::kOrder;
         desc_.order_b = transpose(OpB::kOrder);
@@ -77,7 +79,12 @@ public:
 
         desc_.align.x = OpA::kOrder == kColMajor ? IterA::ThreadMap::kAccessC : 1;
         desc_.align.y = OpB::kOrder == kColMajor ? IterB::ThreadMap::kAccessC : 1;
-        desc_.align.z = Gemm::CTA_K;
+        if constexpr (OpV::SmemLayout::kSize > 1) {
+            desc_.align.z = std::lcm(Gemm::CTA_K, OpV::kGroupSize);
+        }
+        else {
+            desc_.align.z = Gemm::CTA_K;
+        }
 
         desc_.policy_a = (int)IterA::Policy::kEvictPolicy;
         desc_.policy_b = (int)IterB::Policy::kEvictPolicy;
@@ -85,6 +92,11 @@ public:
         desc_.op_class = Impl::kOpClass;
 
         desc_.cluster_shape = {1, 1};
+
+        desc_.arch = Gemm::Arch::value;
+        if (!CheckArch()) {
+            return;
+        }
 
         auto func = gemm_kernel<Gemm, GemmParam, EpilogueParam, Sched>;
 
@@ -103,8 +115,6 @@ public:
         desc_.split_k    = Gemm::kSplitK;
         desc_.group_axis = Sched::group_axis;
 
-        desc_.arch = Gemm::Arch::value;
-
         info_.name = GetName();
     }
 
@@ -118,6 +128,8 @@ public:
                const MatrixLayout& _Bdesc,
                const void*         V,
                const MatrixLayout& _Vdesc,
+               const void*         global_scale,
+               const MatrixLayout& global_scale_desc,
                float               beta,
                const void*         C,
                const MatrixLayout& Cdesc,
@@ -132,6 +144,8 @@ public:
     {
         (void)W;
         (void)Wdesc;
+        (void)global_scale;
+        (void)global_scale_desc;
         MatrixLayout Adesc = _Adesc;
 
         const int m = Ddesc.rows;
@@ -221,15 +235,8 @@ public:
 
     std::array<size_t, 2> GetWorkspaceSize(int tiles, int splits) const
     {
-        static constexpr bool kSerial = true;
-
         size_t barriers_size = sizeof(int) * tiles;
         size_t partials_size = sizeof(float) * CTA_M * CTA_N * tiles;
-
-        if constexpr (!kSerial) {
-            barriers_size *= splits;
-            partials_size *= splits;
-        }
 
         return {barriers_size, partials_size};
     }

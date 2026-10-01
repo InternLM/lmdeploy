@@ -305,6 +305,7 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
                                                      int          group0,
                                                      int          group1,
                                                      const int*   local_token_nums,
+                                                     int          local_token_nums_count,
                                                      cudaStream_t stream)
 {
     TM_CHECK(group0 * group1 == 0);

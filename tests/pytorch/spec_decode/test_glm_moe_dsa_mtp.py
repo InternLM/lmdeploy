@@ -188,3 +188,13 @@ def test_topk_buffer_compaction_preserves_selected_order():
     compacted = buffer.compact(torch.tensor([2, 0]))
 
     assert torch.equal(compacted, rows[[2, 0]])
+
+
+def test_topk_buffer_does_not_reuse_stale_indices_for_dense_prefill():
+    buffer = DSATopKIndicesBuffer(topk=2)
+    rows = torch.tensor([[0, 1]], dtype=torch.int32)
+    buffer.write(rows)
+
+    buffer.write(None)
+
+    assert buffer.read(num_tokens=1, device=rows.device) is None

@@ -39,6 +39,11 @@ private:
     const int mlp_tp_size_;
 
     const int attn_tp_group_;
+    const int mlp_group_;
+    const int node_group_;
+
+    // Per-layer post-FFN reduce group, precomputed in the constructor.
+    std::vector<int> ffn_group_;
 
     comm::DeviceCommImpl* const d_comm_;
 
@@ -60,7 +65,8 @@ private:
                                   int           token_num,
                                   int           t0,
                                   int           t1,
-                                  const int*    local_token_nums);
+                                  const int*    local_token_nums,
+                                  int           local_token_nums_count);
 };
 
 }  // namespace turbomind

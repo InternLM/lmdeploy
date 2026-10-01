@@ -7,23 +7,19 @@
 #include <utility>
 #include <vector>
 
+#include "src/turbomind/kernels/gemm/family.h"
 #include "src/turbomind/kernels/gemm/kernel.h"
-#include "src/turbomind/kernels/gemm/kernel_impl.h"
 
 namespace turbomind::gemm {
 
 class Collector {
 public:
-    // Matches Registry::Add<Config>(): Config has nested ::Kernel
-    template<class Config>
-    void add()
-    {
-        kernels_.emplace_back(std::make_unique<KernelImpl<typename Config::Kernel>>());
-    }
+    explicit Collector(const Family& family): family_{family} {}
 
-    void add(std::unique_ptr<Kernel> kernel)
+    template<class T, class... Args>
+    void add(Args&&... args)
     {
-        kernels_.emplace_back(std::move(kernel));
+        kernels_.emplace_back(std::make_unique<T>(family_, std::forward<Args>(args)...));
     }
 
     std::vector<std::unique_ptr<Kernel>> release()
@@ -32,21 +28,28 @@ public:
     }
 
 private:
+    const Family&                        family_;
     std::vector<std::unique_ptr<Kernel>> kernels_;
 };
 
-using RegisterFn = std::function<void(Collector&, int arch)>;
-
-inline std::vector<RegisterFn>& gKernelFactories()
+template<class T, class... Args>
+void add(Collector& c, Args&&... args)
 {
-    static std::vector<RegisterFn> v;
+    c.add<T>(std::forward<Args>(args)...);
+}
+
+using RegisterFn = std::function<void(Collector&)>;
+
+inline std::vector<std::pair<const Family*, RegisterFn>>& gKernelFactories()
+{
+    static std::vector<std::pair<const Family*, RegisterFn>> v;
     return v;
 }
 
 struct Registrar {
-    explicit Registrar(RegisterFn fn)
+    Registrar(const Family& family, RegisterFn fn)
     {
-        gKernelFactories().push_back(std::move(fn));
+        gKernelFactories().emplace_back(&family, std::move(fn));
     }
 };
 

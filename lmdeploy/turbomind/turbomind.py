@@ -2,11 +2,9 @@
 
 import asyncio
 import copy
-import json
 import math
 import os
 import os.path as osp
-import sys
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -16,22 +14,16 @@ from typing import Any
 import pybase64
 import torch
 
-import lmdeploy
+from lmdeploy._guided_decoding import compile_response_format
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
 
+from . import _tm
 from .parallel_config import derive_parallel_config
 from .supported_models import is_supported
-
-# TODO: find another way import _turbomind
-lmdeploy_dir = osp.split(lmdeploy.__file__)[0]
-sys.path.append(osp.join(lmdeploy_dir, 'lib'))
-import _turbomind as _tm  # noqa: E402
-import _xgrammar as _xgr  # noqa: E402
-
-from .tokenizer_info import TokenizerInfo  # noqa: E402
+from .tokenizer_info import TokenizerInfo
 
 logger = get_logger('lmdeploy')
 
@@ -97,7 +89,14 @@ def update_parallel_config(cfg: TurbomindEngineConfig):
         cfg.mlp_dp_size = parallel.mlp_dp_size
         cfg.mlp_tp_size = parallel.mlp_tp_size
     if cfg.ep > 1:
-        assert cfg.nnodes == 1, 'ep > 1 is only supported in single-node mode'
+        if cfg.moe_a2a_backend == 'auto':
+            cfg.moe_a2a_backend = 'deepep' if cfg.nnodes > 1 else 'default'
+        if cfg.moe_a2a_backend == 'deepep':
+            assert cfg.communicator == 'nccl', 'deepep backend only supports nccl communicator'
+            # Reduce the number of QPs used in multithreaded scenarios.
+            os.environ.setdefault('NCCL_CROSS_NIC', '0')
+        if cfg.communicator in ['cuda-ipc', 'native']:
+            assert cfg.nnodes == 1, f'{cfg.communicator} communicator only supports single-node'
     assert cfg.attn_dp_size * cfg.attn_tp_size * cfg.attn_cp_size * cfg.outer_dp_size == cfg.device_num
     # update devices
     cfg.devices = cfg.devices or list(range(cfg.device_num // cfg.nnodes))
@@ -179,7 +178,7 @@ class TurboMind:
         if self._grammar_compiler is None:
             tokenizer_info = TokenizerInfo.from_huggingface(
                 self.tokenizer.model.model, vocab_size=self._vocab_size)
-            self._grammar_compiler = _xgr.GrammarCompiler(tokenizer_info)
+            self._grammar_compiler = _tm.GrammarCompiler(tokenizer_info)
         return self._grammar_compiler
 
     def _process_weights(self):
@@ -267,6 +266,7 @@ class TurboMind:
         ec.nnodes = engine_config.nnodes
         ec.node_rank = engine_config.node_rank
         ec.communicator = engine_config.communicator
+        ec.moe_a2a_backend = engine_config.moe_a2a_backend
 
         logger.info(f'turbomind engine config:\n\n'
                     f'dtype={engine_config.dtype}, state_dtype={state_dtype}, '
@@ -275,7 +275,9 @@ class TurboMind:
                     f'devices={engine_config.devices}, '
                     f'tp={engine_config.attn_tp_size}, '
                     f'dp={engine_config.attn_dp_size}, '
-                    f'cp={engine_config.attn_cp_size}')
+                    f'cp={engine_config.attn_cp_size}, '
+                    f'ep={engine_config.ep}, '
+                    f'moe_a2a_backend={engine_config.moe_a2a_backend}')
 
         model_comm = _tm.TurboMind.create(model_dir='', engine_config=ec)
         self._create_weight(model_comm)
@@ -716,29 +718,9 @@ class TurboMindInstance:
         if gen_config.response_format is not None:
             try:
                 compiler = self.tm_model.grammar_compiler
-                decode_grammar_type = gen_config.response_format['type']
-                if decode_grammar_type == 'json_schema':
-                    decode_grammar = gen_config.response_format[decode_grammar_type]['schema']
-                elif decode_grammar_type == 'regex_schema':
-                    decode_grammar = gen_config.response_format[decode_grammar_type]
-                elif decode_grammar_type == 'json_object':
-                    decode_grammar = '{"type" : "object", "additionalProperties": true}'
-
-                if decode_grammar_type == 'json_schema':
-                    decode_grammar = json.dumps(decode_grammar)
-                    grammar = compiler.compile_json_schema(decode_grammar)
-                elif decode_grammar_type == 'regex_schema':
-                    decode_grammar = str(decode_grammar)
-                    grammar = compiler.compile_regex(decode_grammar)
-                elif decode_grammar_type == 'json_object':
-                    decode_grammar = str(decode_grammar)
-                    grammar = compiler.compile_json_schema(decode_grammar)
-                else:
-                    assert False, f'Decode grammar type {decode_grammar_type} should be in ' \
-                                   '["json_schema", "regex_schema", "json_object"]'
-
+                grammar = compile_response_format(compiler, gen_config.response_format)
                 self.model_inst.set_grammar(grammar)
-            except ValueError as e:
+            except (ValueError, KeyError) as e:
                 logger.warning(f'Failed to initialize guided decoding, '
                                f'disable guided decoding: {e}')
                 gen_config.response_format = None

@@ -40,7 +40,6 @@ def test_chat_clears_response_before_streaming_and_records_history():
         pass
 
     pipe = Pipeline.__new__(Pipeline)
-    pipe.allowed_media_domains = None
     pipe.seen_prompts = []
     pipe.response_at_stream_start = None
 

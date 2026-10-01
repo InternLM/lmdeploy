@@ -232,6 +232,29 @@ class BaseBlockManager:
         """Free all physical blocks allocated for the session."""
         raise NotImplementedError('Not implemented.')
 
+    def truncate(self, msg: SchedulerSequence, target_num_blocks: int) -> np.ndarray:
+        """Release the logical-block suffix after ``target_num_blocks``.
+
+        The scheduler calls this to roll back blocks appended tentatively, for example when an external KV load fails or
+        is cancelled, or when a tentative prefix-cache match is rejected. Callers restore the related token and prefix-
+        cache state separately.
+        """
+        logical_blocks = msg.logical_blocks
+        if target_num_blocks < 0 or target_num_blocks > len(logical_blocks):
+            raise ValueError(
+                f'target_num_blocks must be in [0, {len(logical_blocks)}], '
+                f'got {target_num_blocks}')
+        # Detach the suffix from LogicalTokenBlocks' reusable backing array so
+        # the returned IDs stay valid after later allocations overwrite it.
+        released = np.asarray(
+            logical_blocks.get_real_blocks()[target_num_blocks:],
+            dtype=np.int64,
+        ).copy()
+        if len(released) > 0:
+            self.allocator.free(released)
+        logical_blocks.resize(target_num_blocks)
+        return released
+
     def try_swap_out(self, msg: SchedulerSequence):
         """Try swap msg out."""
         raise NotImplementedError('Not implemented.')
@@ -262,6 +285,18 @@ class BaseBlockManager:
         if np.any(block_offsets < 0) or np.any(block_offsets >= self.num_gpu_blocks):
             raise ValueError('logical_block_ids contains a block that is not GPU-resident.')
         return block_offsets
+
+    def pin_logical_blocks(self, logical_block_ids: np.ndarray) -> None:
+        """Keep GPU pages alive while an asynchronous reader owns them."""
+        if len(logical_block_ids) > 0:
+            # A sequence may be freed before an external save finishes reading
+            # its KV pages. This extra reference prevents reuse or swapping.
+            self.allocator.add_ref_count(logical_block_ids, 1)
+
+    def release_logical_blocks(self, logical_block_ids: np.ndarray) -> None:
+        """Release one asynchronous ownership reference."""
+        if len(logical_block_ids) > 0:
+            self.allocator.free(logical_block_ids)
 
     def allocate(self, data: SchedulerSequence, prealloc_size: int = 0):
         """Allocate stuff."""

@@ -1,0 +1,317 @@
+diff --git a/csrc/jit/cache.hpp b/csrc/jit/cache.hpp
+index 96d89e5..6b1462c 100644
+--- a/csrc/jit/cache.hpp
++++ b/csrc/jit/cache.hpp
+@@ -29,6 +29,6 @@ public:
+     }
+ };
+
+-static auto kernel_runtime_cache = std::make_shared<KernelRuntimeCache>();
++inline thread_local auto kernel_runtime_cache = std::make_shared<KernelRuntimeCache>();
+
+ } // namespace deep_ep::jit
+diff --git a/csrc/jit/compiler.hpp b/csrc/jit/compiler.hpp
+index ad01b3c..b207f90 100644
+--- a/csrc/jit/compiler.hpp
++++ b/csrc/jit/compiler.hpp
+@@ -4,6 +4,8 @@
+ #include <filesystem>
+ #include <fstream>
+ #include <nvrtc.h>
++#include <mutex>
++#include <nccl.h>
+ #include <optional>
+ #include <regex>
+ #include <string>
+@@ -19,6 +21,11 @@
+
+ namespace deep_ep::jit {
+
++inline std::mutex& get_compiler_cache_miss_mutex() {
++    static std::mutex mutex;
++    return mutex;
++}
++
+ class Compiler {
+ public:
+     static std::filesystem::path library_root_path;
+@@ -51,3 +58,3 @@ public:
+         // Cache settings
+-        cache_dir_path = std::filesystem::path(get_env<std::string>("HOME")) / ".deep_ep";
++        cache_dir_path = std::filesystem::path(get_env<std::string>("HOME")) / ".deep_ep" / "turbomind";
+         if (const auto env_cache_dir_path = get_env<std::string>("EP_JIT_CACHE_DIR"); not env_cache_dir_path.empty())
+@@ -67,9 +74,14 @@ public:
+         flags += fmt::format(" -I {}/include", nccl_root.c_str());
+
+         // Some special flags for EP
+-        // TODO: make it more general, e.g. `EP_JIT_EXTRA_FLAGS`
+-        if (int num_topk_idx_bits = get_env("EP_NUM_TOPK_IDX_BITS", 0); num_topk_idx_bits != 0)
+-            flags += fmt::format(" -DEP_NUM_TOPK_IDX_BITS={}", num_topk_idx_bits);
++        const int env_num_topk_idx_bits = get_env("EP_NUM_TOPK_IDX_BITS", 0);
++        EP_HOST_ASSERT((env_num_topk_idx_bits == 0 or
++                        env_num_topk_idx_bits == EP_NUM_TOPK_IDX_BITS) and
++                       "EP_NUM_TOPK_IDX_BITS conflicts with the host build");
++        flags += fmt::format(
++            " -DEP_NUM_TOPK_IDX_BITS={} -DEP_JIT_NCCL_VERSION_CODE={}",
++            EP_NUM_TOPK_IDX_BITS,
++            NCCL_VERSION_CODE);
+     }
+
+     virtual ~Compiler() = default;
+@@ -115,6 +127,16 @@ public:
+         if (const auto runtime = kernel_runtime_cache->get(dir_path); runtime != nullptr)
+             return runtime;
+
++        // Serialize cache publication only after the thread-local runtime-cache fast path misses.
++        std::unique_lock<std::mutex> lock(get_compiler_cache_miss_mutex());
++        if (KernelRuntime::check_validity(dir_path)) {
++            lock.unlock();
++            const auto runtime = kernel_runtime_cache->get(dir_path);
++            EP_HOST_ASSERT(runtime != nullptr);
++            return runtime;
++        }
++
+         // Compile into a temporary directory, then atomically rename the whole directory
+         // NOTES: renaming a directory is atomic on both local and distributed filesystems,
+         // avoiding the stale inode issue that occurs when renaming individual files
+@@ -153,6 +175,7 @@ public:
+             safe_remove_all(tmp_dir_path);
+         }
+
++        lock.unlock();
+         // Put into the runtime cache
+         const auto runtime = kernel_runtime_cache->get(dir_path);
+         EP_HOST_ASSERT(runtime != nullptr);
+@@ -204,7 +218,7 @@ public:
+     NVCCCompiler() {
+         // Override the compiler signature
+         nvcc_path = cuda_home / "bin" / "nvcc";
+-        cuobjdump_path = cuda_home / "bin" / "cuobjdump";
++        // cuobjdump_path = cuda_home / "bin" / "cuobjdump";
+         if (const auto env_nvcc_path = get_env<std::string>("EP_JIT_NVCC_COMPILER"); not env_nvcc_path.empty())
+             nvcc_path = env_nvcc_path;
+         const auto [nvcc_major, nvcc_minor] = get_nvcc_version();
+@@ -262,7 +276,7 @@ public:
+     }
+ };
+
+-static auto compiler = LazyInit<Compiler>([]() -> std::shared_ptr<Compiler> {
++inline thread_local auto compiler = LazyInit<Compiler>([]() -> std::shared_ptr<Compiler> {
+     return std::make_shared<NVCCCompiler>();
+ });
+
+diff --git a/csrc/jit/device_runtime.hpp b/csrc/jit/device_runtime.hpp
+index 3ed5328..60a8c57 100644
+--- a/csrc/jit/device_runtime.hpp
++++ b/csrc/jit/device_runtime.hpp
+@@ -62,6 +62,6 @@ public:
+     }
+ };
+
+-static auto device_runtime = LazyInit<DeviceRuntime>([](){ return std::make_shared<DeviceRuntime>(); });
++inline thread_local auto device_runtime = LazyInit<DeviceRuntime>([](){ return std::make_shared<DeviceRuntime>(); });
+
+ } // namespace deep_ep::jit
+diff --git a/csrc/jit/handle.hpp b/csrc/jit/handle.hpp
+index d563023..48de736 100644
+--- a/csrc/jit/handle.hpp
++++ b/csrc/jit/handle.hpp
+@@ -64,7 +64,7 @@ static LaunchConfigHandle construct_launch_config(const KernelHandle& kernel,
+
+     // TODO: support cooperative and dependent kernel launch
+     // NOTES: must use `static` or the `attr` will be deconstructed
+-    static LaunchAttrHandle attr;
++    static thread_local LaunchAttrHandle attr;
+     if (cluster_dim > 1) {
+         attr.id = cudaLaunchAttributeClusterDimension;
+         attr.val.clusterDim = {static_cast<unsigned>(cluster_dim), 1, 1};
+@@ -125,7 +125,7 @@ static LaunchConfigHandle construct_launch_config(const KernelHandle& kernel,
+     config.hStream = stream;
+
+     // Create attributes
+-    static LaunchAttrHandle attrs[3];
++    static thread_local LaunchAttrHandle attrs[3];
+     config.attrs = attrs;
+     config.numAttrs = 0;
+
+diff --git a/csrc/jit/include_parser.hpp b/csrc/jit/include_parser.hpp
+index 6df87ff..aa6108f 100644
+--- a/csrc/jit/include_parser.hpp
++++ b/csrc/jit/include_parser.hpp
+@@ -75,6 +75,6 @@ public:
+
+ EP_DECLARE_STATIC_VAR_IN_CLASS(IncludeParser, library_include_path);
+
+-static auto include_parser = std::make_shared<IncludeParser>();
++inline thread_local auto include_parser = std::make_shared<IncludeParser>();
+
+ }  // namespace deep_ep::jit
+diff --git a/csrc/jit/kernel_runtime.hpp b/csrc/jit/kernel_runtime.hpp
+index e610959..d63933b 100644
+--- a/csrc/jit/kernel_runtime.hpp
++++ b/csrc/jit/kernel_runtime.hpp
+@@ -1,7 +1,5 @@
+ #pragma once
+
+-#include <ATen/cuda/CUDAContext.h>
+-
+ #include <deep_ep/common/exception.cuh>
+
+ #include "../utils/format.hpp"
+diff --git a/csrc/jit/launch_runtime.hpp b/csrc/jit/launch_runtime.hpp
+index c01c75a..fec556f 100644
+--- a/csrc/jit/launch_runtime.hpp
++++ b/csrc/jit/launch_runtime.hpp
+@@ -1,6 +1,6 @@
+ #pragma once
+
+-#include <ATen/cuda/CUDAContext.h>
++#include <cuda_runtime.h>
+
+ #include <deep_ep/common/exception.cuh>
+
+@@ -31,12 +31,10 @@ class LaunchRuntime {
+ public:
+     template <typename Args>
+     static std::string generate(const Args& args) {
+         auto code = Derived::generate_impl(args);
+
+         // NOTES: we require that `generate_impl`'s includes never change
+-        static std::string include_hash;
+-        if (include_hash.empty())
+-            include_hash = include_parser->get_hash_value(code);
++        static const std::string include_hash = include_parser->get_hash_value(code);
+
+         // TODO: optimize string concat performance
+         code = fmt::format("// Includes' hash value: {}\n{}", include_hash, code);
+@@ -47,9 +52,8 @@ public:
+
+     template <typename Args>
+     static void launch(const std::shared_ptr<KernelRuntime>& kernel_runtime, const Args& args,
+-                       const std::optional<at::cuda::CUDAStream>& stream_opt = std::nullopt) {
++                       const cudaStream_t& stream) {
+         const auto kernel = kernel_runtime->kernel;
+-        const auto stream = stream_opt.value_or(at::cuda::getCurrentCUDAStream());
+         const LaunchArgs& launch_args = args.launch_args;
+
+         const dim3& grid_dim = {static_cast<unsigned>(launch_args.grid_dim.first),
+@@ -62,10 +66,10 @@ public:
+
+         // Launch in the derived class
+         if (get_env<int>("EP_JIT_DEBUG")) {
+-            printf("Launch kernel with {%d, %d} x %d (cooperative: %d), shared memory: %d bytes, cluster: %d, stream: %ld\n",
++            printf("Launch kernel with {%d, %d} x %d (cooperative: %d), shared memory: %d bytes, cluster: %d, stream: %p\n",
+                    launch_args.grid_dim.first, launch_args.grid_dim.second, launch_args.num_threads,
+                    launch_args.cooperative,
+-                   launch_args.smem_size, launch_args.cluster_dim, stream.id());
++                   launch_args.smem_size, launch_args.cluster_dim, static_cast<void*>(stream));
+         }
+         Derived::launch_impl(kernel, config, args);
+     }
+diff --git a/csrc/kernels/backend/symmetric.hpp b/csrc/kernels/backend/symmetric.hpp
+index c82f851..de940ee 100644
+--- a/csrc/kernels/backend/symmetric.hpp
++++ b/csrc/kernels/backend/symmetric.hpp
+@@ -226,9 +226,5 @@ public:
+             auto [pid, fd] = cpu_comm[num_scaleup_ranks * scaleout_rank_idx + i];
+             int local_fd = fd;
+             if (pid != local_pid) {
+-                int pidfd = syscall(SYS_pidfd_open, pid, 0);
+-                EP_HOST_ASSERT(pidfd >= 0 and "`pidfd_open` failed");
+-                local_fd = syscall(SYS_pidfd_getfd, pidfd, fd, 0);
+-                EP_HOST_ASSERT(local_fd >= 0 and "`pidfd_getfd` failed");
+-                close(pidfd);
++                EP_HOST_UNREACHABLE("Cross-process CPU symmetric memory is not supported by TurboMind");
+             }
+diff --git a/csrc/kernels/elastic/barrier.hpp b/csrc/kernels/elastic/barrier.hpp
+index 7312644..e6aad12 100644
+--- a/csrc/kernels/elastic/barrier.hpp
++++ b/csrc/kernels/elastic/barrier.hpp
+@@ -60,7 +60,7 @@ static void launch_barrier(const jit::NoRefPtr& nccl_dev_comm, const ncclWindow_
+                            const int64_t& num_timeout_cycles,
+                            const bool& is_scaleup_nvlink,
+                            const bool& sequential,
+-                           const at::cuda::CUDAStream& stream) {
++                           const cudaStream_t& stream) {
+     // Number of threads equals to the number of ranks
+     constexpr auto kNumThreads = 512;
+
+diff --git a/csrc/kernels/elastic/combine.hpp b/csrc/kernels/elastic/combine.hpp
+index f3cea1c..bbdb24a 100644
+--- a/csrc/kernels/elastic/combine.hpp
++++ b/csrc/kernels/elastic/combine.hpp
+@@ -129,7 +129,7 @@ static void* launch_combine(void* x,
+                             const int& num_sms, const int& num_smem_bytes,
+                             const int& num_channels,
+                             const bool& use_expanded_layout, const bool& allow_multiple_reduction,
+-                            const at::cuda::CUDAStream& stream) {
++                            const cudaStream_t& stream) {
+     // Maximize shared memory utilization
+     const auto token_layout = get_combine_token_layout(hidden, sizeof(nv_bfloat16), num_topk);
+     auto num_warps = std::min(num_smem_bytes / token_layout.get_num_bytes<true>(), 32);
+@@ -257,7 +257,7 @@ static void launch_combine_reduce_epilogue(void* combined_x,
+                                            const int& scaleout_rank_idx, const int& scaleup_rank_idx,
+                                            const int& num_sms, const int& num_smem_bytes,
+                                            const bool& use_expanded_layout, const bool& allow_multiple_reduction,
+-                                           const at::cuda::CUDAStream& stream) {
++                                           const cudaStream_t& stream) {
+     // Maximize shared memory utilization
+     // Too many warps may cause performance degrade, so we limit into 1024
+     const auto token_layout = layout::TokenLayout(hidden * sizeof(nv_bfloat16), 0, 0, false);
+diff --git a/csrc/kernels/elastic/dispatch.hpp b/csrc/kernels/elastic/dispatch.hpp
+index 3b624c6..0c3650f 100644
+--- a/csrc/kernels/elastic/dispatch.hpp
++++ b/csrc/kernels/elastic/dispatch.hpp
+@@ -162,7 +162,7 @@ static void launch_dispatch(void* x, void* sf,
+                             const int& num_qps, const int64_t& num_timeout_cycles,
+                             const bool& cached_mode,
+                             const bool& do_cpu_sync,
+-                            const at::cuda::CUDAStream& stream) {
++                            const cudaStream_t& stream) {
+     // Cached mode does not support expert token counting
+     if (cached_mode)
+         EP_HOST_ASSERT(cumulative_local_expert_recv_stats == nullptr);
+@@ -308,7 +308,7 @@ static void launch_dispatch_copy_epilogue(void* buffer, void* workspace,
+                                           const int& num_channels,
+                                           const bool& do_expand, const bool& cached_mode,
+                                           const bool& do_zero_padding,
+-                                          const at::cuda::CUDAStream& stream) {
++                                          const cudaStream_t& stream) {
+     // Maximize shared memory utilization
+     const auto token_layout = layout::TokenLayout(num_hidden_bytes, num_sf_packs * sizeof(sf_pack_t), num_topk, true);
+     const auto num_warps = std::min(num_smem_bytes / token_layout.get_num_bytes<true>(), 32);
+diff --git a/csrc/utils/lazy_driver.hpp b/csrc/utils/lazy_driver.hpp
+index d5db490..be38380 100644
+--- a/csrc/utils/lazy_driver.hpp
++++ b/csrc/utils/lazy_driver.hpp
+@@ -9,11 +9,11 @@ namespace deep_ep {
+
+ // Lazy loading all driver symbols
+ static void* get_driver_handle() {
+-    static void* handle = nullptr;
+-    if (handle == nullptr) {
+-        handle = dlopen("libcuda.so.1", RTLD_LAZY | RTLD_LOCAL);
++    static void* handle = [] {
++        void* handle = dlopen("libcuda.so.1", RTLD_LAZY | RTLD_LOCAL);
+         EP_HOST_ASSERT(handle != nullptr and "Failed to load CUDA driver `libcuda.so.1`");
+-    }
++        return handle;
++    }();
+     return handle;
+ }
+
+@@ -22,11 +22,11 @@ static void* get_driver_handle() {
+ template <typename... Args> \
+ static auto lazy_##name(Args&&... args) -> decltype(name(args...)) { \
+     using FuncType = decltype(&name); \
+-    static FuncType func = nullptr; \
+-    if (func == nullptr) { \
+-        func = reinterpret_cast<FuncType>(dlsym(get_driver_handle(), #name)); \
++    static const FuncType func = [] { \
++        const auto func = reinterpret_cast<FuncType>(dlsym(get_driver_handle(), #name)); \
+         EP_HOST_ASSERT(func != nullptr and "Failed to load CUDA driver API"); \
+-    } \
++        return func; \
++    }(); \
+     return func(std::forward<decltype(args)>(args)...); \
+ }

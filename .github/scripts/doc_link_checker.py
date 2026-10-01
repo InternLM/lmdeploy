@@ -49,7 +49,7 @@ def analyze_doc(home, path):
                     if ref.startswith('http') or ref.startswith('#'):
                         continue
                     if '.md#' in ref:
-                        ref = ref[ref.find('#'):]
+                        ref = ref[:ref.find('#')]
                     fullpath = os.path.join(home, ref)
                     if not os.path.exists(fullpath):
                         problem_list.append(ref)

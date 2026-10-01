@@ -682,6 +682,79 @@ class TestScoreAndFillStateDecode:
 
 
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
+class TestScoreAndFillStatePrefill:
+
+    @pytest.mark.parametrize(
+        'ratio,overlap,head_dim,q_seqlens,kv_seqlens_list', [
+            (4, True, 512, [8, 16], [12, 24]),
+            (128, False, 128, [256, 128], [512, 1024]),
+        ])
+    def test_pdl_matches_sequential(self, ratio, overlap, head_dim, q_seqlens,
+                                    kv_seqlens_list):
+        device = 'cuda'
+        dtype = torch.bfloat16
+        D = (1 + overlap) * head_dim
+        B = len(q_seqlens)
+
+        cu_q_seqlens = torch.tensor([0] + q_seqlens, dtype=torch.int32,
+                                    device=device).cumsum(0)
+        kv_seqlens = torch.tensor(kv_seqlens_list, dtype=torch.int32,
+                                  device=device)
+        state_ids = torch.arange(B, dtype=torch.int32, device=device)
+        kv = torch.randn(sum(q_seqlens), D, dtype=dtype, device=device)
+        score = torch.randn_like(kv)
+        ape = torch.randn(ratio, D, dtype=torch.float32, device=device)
+        kv_state = torch.zeros(B, ratio * (1 + overlap), D,
+                               dtype=dtype, device=device)
+        score_state = torch.full_like(kv_state, float('-inf'), dtype=torch.float32)
+
+        from lmdeploy.pytorch.kernels.cuda.v4_compressor import fill_compress_state
+        for batch_id, (kvlen, q_seqlen) in enumerate(zip(kv_seqlens_list, q_seqlens)):
+            history_len = kvlen - q_seqlen
+            hist_kv = torch.randn(history_len, D, dtype=dtype, device=device)
+            hist_score = torch.randn_like(hist_kv)
+            hist_cu_q = torch.tensor([0, history_len], dtype=torch.int32,
+                                     device=device)
+            hist_kvlen = torch.tensor([history_len], dtype=torch.int32,
+                                      device=device)
+            hist_state_id = torch.tensor([batch_id], dtype=torch.int32,
+                                         device=device)
+            fill_compress_state(
+                hist_kv, hist_score, ape, kv_state, score_state,
+                hist_state_id, hist_cu_q, hist_kvlen)
+
+        ref_compressed = _reference_score_kv(
+            kv, score, ape, kv_state, score_state, state_ids,
+            cu_q_seqlens, kv_seqlens, overlap)
+        ref_kv_state, ref_score_state = _reference_fill_compress_state(
+            kv, score, ape, kv_state, score_state, state_ids,
+            cu_q_seqlens, kv_seqlens, overlap)
+
+        from lmdeploy.pytorch.kernels.cuda.v4_compressor import score_and_fill_state_prefill
+        results = []
+        for use_pdl in (False, True):
+            test_kv_state = kv_state.clone()
+            test_score_state = score_state.clone()
+            compressed = torch.zeros(sum(q_seqlens), head_dim,
+                                     dtype=dtype, device=device)
+            score_and_fill_state_prefill(
+                kv, score, ape, test_kv_state, test_score_state, state_ids,
+                cu_q_seqlens, kv_seqlens, compressed, overlap,
+                max(q_seqlens), use_pdl=use_pdl)
+            results.append((compressed, test_kv_state, test_score_state))
+
+            torch.testing.assert_close(
+                compressed.float(), ref_compressed.float(), atol=1e-2, rtol=1e-2)
+            torch.testing.assert_close(
+                test_kv_state.float(), ref_kv_state.float(), atol=1e-2, rtol=1e-2)
+            torch.testing.assert_close(
+                test_score_state, ref_score_state, atol=1e-2, rtol=1e-2)
+
+        for pdl_value, sequential_value in zip(results[1], results[0]):
+            torch.testing.assert_close(pdl_value, sequential_value)
+
+
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason='require device with cc>=9.0')
 class TestFillCompressedKVFP8:
     """Test FP8 direct write in fill_compressed_kv.
 
@@ -886,7 +959,7 @@ class TestFillCompressedKVFP8:
             TritonV4CompressorImpl,
             _get_v4_packed_index_cache_views,
         )
-        from lmdeploy.pytorch.consts import v4_packed_index_cache_shape
+        from lmdeploy.pytorch.consts import V4_INDEX_KV_R4_CACHE_NAME, v4_packed_index_cache_shape
 
         index_cache = torch.zeros(num_blocks,
                                   *v4_packed_index_cache_shape(entries_per_block, head_dim),
@@ -899,8 +972,8 @@ class TestFillCompressedKVFP8:
             block_size=self.BLOCK_SIZE,
             max_q_seqlen=1,
         )
-        impl = TritonV4CompressorImpl(compress_ratio=4, overlap=True, head_dim=head_dim)
-        impl.write_compressed_kv(compressed_kv, index_cache, meta)
+        impl = TritonV4CompressorImpl(compress_ratio=4, overlap=True, head_dim=head_dim, is_indexer=True)
+        impl.write_compressed_kv(compressed_kv, {V4_INDEX_KV_R4_CACHE_NAME: index_cache}, meta)
 
         value_cache, scale_cache = _get_v4_packed_index_cache_views(index_cache, head_dim)
         num_written = 0

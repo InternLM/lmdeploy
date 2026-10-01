@@ -1,14 +1,46 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import functools
+
 import torch
+import torch.nn.functional as F
 
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.kernels.cuda.fused_noaux_tc import fused_noaux_tc_routing
-from lmdeploy.pytorch.kernels.cuda.fused_single_group_router import (
+from lmdeploy.pytorch.kernels.cuda.moe.route_noaux_tc import fused_noaux_tc_routing
+from lmdeploy.pytorch.kernels.cuda.moe.route_single_group import (
     fused_single_group_topk_router,
 )
 
 from ..default.moe_router import DefaultRouterNoauxTCImpl
-from ..moe_router import RouterNoauxTCBuilder, RouterNoauxTCImpl
+from ..moe_router import RouterGemmImpl
+
+
+@functools.cache
+def _is_hopper_or_blackwell(device: int) -> bool:
+    major, minor = torch.cuda.get_device_capability(device)
+    return (major, minor) == (9, 0) or major == 10
+
+
+class CudaRouterGemmImpl(RouterGemmImpl):
+    """CUDA router GEMM with dtype-aware dispatch."""
+
+    def __init__(self, out_dtype: torch.dtype | None = None):
+        super().__init__(out_dtype=out_dtype)
+        device = torch.cuda.current_device()
+        self.allow_cublas_router_gemm = out_dtype == torch.float32 and _is_hopper_or_blackwell(device)
+
+    def forward(self, hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        """Compute router logits."""
+        # Use the cuBLAS output epilogue when BF16 gates require FP32 logits.
+        if self.allow_cublas_router_gemm and hidden_states.dtype == weight.dtype == torch.bfloat16:
+            return torch.mm(hidden_states, weight.T, out_dtype=torch.float32)
+
+        # Other dtype combinations use the native linear path.
+        output = F.linear(hidden_states.to(weight.dtype), weight)
+
+        # Preserve the model-selected router-logit dtype on fallback paths.
+        if self.out_dtype is not None:
+            output = output.to(self.out_dtype)
+        return output
 
 
 def is_power_of_two(n):
@@ -110,28 +142,3 @@ class TritonRouterNoauxTCImpl(DefaultRouterNoauxTCImpl):
             )
         else:
             return super().forward(logits, bias)
-
-
-class TritonRouterNoauxTCBuilder(RouterNoauxTCBuilder):
-
-    @staticmethod
-    def build(
-        scoring_func: str,
-        top_k: int,
-        n_group: int,
-        topk_group: int,
-        n_routed_experts: int,
-        routed_scaling_factor: float,
-        renormalize: bool = True,
-        router_n_groups: int = -1,
-    ) -> RouterNoauxTCImpl:
-        return TritonRouterNoauxTCImpl(
-            scoring_func=scoring_func,
-            top_k=top_k,
-            n_group=n_group,
-            topk_group=topk_group,
-            n_routed_experts=n_routed_experts,
-            routed_scaling_factor=routed_scaling_factor,
-            renormalize=renormalize,
-            router_n_groups=router_n_groups,
-        )

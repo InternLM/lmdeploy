@@ -103,36 +103,6 @@ response = client.chat.completions.create(
 print(response)
 ```
 
-### Integrate with lmdeploy `APIClient`
-
-Below are some examples demonstrating how to visit the service through `APIClient`
-
-If you want to use the `/v1/chat/completions` endpoint, you can try the following code:
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-
-api_client = APIClient(f'http://0.0.0.0:23333')
-model_name = api_client.available_models[0]
-messages = [{
-    'role':
-    'user',
-    'content': [{
-        'type': 'text',
-        'text': 'Describe the image please',
-    }, {
-        'type': 'image_url',
-        'image_url': {
-            'url':
-            'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
-        },
-    }]
-}]
-for item in api_client.chat_completions_v1(model=model_name,
-                                           messages=messages):
-    print(item)
-```
-
 ### Integrate with Java/Golang/Rust
 
 May use [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) to convert `http://{server_ip}:{server_port}/openapi.json` to java/rust/golang client.

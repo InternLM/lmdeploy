@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from lmdeploy.serve.core.exceptions import RequestError
-from lmdeploy.serve.openai.protocol import DeltaMessage
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 from .adapter import map_finish_reason
 from .errors import anthropic_error_from_request
@@ -182,169 +182,143 @@ def _emit_metadata_delta(state: _StreamBlockState,
     )
 
 
-async def stream_messages_response(result_generator,
+async def stream_messages_response(parsed_stream,
                                    *,
                                    request_id: str,
-                                   model: str,
-                                   response_parser,
-                                   return_token_ids: bool = False,
-                                   return_routed_experts: bool = False,
-                                   logprobs: bool = False) -> AsyncGenerator[str, None]:
+                                   request: ChatCompletionRequest) -> AsyncGenerator[str, None]:
     """Convert LMDeploy generation stream to Anthropic SSE events."""
+    return_token_ids = bool(request.return_token_ids)
+    return_routed_experts = bool(request.return_routed_experts)
+    return_logprob = bool(request.return_logprob)
 
     # Anthropic's message_start event carries usage while its content is
-    # still empty. Buffer one backend result to populate usage, then stream
-    # that same result through the normal content-block path below.
-    result_iter = _results_or_error(result_generator).__aiter__()
+    # still empty. Buffer one parsed chunk to populate usage, then stream
+    # that same chunk through the normal content-block path below.
+    result_iter = _results_or_error(parsed_stream).__aiter__()
     try:
-        first_res = await anext(result_iter)
+        first_chunk = await anext(result_iter)
     except StopAsyncIteration:
-        first_res = None
+        first_chunk = None
 
-    if isinstance(first_res, RequestError):
+    if isinstance(first_chunk, RequestError):
         yield _format_sse(
-            ErrorEvent(error=anthropic_error_from_request(first_res)))
+            ErrorEvent(error=anthropic_error_from_request(first_chunk)))
         return
 
     start_usage = MessageUsage(
-        input_tokens=0 if first_res is None else first_res.input_token_len,
-        output_tokens=0 if first_res is None else first_res.generate_token_len,
+        input_tokens=0 if first_chunk is None else first_chunk.input_token_len,
+        output_tokens=0 if first_chunk is None else first_chunk.generate_token_len,
     )
     yield _format_sse(
         MessageStartEvent(
             message=MessageStartMessage(
                 id=request_id,
-                model=model,
+                model=request.model,
                 usage=start_usage,
             ),
         )
     )
-    final_res = None
+    final_chunk = None
     block_state = _StreamBlockState()
-    streaming_tools = False
 
     async def _results():
-        if first_res is not None:
-            yield first_res
-        async for res in result_iter:
-            yield res
+        if first_chunk is not None:
+            yield first_chunk
+        async for chunk in result_iter:
+            yield chunk
 
-    async for res in _results():
-        if isinstance(res, RequestError):
+    async for chunk in _results():
+        if isinstance(chunk, RequestError):
             for event in _close_current_block(block_state):
                 yield event
             yield _format_sse(
-                ErrorEvent(error=anthropic_error_from_request(res)))
+                ErrorEvent(error=anthropic_error_from_request(chunk)))
             return
-        final_res = res
-        text = res.response or ''
-        delta_token_ids = res.token_ids if res.token_ids is not None else []
+        final_chunk = chunk
+        delta_message = chunk.delta_message
+        delta_token_ids = chunk.token_ids
         delta_logprobs = None
-        if logprobs and res.logprobs and delta_token_ids:
+        if return_logprob and chunk.logprobs and delta_token_ids:
             delta_logprobs = [
                 (tok_logprobs[tok], tok)
-                for tok, tok_logprobs in zip(delta_token_ids, res.logprobs)
+                for tok, tok_logprobs in zip(delta_token_ids, chunk.logprobs)
             ]
 
-        stream_deltas = response_parser.stream_chunk(text, delta_token_ids)
-        if not stream_deltas:
-            if res.finish_reason is None and not delta_token_ids:
-                continue
-            # The parser can consume structural text without emitting visible
-            # content. Keep a synthetic delta so token IDs/logprobs from that
-            # backend chunk are still streamed as metadata.
-            stream_deltas = [(DeltaMessage(role='assistant', content=''), False)]
+        if delta_message is None:
+            continue
 
-        should_validate_complete = (
-            res.finish_reason in ('stop', 'length')
-            and (return_token_ids or return_routed_experts)
-        )
-        if should_validate_complete and not response_parser.validate_complete():
-            res.finish_reason = 'parse_error'
+        delta_output_ids = delta_token_ids if return_token_ids and chunk.is_last_delta else None
+        delta_output_logprobs = delta_logprobs if chunk.is_last_delta else None
+        metadata_emitted = delta_output_ids is None and delta_output_logprobs is None
+        has_content = bool(delta_message.content)
+        has_tools = bool(delta_message.tool_calls)
 
-        for delta_index, (delta_message, tool_emitted) in enumerate(stream_deltas):
-            if tool_emitted:
-                streaming_tools = True
+        if delta_message.reasoning_content:
+            for event in _start_text_or_thinking(block_state, 'thinking'):
+                yield event
+            reasoning_output_ids = None if has_content or has_tools else delta_output_ids
+            reasoning_output_logprobs = None if has_content or has_tools else delta_output_logprobs
+            yield _emit_text_delta(
+                block_state,
+                delta_message.reasoning_content,
+                thinking=True,
+                output_ids=reasoning_output_ids,
+                output_token_logprobs=reasoning_output_logprobs,
+            )
+            metadata_emitted = metadata_emitted or (
+                reasoning_output_ids is not None or reasoning_output_logprobs is not None)
 
-            if delta_message is None:
-                continue
+        if delta_message.content:
+            for event in _start_text_or_thinking(block_state, 'text'):
+                yield event
+            content_output_ids = None if has_tools else delta_output_ids
+            content_output_logprobs = None if has_tools else delta_output_logprobs
+            yield _emit_text_delta(
+                block_state,
+                delta_message.content,
+                thinking=False,
+                output_ids=content_output_ids,
+                output_token_logprobs=content_output_logprobs,
+            )
+            metadata_emitted = metadata_emitted or (
+                content_output_ids is not None or content_output_logprobs is not None)
 
-            is_last_delta = delta_index == len(stream_deltas) - 1
-            delta_output_ids = delta_token_ids if return_token_ids and is_last_delta else None
-            delta_output_logprobs = delta_logprobs if is_last_delta else None
-            metadata_emitted = delta_output_ids is None and delta_output_logprobs is None
-            has_content = bool(delta_message.content)
-            has_tools = bool(delta_message.tool_calls)
-
-            if delta_message.reasoning_content:
-                for event in _start_text_or_thinking(block_state, 'thinking'):
+        if delta_message.tool_calls:
+            for tool_index, tool_delta in enumerate(delta_message.tool_calls):
+                for event in _start_tool_block(block_state, tool_delta):
                     yield event
-                reasoning_output_ids = None if has_content or has_tools else delta_output_ids
-                reasoning_output_logprobs = None if has_content or has_tools else delta_output_logprobs
-                yield _emit_text_delta(
-                    block_state,
-                    delta_message.reasoning_content,
-                    thinking=True,
-                    output_ids=reasoning_output_ids,
-                    output_token_logprobs=reasoning_output_logprobs,
-                )
-                metadata_emitted = metadata_emitted or (
-                    reasoning_output_ids is not None or reasoning_output_logprobs is not None)
+                function_delta = tool_delta.function
+                if function_delta is None:
+                    continue
+                partial_json = function_delta.arguments or ''
+                if partial_json:
+                    output_ids = None
+                    output_token_logprobs = None
+                    if tool_index == len(delta_message.tool_calls) - 1:
+                        output_ids = delta_output_ids
+                        output_token_logprobs = delta_output_logprobs
+                    yield _format_sse(
+                        ContentBlockDeltaEvent(
+                            index=block_state.current_block['block_index'],
+                            delta=InputJsonDelta(partial_json=partial_json),
+                            output_ids=output_ids,
+                            output_token_logprobs=output_token_logprobs,
+                        ))
+                    metadata_emitted = metadata_emitted or (
+                        output_ids is not None or output_token_logprobs is not None)
 
-            if delta_message.content:
+        if not metadata_emitted:
+            if block_state.current_block is None:
                 for event in _start_text_or_thinking(block_state, 'text'):
                     yield event
-                content_output_ids = None if has_tools else delta_output_ids
-                content_output_logprobs = None if has_tools else delta_output_logprobs
-                yield _emit_text_delta(
-                    block_state,
-                    delta_message.content,
-                    thinking=False,
-                    output_ids=content_output_ids,
-                    output_token_logprobs=content_output_logprobs,
-                )
-                metadata_emitted = metadata_emitted or (
-                    content_output_ids is not None or content_output_logprobs is not None)
-
-            if delta_message.tool_calls:
-                for tool_index, tool_delta in enumerate(delta_message.tool_calls):
-                    for event in _start_tool_block(block_state, tool_delta):
-                        yield event
-                    function_delta = tool_delta.function
-                    if function_delta is None:
-                        continue
-                    partial_json = function_delta.arguments or ''
-                    if partial_json:
-                        output_ids = None
-                        output_token_logprobs = None
-                        if tool_index == len(delta_message.tool_calls) - 1:
-                            output_ids = delta_output_ids
-                            output_token_logprobs = delta_output_logprobs
-                        yield _format_sse(
-                            ContentBlockDeltaEvent(
-                                index=block_state.current_block['block_index'],
-                                delta=InputJsonDelta(partial_json=partial_json),
-                                output_ids=output_ids,
-                                output_token_logprobs=output_token_logprobs,
-                            ))
-                        metadata_emitted = metadata_emitted or (
-                            output_ids is not None or output_token_logprobs is not None)
-
-            if not metadata_emitted:
-                if block_state.current_block is None:
-                    for event in _start_text_or_thinking(block_state, 'text'):
-                        yield event
-                yield _emit_metadata_delta(block_state, delta_output_ids, delta_output_logprobs)
-
-        if res.finish_reason == 'stop' and streaming_tools:
-            res.finish_reason = 'tool_calls'
+            yield _emit_metadata_delta(block_state, delta_output_ids, delta_output_logprobs)
 
     for event in _close_current_block(block_state):
         yield event
 
-    output_tokens = 0 if final_res is None else final_res.generate_token_len
-    stop_reason = map_finish_reason(None if final_res is None else final_res.finish_reason)
-    routed_experts = final_res.routed_experts if return_routed_experts and final_res is not None else None
+    output_tokens = 0 if final_chunk is None else final_chunk.generate_token_len
+    stop_reason = map_finish_reason(None if final_chunk is None else final_chunk.finish_reason)
+    routed_experts = final_chunk.routed_experts if return_routed_experts and final_chunk is not None else None
     yield _format_sse(
         MessageDeltaEvent(
             delta=MessageDelta(stop_reason=stop_reason, stop_sequence=None),

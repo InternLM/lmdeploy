@@ -30,9 +30,6 @@ def _load_tokenizer_cached(model_path: str):
         raise RuntimeError(f"Failed to load tokenizer from '{model_path}': {e}")
 
 
-def encode_text(model_path: str, text: str) -> list[int]:
+def encode_text(model_path: str, text: str, *, add_special_tokens: bool = True) -> list[int]:
     tokenizer = _load_tokenizer_cached(model_path)
-
-    encoded = tokenizer.encode(text)
-
-    return encoded
+    return tokenizer.encode(text, add_special_tokens=add_special_tokens)

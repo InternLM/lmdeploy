@@ -4,7 +4,7 @@ fastapi
 fire
 mmengine-lite
 numpy
-openai
+openai >= 2.45.0
 openai_harmony
 partial_json_parser
 pillow
@@ -20,4 +20,4 @@ shortuuid
 tiktoken
 transformers >= 4.56.0, != 5.0.*, != 5.1.*, != 5.2.*, != 5.3.*, != 5.4.*, != 5.5.0, !=5.7.*, !=5.8.*, !=5.9.*
 uvicorn
-xgrammar >= 0.1.33
+xgrammar >= 0.2.0, != 0.2.5.post1

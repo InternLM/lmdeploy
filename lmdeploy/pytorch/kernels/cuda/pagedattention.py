@@ -6,14 +6,13 @@ from collections.abc import Sequence
 import torch
 import triton
 import triton.language as tl
-from packaging import version
 from torch import Tensor
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.utils import get_logger
 
 from .turbo_quant import hadamard_rotate
-from .utils import get_device_props
+from .utils import get_device_props, is_cuda
 
 logger = get_logger('lmdeploy')
 
@@ -26,22 +25,11 @@ Q_POLICY_INT8 = tl.constexpr(8)
 Q_POLICY_FP8 = tl.constexpr(16)
 Q_POLICY_TURBO = tl.constexpr(42)
 
-TRITON_VERSION = version.parse(triton.__version__)
-VERSION_300 = version.parse('3.0.0')
-
-assert TRITON_VERSION >= version.parse('2.2.0')
-
 # TODO: fast op might not work on non-nv device
-if TRITON_VERSION >= VERSION_300:
-    tanh = tl.extra.cuda.libdevice.tanh
-    fast_dividef = tl.extra.cuda.libdevice.fast_dividef
-    tl_log2 = tl.log2
-    tl_exp2 = tl.exp2
-else:
-    tanh = tl.math.tanh
-    fast_dividef = tl.math.fast_dividef
-    tl_log2 = tl.math.log2
-    tl_exp2 = tl.math.exp2
+tanh = tl.extra.cuda.libdevice.tanh
+fast_dividef = tl.extra.cuda.libdevice.fast_dividef
+tl_log2 = tl.log2
+tl_exp2 = tl.exp2
 
 
 @triton.jit
@@ -84,6 +72,7 @@ def _fwd_grouped_split_kernel(
     BLOCK_N: tl.constexpr,
     BLOCK_H: tl.constexpr,
     BLOCK_DMODEL1: tl.constexpr,
+    USE_PDL: tl.constexpr,
 ):
     """First step kernel of split k attention."""
     cur_batch = tl.program_id(2)
@@ -218,6 +207,11 @@ def _fwd_grouped_split_kernel(
         l_i = l_i_new
         m_i = m_i_new
 
+    # Let the reducer launch while this kernel retires its scratch stores. The
+    # reducer waits for the whole producer grid before reading the scratch.
+    if USE_PDL:
+        tl.extra.cuda.gdc_launch_dependents()
+
     # initialize pointers to output
     if loop_end > loop_start:
         off_acc = (cur_token[:, None] * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
@@ -318,6 +312,7 @@ def _fwd_grouped_split_quant_kernel(
     BLOCK_N: tl.constexpr,
     BLOCK_H: tl.constexpr,
     BLOCK_DMODEL1: tl.constexpr,
+    USE_PDL: tl.constexpr,
 ):
     """First step kernel of split k attention.
 
@@ -555,6 +550,11 @@ def _fwd_grouped_split_quant_kernel(
         l_i = l_i_new
         m_i = m_i_new
 
+    # Let the reducer launch while this kernel retires its scratch stores. The
+    # reducer waits for the whole producer grid before reading the scratch.
+    if USE_PDL:
+        tl.extra.cuda.gdc_launch_dependents()
+
     # initialize pointers to output
     if loop_end > loop_start:
         off_acc = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
@@ -586,19 +586,28 @@ def _reduce_split_kernel(
     head_size_v: tl.constexpr,
     SPLIT_K: tl.constexpr,
     BLOCK_DV: tl.constexpr,
+    USE_PDL: tl.constexpr,
 ):
     """Second step kernel of split k attention."""
     cur_batch = tl.program_id(1)
     cur_head = tl.program_id(0)
+
+    # Apply the scalar batch/head offsets before constructing the K x DV
+    # tensor offsets. Broadcasting the scalar base into that tensor can make
+    # Triton miscompile 128 x 128 reductions when launched with two warps.
+    acc_ptr += cur_batch * stride_abs + cur_head * stride_ah
+    out_ptr += cur_batch * stride_obs + cur_head * stride_oh
 
     # initialize offsets
     offs_dv = tl.arange(0, BLOCK_DV)
     offs_k = tl.arange(0, SPLIT_K)
     mask_dv = offs_dv < head_size_v
 
-    offs_acc = (cur_batch * stride_abs + cur_head * stride_ah + offs_k[:, None] * stride_ak +
-                offs_dv[None, :] * stride_ad)
-    offs_mi = (cur_batch * stride_abs + cur_head * stride_ah + stride_ak * offs_k + head_size_v)
+    offs_acc = offs_k[:, None] * stride_ak + offs_dv[None, :] * stride_ad
+    offs_mi = stride_ak * offs_k + head_size_v
+
+    if USE_PDL:
+        tl.extra.cuda.gdc_wait()
 
     m_k = tl.load(acc_ptr + offs_mi)
     l_k = tl.load(acc_ptr + offs_mi + 1)
@@ -618,7 +627,7 @@ def _reduce_split_kernel(
         l_sum = l_sum + tl.exp2(sink * tl_log2(math.e) - m_max)
     acc = acc / (l_sum + 1e-10)
 
-    out_offs = (cur_batch * stride_obs + cur_head * stride_oh + offs_dv * stride_od)
+    out_offs = offs_dv * stride_od
     tl.store(out_ptr + out_offs, acc, mask=mask_dv)
 
 
@@ -629,16 +638,13 @@ def _convert_pv(p, v):
     return p, v
 
 
-_nv_cap = None
-
-
 def _kernel_meta_default(BLOCK_DMODEL: int, BLOCK_H: int):
     """Kernel meta default."""
     return 4, 2
 
 
 def _kernel_meta_sm8x(BLOCK_DMODEL: int, BLOCK_H: int):
-    """Kernel meta default."""
+    """Kernel meta for Ampere and Ada."""
     num_stages = 2
     if BLOCK_DMODEL * BLOCK_H > 8192:
         num_warps = 8
@@ -648,7 +654,7 @@ def _kernel_meta_sm8x(BLOCK_DMODEL: int, BLOCK_H: int):
 
 
 def _kernel_meta_sm9x(BLOCK_DMODEL: int, BLOCK_H: int):
-    """Kernel meta default."""
+    """Kernel meta for Hopper and newer architectures."""
     num_warps = 4
     if BLOCK_DMODEL * BLOCK_H > 4096:
         num_stages = 2
@@ -671,6 +677,17 @@ def _get_split_k(device_idx: int, head_grid: int, batch_size: int, num_warps: in
     max_split = 1 << (num_sm.bit_length() - 1)
     SPLIT_K = max(min(SPLIT_K, max_split), 4)
     return SPLIT_K
+
+
+def _get_block_d(head_dim_k: int, head_dim_v: int):
+    """Get the padded K and V block dimensions."""
+    block_dk = triton.next_power_of_2(head_dim_k)
+    block_dk1 = 0
+    if block_dk != head_dim_k:
+        block_dk //= 2
+        block_dk1 = max(16, triton.next_power_of_2(head_dim_k - block_dk))
+    block_dv = triton.next_power_of_2(head_dim_v)
+    return block_dk, block_dk1, block_dv
 
 
 @triton.jit
@@ -697,6 +714,7 @@ def _fused_reduce_hadamard_kernel(
     SPLIT_K: tl.constexpr,
     BLOCK_DV: tl.constexpr,
     LOG2_DV: tl.constexpr,
+    USE_PDL: tl.constexpr,
 ):
     """Fused split-K reduce + inverse Hadamard transform for TURBO_QUANT.
 
@@ -712,6 +730,9 @@ def _fused_reduce_hadamard_kernel(
                 + offs_k[:, None] * stride_ak + offs_dv[None, :] * stride_ad)
     offs_mi = (cur_batch * stride_abs + cur_head * stride_ah
                + stride_ak * offs_k + head_size_v)
+
+    if USE_PDL:
+        tl.extra.cuda.gdc_wait()
 
     m_k = tl.load(acc_ptr + offs_mi)
     l_k = tl.load(acc_ptr + offs_mi + 1)
@@ -785,10 +806,6 @@ def flash_attn_with_kvcache(
             per-tensor value scale for per-tensor FP8 KV cache.
     """
 
-    global _nv_cap
-    if _nv_cap is None:
-        _nv_cap = torch.cuda.get_device_capability()
-
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
     elif kv_layout == 'bhsd':
@@ -809,17 +826,6 @@ def flash_attn_with_kvcache(
     # quant42 K/V have different semantics and meta shape, should not share buffer
     if quant_policy == QuantPolicy.TURBO_QUANT:
         assert not shared_kv, 'quant_policy==42 does not support shared_kv'
-
-    def _get_block_d(Lk):
-        """Get block d."""
-        BLOCK_DMODEL = triton.next_power_of_2(Lk)
-        BLOCK_DMODEL1 = 0
-        if BLOCK_DMODEL != Lk:
-            BLOCK_DMODEL = BLOCK_DMODEL // 2
-            BLOCK_DMODEL1 = max(16, triton.next_power_of_2(Lk - BLOCK_DMODEL))
-        BLOCK_DV = triton.next_power_of_2(Lv)
-        return BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV
-
 
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k_cache.shape[d_dim], v_cache.shape[d_dim]
@@ -878,21 +884,25 @@ def flash_attn_with_kvcache(
     if max_seqlen_q is not None:
         assert max_seqlen_q == seq_len, 'we only support decoding paged attention.'
 
-    BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lq)
+    BLOCK_DMODEL, BLOCK_DMODEL1, BLOCK_DV = _get_block_d(Lq, Lv)
     HEADS_PER_REQ = kv_group_num * seq_len
     BLOCK_H = max(16, min(BLOCK, triton.next_power_of_2(HEADS_PER_REQ)))
     TILES_PER_GROUP = triton.cdiv(HEADS_PER_REQ, BLOCK_H)
     grid_1 = TILES_PER_GROUP * num_kv_heads
 
-    if _nv_cap[0] < 8:
+    device_props = get_device_props(q.device.index)
+    nv_cap = device_props['compute_capability']
+    if nv_cap[0] < 8:
         num_warps, num_stages = _kernel_meta_default(BLOCK_DMODEL, BLOCK_H)
-    elif _nv_cap[0] < 9:
+    elif nv_cap[0] < 9:
         num_warps, num_stages = _kernel_meta_sm8x(BLOCK_DMODEL, BLOCK_H)
     else:
         num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DMODEL, BLOCK_H)
 
     is_fp8_scalar = quant_policy in (QuantPolicy.FP8, QuantPolicy.FP8_E5M2)
     SPLIT_K = _get_split_k(q.device.index, grid_1, batch, num_warps)
+    use_pdl = is_cuda() and nv_cap[0] >= 9
+    pdl_launch = {'launch_pdl': True} if use_pdl else {}
 
     if quant_policy == QuantPolicy.INT4 or quant_policy == QuantPolicy.TURBO_QUANT:
         acc = q.new_empty(num_tokens, head, SPLIT_K, o.shape[-1] + 2, dtype=torch.float32)
@@ -973,6 +983,7 @@ def flash_attn_with_kvcache(
                                               BLOCK_N=BLOCK,
                                               BLOCK_H=BLOCK_H,
                                               BLOCK_DMODEL1=BLOCK_DMODEL1,
+                                              USE_PDL=use_pdl,
                                               num_warps=num_warps,
                                               num_stages=num_stages)
 
@@ -1015,6 +1026,7 @@ def flash_attn_with_kvcache(
                                         BLOCK_N=BLOCK,
                                         BLOCK_H=BLOCK_H,
                                         BLOCK_DMODEL1=BLOCK_DMODEL1,
+                                        USE_PDL=use_pdl,
                                         num_warps=num_warps,
                                         num_stages=num_stages)
 
@@ -1043,8 +1055,10 @@ def flash_attn_with_kvcache(
                                             head_size_v=Lv,
                                             BLOCK_DV=BLOCK_DV,
                                             LOG2_DV=LOG2_DV,
+                                            USE_PDL=use_pdl,
                                             num_warps=num_warps,
-                                            num_stages=1)
+                                            num_stages=1,
+                                            **pdl_launch)
     else:
         _reduce_split_kernel[grid](acc,
                                    o,
@@ -1059,6 +1073,8 @@ def flash_attn_with_kvcache(
                                    SPLIT_K=SPLIT_K,
                                    head_size_v=Lv,
                                    BLOCK_DV=BLOCK_DV,
+                                   USE_PDL=use_pdl,
                                    num_warps=num_warps,
-                                   num_stages=1)
+                                   num_stages=1,
+                                   **pdl_launch)
     return o

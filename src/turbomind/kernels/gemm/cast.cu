@@ -245,19 +245,21 @@ __global__ void BlockscaleToGroupscale_Kernel(T1* dst, const T0* src, int64_t n,
 
 Tensor BlockscaleToGroupscale(const Tensor& scales, DataType data_type, int block_size)
 {
-    TM_CHECK_EQ(scales.dtype(), kFloat32);
-
     Tensor ret{{scales.shape(0), scales.shape(1) * block_size}, data_type, kDEVICE};
 
     auto stream = core::Context::stream().handle();
 
-    auto invoke = [&](auto t) {
-        using T = decltype(t);
-        BlockscaleToGroupscale_Kernel<<<(ret.size() + 511) / 512, 512, 0, stream>>>(
-            ret.data<T>(), scales.data<float>(), ret.size(), block_size);
+    auto invoke_dst = [&](auto t1) {
+        using T1        = decltype(t1);
+        auto invoke_src = [&](auto t0) {
+            using T0 = decltype(t0);
+            BlockscaleToGroupscale_Kernel<<<(ret.size() + 511) / 512, 512, 0, stream>>>(
+                ret.data<T1>(), scales.data<T0>(), ret.size(), block_size);
+        };
+        TM_DISPATCH_DTYPES(scales.dtype(), invoke_src, half_t, bfloat16_t, float);
     };
 
-    TM_DISPATCH_DTYPES(data_type, invoke, half_t, bfloat16_t);
+    TM_DISPATCH_DTYPES(data_type, invoke_dst, half_t, bfloat16_t);
 
     TM_CUDA_CHECK(cudaGetLastError());
 

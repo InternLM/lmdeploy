@@ -20,11 +20,11 @@ h:
       - reasoning
       extra:
         tool-call-parser: qwen3
-        reasoning-parser: qwen-qwq
+        reasoning-parser: default
     turbomind:
       suites:
       - toolcall
       - reasoning
       extra:
         tool-call-parser: qwen3
-        reasoning-parser: qwen-qwq
+        reasoning-parser: default

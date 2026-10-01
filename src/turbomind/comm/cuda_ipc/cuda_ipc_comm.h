@@ -119,6 +119,7 @@ public:
                                         int          group0,
                                         int          group1,
                                         const int*   local_token_nums,
+                                        int          local_token_nums_count,
                                         cudaStream_t stream) override;
 
     void AllGather2D(const void*  sendbuff,

@@ -8,7 +8,7 @@ from lmdeploy.serve.openai.protocol import (
     Function,
     Tool,
 )
-from lmdeploy.serve.parsers.response_parser import BaseResponseParser
+from lmdeploy.serve.parsers.tool_parser.tool_parser import dump_tools
 
 
 def test_dump_tools_filters_by_allowed_tool_choice():
@@ -29,7 +29,7 @@ def test_dump_tools_filters_by_allowed_tool_choice():
         tool_choice=AllowedToolChoice(allowed_tools=allowed),
     )
 
-    dumped = BaseResponseParser.dump_tools(request)
+    dumped = dump_tools(request)
 
     dumped_names = [t['name'] for t in dumped.tools]
     assert dumped_names == ['get_weather', 'search']
@@ -48,7 +48,7 @@ def test_dump_tools_populates_from_allowed_tools_when_request_tools_missing():
         tool_choice=AllowedToolChoice(allowed_tools=allowed),
     )
 
-    dumped = BaseResponseParser.dump_tools(request)
+    dumped = dump_tools(request)
 
     dumped_names = [t['name'] for t in dumped.tools]
     assert dumped_names == ['get_weather', 'search']
@@ -70,4 +70,4 @@ def test_dump_tools_raises_when_allowed_tool_missing_from_request_tools():
     )
 
     with pytest.raises(ValueError, match="Allowed tool\\(s\\) not found in request.tools: \\['search'\\]"):
-        BaseResponseParser.dump_tools(request)
+        dump_tools(request)

@@ -55,8 +55,9 @@ h:
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
+        enable-return-routed-experts: true
         tool-call-parser: intern-s1
-        reasoning-parser: intern-s1
+        reasoning-parser: default
     - suites:
       - anthropic
       extra:
@@ -70,7 +71,7 @@ h:
       extra:
         logprobs-mode: raw_logprobs
         tool-call-parser: intern-s1
-        reasoning-parser: intern-s1
+        reasoning-parser: default
     - suites:
       - anthropic
       extra:

@@ -2,8 +2,20 @@
 import functools
 
 import torch
+import torch.nn.functional as F
 
-from ..moe_router import RouterNoauxTCBuilder, RouterNoauxTCImpl
+from ..moe_router import RouterGemmImpl, RouterNoauxTCImpl
+
+
+class DefaultRouterGemmImpl(RouterGemmImpl):
+    """Default router GEMM implementation."""
+
+    def forward(self, hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        """Compute router logits."""
+        output = F.linear(hidden_states.to(weight.dtype), weight)
+        if self.out_dtype is not None:
+            output = output.to(self.out_dtype)
+        return output
 
 
 def _compute_scores(scoring_func: str, logits: torch.Tensor):
@@ -102,28 +114,3 @@ class DefaultRouterNoauxTCImpl(RouterNoauxTCImpl):
 
         topk_weight = self.renorm(topk_weight)
         return topk_weight, topk_idx
-
-
-class DefaultRouterNoauxTCBuilder(RouterNoauxTCBuilder):
-
-    @staticmethod
-    def build(
-        scoring_func: str,
-        top_k: int,
-        n_group: int,
-        topk_group: int,
-        n_routed_experts: int,
-        routed_scaling_factor: float,
-        renormalize: bool = True,
-        router_n_groups: int = -1,
-    ):
-        return DefaultRouterNoauxTCImpl(
-            scoring_func=scoring_func,
-            top_k=top_k,
-            n_group=n_group,
-            topk_group=topk_group,
-            n_routed_experts=n_routed_experts,
-            routed_scaling_factor=routed_scaling_factor,
-            renormalize=renormalize,
-            router_n_groups=router_n_groups,
-        )

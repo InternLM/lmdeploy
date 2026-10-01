@@ -13,6 +13,7 @@ a100:
     - nccl
   test_coverage:
   - func
+  - evaluate
   - quantization
   interface:
     pytorch:
@@ -40,6 +41,7 @@ h:
     - nccl
   test_coverage:
   - func
+  - evaluate
   - quantization
   interface:
     pytorch:

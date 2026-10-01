@@ -5,6 +5,8 @@ from enum import Enum, auto
 
 import torch
 
+from .base import BuildSpec
+
 
 class RopeType(Enum):
     """Rotary embedding type."""
@@ -71,21 +73,16 @@ class RotaryEmbeddingImpl(ABC):
         raise NotImplementedError
 
 
-class RotaryEmbeddingBuilder(ABC):
-    """Rotary embedding implementation builder."""
+@dataclass(frozen=True)
+class RotaryEmbeddingBuildSpec(BuildSpec[RotaryEmbeddingImpl]):
+    """Immutable requirements for constructing rotary position tables."""
 
-    @staticmethod
-    @abstractmethod
-    def build(
-        dim: int,
-        max_position_embeddings: int = 2048,
-        base: int = 10000,
-        scaling_factor: float = 1.0,
-        yarn_params: YarnParameters = None,
-        longrope_params: LongRoPEScalingParameters = None,
-        llama3_params: Llama3Parameters = None,
-        fope_params: FopeParameters = None,
-        emb_type: RopeType = RopeType.Default,
-    ):
-        """build."""
-        raise NotImplementedError
+    dim: int
+    max_position_embeddings: int = 2048
+    base: int = 10000
+    scaling_factor: float = 1.0
+    yarn_params: YarnParameters | None = None
+    longrope_params: LongRoPEScalingParameters | None = None
+    llama3_params: Llama3Parameters | None = None
+    fope_params: FopeParameters | None = None
+    emb_type: RopeType = RopeType.Default

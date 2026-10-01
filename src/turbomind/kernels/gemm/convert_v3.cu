@@ -1,87 +1,17 @@
-
-#include <array>
 #include <cstdlib>
 
 #include "src/turbomind/core/check.h"
-#include "src/turbomind/kernels/gemm/arch.h"
-#include "src/turbomind/kernels/gemm/convert.cuh"
+#include "src/turbomind/kernels/gemm/cast.h"
 #include "src/turbomind/kernels/gemm/convert.h"
-#include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/gemm/family.h"
+#include "src/turbomind/kernels/gemm/matrix_ptr.h"
+#include "src/turbomind/kernels/gemm/utils.h"
+#include "src/turbomind/kernels/gpt_kernels.h"
+#include "src/turbomind/models/linear_weight.h"
 #include "src/turbomind/utils/cuda_utils.h"
-
-#include "src/turbomind/kernels/gemm/arch/operand_simt.h"
-#include "src/turbomind/kernels/gemm/arch/operand_sm70_s884.h"
-#include "src/turbomind/kernels/gemm/arch/operand_sm80_s16816.h"
+#include "src/turbomind/utils/memory_utils.h"
 
 namespace turbomind::gemm {
-
-template<class Arch, Order order_, MMA_Tag mma_tag, Op_Tag op_tag, int pack_num, class Stype, class Dtype>
-struct LayoutConverterImpl: public LayoutConverter {
-
-    LayoutConverterImpl(): LayoutConverter{}
-    {
-        this->order = order_;
-        this->pack  = mma_tag | op_tag | pack_num;
-    }
-
-    int Convert(const void*         S,
-                const MatrixLayout& Sdesc_,  // (m,k) / (n,k)
-                void*               D,
-                MatrixLayout&       Ddesc,  // (m,k) / (n,k)
-                cudaStream_t        stream) const override
-    {
-        // TM_CHECK_EQ(Sdesc.pack, 0U) << "Source must be non-packed format";
-
-        const bool trans = op_tag == OPERAND_B || op_tag == OPERAND_V;
-        // (k, n) -> (n, k)
-        MatrixLayout Sdesc = trans ? transpose(Sdesc_) : Sdesc_;
-        // MatrixLayout Ddesc = trans ? transpose(Ddesc_) : Ddesc_;
-
-        TM_CHECK_NOTNULL(S);
-        TM_CHECK_NOTNULL(D);
-
-        using Operand = typename GetOperand<mma_tag, op_tag, Stype, order_, false>::Operand;
-
-        Convert_v2_Impl<Config<Operand, Dtype, pack_num>>(S, Sdesc, D, Ddesc, stream);
-
-        constexpr Pack pack = mma_tag | op_tag | pack_num;
-
-        // Update leading dimension
-        Ddesc.ld = mk2cs<order_>(Packing_v2<pack, order_>::apply({Sdesc.rows, Sdesc.cols})).x;
-
-        return 0;
-    }
-};
-
-template<class Arch, Order order, uint32_t pack, class Stype, class Dtype>
-static LayoutConverter* GetImpl()
-{
-    constexpr auto mma      = get_mma_tag(pack);
-    constexpr auto operand  = get_operand_tag(pack);
-    constexpr auto pack_num = get_pack_num(pack);
-
-    static LayoutConverterImpl<Arch, order, mma, operand, pack_num, Stype, Dtype> impl{};
-
-    return &impl;
-}
-
-template<class Stype, class Dtype>
-struct Cvt {
-    template<class Arch, Order order, Pack pack>
-    LayoutConverter* operator()(Arch, constant<order>, constant<pack>) const
-    {
-        return GetImpl<Arch, order, pack, Stype, Dtype>();
-    }
-};
-
-constexpr constant<(Pack)HMMA_16816> s16816h{};
-constexpr constant<(Pack)HMMA_884>   s884h{};
-
-template<auto a, auto b>
-constexpr auto operator|(constant<a>, constant<b>)
-{
-    return constant<a | b>{};
-}
 
 int WeightPackEnv()
 {
@@ -101,97 +31,151 @@ int WeightPackEnv()
     return v;
 }
 
-std::array<const LayoutConverter*, 2> GetConverters(DataType data_type,
-                                                    DataType weight_type,  //
-                                                    DataType input_type,
-                                                    bool     grouped,
-                                                    int      sm)
+void PackWeight(LinearWeight& linear, const LayoutConverter& convert, cudaStream_t stream)
 {
-    constexpr constant<kRowMajor> kRow{};
-    constexpr constant<kColMajor> kCol{};
-
-    constexpr constant<OPERAND_A> A{};
-    constexpr constant<OPERAND_B> B{};
-    constexpr constant<OPERAND_U> U{};
-    constexpr constant<OPERAND_V> V{};
-
-    constexpr constant<1> _1{};
-    constexpr constant<2> _2{};
-
-    constexpr Arch<80> sm8_{};
-    constexpr Sm75     sm75{};
-    constexpr Sm70     sm70{};
-
-    const int pack_env = WeightPackEnv();
-    if (pack_env == 0) {
-        return {};
+    const DataType    source_weight_type = linear.weight_format.dtype;
+    const int         bits               = byte_size(source_weight_type, 8);
+    Tensor_<uint16_t> tmp{{linear.input_dim, linear.output_dim}, kDEVICE};
+    if (bits == 4) {
+        extend_to_u16(tmp.data(), (const uint4_t*)linear.weight.raw_data(), tmp.size(), stream);
+    }
+    else if (bits == 8) {
+        extend_to_u16(tmp.data(), (const uint8_t*)linear.weight.raw_data(), tmp.size(), stream);
+    }
+    else {
+        TM_CHECK_EQ(bits, 16);
+        TM_CUDA_CHECK(cudaMemcpyAsync(
+            tmp.raw_data(), linear.weight.raw_data(), linear.weight.byte_size(), cudaMemcpyDefault, stream));
     }
 
-    if (weight_type == kHalf || weight_type == kBfloat16) {
-        constexpr Cvt<uint16_t, uint16_t> W;
-        if (grouped) {
-            if (pack_env != 1) {
-                // SM10.x: CublasGroupedKernel expects standard (K,N)
-                if (sm >= 100 && sm < 120)
-                    return {};
-                // SM90: plain B for native GMMA (LinearWeight prepare stores physical (N,K))
-                if (sm >= 90 && sm < 100)
-                    return {};
-            }
-            // clang-format off
-            if (sm >= 80) return {W(sm8_, kRow, s16816h | B | _1), {}};
-            if (sm == 75) return {W(sm75, kRow, s16816h | B | _1), {}};
-            if (sm >= 70) return {W(sm70, kRow,   s884h | B | _1), {}};
-            // clang-format on
-        }
-        else {
-            return {};  //  trivial case: no quantization
-        }
+    const Order order_w = convert.order;
+    if (order_w == kRowMajor) {
+        Tensor_<uint16_t> trans{{linear.output_dim, linear.input_dim}, kDEVICE};
+        invokeTransposeAxis01(trans.data(), tmp.data(), linear.input_dim, linear.output_dim, 1, stream);
+        tmp = std::move(trans);
+    }
+    MatrixLayout w_desc{linear.data_type,
+                        order_w,
+                        linear.output_dim,
+                        linear.input_dim,
+                        order_w == kRowMajor ? linear.input_dim : linear.output_dim};
+    const bool   is_weight_a = get_operand_tag(convert.pack) == OPERAND_A;
+    if (!is_weight_a) {
+        std::swap(w_desc.rows, w_desc.cols);
+        w_desc.order = ~w_desc.order;
+    }
+    MatrixLayout kd = w_desc;
+    kd.type         = source_weight_type;
+    kd.pack         = convert.pack;
+
+    TM_CUDA_CHECK(cudaMemsetAsync(linear.weight.raw_data(), 0, linear.weight.byte_size(), stream));
+    convert.Convert(tmp.data(), w_desc, linear.weight.raw_data(), kd, stream);
+    kd.type = source_weight_type;
+    if (is_weight_a) {
+        kd = transpose(kd);
+    }
+    linear.k_desc = kd;
+}
+
+void PackWeight(LinearWeight& linear,
+                Pack          pack,
+                void (*convert)(uint32_t*, const uint16_t*, int, int, cudaStream_t),
+                cudaStream_t stream)
+{
+    const DataType source_weight_type = linear.weight_format.dtype;
+    const int      bits               = byte_size(source_weight_type, 8);
+    TM_CHECK(bits == 4 || bits == 8);
+
+    Tensor_<uint16_t> tmp{{linear.input_dim, linear.output_dim}, kDEVICE};
+    if (bits == 4) {
+        extend_to_u16(tmp.data(), (const uint4_t*)linear.weight.raw_data(), tmp.size(), stream);
+    }
+    else {
+        extend_to_u16(tmp.data(), (const uint8_t*)linear.weight.raw_data(), tmp.size(), stream);
     }
 
-    // For performance reasons, u4 use different layouts for grouped/non-grouped GEMM
-    if (weight_type == kUint4) {
-        constexpr Cvt<uint16_t, uint4_t>  W;  // e4m3     weight
-        constexpr Cvt<uint32_t, uint32_t> S;  // f16/bf16 scales&zeros
-        if (grouped) {
-            // clang-format off
-            if (sm >= 80) return {W(sm8_, kRow, s16816h | B | _2), S(sm8_, kCol, s16816h | V | _1)};
-            if (sm == 75) return {W(sm75, kRow, s16816h | B | _2), S(sm75, kCol, s16816h | V | _1)};
-            if (sm >= 70) return {W(sm70, kRow,   s884h | B | _1), S(sm70, kCol,   s884h | V | _1)};
-            // clang-format on
-        }
-        else {
-            // clang-format off
-            if (sm >= 80) return {W(sm8_, kCol, s16816h | B | _2), S(sm8_, kCol, s16816h | V | _1)};
-            if (sm == 75) return {W(sm75, kCol, s16816h | B | _2), S(sm75, kCol, s16816h | V | _1)};
-            if (sm >= 70) return {W(sm70, kRow,   s884h | B | _1), S(sm70, kCol,   s884h | V | _1)};
-            // clang-format on
-        }
+    Tensor_<uint16_t> trans{{linear.output_dim, linear.input_dim}, kDEVICE};
+    invokeTransposeAxis01(trans.data(), tmp.data(), linear.input_dim, linear.output_dim, 1, stream);
+    TM_CUDA_CHECK(cudaMemsetAsync(linear.weight.raw_data(), 0, linear.weight.byte_size(), stream));
+    convert(
+        static_cast<uint32_t*>(linear.weight.raw_data()), trans.data(), linear.output_dim, linear.input_dim, stream);
+
+    linear.k_desc =
+        MatrixLayout{source_weight_type, kColMajor, linear.input_dim, linear.output_dim, linear.input_dim, pack};
+}
+
+void PackQParams(LinearWeight& linear, const LayoutConverter& convert, QuantDesc quant, cudaStream_t stream)
+{
+    TM_CHECK(linear.scales);
+    // The blockwise FP8 bridge pads each K-group row to a whole number of N128
+    // blocks, so the source row may be wider than output_dim; only the leading
+    // output_dim columns are read.
+    const int group_count   = (linear.input_dim + quant.group_size - 1) / quant.group_size;
+    const int scales_stride = (int)linear.scales.shape(1);
+    TM_CHECK_GE(linear.scales.shape(0), group_count);
+    TM_CHECK_GE(scales_stride, linear.output_dim);
+    const DataType source_weight_type = linear.weight_format.dtype;
+    const bool     is_a               = get_operand_tag(convert.pack) == OPERAND_U;
+    Tensor         tmp_q;
+    DataType       scale_type{};
+
+    if (linear.zeros) {
+        TM_CHECK_EQ(linear.scales.dtype(), kHalf);
+        TM_CHECK_EQ(linear.zeros.dtype(), kHalf);
+        tmp_q = Tensor{{linear.scales.size(), 2}, kHalf, kDEVICE};
+        fuse_scales_and_zeros(
+            tmp_q.data<half>(), linear.scales.data<half>(), linear.zeros.data<half>(), linear.scales.size(), stream);
+        scale_type    = kUint32;
+        linear.zeros  = {};
+        linear.scales = empty_like(tmp_q);
+    }
+    else {
+        tmp_q = empty_like(linear.scales);
+        TM_CUDA_CHECK(cudaMemcpyAsync(
+            tmp_q.raw_data(), linear.scales.raw_data(), linear.scales.byte_size(), cudaMemcpyDefault, stream));
+        scale_type = source_weight_type == kFloat8_e4m3 ? kUint16 : kUint8;
     }
 
-    if (weight_type == kFloat4_e2m1) {
-        constexpr Cvt<uint16_t, uint4_t> W;  // e2m1  weight
-        constexpr Cvt<uint8_t, uint8_t>  S;  // ue8m0 scales
-        // clang-format off
-        if (sm >= 80) return {W(sm8_, kCol, s16816h | A | _1), S(sm8_, kCol, s16816h | U | _1)};
-        if (sm == 75) return {W(sm75, kCol, s16816h | A | _1), S(sm75, kCol, s16816h | U | _1)};
-        if (sm >= 70) return {W(sm70, kRow,   s884h | B | _1), S(sm70, kCol,   s884h | V | _1)};
-        // clang-format on
+    if (linear.data_type == kHalf && source_weight_type == kFloat4_e2m1) {
+        AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), stream);
     }
 
-    if (weight_type == kFloat8_e4m3) {
-        constexpr Cvt<uint16_t, uint8_t>  W;  // e4m3     weight
-        constexpr Cvt<uint16_t, uint16_t> S;  // f16/bf16 scales
-        // clang-format off
-        if (sm >= 80) return {W(sm8_, kCol, s16816h | A | _1), S(sm8_, kCol, s16816h | U | _1)};
-        if (sm == 75) return {W(sm75, kCol, s16816h | A | _1), S(sm75, kCol, s16816h | U | _1)};
-        if (sm >= 70) return {W(sm70, kRow,   s884h | B | _1), S(sm70, kCol,   s884h | V | _1)};
-        // clang-format on
+    MatrixLayout s_desc{scale_type, convert.order, linear.output_dim, group_count, scales_stride};
+    if (!is_a) {
+        std::swap(s_desc.rows, s_desc.cols);
+        s_desc.order = ~s_desc.order;
     }
+    MatrixLayout qd = s_desc;
+    qd.pack         = convert.pack;
+    convert.Convert(tmp_q.raw_data(), s_desc, linear.scales.raw_data(), qd, stream);
+    linear.q_desc = is_a ? transpose(qd) : qd;
+}
 
-    TM_LOG_FATAL("Invalid combination: {} {} {} {} {}", sm, data_type, weight_type, input_type, grouped);
-
-    return {};
+void PackQParams(LinearWeight& linear,
+                 QuantDesc     quant,
+                 Pack          pack,
+                 void (*convert)(uint8_t*, const uint8_t*, int, int, int, cudaStream_t),
+                 cudaStream_t stream)
+{
+    TM_CHECK(linear.scales);
+    TM_CHECK_EQ(byte_size(linear.scales.dtype()), 1);
+    Tensor tmp_q = empty_like(linear.scales);
+    TM_CUDA_CHECK(cudaMemcpyAsync(
+        tmp_q.raw_data(), linear.scales.raw_data(), linear.scales.byte_size(), cudaMemcpyDefault, stream));
+    Tensor packed_q{{linear.scales.size()}, linear.scales.dtype(), kDEVICE};
+    convert(static_cast<uint8_t*>(packed_q.raw_data()),
+            static_cast<const uint8_t*>(tmp_q.raw_data()),
+            linear.output_dim,
+            (linear.input_dim + quant.group_size - 1) / quant.group_size,
+            (int)linear.scales.shape(1),
+            stream);
+    linear.scales = std::move(packed_q);
+    linear.q_desc = transpose(MatrixLayout{kUint8,
+                                           kColMajor,
+                                           linear.output_dim,
+                                           (linear.input_dim + quant.group_size - 1) / quant.group_size,
+                                           linear.output_dim,
+                                           pack});
 }
 
 namespace {
@@ -218,9 +202,9 @@ void* MakeStridedPtrs(const std::vector<std::pair<void*, int>>& ptrs, cudaStream
 {
     constexpr int N = 64;
     Param<N>      param{};
-    static_assert(sizeof(param) <= 4096);  // max parameter size for cuda11
+    static_assert(sizeof(param) <= 4096);
     StridedPtr* ptr{};
-    cudaMallocAsync(&ptr, sizeof(StridedPtr) * ptrs.size(), stream);
+    TM_CUDA_CHECK(cudaMallocAsync(&ptr, sizeof(StridedPtr) * ptrs.size(), stream));
     param.ptr = ptr;
     for (int i = 0; i < (int)ptrs.size(); i += N) {
         const int n = std::min<int>(ptrs.size() - i, N);

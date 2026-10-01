@@ -157,6 +157,7 @@ class ARSamplingStrategy(SamplingStrategy):
         bad_words, bad_mask = __get_bad_words(bad_words)
         stop_words, stop_mask = __get_bad_words(stop_words)
 
+        has_greedy = 1 in top_k
         max_top_k = max(top_k)
         if min(top_k) <= 0:
             max_top_k = 0
@@ -209,6 +210,7 @@ class ARSamplingStrategy(SamplingStrategy):
             random_offsets=random_offsets,
             response_formats=tuple(response_formats),
             max_top_k=max_top_k,
+            has_greedy=has_greedy,
             min_top_p=min_top_p,
             logits_processors=logits_processors,
             max_num_logprobs=max_num_logprobs,

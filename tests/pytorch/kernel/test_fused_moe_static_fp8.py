@@ -4,11 +4,11 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-import lmdeploy.pytorch.kernels.cuda.w8a8_fused_moe as w8a8_module
-from lmdeploy.pytorch.kernels.cuda.fused_moe import (
+import lmdeploy.pytorch.kernels.cuda.moe.w8a8 as w8a8_module
+from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import (
     moe_reduce,
 )
-from lmdeploy.pytorch.kernels.cuda.w8a8_fused_moe import (
+from lmdeploy.pytorch.kernels.cuda.moe.w8a8 import (
     _per_tensor_quant_fp8_e4m3fn_inductor,
     _scalar_static_fp8_quant,
     fused_moe_static_fp8,

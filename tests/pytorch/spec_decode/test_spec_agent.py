@@ -1,14 +1,124 @@
 import asyncio
+import inspect
+from contextlib import nullcontext
+from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
+import pytest
 import torch
 
+from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
 from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
-from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent, _expand_sampling_inputs
+from lmdeploy.pytorch.spec_decode.proposers.base import (
+    ProposalContext,
+    ProposalMethod,
+    ProposalWarmupCase,
+    ProposalWarmupPlan,
+)
+from lmdeploy.pytorch.spec_decode.proposers.dflash import DFlash
+from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
 from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
+def test_rejection_sampling_delegates_complete_logits(monkeypatch):
+    """The agent delegates routing and bonus sampling to RejectionSampler."""
+    batch_size = 2
+    num_spec_tokens = 2
+    num_positions = num_spec_tokens + 1
+    vocab_size = 16
+    expected_target_ids = torch.tensor([
+        [3, 4, 5],
+        [6, 7, 8],
+    ])
+    target_logits = torch.full(
+        (batch_size * num_positions, vocab_size),
+        -100.0,
+    )
+    target_logits.scatter_(
+        1,
+        expected_target_ids.flatten()[:, None],
+        100.0,
+    )
+    draft_token_ids = expected_target_ids[:, :-1].clone()
+
+    class _FakeLogitsProcessor:
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __call__(self, logits):
+            return logits, None
+
+        def sampling(self, logits):
+            raise AssertionError('greedy fast path must not sample bonus separately')
+
+    class _GuidedHelper:
+
+        def cleanup_sessions(self, sessions):
+            pass
+
+        def get_processors(self, session_ctx, response_formats):
+            return {}
+
+        async def accept_rejection_sampled_tokens(self, *args, **kwargs):
+            pass
+
+    class _RecordingRejectionSampler:
+
+        def __init__(self):
+            self.target_logits = None
+
+        def __call__(self, actual_target_logits, actual_draft_token_ids,
+                     actual_sampling_inputs):
+            self.target_logits = actual_target_logits
+            assert torch.equal(actual_draft_token_ids, draft_token_ids)
+            assert actual_sampling_inputs.batch_size == batch_size * num_positions
+            target_token_ids = actual_target_logits.argmax(dim=-1)
+            return (
+                target_token_ids,
+                target_token_ids.new_zeros(batch_size),
+                target_token_ids[:, -1],
+            )
+
+    monkeypatch.setattr(
+        'lmdeploy.pytorch.spec_decode.spec_agent.FusedLogitsProcessor',
+        _FakeLogitsProcessor,
+    )
+    rejection_sampler = _RecordingRejectionSampler()
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = num_spec_tokens
+    agent.misc_config = SimpleNamespace(logprobs_mode=None)
+    agent.guided_helper = _GuidedHelper()
+    agent.rejection_sampler = rejection_sampler
+    model_inputs = ModelInputs(
+        input_ids=torch.zeros(1, batch_size * num_positions, dtype=torch.long),
+        seq_length=torch.full((batch_size, ), num_positions, dtype=torch.long),
+        history_lengths=torch.zeros(batch_size, dtype=torch.long),
+        block_offsets=torch.zeros(batch_size, 1, dtype=torch.long),
+        num_ignored_history=torch.zeros(batch_size, dtype=torch.long),
+        is_decoding=True,
+        max_q_seqlen=num_positions,
+        max_kv_seqlen=num_positions,
+        sum_kv_seqlen=batch_size * num_positions,
+    )
+    extra_inputs = ARSpecExtraInputs(
+        target_logits=target_logits,
+        output_draft_token_ids=draft_token_ids,
+    )
+    sampling_inputs = SamplingInputs(max_top_k=1, batch_size=batch_size)
+
+    output = asyncio.run(
+        agent._rejection_sampling(model_inputs, extra_inputs, sampling_inputs))
+
+    assert torch.equal(
+        rejection_sampler.target_logits,
+        target_logits.view(batch_size, num_positions, vocab_size),
+    )
+    assert torch.equal(output.output_token_ids, expected_target_ids)
+    assert torch.equal(output.next_token_ids, expected_target_ids[:, -1])
 
 
 def _make_non_last_chunk_inputs(dp_meta=None):
@@ -61,6 +171,8 @@ class _DummyDraftModel:
 
 
 class _DummyProposer:
+
+    proposal_method = ProposalMethod.AUTOREGRESSIVE
 
     def __init__(self):
         self.get_outputs_calls = 0
@@ -147,6 +259,11 @@ def test_guided_serial_bitmask_updates_inference_tensor():
     assert manager.seen_inference_mode == [True, True, True]
     assert manager.accepted == [10, 20, 11, 21]
 
+class _NoForkGuidedHelper:
+
+    def get_processors(self, session_ctx, response_formats):
+        return {0: object()}
+
 
 def test_prepare_inputs_from_main_dp_non_last_first_chunk_shifts_last_token_indices():
     """DP non-last first chunks run draft forwards, so indices must match
@@ -194,6 +311,92 @@ def test_prepare_inputs_from_main_dp_non_last_first_chunk_shifts_last_token_indi
     torch.testing.assert_close(agent._prev_chunk_last['hidden_states'], target_hidden_states[:, -1:])
     assert draft_inputs.dp_meta is model_inputs.dp_meta
     assert agent.proposer.model.update_inputs_calls == 1
+
+
+def test_shift_packed_prefill_inputs_without_host_sync(monkeypatch):
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    input_ids = torch.tensor([[10, 11, 12, 20, 30, 31]])
+    seq_length = torch.tensor([3, 1, 2])
+    next_token_ids = torch.tensor([13, 21, 32])
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            torch.Tensor,
+            'tolist',
+            lambda self: pytest.fail('unexpected Tensor.tolist'),
+        )
+        shifted = SpecModelAgent._shift_packed_prefill_inputs(
+            input_ids,
+            seq_length,
+            next_token_ids,
+        )
+
+    torch.testing.assert_close(
+        shifted,
+        torch.tensor([[11, 12, 13, 21, 31, 32]]),
+    )
+
+
+def test_shift_packed_prefill_embeddings_with_replacement_indices():
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    input_embeds = torch.tensor([[[10., 100.], [11., 110.], [12., 120.],
+                                  [20., 200.], [21., 210.]]])
+    seq_length = torch.tensor([3, 2])
+    next_token_embeds = torch.tensor([[13., 130.], [22., 220.]])
+    replacement_indices = torch.tensor([1, 3])
+
+    shifted = SpecModelAgent._shift_packed_prefill_inputs(
+        input_embeds,
+        seq_length,
+        next_token_embeds,
+        replacement_indices=replacement_indices,
+    )
+
+    torch.testing.assert_close(
+        shifted,
+        torch.tensor([[[11., 110.], [13., 130.], [12., 120.],
+                       [22., 220.], [21., 210.]]]),
+    )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+def test_shift_packed_prefill_inputs_cuda_graph_replays():
+    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
+
+    input_ids = torch.tensor(
+        [[10, 11, 12, 20, 21]],
+        device='cuda',
+    )
+    seq_length = torch.tensor([3, 2], device='cuda')
+    next_token_ids = torch.tensor([13, 22], device='cuda')
+    replacement_indices = torch.tensor([1, 3], device='cuda')
+    SpecModelAgent._shift_packed_prefill_inputs(
+        input_ids,
+        seq_length,
+        next_token_ids,
+        replacement_indices=replacement_indices,
+    )
+    torch.cuda.synchronize()
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        shifted = SpecModelAgent._shift_packed_prefill_inputs(
+            input_ids,
+            seq_length,
+            next_token_ids,
+            replacement_indices=replacement_indices,
+        )
+
+    input_ids.copy_(torch.tensor([[30, 31, 32, 40, 41]], device='cuda'))
+    next_token_ids.copy_(torch.tensor([33, 42], device='cuda'))
+    graph.replay()
+    torch.cuda.synchronize()
+
+    torch.testing.assert_close(
+        shifted,
+        torch.tensor([[31, 33, 32, 42, 41]], device='cuda'),
+    )
 
 
 def test_prepare_inputs_from_main_last_chunk_keeps_long_context_kv_metadata():
@@ -343,7 +546,7 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
 
     agent._forward_impl = _forward_impl
 
-    output = asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+    output = asyncio.run(agent._async_autoregressive_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
     expected = torch.zeros((2, 3), dtype=torch.long)
     torch.testing.assert_close(output.output_draft_token_ids, expected)
@@ -378,7 +581,7 @@ def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
 
     agent._forward_impl = _forward_impl
 
-    output = asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+    output = asyncio.run(agent._async_autoregressive_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
     expected = torch.tensor([[0, 1, 2], [0, 1, 2]], dtype=torch.long)
     torch.testing.assert_close(output.output_draft_token_ids, expected)
@@ -418,7 +621,7 @@ def test_async_model_forward_preserves_dp_global_decoding_in_draft_loop(monkeypa
 
     agent._forward_impl = _forward_impl
 
-    asyncio.run(agent._async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+    asyncio.run(agent._async_autoregressive_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
     assert agent.proposer.model.update_inputs_dp_is_decoding == [True, True]
 
@@ -549,62 +752,204 @@ def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
     ]
 
 
-def test_slice_sampling_inputs_decode():
-    """Test _slice_sampling_inputs with decoding (num_tokens_per_batch > 1)."""
-    from lmdeploy.pytorch.engine.logits_process import SamplingInputs
-    from lmdeploy.pytorch.spec_decode.spec_agent import _slice_sampling_inputs
+def test_dflash_diffusion_warmup_materializes_context_and_captures_only_block_queries(monkeypatch):
+    """DFlash warmup must not capture its dead prefill or q_len=1 graphs."""
 
-    batch_size = 2
-    num_tokens_per_batch = 3
+    class DummyInputsStrategy:
 
-    temperature = torch.tensor([0.5, 1.0], device=device)
-    top_k = torch.tensor([1, 10], device=device)
-    random_offsets = torch.tensor([100, 200], device=device)
+        def __init__(self):
+            self.calls = []
 
-    sampling_inputs = SamplingInputs(
-        max_top_k=10,
-        top_k=top_k,
-        temperature=temperature,
-        random_offsets=random_offsets,
-        max_num_logprobs=-1,
-        batch_size=batch_size,
+        def make_dummy(self,
+                       batch_size,
+                       is_decoding,
+                       device='cpu',
+                       vocab_size=1,
+                       max_q_seqlen=1,
+                       target_hidden_size=None,
+                       target_dtype=torch.float32,
+                       meta=None):
+            self.calls.append((batch_size, is_decoding, max_q_seqlen, target_hidden_size))
+            num_tokens = batch_size * max_q_seqlen
+            return ModelInputs(
+                input_ids=torch.zeros((1, num_tokens), dtype=torch.long),
+                seq_length=torch.full((batch_size, ), max_q_seqlen, dtype=torch.long),
+                history_lengths=torch.zeros(batch_size, dtype=torch.long),
+                block_offsets=torch.zeros((batch_size, 1), dtype=torch.long),
+                is_decoding=is_decoding,
+                num_ignored_history=torch.zeros(batch_size, dtype=torch.long),
+                max_q_seqlen=max_q_seqlen,
+                max_kv_seqlen=max_q_seqlen,
+                sum_kv_seqlen=num_tokens,
+                target_hidden_states=torch.zeros((1, num_tokens, target_hidden_size), dtype=target_dtype),
+                target_position_ids=torch.zeros((1, num_tokens), dtype=torch.long),
+            )
+
+    class DummyGraphModel:
+
+        def get_capture_batch_sizes(self):
+            return [2, 4]
+
+    proposer = _make_dflash_proposer()
+    proposer.model = DummyGraphModel()
+    materialized = []
+    monkeypatch.setattr(proposer, '_materialize_context',
+                        lambda inputs, hidden, cache: materialized.append(
+                            (inputs.is_decoding, inputs.seq_length.numel(), inputs.max_q_seqlen,
+                             tuple(hidden.shape), cache)))
+
+    inputs_strategy = DummyInputsStrategy()
+    forward_graph_keys = []
+    sync_calls = []
+    monkeypatch.setattr(torch.cuda, 'synchronize', lambda: sync_calls.append(True))
+
+    agent = object.__new__(SpecModelAgent)
+    agent.draft_dist_ctx = SimpleNamespace(dist_config=SimpleNamespace(dp=1))
+    agent.draft_context = lambda: nullcontext()
+    agent.inputs_strategy = inputs_strategy
+    agent.proposer = proposer
+    agent.cache_engine = SimpleNamespace(
+        cache_config=SimpleNamespace(block_size=8, max_prefill_token_num=10))
+    agent.model_config = SimpleNamespace(vocab_size=11, dtype=torch.float32, hidden_size=4)
+    agent.num_spec_tokens = 3
+    agent.make_dummy_meta = None
+    dp_markers = []
+
+    def build_dp_meta(inputs):
+        marker = object()
+        inputs.dp_meta = marker
+        dp_markers.append(marker)
+
+    agent._build_warmup_dp_meta = build_dp_meta
+    agent._forward_impl = lambda inputs: forward_graph_keys.append(
+        (inputs.seq_length.numel(), inputs.max_q_seqlen, inputs.dp_meta)) or {}
+
+    agent.warmup(max_batches=4, target_model_config=SimpleNamespace(hidden_size=4))
+
+    assert inputs_strategy.calls == [(1, False, 8, 8), (4, True, 4, 8), (2, True, 4, 8)]
+    assert [(is_decoding, batches, q_len, shape) for is_decoding, batches, q_len, shape, _ in materialized] == [
+        (False, 1, 8, (8, 8)),
+        (False, 4, 4, (16, 8)),
+        (False, 2, 4, (8, 8)),
+    ]
+    assert all(cache is agent.cache_engine for *_, cache in materialized)
+    assert forward_graph_keys == [(4, 4, dp_markers[1]), (2, 4, dp_markers[2])]
+    assert len(sync_calls) == 3
+    assert 'synchronize' not in inspect.getsource(DFlash.prepare_warmup_forward)
+
+
+def test_proposal_warmup_plan_is_immutable_and_shape_only():
+    case = ProposalWarmupCase(batch_size=4, is_decoding=True, max_q_seqlen=16, target_hidden_size=1024)
+    plan = ProposalWarmupPlan(cases=(case, ))
+
+    assert tuple(ProposalWarmupCase.__dataclass_fields__) == (
+        'batch_size', 'is_decoding', 'max_q_seqlen', 'target_hidden_size')
+    assert tuple(ProposalWarmupPlan.__dataclass_fields__) == ('cases', )
+    with pytest.raises(FrozenInstanceError):
+        case.batch_size = 2
+    with pytest.raises(FrozenInstanceError):
+        plan.cases = ()
+
+
+def _make_dflash_proposer():
+    return DFlash(
+        SimpleNamespace(
+            mask_token_id=99,
+            target_layer_ids=(1, 5),
+            num_speculative_tokens=3,
+            model_config=None,
+        ),
+        device='cpu',
     )
 
-    # First expand
-    expanded = _expand_sampling_inputs(sampling_inputs, num_tokens_per_batch)
-    assert expanded.batch_size == batch_size * num_tokens_per_batch
-    # random_offsets should be offset by arange per batch element
-    # batch 0: [100, 101, 102], batch 1: [200, 201, 202]
-    expected_offsets = torch.tensor([100, 101, 102, 200, 201, 202], device=device)
-    torch.testing.assert_close(expanded.random_offsets, expected_offsets)
 
-    # Then slice back (is_last=True, takes last token per batch)
-    sliced = _slice_sampling_inputs(expanded, num_tokens_per_batch)
-    assert sliced.batch_size == batch_size
-    torch.testing.assert_close(sliced.temperature, temperature)
-    torch.testing.assert_close(sliced.top_k, top_k)
-    assert sliced.max_top_k == 10
-    # last token per batch: offsets [102, 202]
-    torch.testing.assert_close(sliced.random_offsets, torch.tensor([102, 202], device=device))
+def test_dflash_proposer_hook_rejects_guided_before_fork():
+    agent = object.__new__(SpecModelAgent)
+    agent.guided_helper = _NoForkGuidedHelper()
+    agent.proposer = _make_dflash_proposer()
+    agent.proposer.guided_helper = agent.guided_helper
+    agent.cache_engine = None
+    agent.rank = 0
+    agent.draft_context = lambda: nullcontext()
 
-    # Slice with is_last=False (takes tokens except the last one per batch)
-    sliced_draft = _slice_sampling_inputs(expanded, num_tokens_per_batch, is_last=False)
-    assert sliced_draft.batch_size == batch_size * (num_tokens_per_batch - 1)
-    # drops last per batch: [100, 101, 200, 201]
-    torch.testing.assert_close(sliced_draft.random_offsets, torch.tensor([100, 101, 200, 201], device=device))
+    model_inputs = ModelInputs(
+        input_ids=torch.tensor([[1]]),
+        seq_length=torch.ones(1, dtype=torch.long),
+        history_lengths=torch.zeros(1, dtype=torch.long),
+        block_offsets=torch.ones((1, 1), dtype=torch.int32),
+        is_decoding=False,
+        num_ignored_history=torch.zeros(1, dtype=torch.long),
+        max_q_seqlen=1,
+        max_kv_seqlen=1,
+        sum_kv_seqlen=1,
+    )
+    extra_inputs = ARSpecExtraInputs(next_token_ids=torch.tensor([2]))
+    sampling_inputs = SimpleNamespace(session_ctx=object(), response_formats=object())
 
-
-def test_slice_sampling_inputs_prefill():
-    """Test _slice_sampling_inputs with prefill (num_tokens_per_batch=1 returns
-    same object)."""
-    from lmdeploy.pytorch.engine.logits_process import SamplingInputs
-    from lmdeploy.pytorch.spec_decode.spec_agent import _slice_sampling_inputs
-
-    sampling_inputs = SamplingInputs(max_top_k=1, batch_size=2)
-    result = _slice_sampling_inputs(sampling_inputs, 1)
-    assert result is sampling_inputs
+    with pytest.raises(NotImplementedError, match='DFlash guided decoding'):
+        asyncio.run(agent.async_model_forward(model_inputs, extra_inputs, sampling_inputs))
 
 
+def test_dflash_proposer_hook_materializes_non_last_chunk_without_drafting(monkeypatch):
+    inputs, extra_inputs = _make_non_last_chunk_inputs()
+    extra_inputs.target_inputs_embeds = torch.randn(1, 2, 4)
+
+    agent = object.__new__(SpecModelAgent)
+    agent.num_spec_tokens = 3
+    agent.rank = 0
+    agent.guided_helper = GuidedSpecHelper()
+    agent.proposer = _make_dflash_proposer()
+    agent.proposer.guided_helper = agent.guided_helper
+    agent.cache_engine = object()
+    agent.draft_context = lambda: nullcontext()
+    captured = {
+        'materialize_context_calls': 0,
+        'propose_block_calls': 0,
+    }
+
+    def materialize_context(model_inputs, extra_inputs, cache_engine):
+        captured['materialize_context_calls'] += 1
+        assert cache_engine is agent.cache_engine
+
+    async def propose_block(model_inputs, extra_inputs, cache_engine, guided_processors=None):
+        captured['propose_block_calls'] += 1
+        return model_inputs.input_ids.new_full((model_inputs.seq_length.size(0), 3), 9)
+
+    monkeypatch.setattr(agent.proposer, 'materialize_context', materialize_context)
+    monkeypatch.setattr(agent.proposer, 'propose_block', propose_block)
+
+    output = asyncio.run(agent.async_model_forward(inputs, extra_inputs, sampling_inputs=None))
+
+    torch.testing.assert_close(output.output_draft_token_ids, torch.zeros((2, 3), dtype=torch.long))
+    assert captured['materialize_context_calls'] == 1
+    assert captured['propose_block_calls'] == 0
+    assert output.next_token_ids is extra_inputs.next_token_ids
+    assert output.target_inputs_embeds is None
+
+
+def test_dflash_proposer_api_uses_explicit_context_not_spec_agent():
+    proposer = _make_dflash_proposer()
+
+    assert proposer.proposal_method == ProposalMethod.DIFFUSION
+    assert not hasattr(proposer, 'input_mode')
+    assert not hasattr(proposer, 'proposal_mode')
+    assert tuple(ProposalContext.__dataclass_fields__) == ('cache_engine', )
+
+
+def test_dflash_proposer_requires_explicit_proposal_context():
+    proposer = _make_dflash_proposer()
+
+    with pytest.raises(RuntimeError, match='requires ProposalContext'):
+        asyncio.run(proposer.propose(None, None, None))
+
+
+def test_dflash_spec_agent_reset_runtime_state_discards_chunk_carry():
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent._prev_chunk_last = {'hidden_states': object()}
+
+    agent.reset_runtime_state()
+
+    assert agent._prev_chunk_last == {}
 def _model_inputs(input_ids,
                   *,
                   is_decoding=False,

@@ -164,7 +164,10 @@ def hc_post_expand(
         *x.stride(),
         *residual.stride(),
         *post.stride(),
-        *comb.stride(),
+        # comb is [n, src, out]; the kernel indexes (out_h, src_h), so out_h
+        # strides the OUT axis (stride(2)) and src_h the SRC axis (stride(1)).
+        # *comb.stride() swaps them and applies comb transposed.
+        comb.stride(0), comb.stride(2), comb.stride(1),
         *out.stride(),
         dim,
         hc_mult,

@@ -1,12 +1,12 @@
 import os
 
 import pytest
-from utils.constant import BACKEND_LIST, DEFAULT_MAX_COMPLETION_TOKENS, TOOL_REASONING_MODEL_LIST
+from utils.config_utils import get_tool_reasoning_model_list, model_enables_return_routed_experts
+from utils.constant import BACKEND_LIST, CAPPED_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
     CONCURRENT_WEATHER_TOOL,
     DEFAULT_TOOL_CALL_CONCURRENCY,
     HttpToolCallError,
-    RoutedExpertsNotSupported,
     append_concurrent_turn_to_messages,
     build_input_ids_and_prompt_tokens,
     collect_stream_tool_call,
@@ -30,7 +30,7 @@ _CLASS_MARKS = [
     pytest.mark.tool_call,
     pytest.mark.flaky(reruns=2),
     pytest.mark.parametrize('backend', BACKEND_LIST),
-    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
+    pytest.mark.parametrize('model_case', get_tool_reasoning_model_list()),
 ]
 
 _CLASS_MARKS_MM = [
@@ -39,12 +39,26 @@ _CLASS_MARKS_MM = [
     pytest.mark.mm_tool_call,
     pytest.mark.flaky(reruns=2),
     pytest.mark.parametrize('backend', BACKEND_LIST),
-    pytest.mark.parametrize('model_case', TOOL_REASONING_MODEL_LIST),
+    pytest.mark.parametrize('model_case', get_tool_reasoning_model_list()),
 ]
 
 def _apply_marks(cls):
     """Apply the shared set of marks to *cls* and return it."""
     for m in _CLASS_MARKS:
+        cls = m(cls)
+    return cls
+
+
+_EXPERTS_CLASS_MARKS = [
+    pytest.mark.experts,
+]
+
+
+def _apply_experts_marks(cls):
+    """Experts toolcall cases; turbomind omits routed_experts
+    request/validation."""
+    cls = _apply_marks(cls)
+    for m in _EXPERTS_CLASS_MARKS:
         cls = m(cls)
     return cls
 
@@ -263,7 +277,7 @@ class _ToolCallTestBase:
 
     _DEFAULT_STREAM_KWARGS = {
         'temperature': 0,
-        'max_completion_tokens': DEFAULT_MAX_COMPLETION_TOKENS,
+        'max_completion_tokens': CAPPED_MAX_COMPLETION_TOKENS,
         'logprobs': False,
     }
 
@@ -272,8 +286,10 @@ class _ToolCallTestBase:
         """Create the log directory and compute the log-file path."""
         self._log_file = setup_log_file(config, request.node.name, 'tool_calls')
         self._config = config
+        self._backend = backend
         self._model_case = model_case
-        self._client, self._api_model_name = make_logged_client(self._log_file)
+        self._client, self._api_model_name = make_logged_client(
+            self._log_file, default_enable_thinking=False)
         self._model_name = self._api_model_name
         self._tokenizer_path = resolve_tokenizer_model_path(config, model_case)
 
@@ -306,8 +322,8 @@ class _ToolCallTestBase:
         return self._require_mm_resource(filename)
 
     def _parser_validation_kwargs(self, tools=None):
-        """Kwargs for ``validate_*`` helpers using
-        ``ResponseParser.validate_complete``."""
+        """Kwargs for decoded-output replay through
+        ``ResponseParser.parse_complete``."""
         kwargs = {
             'tokenizer_path': self._tokenizer_path,
             'tool_parser_name': resolve_tool_parser_name(self._model_case),
@@ -315,6 +331,16 @@ class _ToolCallTestBase:
         if tools is not None:
             kwargs['tools'] = tools
         return kwargs
+
+    def _validate_experts(self) -> bool:
+        return model_enables_return_routed_experts(
+            self._model_case,
+            self._backend,
+            required_suites=frozenset({'toolcall'}),
+        )
+
+    def _experts_validation_kwargs(self) -> dict:
+        return {'validate_experts': self._validate_experts()}
 
     def _stream_tool_call(self, messages, tools=None, **create_kwargs):
         """Run a streaming tool-call request and return aggregated result."""
@@ -338,7 +364,8 @@ class _ToolCallTestBase:
         reference_payload=False,
         **payload_extra,
     ):
-        """Stream via HTTP with return_token_ids + return_routed_experts."""
+        """Stream via HTTP with return_token_ids; routed_experts when
+        supported."""
         if use_input_ids:
             try:
                 build_input_ids_and_prompt_tokens(messages, self._tokenizer_path, tools)
@@ -358,10 +385,9 @@ class _ToolCallTestBase:
                 use_input_ids=use_input_ids,
                 tokenizer_path=self._tokenizer_path,
                 reference_payload=reference_payload,
+                return_routed_experts=self._validate_experts(),
                 **payload_extra,
             )
-        except RoutedExpertsNotSupported as exc:
-            pytest.skip(str(exc))
         except HttpToolCallError as exc:
             pytest.fail(exc.message)
 
@@ -388,6 +414,8 @@ class _ToolCallTestBase:
             use_input_ids=use_input_ids,
             log_file=self._log_file,
             reference_payload=reference_payload,
+            return_routed_experts=self._validate_experts(),
+            validate_experts=self._validate_experts(),
         )
 
     def _run_concurrent_http_error_workers(self, num_workers=None, invalid_model_name=None):
@@ -409,6 +437,7 @@ MESSAGES_ASKING_FOR_WEATHER = [
         'system',
         'content':
         'You are a helpful assistant that can use tools. '
+        'Call the required tool immediately; do not explain first. '
         'When asked about weather, use the get_current_weather tool.',
     },
     {
@@ -423,6 +452,7 @@ MESSAGES_ASKING_FOR_SEARCH = [
         'system',
         'content':
         'You are a helpful assistant with access to tools. '
+        'Call the required tool immediately; do not explain first. '
         'Use the web_search tool when asked to look something up.',
     },
     {
@@ -434,8 +464,8 @@ MESSAGES_ASKING_FOR_SEARCH = [
 MESSAGES_ASKING_FOR_CALCULATION = [
     {
         'role': 'system',
-        'content': 'You are a helpful assistant. When asked math questions, '
-        'use the calculate tool.',
+        'content': 'You are a helpful assistant. Call the required tool immediately; '
+        'do not explain first. When asked math questions, use the calculate tool.',
     },
     {
         'role': 'user',
@@ -447,6 +477,7 @@ MESSAGES_ASKING_FOR_WEATHER_CN = [
     {
         'role': 'system',
         'content': '你是一个有用的助手，可以使用工具。'
+        '需要工具时请立刻调用，不要先解释。'
         '当被问到天气时，请使用get_current_weather工具。',
     },
     {
@@ -467,9 +498,9 @@ MESSAGES_PARALLEL_WEATHER = [
         'role':
         'system',
         'content':
-        'You are a helpful assistant. When asked about weather '
-        'in multiple cities, call the weather tool for each city '
-        'separately.',
+        'You are a helpful assistant. Call the required tools immediately; '
+        'do not explain first. When asked about weather in multiple cities, '
+        'call the weather tool for each city separately.',
     },
     {
         'role': 'user',
@@ -635,6 +666,7 @@ MESSAGES_CONCURRENT_WEATHER = [
     {
         'role': 'system',
         'content': 'You are a helpful assistant that can use tools. '
+        'Call the required tool immediately; do not explain first. '
         'When asked about weather, use the get_weather tool.',
     },
 ]
@@ -645,6 +677,7 @@ MESSAGES_PARALLEL_MIXED = [
         'system',
         'content':
         'You are a helpful assistant with access to multiple tools. '
+        'Call the required tools immediately; do not explain first. '
         'You can call multiple tools in parallel when needed.',
     },
     {

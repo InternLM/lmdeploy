@@ -57,7 +57,8 @@ target_link_libraries(models PUBLIC
         memory_utils
         cuda_utils
         anomaly_handler)
-target_compile_options(models PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info --threads 8>)
+target_compile_options(models PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v --generate-line-info --threads=${NVCC_THREADS}>)
 
 if(BUILD_TEST)
     add_executable(bench_conv1d_silu

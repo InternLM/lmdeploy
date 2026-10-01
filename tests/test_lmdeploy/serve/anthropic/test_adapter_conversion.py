@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from lmdeploy.serve.anthropic.adapter import to_generation_config, to_openai_messages
+from lmdeploy.serve.anthropic.adapter import (
+    to_lmdeploy_messages,
+    to_openai_messages,
+)
 from lmdeploy.serve.anthropic.protocol import MessagesRequest
 
 
@@ -12,19 +15,6 @@ def _make_request(*, messages, system=None):
             'messages': messages,
             'system': system,
         })
-
-
-def test_to_generation_config_maps_include_stop_str_in_output():
-    request = MessagesRequest.model_validate({
-        'model': 'fake-model',
-        'max_tokens': 32,
-        'messages': [{
-            'role': 'user',
-            'content': 'hello',
-        }],
-        'include_stop_str_in_output': True,
-    })
-    assert to_generation_config(request).include_stop_str_in_output is True
 
 
 def test_to_openai_messages_keeps_plain_text_messages():
@@ -62,6 +52,46 @@ def test_to_openai_messages_preserves_system_role_message_order():
             'content': 'second',
         },
     ]
+
+
+def test_to_openai_messages_merges_inline_system_messages_at_the_front():
+    request = _make_request(
+        system='Top-level.',
+        messages=[
+            {
+                'role': 'user',
+                'content': 'first',
+            },
+            {
+                'role': 'system',
+                'content': 'Inline one.',
+            },
+            {
+                'role': 'assistant',
+                'content': 'ack',
+            },
+            {
+                'role': 'system',
+                'content': 'Inline two.',
+            },
+        ])
+
+    expected = [
+        {
+            'role': 'system',
+            'content': 'Top-level.Inline one.Inline two.',
+        },
+        {
+            'role': 'user',
+            'content': 'first',
+        },
+        {
+            'role': 'assistant',
+            'content': 'ack',
+        },
+    ]
+    assert to_openai_messages(request, merge_inline_system=True) == expected
+    assert to_lmdeploy_messages(request, merge_inline_system=True) == expected
 
 
 def test_to_openai_messages_converts_system_text_blocks():

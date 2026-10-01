@@ -23,6 +23,25 @@
 
 namespace turbomind {
 
+struct QwenVitWorkspacePlan {
+    core::ssize_t hidden_required_elements{};
+    core::ssize_t merger_required_elements{};
+    bool          hidden_fits{};
+    bool          merger_fits{};
+};
+
+QwenVitWorkspacePlan PlanWorkspace(core::ssize_t available_elements,
+                                   int           raw_token_num,
+                                   int           vision_hidden_dim,
+                                   int           merged_token_num,
+                                   int           output_hidden_dim)
+{
+    const auto hidden_required = static_cast<core::ssize_t>(raw_token_num) * vision_hidden_dim;
+    const auto merger_required = static_cast<core::ssize_t>(merged_token_num) * output_hidden_dim;
+    return {
+        hidden_required, merger_required, hidden_required <= available_elements, merger_required <= available_elements};
+}
+
 struct QwenVit::Impl {
     const QwenVitWeight&        weights_;
     const core::QwenVitConfig&  config_;
@@ -31,6 +50,7 @@ struct QwenVit::Impl {
     comm::DeviceCommImpl* const d_comm_;
     const int                   tp_group_;
     const DataType              engine_data_type_;
+    const std::string           communicator_;
 
     Buffer_<int> grid_thws_buf_;     // (t, h, w)
     Buffer_<int> grid_offsets_buf_;  // (token offset, natural offset)
@@ -104,7 +124,8 @@ struct QwenVit::Impl {
         h_tp_group{ctx.comm.h_comm},
         d_comm_{ctx.comm.d_comm},
         tp_group_{ctx.comm.d_tp_group},
-        engine_data_type_{engine.data_type}
+        engine_data_type_{engine.data_type},
+        communicator_{engine.communicator}
     {
         for (int i = 0; i < phases; ++i) {
             auto& d              = data_.emplace_back();
@@ -760,6 +781,26 @@ struct QwenVit::Impl {
 
         auto& cfg = weights_.config();
 
+        Buffer     symm_buf  = args.contains("symm_buf") ? args.at("symm_buf").buffer() : Buffer{};
+        const auto workspace = PlanWorkspace(symm_buf ? symm_buf.view(cfg.data_type).size() : 0,
+                                             d.batch_size,
+                                             cfg.hidden_dim,
+                                             d.merge_unit_count,
+                                             weights_.merger_fc2->output_dim);
+        const bool can_use_regular = !d_comm_ || communicator_ == "nccl";
+        TM_CHECK(can_use_regular || (workspace.hidden_fits && workspace.merger_fits))
+            << "QwenVit communicator requires registered symmetric buffers, but the language-model buffer is too "
+               "small: communicator="
+            << communicator_ << ", available_bytes=" << symm_buf.byte_size()
+            << ", hidden_required_bytes=" << byte_size(cfg.data_type, workspace.hidden_required_elements)
+            << ", merger_required_bytes=" << byte_size(cfg.data_type, workspace.merger_required_elements)
+            << ", raw_tokens=" << d.batch_size << ", merged_tokens=" << d.merge_unit_count
+            << ", vision_hidden_dim=" << cfg.hidden_dim << ", output_hidden_dim=" << weights_.merger_fc2->output_dim
+            << ". Use the NCCL communicator.";
+
+        const bool hidden_use_symm = workspace.hidden_fits;
+        const bool merger_use_symm = workspace.merger_fits;
+
         auto residual       = PatchEmbedding(d);
         auto rotary_pos_emb = args.consume("rotary_pos_emb");
         auto stream         = core::Context::stream().handle();
@@ -792,10 +833,8 @@ struct QwenVit::Impl {
             residual = std::move(reordered);
         }
 
-        Buffer symm_buf = args.contains("symm_buf") ? args.at("symm_buf").buffer() : Buffer{};
-
         Tensor hidden_states = [&]() {
-            if (symm_buf) {
+            if (hidden_use_symm) {
                 return Tensor{symm_buf.view(cfg.data_type), {d.batch_size, cfg.hidden_dim}};
             }
             else {
@@ -831,7 +870,7 @@ struct QwenVit::Impl {
             ResidualBiasNorm(hidden_states, residual, block->mlp_fc2->bias, *next_norm, cfg.norm_type);
         }
 
-        Tensor image_embeds = Merger(hidden_states, symm_buf);
+        Tensor image_embeds = Merger(hidden_states, merger_use_symm ? symm_buf : Buffer{});
         if (cfg.use_window_attention) {
             Tensor reordered{{d.merge_unit_count, cfg.out_hidden_dim}, image_embeds.dtype(), kDEVICE};
             TM_SCOPE_CALL(
@@ -992,7 +1031,7 @@ struct QwenVit::Impl {
         TM_SCOPE_CALL(invokeAddBiasActivation(inter, weights_.merger_fc1->bias, ActivationType::kGelu, stream));
 
         Tensor output;
-        if (d_comm_) {
+        if (symm_buf) {
             output = {symm_buf.view(config_.data_type), {inter.shape(0), weights_.merger_fc2->output_dim}};
         }
         TM_SCOPE_CALL(linear_.Forward(inter, *weights_.merger_fc2, output));

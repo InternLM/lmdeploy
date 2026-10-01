@@ -7,10 +7,12 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/engine/batch.h"
+#include "src/turbomind/kernels/gemm/types.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/vision_model.h"
 #include "src/turbomind/utils/anomaly_handler.h"
+#include "src/turbomind/utils/cuda_utils.h"
 
 // #include "dbg.h"
 
@@ -45,6 +47,12 @@ struct ModelExecutor::Impl {
 
         core::ContextGuard ctx{stream, h_alloc, d_alloc};
 
+        // Default GEMM workspace for everything dispatched on this stream;
+        // bound for the whole work loop, which is the outer-most scope that
+        // drives `linear_`.
+        gemm::Workspace workspace{stream.handle()};
+        auto            ws_lifetime = linear_.With(workspace);
+
         unique_ptr<BatchData> d;
 
         while (inbound_.pop(d)) {
@@ -54,6 +62,9 @@ struct ModelExecutor::Impl {
             d->done.Record(core::Context::stream());
             outbound_.push(std::move(d));
         }
+
+        // Stream-ordered teardown: the frees run after the last batch's kernels.
+        workspace.Release(stream.handle());
     }
 
     static void RunCopies(std::vector<ResolvedCopy>& copies)

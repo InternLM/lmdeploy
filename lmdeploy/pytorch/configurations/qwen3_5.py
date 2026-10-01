@@ -85,18 +85,19 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
 
         # for spec
         if spec_method is not None:
-            assert spec_method == 'qwen3_5_mtp'
+            assert spec_method in ['qwen3_5_mtp', 'dflash']
             cfg.model_paradigm = 'ar_spec'
 
         # draft model cfg
         if is_draft_model:
-            hf_config.architectures[0] = 'Qwen3_5MTPModel'
-            # remove for correct mapping when building the patched model
-            if hasattr(hf_config, 'auto_map'):
-                del hf_config.auto_map
-
             cfg.model_paradigm = 'ar_spec'
-            cfg.num_layers = text_config.mtp_num_hidden_layers
             cfg.states_shapes = []
+
+            if spec_method == 'qwen3_5_mtp':
+                hf_config.architectures[0] = 'Qwen3_5MTPModel'
+                # remove for correct mapping when building the patched model
+                if hasattr(hf_config, 'auto_map'):
+                    del hf_config.auto_map
+                cfg.num_layers = text_config.mtp_num_hidden_layers
 
         return cfg

@@ -82,6 +82,10 @@ class DeployModelMixin:
         """Update quant config."""
         if quant_config is None:
             return
+        if quant_config.quant_method == 'compressed-tensors':
+            # CT ignore rules are evaluated against canonical checkpoint FQNs.
+            # Treating `re:` rules as literal weight names would corrupt them.
+            return quant_config
         if getattr(quant_config, 'ignored_layers', None) is None:
             return quant_config
         ignored_layers = [cls.rename_weight(name) for name in quant_config.ignored_layers]

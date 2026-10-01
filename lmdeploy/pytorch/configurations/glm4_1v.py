@@ -16,4 +16,5 @@ class Glm4vModelConfigBuilder(AutoModelConfigBuilder):
         hf_config.text_config.bos_token_id = bos_token_id
         cfg = DefaultModelConfigBuilder.build(hf_config.text_config, model_path, **kwargs)
         cfg.hf_config = hf_config
+        cfg.use_mrope = True
         return cfg

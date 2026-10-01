@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -13,6 +13,7 @@ from lmdeploy.pytorch.backends.attention import V4AttentionMetadata
 from lmdeploy.pytorch.backends.compressor import V4CompressorMetadata
 from lmdeploy.pytorch.backends.indexer import V4IndexerMetadata
 from lmdeploy.pytorch.backends.rotary_embedding import RopeType, YarnParameters
+from lmdeploy.pytorch.configurations.deepseek_v4 import get_v4_compress_ratios
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, HcPrePost, RMSNorm, SiluAndMul, rms_scale
@@ -83,7 +84,7 @@ class V4Args:
     vocab_size: int
     moe_inter_dim: int
     n_layers: int
-    n_hash_layers: int
+    mlp_layer_types: tuple[str, ...]
     n_routed_experts: int
     n_shared_experts: int
     n_activated_experts: int
@@ -120,24 +121,15 @@ class V4Args:
 
 @dataclass
 class V4Caches:
-    """Cache dictionaries extracted once from StepContext, passed down to sub-
-    modules."""
-    named_state_caches: dict   # dict-like {name: [per_layer_tensor]}
-    block_caches: dict         # dict-like {name: [per_layer_tensor]}
-
-    @staticmethod
-    def _cache_layer(caches, cache_name: str, layer_id: int):
-        if hasattr(caches, 'layer'):
-            return caches.layer(cache_name, layer_id)
-        return caches[cache_name][layer_id]
+    """State-cache view and operator-owned block-cache view for one forward."""
+    named_state_caches: Mapping[str, torch.Tensor]
+    block_caches: Mapping[str, torch.Tensor]
 
     def state_cache(self, cache_name: str, layer_id: int):
         """Return a named state cache row for a global layer id."""
-        return self._cache_layer(self.named_state_caches, cache_name, layer_id)
-
-    def block_cache(self, cache_name: str, layer_id: int):
-        """Return a named block cache row for a global layer id."""
-        return self._cache_layer(self.block_caches, cache_name, layer_id)
+        if hasattr(self.named_state_caches, 'layer'):
+            return self.named_state_caches.layer(cache_name, layer_id)
+        return self.named_state_caches[cache_name][layer_id]
 
 
 class Compressor(nn.Module):
@@ -168,7 +160,8 @@ class Compressor(nn.Module):
         self.compressor_impl = NativeV4Compressor(
             compress_ratio=compress_ratio,
             overlap=self.overlap,
-            head_dim=head_dim)
+            head_dim=head_dim,
+            is_indexer=rotate)
         self.state_cache_name = self._get_state_cache_name()
 
     def _get_state_cache_name(self):
@@ -178,24 +171,6 @@ class Compressor(nn.Module):
         if self.compress_ratio == 4:
             return 'v4_compress_state_r4'
         return 'v4_compress_state_r128'
-
-    def _get_index_kv_cache_name(self) -> str | None:
-        """Return the indexer simple-FP8 cache name, if this compressor uses
-        one."""
-        if self.rotate:
-            return 'v4_index_kv_r4'
-        return None
-
-    def _get_flashmla_fp8_cache_name(self) -> str | None:
-        """Return the FlashMLA packed FP8 cache name, if this compressor uses
-        one."""
-        if self.rotate:
-            return None
-        if self.compress_ratio == 4:
-            return 'v4_compressed_kv_r4_fp8'
-        if self.compress_ratio == 128:
-            return 'v4_compressed_kv_r128_fp8'
-        return None
 
     def forward(self,
                 x: torch.Tensor,
@@ -248,22 +223,10 @@ class Compressor(nn.Module):
         if self.rotate:
             compressed_kv = self.compressor_impl.rotate_activation(compressed_kv)
 
-        # ---- Phase G: Write to paged block cache (via backend dispatch) ----
-        block_caches = caches.block_caches
-        kv_cache_name = self._get_index_kv_cache_name()
-        fp8_cache_name = self._get_flashmla_fp8_cache_name()
-        kv_cache = caches.block_cache(kv_cache_name, self.layer_id) if kv_cache_name else None
-        fp8_cache = caches.block_cache(fp8_cache_name, self.layer_id) if fp8_cache_name else None
-        scale_cache_name = f'{kv_cache_name}_scale' if kv_cache_name else None
-        if scale_cache_name and scale_cache_name in block_caches:
-            kv_scale_cache = caches.block_cache(scale_cache_name, self.layer_id)
-        else:
-            kv_scale_cache = None
-
-        self.compressor_impl.write_compressed_kv(
-            compressed_kv, kv_cache, v4_compressor_meta,
-            fp8_cache=fp8_cache,
-            kv_scale_cache=kv_scale_cache)
+        # ---- Phase G: Resolve and write the compressor-owned block cache ----
+        block_caches = self.compressor_impl.resolve_block_caches(caches.block_caches)
+        self.compressor_impl.write_compressed_kv(compressed_kv, block_caches, v4_compressor_meta)
+        return block_caches
 
     def rotate_activation(self, x: torch.Tensor) -> torch.Tensor:
         return self.compressor_impl.rotate_activation(x)
@@ -306,8 +269,11 @@ class Indexer(nn.Module):
         )
         self.compressor = Compressor(args, layer_id, compress_ratio, self.head_dim,
                                      dtype=dtype, device=device, rotate=True)
-        self.indexer_fwd = NativeV4Indexer(index_topk=self.index_topk,
-                                           compress_ratio=self.compress_ratio)
+        self.indexer_fwd = NativeV4Indexer(
+            index_topk=self.index_topk,
+            compress_ratio=self.compress_ratio,
+            num_heads=self.n_heads,
+            head_dim=self.head_dim)
         self.apply_rotary = ApplyRotaryEmb()
 
     def forward(self,
@@ -315,8 +281,6 @@ class Indexer(nn.Module):
                 qr: torch.Tensor,
                 caches: V4Caches,
                 slot: torch.Tensor,
-                index_kv_cache: torch.Tensor,
-                index_kv_scale_cache: torch.Tensor | None,
                 rotary_pos_emb: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
                 compress_pos_emb: tuple[torch.Tensor, torch.Tensor],
                 v4_indexer_meta: V4IndexerMetadata = None,
@@ -328,10 +292,11 @@ class Indexer(nn.Module):
         self.apply_rotary.forward_single(q[..., -rd:], cos, sin, inplace=True, complex_mode=True)
         q = self.compressor.rotate_activation(q)
 
-        self.compressor(x, slot, caches, compress_pos_emb, v4_compressor_meta=v4_compressor_meta)
+        block_caches = self.compressor(x, slot, caches, compress_pos_emb,
+                                       v4_compressor_meta=v4_compressor_meta)
         weights = self.weights_proj(x) * (self.head_dim**-0.5 * self.n_heads**-0.5)
 
-        return self.indexer_fwd(q, weights, index_kv_cache, index_kv_scale_cache, v4_indexer_meta)
+        return self.indexer_fwd(q, weights, block_caches, v4_indexer_meta)
 
 class DeepseekV4BMM(nn.Module):
     """Wrapped bmm."""
@@ -461,28 +426,6 @@ class Attention(nn.Module):
     def _attn_sink_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         _load_vector_shard(param, loaded_weight)
 
-    def _resolve_attention_caches(self, caches: V4Caches) -> dict:
-        window_state_fp8 = caches.state_cache('v4_window_kv_fp8', self.layer_id)
-
-        compressed_kv = None
-        compressed_kv_fp8 = None
-        index_kv = None
-        index_kv_scale = None
-        if self.compress_ratio:
-            if self.compress_ratio == 4:
-                compressed_kv_fp8 = caches.block_cache('v4_compressed_kv_r4_fp8', self.layer_id)
-                index_kv = caches.block_cache('v4_index_kv_r4', self.layer_id)
-                if 'v4_index_kv_r4_scale' in caches.block_caches:
-                    index_kv_scale = caches.block_cache('v4_index_kv_r4_scale', self.layer_id)
-            else:
-                compressed_kv_fp8 = caches.block_cache('v4_compressed_kv_r128_fp8', self.layer_id)
-
-        return dict(window_state_fp8=window_state_fp8,
-                    compressed_kv=compressed_kv,
-                    compressed_kv_fp8=compressed_kv_fp8,
-                    index_kv=index_kv,
-                    index_kv_scale=index_kv_scale)
-
     def forward(self,
                 x: torch.Tensor,
                 v4_meta: V4AttentionMetadata,
@@ -513,23 +456,24 @@ class Attention(nn.Module):
         kv[..., -rd:] = kv_rope_3d.reshape_as(kv_rope)
 
         # ---- Compressor call (shared) ----
+        block_caches = {}
         if self.compress_ratio:
-            self.compressor(x, slot, caches, compress_pos_emb, v4_compressor_meta=v4_compressor_meta)
+            block_caches = self.compressor(x, slot, caches, compress_pos_emb,
+                                           v4_compressor_meta=v4_compressor_meta)
 
         # ---- Indexer call (model-level, result passed to backend) ----
-        attn_caches = self._resolve_attention_caches(caches)
         index_out = None
         if self.compress_ratio and self.indexer is not None:
             index_out = self.indexer(x=x, qr=qr, caches=caches, slot=slot,
-                                     index_kv_cache=attn_caches['index_kv'],
-                                     index_kv_scale_cache=attn_caches['index_kv_scale'],
                                      rotary_pos_emb=rotary_pos_emb,
                                      compress_pos_emb=compress_pos_emb,
                                      v4_indexer_meta=v4_indexer_meta,
                                      v4_compressor_meta=v4_compressor_meta)
 
         # ---- Unified attention (backend dispatches decode/prefill) ----
-        out = self.attn_fwd(q, kv, self.attn_sink, v4_meta, attn_caches, slot,
+        window_state_fp8 = caches.state_cache('v4_window_kv_fp8', self.layer_id)
+        out = self.attn_fwd(q, kv, self.attn_sink, v4_meta,
+                            window_state_fp8, block_caches, slot,
                             index_out=index_out)
 
         # ---- Output projection (inverse RoPE via precomputed neg_sin) ----
@@ -550,7 +494,7 @@ class Gate(nn.Module):
         self.topk = args.n_activated_experts
         self.score_func = args.score_func
         self.route_scale = args.route_scale
-        self.hash = layer_id < args.n_hash_layers
+        self.hash = args.mlp_layer_types[layer_id] == 'hash_moe'
         self.weight = nn.Parameter(torch.empty(args.n_routed_experts, args.dim, device=device), requires_grad=False)
         if self.hash:
             self.tid2eid = nn.Parameter(torch.empty(args.vocab_size,
@@ -726,13 +670,14 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         if isinstance(device, str):
             device = torch.device(device)
         self.device = device
+        compress_rope_params = config.rope_parameters['compress']
         self.args = V4Args(
             dim=config.hidden_size,
             n_heads=config.num_attention_heads,
             vocab_size=config.vocab_size,
             moe_inter_dim=config.moe_intermediate_size,
             n_layers=config.num_hidden_layers,
-            n_hash_layers=config.num_hash_layers,
+            mlp_layer_types=tuple(config.mlp_layer_types),
             n_routed_experts=config.n_routed_experts,
             n_shared_experts=config.n_shared_experts,
             n_activated_experts=config.num_experts_per_tok,
@@ -746,13 +691,13 @@ class DeepseekV4ForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             o_groups=config.o_groups,
             o_lora_rank=config.o_lora_rank,
             window_size=config.sliding_window,
-            compress_ratios=tuple(config.compress_ratios),
+            compress_ratios=tuple(get_v4_compress_ratios(config)),
             compress_rope_theta=config.compress_rope_theta,
-            original_seq_len=config.rope_scaling['original_max_position_embeddings'],
+            original_seq_len=compress_rope_params['original_max_position_embeddings'],
             rope_theta=config.rope_theta,
-            rope_factor=config.rope_scaling['factor'],
-            beta_fast=config.rope_scaling['beta_fast'],
-            beta_slow=config.rope_scaling['beta_slow'],
+            rope_factor=compress_rope_params['factor'],
+            beta_fast=compress_rope_params['beta_fast'],
+            beta_slow=compress_rope_params['beta_slow'],
             index_n_heads=config.index_n_heads,
             index_head_dim=config.index_head_dim,
             index_topk=config.index_topk,

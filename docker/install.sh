@@ -111,6 +111,8 @@ pip check
 if [[ "${CUDA_VERSION_SHORT}" = "cu128" ]]; then
     pip install "nvidia-nccl-cu12>=2.30.4"
 elif [[ "${CUDA_VERSION_SHORT}" == cu13* ]]; then
+    # tile-kernels (for DeepSeek-V4) requires a cu13 tilelang build.
+    pip install "tile-kernels==1.0.0"
     pip install "nvidia-nccl-cu13>=2.30.4"
 fi
 

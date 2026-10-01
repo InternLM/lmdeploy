@@ -247,12 +247,15 @@ class SamplingInputs:
     stop_words: torch.LongTensor = None
     stop_mask: torch.BoolTensor = None
     repetition_penalty: torch.Tensor = None
+    # Raw token-sampling fields. Keep select_sampling_rows in sync.
     top_k: torch.LongTensor = None
     top_p: torch.Tensor = None
     min_p: torch.Tensor = None
     random_seeds: torch.Tensor = None
     random_offsets: torch.Tensor = None
+    # Host-side summaries used to route sampling without reading device data.
     max_top_k: int = 1
+    has_greedy: bool = False
     min_top_p: float = 1.0
     response_formats: list[str, ...] = ()
     logits_processors: list[list[LogitsProcessor]] = None
@@ -270,6 +273,34 @@ class SamplingInputs:
     repetition_ngram_size: torch.Tensor | None = None
     repetition_ngram_threshold: torch.Tensor | None = None
     max_repetition_ngram_size: int = 0
+
+    def select_sampling_rows(self, rows: slice) -> 'SamplingInputs':
+        """Select the fields consumed by raw token sampling."""
+        start, stop, step = rows.indices(self.batch_size)
+        if step <= 0:
+            raise ValueError('sampling row selection requires a positive step')
+
+        batch_size = len(range(start, stop, step))
+        if start == 0 and step == 1 and batch_size == self.batch_size:
+            return self
+
+        rows = slice(start, stop, step)
+
+        def select(value: torch.Tensor | None) -> torch.Tensor | None:
+            if value is None:
+                return None
+            return value[rows]
+
+        return SamplingInputs(
+            top_k=select(self.top_k),
+            top_p=select(self.top_p),
+            min_p=select(self.min_p),
+            random_seeds=select(self.random_seeds),
+            random_offsets=select(self.random_offsets),
+            max_top_k=self.max_top_k,
+            has_greedy=self.has_greedy,
+            batch_size=batch_size,
+        )
 
     def to_device(self, device: str, non_blocking: bool = False):
         """To device."""
@@ -364,7 +395,9 @@ class FusedLogitsProcessor:
             if not self.guided_decoding_manager.is_terminated(processor):
                 self.guided_decoding_manager.fill_bitmap(processor, guided_bitmask, i)
 
-    def _accept_guided_tokens(self, next_token_ids: torch.Tensor):
+    def _accept_guided_tokens(self, next_token_ids: torch.Tensor, ready_event: torch.cuda.Event | None):
+        if ready_event is not None:
+            ready_event.synchronize()
         cpu_result = next_token_ids.tolist()
         for i, processor in self.guided_processors.items():
             if self.guided_decoding_manager.is_terminated(processor):
@@ -374,7 +407,13 @@ class FusedLogitsProcessor:
 
     async def accept_guided_tokens(self, next_token_ids: torch.Tensor):
         if self.guided_decoding_manager and self.guided_processors:
-            await asyncio.to_thread(self._accept_guided_tokens, next_token_ids)
+            ready_event = None
+            if next_token_ids.is_cuda:
+                # Sampling runs on the forward stream, while to_thread uses a
+                # different thread-local CUDA stream. Preserve that dependency.
+                ready_event = torch.cuda.Event()
+                ready_event.record()
+            await asyncio.to_thread(self._accept_guided_tokens, next_token_ids, ready_event)
 
     async def __call__(self, scores: torch.Tensor) -> torch.Tensor:
         r"""

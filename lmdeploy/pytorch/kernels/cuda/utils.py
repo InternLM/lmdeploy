@@ -3,7 +3,6 @@ import functools
 
 import torch
 import triton
-from packaging import version
 
 WARPS_PER_SM = {
     (8, 0): 64,
@@ -29,9 +28,6 @@ BLOCKS_PER_SM = {
     (12, 0): 24,
 }
 
-TRITON_VERSION = version.parse(triton.__version__)
-
-
 @functools.lru_cache
 def get_device_props(device=None):
     if device is None:
@@ -43,6 +39,7 @@ def get_device_props(device=None):
     blocks_per_sm = BLOCKS_PER_SM.get((props.major, props.minor), warps_per_sm // 2)
     out = dict(
         multi_processor_count=props.multi_processor_count,
+        compute_capability=(props.major, props.minor),
         warps_per_sm=warps_per_sm,
         blocks_per_sm=blocks_per_sm,
     )
@@ -54,14 +51,13 @@ def is_cuda():
 
 
 @functools.lru_cache
-def supports_tma():
-    ret = is_cuda() and torch.cuda.get_device_capability()[0] >= 9
-    if not ret:
+def supports_tma(device=None):
+    if not is_cuda():
         return False
 
-    VALID_VERSION = version.parse('3.4.0')
-    return TRITON_VERSION >= VALID_VERSION
+    return get_device_props(device)['compute_capability'][0] >= 9
 
-
-if supports_tma():
-    from triton.tools.tensor_descriptor import TensorDescriptor  # noqa: F401
+@functools.lru_cache
+def supports_pdl():
+    """Whether Triton programmatic dependent launch is available."""
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9

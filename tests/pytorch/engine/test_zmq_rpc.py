@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import multiprocessing as mp
 from contextlib import suppress
 
@@ -7,6 +8,23 @@ import pytest
 from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.pytorch.engine.mp_engine.base import MPEngine
 from lmdeploy.pytorch.engine.mp_engine.base_worker import StreamMailbox, StreamPollResult
+
+
+def test_engine_worker_health_status_is_synchronous():
+    from lmdeploy.pytorch.engine.mp_engine.base_worker import EngineWorkerBase
+
+    status = dict(alive=True, message='healthy', schedule_metrics=None)
+
+    class _FakeEngine:
+
+        def get_local_health_status(self):
+            return status
+
+    worker = EngineWorkerBase.__new__(EngineWorkerBase)
+    worker.engine = _FakeEngine()
+
+    assert not inspect.iscoroutinefunction(worker.get_health_status)
+    assert worker.get_health_status() is status
 
 
 def _sleep_then_exit():

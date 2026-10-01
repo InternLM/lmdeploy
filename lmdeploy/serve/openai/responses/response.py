@@ -141,6 +141,7 @@ def make_response(*,
             input_tokens=input_tokens,
             input_tokens_details=ResponseInputTokensDetails(
                 cached_tokens=0,
+                cache_write_tokens=0,
                 input_tokens_per_turn=[],
                 cached_tokens_per_turn=[],
             ),

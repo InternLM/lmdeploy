@@ -1,12 +1,12 @@
 import pytest
-from utils.constant import DEFAULT_MAX_COMPLETION_TOKENS
+from utils.config_utils import ROUTED_EXPERTS_UNSUPPORTED_SKIP
+from utils.constant import CAPPED_MAX_COMPLETION_TOKENS
 from utils.tool_reasoning_definitions import (
     ALL_OPTIONAL_TOOL,
     CALCULATOR_TOOL,
     NESTED_PARAM_TOOL,
     SEARCH_TOOL,
     WEATHER_TOOL,
-    RoutedExpertsNotSupported,
     assert_arguments_parseable,
     assert_no_parser_drop,
     assert_parallel_mixed_tools_isolated,
@@ -32,6 +32,7 @@ from .conftest import (
     MESSAGES_PARALLEL_MIXED,
     MESSAGES_PARALLEL_WEATHER,
     MULTI_TURN_WEATHER_CITIES,
+    _apply_experts_marks,
     _apply_marks,
     _ToolCallTestBase,
 )
@@ -52,7 +53,7 @@ class TestToolCallMultipleTools(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL, CALCULATOR_TOOL],
             logprobs=False,
         )
@@ -76,7 +77,7 @@ class TestToolCallMultipleTools(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_CALCULATION,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL, CALCULATOR_TOOL],
             logprobs=False,
         )
@@ -103,7 +104,7 @@ class TestToolCallMultipleTools(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_NO_TOOL_NEEDED,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             tool_choice='auto',
             logprobs=False,
@@ -146,7 +147,7 @@ class TestToolCallMultipleTools(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=tools,
             logprobs=False,
         )
@@ -182,7 +183,7 @@ class TestToolCallParallel(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_PARALLEL_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -214,7 +215,7 @@ class TestToolCallParallel(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_PARALLEL_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
             stream=True,
@@ -246,7 +247,7 @@ class TestToolCallParallel(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_PARALLEL_MIXED,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, CALCULATOR_TOOL],
             logprobs=False,
         )
@@ -280,7 +281,7 @@ class TestToolCallParallel(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_PARALLEL_MIXED,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, CALCULATOR_TOOL],
             logprobs=False,
             stream=True,
@@ -329,7 +330,7 @@ class TestToolCallWithResults(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -350,7 +351,7 @@ class TestToolCallWithResults(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -381,7 +382,7 @@ class TestToolCallMultilingual(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER_CN,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -408,7 +409,7 @@ class TestToolCallMultilingual(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER_CN,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
             stream=True,
@@ -432,7 +433,7 @@ class TestToolCallMultilingual(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER_CN,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -471,7 +472,7 @@ class TestToolCallMultilingual(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[SEARCH_TOOL],
             logprobs=False,
         )
@@ -523,7 +524,7 @@ class TestToolCallComplexParams(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[NESTED_PARAM_TOOL],
             logprobs=False,
         )
@@ -564,7 +565,7 @@ class TestToolCallComplexParams(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[ALL_OPTIONAL_TOOL],
             logprobs=False,
         )
@@ -599,7 +600,7 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             tool_choice={
                 'type': 'function',
@@ -628,7 +629,7 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -655,7 +656,7 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -673,7 +674,7 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
             n=1,
@@ -688,15 +689,10 @@ class TestToolCallResponseValidation(_ToolCallTestBase):
 # ===========================================================================
 
 
-@_apply_marks
-@pytest.mark.experts
+@_apply_experts_marks
 class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
-    """Streaming tool calls with return_token_ids and routed_experts
-    validation.
-
-    Marked ``experts`` so proxy interface runs can exclude these (large
-    output_ids / routed_experts payloads).
-    """
+    """Streaming tool calls with return_token_ids; routed_experts on
+    pytorch."""
 
     def test_streaming_return_token_ids(self, backend, model_case):
         """return_token_ids=True must yield one output_ids entry per completion
@@ -716,6 +712,8 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
 
     def test_streaming_routed_experts_length(self, backend, model_case):
         """routed_experts length must equal prompt_tokens + len(output_ids) - 1."""
+        if not self._validate_experts():
+            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
         r = self._stream_tool_call_with_tokens(
             MESSAGES_ASKING_FOR_WEATHER,
             tools=[WEATHER_TOOL],
@@ -728,24 +726,24 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
         assert r['stream_complete']
         validate_output_ids_present(r)
         validate_output_ids_match_usage(r)
-        try:
-            validate_routed_experts_length(r)
-        except RoutedExpertsNotSupported as exc:
-            pytest.skip(str(exc))
+        validate_routed_experts_length(r)
 
     def test_streaming_routed_experts_max_tokens_cap_followup(self, backend, model_case):
-        """Hit DEFAULT max_completion_tokens with routed_experts; no overshoot;
+        """Hit CAPPED_MAX_COMPLETION_TOKENS with routed_experts; no overshoot;
         follow-up OK.
 
         Does not require a tool call — forces length finish via ignore_eos so experts length stays correct when
-        completion hits the default cap (8192).
+        completion hits the length cap.
         """
-        max_tokens = DEFAULT_MAX_COMPLETION_TOKENS
+        if not self._validate_experts():
+            pytest.skip(ROUTED_EXPERTS_UNSUPPORTED_SKIP)
+        prompt = 'Continue writing forever without stopping.'
+        max_tokens = CAPPED_MAX_COMPLETION_TOKENS
         overshoot_slack = 1
         messages = [
             {
                 'role': 'user',
-                'content': 'Continue writing forever without stopping.',
+                'content': prompt,
             },
         ]
         r = self._stream_tool_call_with_tokens(
@@ -759,10 +757,7 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
             f'Expected finish_reason length, got {r["finish_reason"]!r}')
         validate_output_ids_present(r)
         validate_output_ids_match_usage(r)
-        try:
-            validate_routed_experts_length(r)
-        except RoutedExpertsNotSupported as exc:
-            pytest.skip(str(exc))
+        validate_routed_experts_length(r)
 
         completion_tokens = r.get('completion_tokens') or len(r['output_ids'])
         assert completion_tokens <= max_tokens + overshoot_slack, (
@@ -781,10 +776,8 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
         )
         assert followup['stream_complete'], 'follow-up stream ended before data: [DONE]'
         validate_output_ids_present(followup)
-        try:
+        if self._validate_experts():
             validate_routed_experts_length(followup)
-        except RoutedExpertsNotSupported as exc:
-            pytest.skip(str(exc))
 
     def test_streaming_tool_call_with_tokens_full_validation(self, backend, model_case):
         """Single-turn: tool call + output_ids + routed_experts + parser checks."""
@@ -792,14 +785,12 @@ class TestToolCallTokenIdsAndRoutedExperts(_ToolCallTestBase):
             MESSAGES_ASKING_FOR_WEATHER,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
         )
-        try:
-            validate_stream_tool_call_with_tokens(
-                r,
-                expected_function_name=WEATHER_TOOL['function']['name'],
-                **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
-            )
-        except RoutedExpertsNotSupported as exc:
-            pytest.skip(str(exc))
+        validate_stream_tool_call_with_tokens(
+            r,
+            expected_function_name=WEATHER_TOOL['function']['name'],
+            **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
+            **self._experts_validation_kwargs(),
+        )
 
 
 # ===========================================================================
@@ -843,8 +834,8 @@ class TestToolCallMultiTurnStreaming(_ToolCallTestBase):
 
     @pytest.mark.experts
     def test_multi_turn_streaming_with_token_ids_and_experts(self, backend, model_case):
-        """Multi-turn loop with per-turn output_ids and routed_experts
-        checks."""
+        """Multi-turn loop with per-turn output_ids; routed_experts on
+        pytorch."""
         messages = [
             {
                 'role': 'system',
@@ -860,17 +851,15 @@ class TestToolCallMultiTurnStreaming(_ToolCallTestBase):
                 'role': 'user',
                 'content': f'What is the weather in {city}?',
             })
-            try:
-                r = self._stream_tool_call_with_tokens(messages, tools=[WEATHER_TOOL])
-                prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
-                validate_stream_tool_call_with_tokens(
-                    r,
-                    prompt_tokens=prompt_tokens,
-                    expected_function_name=WEATHER_TOOL['function']['name'],
-                    **self._parser_validation_kwargs([WEATHER_TOOL]),
-                )
-            except RoutedExpertsNotSupported as exc:
-                pytest.skip(f'turn {turn + 1}: {exc}')
+            r = self._stream_tool_call_with_tokens(messages, tools=[WEATHER_TOOL])
+            prompt_tokens = r['prompt_tokens_computed'] or r['prompt_tokens']
+            validate_stream_tool_call_with_tokens(
+                r,
+                prompt_tokens=prompt_tokens,
+                expected_function_name=WEATHER_TOOL['function']['name'],
+                **self._parser_validation_kwargs([WEATHER_TOOL]),
+                **self._experts_validation_kwargs(),
+            )
             self._append_assistant_and_tool_messages(messages, r)
 
 
@@ -893,7 +882,7 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
                 model=model_name,
                 messages=MESSAGES_NO_TOOL_NEEDED,
                 temperature=0,
-                max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+                max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
                 tools=[],
                 logprobs=False,
             )
@@ -938,7 +927,7 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
             model=model_name,
             messages=MESSAGES_ASKING_FOR_WEATHER,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL],
             logprobs=False,
         )
@@ -969,7 +958,7 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
             logprobs=False,
         )
@@ -997,7 +986,7 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
         r = self._stream_tool_call(
             messages,
             tools=[WEATHER_TOOL, SEARCH_TOOL],
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
         )
         assert r['finish_reason'] in ('stop', 'length', 'tool_calls')
         if r['finish_reason'] == 'tool_calls':
@@ -1041,7 +1030,7 @@ class TestToolCallEdgeCases(_ToolCallTestBase):
             model=model_name,
             messages=messages,
             temperature=0,
-            max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+            max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
             tools=[SEARCH_TOOL],
             logprobs=False,
         )

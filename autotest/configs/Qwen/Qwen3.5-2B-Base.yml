@@ -13,6 +13,7 @@ a100:
     - nccl
   test_coverage:
   - func
+  - evaluate
   interface:
     pytorch:
       suites:
@@ -38,6 +39,7 @@ h:
     - nccl
   test_coverage:
   - func
+  - evaluate
   interface:
     pytorch:
       suites:
