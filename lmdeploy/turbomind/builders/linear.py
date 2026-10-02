@@ -54,6 +54,7 @@ def _build_linear(fmt: WeightFormat, available: dict[str, Tensor]) -> Linear:
         tensors['zeros'] = fmt.synthesize_zeros(tensors['scales'])
     if 'zeros' in tensors:
         tensors['zeros'] = tensors['zeros'].to(tensors['scales'].dtype)
+    tensors = fmt.post_process(tensors)
     return Linear(tensors=tensors, weight_format=fmt)
 
 

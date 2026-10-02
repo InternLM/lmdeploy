@@ -152,6 +152,11 @@ class WeightFormat(ABC):
     def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
         return PackedTensor(tensor, None, None)
 
+    def post_process(self, tensors: dict[str, Tensor]) -> dict[str, Tensor]:
+        """Post-normalization hook (identity by default). Subclasses reshape
+        or expand tensors into the layout the backend kernels expect."""
+        return tensors
+
     def synthesize_zeros(self, scales: Tensor) -> Tensor:
         raise NotImplementedError(f"{type(self).__name__}.synthesize_zeros not implemented")
 
@@ -372,7 +377,12 @@ class CompressedTensorFormat(WeightFormat):
 
 class FP8Format(WeightFormat):
     name = 'fp8'
-    suffix_map = {'.weight': 'weight', '.weight_scale_inv': 'scales', '.bias': 'bias'}
+    suffix_map = {
+        '.weight': 'weight',
+        '.weight_scale_inv': 'scales',
+        '.weight_scale': 'scales',
+        '.bias': 'bias',
+    }
     weight_dtype = _tm.DataType.TYPE_FP8_E4M3
     scales_dtype = _tm.DataType.TYPE_GENERIC_FLOAT
     zeros_dtype = _tm.DataType.TYPE_INVALID
@@ -384,6 +394,8 @@ class FP8Format(WeightFormat):
 
     def accepts(self, available: dict[str, Tensor]) -> bool:
         scales = available.get('.weight_scale_inv')
+        if scales is None:
+            scales = available.get('.weight_scale')
         if scales is None or scales.dtype not in _GENERIC_FLOAT_DTYPES:
             return False
         w = available.get('.weight')
@@ -393,6 +405,11 @@ class FP8Format(WeightFormat):
             return False
         if w.dim() < 2 or scales.dim() < 2:
             return False
+        if self.block_out == 1:
+            # per-channel (Ornith-style `.weight_scale`): one scale per output
+            # channel, checkpoint shape [N, 1]. Expanded to the K-grouped
+            # kernel layout [K//128, N] by post_process.
+            return scales.shape[-2:] == (w.shape[-2], 1)
         expected = (
             (w.shape[-2] + self.block_out - 1) // self.block_out,
             (w.shape[-1] + self.block_in - 1) // self.block_in,
@@ -418,6 +435,35 @@ class FP8Format(WeightFormat):
         if 'bias' in tensors:
             result['bias'] = tensors['bias']
         return result
+
+    def post_process(self, tensors: dict[str, Tensor]) -> dict[str, Tensor]:
+        """Expand per-channel FP8 scales into the K-grouped kernel layout.
+
+        In TM layout the weight is ``[K, N]`` (axis 0 = input K, axis -1 =
+        output N).  A per-channel (channel-quantized, e.g. Ornith) scale is
+        stored per output channel and arrives normalized as ``[N, 1]``.
+        The K-grouped GEMM path (``PackQParams``) consumes a ``[K//128, N]``
+        scale.  A per-channel scale is independent of K, so it is exactly
+        such a tensor with identical rows; repeat the single column to
+        materialize it.  This also yields a 2-D tensor that TP-shards
+        correctly.  Blocked scales (``[K//128, N//128]``) are left untouched.
+        """
+        if self.block_out != 1:
+            return tensors
+        scales = tensors.get('scales')
+        weight = tensors.get('weight')
+        if scales is None or weight is None or scales.dim() != 2:
+            return tensors
+        if scales.shape[-1] != 1:
+            return tensors
+        in_dim = weight.shape[0]      # K (input)
+        out_dim = weight.shape[-1]    # N (output)
+        if scales.shape[0] != out_dim or in_dim % self.block_in != 0:
+            return tensors
+        kgroups = in_dim // self.block_in
+        tensors = dict(tensors)
+        tensors['scales'] = scales.expand(kgroups, out_dim).contiguous()
+        return tensors
 
     def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
         if kind == 'weight':
