@@ -454,11 +454,11 @@ class FP8Format(WeightFormat):
         weight = tensors.get('weight')
         if scales is None or weight is None or scales.dim() != 2:
             return tensors
-        if scales.shape[-1] != 1:
-            return tensors
         in_dim = weight.shape[0]      # K (input)
         out_dim = weight.shape[-1]    # N (output)
-        if scales.shape[0] != out_dim or in_dim % self.block_in != 0:
+        # After normalize() the tensors are transposed to TM layout: weight
+        # [K, N], and the per-channel scale [N, 1] becomes [1, N].
+        if scales.shape != (1, out_dim) or in_dim % self.block_in != 0:
             return tensors
         kgroups = in_dim // self.block_in
         tensors = dict(tensors)
