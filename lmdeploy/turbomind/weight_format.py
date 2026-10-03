@@ -153,8 +153,10 @@ class WeightFormat(ABC):
         return PackedTensor(tensor, None, None)
 
     def post_process(self, tensors: dict[str, Tensor]) -> dict[str, Tensor]:
-        """Post-normalization hook (identity by default). Subclasses reshape
-        or expand tensors into the layout the backend kernels expect."""
+        """Post-normalization hook (identity by default).
+
+        Subclasses reshape or expand tensors into the layout the backend kernels expect.
+        """
         return tensors
 
     def synthesize_zeros(self, scales: Tensor) -> Tensor:
