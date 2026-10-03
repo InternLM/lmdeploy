@@ -382,7 +382,11 @@ void invokeCommitAcceptedRecurrentState(
                 args.heads_per_block,
                 total_work);
         };
-        TM_DISPATCH_DTYPES(state_dtype, launch_state, bfloat16_t, float);
+        // f16 is required on pre-SM80 (Turing/Maxwell, no bf16 tensor core), where
+        // the recurrent state follows the engine's float16 dtype. The kernel body is
+        // computed in float and only touches StateT via ToFloat/FromFloat, so half_t
+        // is safe here (mirrors the input-side dispatch below).
+        TM_DISPATCH_DTYPES(state_dtype, launch_state, half_t, bfloat16_t, float);
     };
     TM_DISPATCH_DTYPES(args.key.dtype(), launch_input, half_t, bfloat16_t);
     TM_CUDA_CHECK(cudaGetLastError());
