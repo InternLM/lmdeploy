@@ -237,7 +237,7 @@ class TurboMind:
 
         from .converter import get_tm_config
         from .model_loader import ModelLoader
-        from .spec_decode import build_draft_model
+        from .spec_decode import build_draft_model, normalize_spec_method
 
         model, model_path, data_type = get_tm_config(model_path, engine_config,
                                                      trust_remote_code=trust_remote_code)
@@ -253,7 +253,7 @@ class TurboMind:
             draft_model, draft_model_path = build_draft_model(
                 speculative_config, model, model_path, data_type,
                 engine_config.download_dir)
-            spec_method = speculative_config.method
+            spec_method = normalize_spec_method(speculative_config.method)
             spec_num_draft_tokens = speculative_config.num_speculative_tokens
             spec_tap_layer_ids = list(draft_model.tap_layer_ids)
 
