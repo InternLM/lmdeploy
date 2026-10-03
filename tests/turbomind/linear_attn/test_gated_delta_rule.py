@@ -159,6 +159,91 @@ def _canonical_native_inputs(inputs: InputTensors) -> InputTensors:
     return native
 
 
+@cuda_required
+@pytest.mark.skipif(_device_capability() != (9, 0), reason='SM90 is required')
+@pytest.mark.parametrize('positions,requested_capacity,expected_capacity', [
+    (4, 8, 8),
+    (8, 8, 8),
+    (12, None, 16),
+    (16, 16, 16),
+])
+@pytest.mark.parametrize('state_dtype', ['f32', 'bf16'])
+def test_sm90_verify_gdr(positions, requested_capacity, expected_capacity, state_dtype):
+    case = InputCase(
+        layout=Fixed(batch_size=3, seq_len=positions),
+        heads=Heads(hq=4, hv=8),
+        input_dtype=torch.bfloat16,
+        has_h0=True,
+        seed=81000 + positions,
+    )
+    run = RunCase(input=case, state_dtype=state_dtype, chunk_size=expected_capacity)
+    inputs = make_input_tensors(case, device='cuda')
+    native = _canonical_native_inputs(inputs)
+    state = make_state_buffer(inputs.h0, run, torch.device('cuda'))
+    entry_state = state.storage.clone()
+    finished = torch.ones(3, device='cuda', dtype=torch.bool)
+    native_state_dtype = _native_state_dtype(state_dtype)
+    bridge = turbomind_gated_delta_rule.NativeBridge(turbomind_gated_delta_rule._require_native_bridge())
+    verify_plan = bridge.plan(
+        native,
+        q_offsets=None,
+        state_dtype=native_state_dtype,
+        mode='verify',
+        chunk_size=requested_capacity,
+        cp_level='off',
+        num_head_groups=1,
+        heads_per_block=8,
+    )
+    assert verify_plan['kernel']['mode'] == 'verify'
+    assert verify_plan['kernel']['chunk_size'] == expected_capacity
+    assert verify_plan['problem']['chunk_size'] == expected_capacity
+
+    expected, _ = chunk_gated_delta_rule_fwd(
+        inputs.q,
+        inputs.k,
+        inputs.v,
+        inputs.g,
+        inputs.beta,
+        initial_state=entry_state.float(),
+        chunk_size=64,
+    )
+    dedicated = turbomind_gated_delta_rule.chunk_gated_delta_rule_fwd(
+        native.q,
+        native.k,
+        native.v,
+        native.g,
+        native.beta,
+        state_ptrs=state.ptrs,
+        finished=finished,
+        state_dtype=native_state_dtype,
+        plan=verify_plan,
+        cp_level='off',
+        num_head_groups=1,
+        heads_per_block=8,
+    )
+    torch.testing.assert_close(dedicated, expected, rtol=8e-2, atol=8e-2)
+    assert torch.equal(state.storage, entry_state)
+
+    state.reset(inputs.h0)
+    legacy = turbomind_gated_delta_rule.chunk_gated_delta_rule_fwd(
+        native.q,
+        native.k,
+        native.v,
+        native.g,
+        native.beta,
+        state_ptrs=state.ptrs,
+        finished=finished,
+        state_dtype=native_state_dtype,
+        mode='chunked',
+        chunk_size=64,
+        cp_level='off',
+        num_head_groups=1,
+        heads_per_block=8,
+    )
+    torch.testing.assert_close(legacy, expected, rtol=8e-2, atol=8e-2)
+    assert torch.equal(state.storage, entry_state)
+
+
 def _supported_arch_cases():
     if not torch.cuda.is_available():
         return []
@@ -185,6 +270,361 @@ def _supported_arch_cases():
             cases.append((input_dtype, state_dtype, 1, 'recurrent'))
             cases.append((input_dtype, state_dtype, chunk_size, 'chunked'))
     return cases
+
+
+def _transaction_bridge():
+    symbols = (
+        *turbomind_gated_delta_rule.REQUIRED_NATIVE_BRIDGE_SYMBOLS,
+        'gdn_build_state_store_mask',
+        'gdn_capture_transitions',
+        'gdn_commit_conv_state',
+        'gdn_commit_recurrent_state',
+    )
+    return turbomind_gated_delta_rule.NativeBridge(
+        turbomind_gated_delta_rule._require_native_bridge(symbols))
+
+
+@cuda_required
+def test_speculative_state_mask():
+    bridge = _transaction_bridge()
+    finished = torch.tensor(
+        [False, True, False, True, False], device='cuda', dtype=torch.bool)
+    speculative = torch.tensor(
+        [False, False, True, True, False], device='cuda', dtype=torch.bool)
+    actual = torch.empty_like(finished)
+    bridge.build_state_store_mask(actual, finished, speculative)
+    torch.testing.assert_close(actual, finished | speculative)
+
+
+@cuda_required
+@pytest.mark.parametrize('position_count', [2, 4])
+@pytest.mark.parametrize('tp', [1, 2, 4, 8, 16])
+def test_speculative_transition_capture(position_count, tp):
+    bridge = _transaction_bridge()
+    dtype = torch.bfloat16
+    hq = 16 // tp
+    hv = 48 // tp
+    conv_dim = (16 + 48) * 128 // tp
+    value_dim = 48 * 128 // tp
+    all_proj_width = conv_dim + value_dim + 2 * hv
+
+    lengths = [1, position_count + 1, 2, position_count]
+    q_offsets = torch.tensor(
+        [0, *torch.tensor(lengths).cumsum(0).tolist()],
+        device='cuda', dtype=torch.int32)
+    requests = torch.tensor([1, 3], device='cuda', dtype=torch.int32)
+    token_count = sum(lengths)
+    poison = 31744.0
+
+    all_proj = torch.full(
+        (token_count, all_proj_width), poison, device='cuda', dtype=dtype)
+    raw = all_proj[:, :conv_dim]
+    raw.copy_(torch.arange(
+        token_count * conv_dim, device='cuda', dtype=torch.float32)
+        .reshape(token_count, conv_dim).remainder(97).to(dtype))
+
+    key_storage = torch.full(
+        (1, token_count, hq, 132), poison, device='cuda', dtype=dtype)
+    value_storage = torch.full(
+        (1, token_count, hv, 132), poison, device='cuda', dtype=dtype)
+    key = key_storage[..., :128]
+    value = value_storage[..., :128]
+    key.copy_(torch.randn_like(key))
+    value.copy_(torch.randn_like(value))
+
+    decay_storage = torch.full(
+        (1, token_count, hv + 3), poison, device='cuda', dtype=torch.float32)
+    beta_storage = torch.full_like(decay_storage, poison)
+    decay = decay_storage[..., :hv]
+    beta = beta_storage[..., :hv]
+    decay.copy_(torch.randn_like(decay) * .01)
+    beta.copy_(torch.sigmoid(torch.randn_like(beta)))
+
+    layers = 2
+    spec_count = requests.numel()
+    journal_raw = torch.full(
+        (layers, spec_count, position_count, conv_dim), poison,
+        device='cuda', dtype=dtype)
+    journal_key = torch.full(
+        (layers, spec_count, position_count, hq, 128), poison,
+        device='cuda', dtype=dtype)
+    journal_value = torch.full(
+        (layers, spec_count, position_count, hv, 128), poison,
+        device='cuda', dtype=dtype)
+    journal_decay = torch.full(
+        (layers, spec_count, position_count, hv), poison,
+        device='cuda', dtype=torch.float32)
+    journal_beta = torch.full_like(journal_decay, poison)
+    journal = (
+        journal_raw, journal_key, journal_value, journal_decay, journal_beta)
+
+    for layer in range(layers):
+        bridge.capture_transitions(
+            raw, key, value, decay, beta, q_offsets, requests,
+            gdn_layer=layer,
+            verify_positions=position_count,
+            journal=journal)
+
+    starts = q_offsets[requests].cpu().tolist()
+    expected_rows = torch.cat([
+        torch.arange(start, start + position_count, device='cuda')
+        for start in starts
+    ])
+    expected_raw = raw[expected_rows].reshape(spec_count, position_count, conv_dim)
+    expected_key = key[0, expected_rows].reshape(spec_count, position_count, hq, 128)
+    expected_value = value[0, expected_rows].reshape(spec_count, position_count, hv, 128)
+    expected_decay = decay[0, expected_rows].reshape(spec_count, position_count, hv)
+    expected_beta = beta[0, expected_rows].reshape(spec_count, position_count, hv)
+    for layer in range(layers):
+        torch.testing.assert_close(journal_raw[layer], expected_raw)
+        torch.testing.assert_close(journal_key[layer], expected_key)
+        torch.testing.assert_close(journal_value[layer], expected_value)
+        torch.testing.assert_close(journal_decay[layer], expected_decay)
+        torch.testing.assert_close(journal_beta[layer], expected_beta)
+
+
+@cuda_required
+def test_speculative_state_commit_conv_ring_and_guards():
+    bridge = _transaction_bridge()
+    layers, batch, spec_count, position_count = 2, 4, 2, 4
+    conv_dim, d_conv = 19, 4
+    request_indices = torch.tensor([1, 3], device='cuda', dtype=torch.int32)
+    entry = torch.tensor([0, 3, 0, 6], device='cuda', dtype=torch.int32)
+    accept = torch.tensor([0, 0, 0, 3], device='cuda', dtype=torch.int32)
+    offsets = torch.tensor(
+        [layer * d_conv * conv_dim for layer in range(layers)],
+        device='cuda', dtype=torch.int32)
+    raw = torch.arange(
+        layers * spec_count * position_count * conv_dim,
+        device='cuda', dtype=torch.float32).reshape(
+            layers, spec_count, position_count, conv_dim).to(torch.bfloat16)
+
+    states = [torch.full(
+        (layers, d_conv, conv_dim), -7, device='cuda', dtype=torch.bfloat16)
+              for _ in range(batch)]
+    before = [state.clone() for state in states]
+    pointers = torch.tensor(
+        [state.data_ptr() for state in states], device='cuda', dtype=torch.int64)
+    bridge.commit_conv_state(
+        raw, pointers, request_indices, entry, accept, offsets,
+        conv_dim=conv_dim, d_conv=d_conv)
+
+    torch.testing.assert_close(states[0], before[0])
+    torch.testing.assert_close(states[1], before[1])
+    torch.testing.assert_close(states[2], before[2])
+    expected = before[3]
+    for layer in range(layers):
+        for position in range(accept[3].item()):
+            expected[layer, (entry[3].item() - 1 + position) % d_conv] = raw[layer, 1, position]
+    torch.testing.assert_close(states[3], expected)
+
+
+def _commit_reference(initial, key, value, decay, beta, request_indices, accept_len,
+                      layers_per_block, heads_per_block):
+    result = initial.float().clone()
+    _, _, _, hq, _ = key.shape
+    hv = value.shape[3]
+    for layer in range(key.shape[0]):
+        layer_group, layer_in_group = divmod(layer, layers_per_block)
+        for compact, request in enumerate(request_indices.tolist()):
+            for value_head in range(hv):
+                head_group, local_head = divmod(value_head, heads_per_block)
+                state = result[layer_group, request, head_group,
+                               layer_in_group, local_head]
+                key_head = value_head // (hv // hq)
+                for position in range(int(accept_len[request])):
+                    state.mul_(decay[layer, compact, position, value_head].exp())
+                    key_row = key[layer, compact, position, key_head].float()
+                    value_row = value[layer, compact, position, value_head].float()
+                    prediction = key_row @ state
+                    delta = (value_row - prediction) * beta[
+                        layer, compact, position, value_head]
+                    state.add_(key_row[:, None] * delta[None, :])
+    return result
+
+
+def _state_pointers(storage):
+    layer_groups, batch, head_groups = storage.shape[:3]
+    pointers = torch.empty(
+        layer_groups, batch, head_groups,
+        device=storage.device, dtype=torch.int64)
+    values = [
+        storage[group, request, head_group].data_ptr()
+        for group in range(layer_groups)
+        for request in range(batch)
+        for head_group in range(head_groups)
+    ]
+    pointers.copy_(torch.tensor(values, dtype=torch.int64).view_as(pointers))
+    return pointers
+
+
+def _storage_spacing(reference, state_dtype):
+    stored = reference.to(state_dtype)
+    next_up = torch.nextafter(stored, torch.full_like(stored, float('inf')))
+    next_down = torch.nextafter(stored, torch.full_like(stored, -float('inf')))
+    return torch.maximum(
+        (next_up.float() - stored.float()).abs(),
+        (stored.float() - next_down.float()).abs())
+
+
+@cuda_required
+@pytest.mark.parametrize('position_count', [2, 4])
+@pytest.mark.parametrize('state_dtype', [torch.bfloat16, torch.float32])
+def test_speculative_state_commit_differential(position_count, state_dtype):
+    bridge = _transaction_bridge()
+    torch.manual_seed(91023 + position_count)
+    layers, batch, spec_count = 1, 2, 2
+    hq, hv = 2, 4
+    layers_per_block, heads_per_block = 1, 2
+    layer_groups = (layers + layers_per_block - 1) // layers_per_block
+    head_groups = hv // heads_per_block
+    request_indices = torch.arange(batch, device='cuda', dtype=torch.int32)
+    key = torch.randn(
+        layers, spec_count, position_count, hq, 128,
+        device='cuda', dtype=torch.bfloat16) * .04
+    value = torch.randn(
+        layers, spec_count, position_count, hv, 128,
+        device='cuda', dtype=torch.bfloat16) * .04
+    decay = -torch.rand(
+        layers, spec_count, position_count, hv,
+        device='cuda', dtype=torch.float32) * .03
+    beta = torch.rand_like(decay) * .2
+
+    for accepted in range(position_count + 1):
+        accept_len = torch.tensor(
+            [accepted, position_count - accepted],
+            device='cuda', dtype=torch.int32)
+        initial = torch.randn(
+            layer_groups, batch, head_groups, layers_per_block,
+            heads_per_block, 128, 128,
+            device='cuda', dtype=state_dtype) * .01
+
+        transactional = initial.clone()
+        transaction_ptrs = _state_pointers(transactional)
+        bridge.commit_recurrent_state(
+            key, value, decay, beta, transaction_ptrs, request_indices, accept_len,
+            state_dtype='bf16' if state_dtype == torch.bfloat16 else 'f32',
+            layers_per_block=layers_per_block,
+            heads_per_block=heads_per_block)
+
+        recurrent = initial.clone()
+        recurrent_ptrs = _state_pointers(recurrent)
+        for position in range(position_count):
+            finished = accept_len <= position
+            turbomind_gated_delta_rule.chunk_gated_delta_rule_fwd(
+                key[0, :, position].unsqueeze(1),
+                key[0, :, position].unsqueeze(1),
+                value[0, :, position].unsqueeze(1),
+                decay[0, :, position].unsqueeze(1),
+                beta[0, :, position].unsqueeze(1),
+                state_ptrs=recurrent_ptrs[0],
+                finished=finished,
+                state_dtype='bf16' if state_dtype == torch.bfloat16 else 'f32',
+                mode='recurrent',
+                cp_level='off',
+                num_head_groups=head_groups,
+                heads_per_block=heads_per_block,
+                layer_groups=1,
+                layers_per_block=1)
+
+        chunked = initial.clone()
+        chunked_ptrs = _state_pointers(chunked)
+        for request, accepted_positions in enumerate(accept_len.tolist()):
+            if accepted_positions == 0:
+                continue
+            request_slice = slice(request, request + 1)
+            position_slice = slice(0, accepted_positions)
+            turbomind_gated_delta_rule.chunk_gated_delta_rule_fwd(
+                key[0, request_slice, position_slice],
+                key[0, request_slice, position_slice],
+                value[0, request_slice, position_slice],
+                decay[0, request_slice, position_slice],
+                beta[0, request_slice, position_slice],
+                state_ptrs=chunked_ptrs[0, request_slice],
+                finished=torch.zeros(1, device='cuda', dtype=torch.bool),
+                state_dtype='bf16' if state_dtype == torch.bfloat16 else 'f32',
+                mode='chunked',
+                cp_level='off',
+                num_head_groups=head_groups,
+                heads_per_block=heads_per_block,
+                layer_groups=1,
+                layers_per_block=1)
+
+        reference = _commit_reference(
+            initial, key, value, decay, beta, request_indices.cpu(),
+            accept_len.cpu(), layers_per_block, heads_per_block)
+        rtol = 8e-2
+        atol = 8e-2
+        recurrent_f32 = recurrent.float()
+        chunked_f32 = chunked.float()
+        transactional_f32 = transactional.float()
+        torch.testing.assert_close(recurrent_f32, reference, rtol=rtol, atol=atol)
+        torch.testing.assert_close(chunked_f32, reference, rtol=rtol, atol=atol)
+        torch.testing.assert_close(transactional_f32, reference, rtol=rtol, atol=atol)
+
+        recurrent_error = (recurrent_f32 - reference).abs()
+        chunked_error = (chunked_f32 - reference).abs()
+        transaction_error = (transactional_f32 - reference).abs()
+        backend_envelope = torch.maximum(recurrent_error, chunked_error)
+        roundoff = _storage_spacing(reference, state_dtype)
+        assert torch.all(transaction_error <= backend_envelope + roundoff)
+
+        for request, accepted_positions in enumerate(accept_len.tolist()):
+            if accepted_positions == 0:
+                assert torch.equal(transactional[:, request], initial[:, request])
+
+
+@cuda_required
+def test_speculative_state_commit_rounds_only_at_final_store():
+    bridge = _transaction_bridge()
+    position_count = 4
+    key = torch.zeros(
+        1, 1, position_count, 1, 128,
+        device='cuda', dtype=torch.bfloat16)
+    key[..., 0] = 1
+    value = torch.full(
+        (1, 1, position_count, 1, 128), 2,
+        device='cuda', dtype=torch.bfloat16)
+    decay = torch.zeros(
+        1, 1, position_count, 1,
+        device='cuda', dtype=torch.float32)
+    beta = torch.full_like(decay, 1 / 256)
+    request_indices = torch.zeros(1, device='cuda', dtype=torch.int32)
+    accept_len = torch.full(
+        (1,), position_count,
+        device='cuda', dtype=torch.int32)
+    initial = torch.zeros(
+        1, 1, 1, 1, 1, 128, 128,
+        device='cuda', dtype=torch.bfloat16)
+    initial[..., 0, :] = 1
+
+    transactional = initial.clone()
+    bridge.commit_recurrent_state(
+        key, value, decay, beta, _state_pointers(transactional),
+        request_indices, accept_len,
+        state_dtype='bf16', layers_per_block=1, heads_per_block=1)
+
+    recurrent = initial.clone()
+    recurrent_ptrs = _state_pointers(recurrent)
+    for position in range(position_count):
+        turbomind_gated_delta_rule.chunk_gated_delta_rule_fwd(
+            key[0, :, position].unsqueeze(1),
+            key[0, :, position].unsqueeze(1),
+            value[0, :, position].unsqueeze(1),
+            decay[0, :, position].unsqueeze(1),
+            beta[0, :, position].unsqueeze(1),
+            state_ptrs=recurrent_ptrs[0],
+            finished=torch.zeros(1, device='cuda', dtype=torch.bool),
+            state_dtype='bf16', mode='recurrent', cp_level='off',
+            num_head_groups=1, heads_per_block=1,
+            layer_groups=1, layers_per_block=1)
+
+    reference = _commit_reference(
+        initial, key, value, decay, beta, request_indices.cpu(),
+        accept_len.cpu(), layers_per_block=1, heads_per_block=1)
+    final_store_reference = reference.to(torch.bfloat16)
+    assert not torch.equal(recurrent, final_store_reference)
+    assert torch.equal(transactional, final_store_reference)
 
 
 @cuda_required

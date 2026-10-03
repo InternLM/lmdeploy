@@ -39,6 +39,23 @@ namespace turbomind {
 
 struct AttentionData;
 
+struct AttentionForwardMetadata {
+    struct Partition {
+        int request_count;
+        int query_count;
+        int max_query_length;
+        int key_capacity_sum;
+        int max_key_capacity;
+    };
+
+    Partition verification;
+    Partition decode;
+    Partition prefill;
+
+    Buffer_<int> q_offsets;
+    Buffer_<int> k_offsets;
+};
+
 class UnifiedAttentionLayer {
 public:
     using WeightType = AttentionWeight;
@@ -66,6 +83,8 @@ public:
 
     void Forward(ForwardParam p);
 
+    void SetForwardMetadata(int phase, const AttentionForwardMetadata& metadata);
+
 private:
     void Setup(int phase, TensorMap& env);
 
@@ -86,6 +105,8 @@ private:
 
     LlamaLinear& linear_;
     const int    arch_{};
+    const int    sm_count_{};
+    const bool   direct_verification_supported_{};
 
     cudaStream_t aux_stream_;
     cudaEvent_t  qkv_event_;
@@ -107,6 +128,7 @@ private:
     Tensor_<float> partial_O_;
     Tensor_<float> partial_ML_;
     Tensor_<int>   split_cnt_;
+    Tensor         tmp_attn_;
 
     Buffer_<float> rope_base_buf_;
     Buffer_<int>   mrope_default_buf_;

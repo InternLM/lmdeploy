@@ -13,6 +13,7 @@
 namespace turbomind {
 
 struct ScheduleMetrics;
+class SpeculativeModel;
 class VisionModel;
 
 class Engine {
@@ -28,16 +29,16 @@ public:
         return static_cast<bool>(impl_);
     }
 
-    Engine(EngineParam                  param,
-           ObjectAllocator              alloc,
-           CacheRegistry                cache_registry,
-           LanguageModel                model,
-           std::unique_ptr<VisionModel> vision_model,  // null for text-only checkpoints
-           Context&                     ctx,
-           Gateway&                     gateway,
-           int                          device_id,
-           int                          queue_id,
-           int                          phases);
+    Engine(EngineParam                       param,
+           CacheRegistry                     cache_registry,
+           std::unique_ptr<LanguageModel>    model,
+           std::unique_ptr<VisionModel>      vision_model,
+           std::unique_ptr<SpeculativeModel> spec_model,
+           Context&                          ctx,
+           Gateway&                          gateway,
+           int                               device_id,
+           int                               queue_id,
+           int                               phases);
 
     void Start();
 

@@ -70,6 +70,10 @@ const char* ModeName(GdrMode mode)
             return "recurrent";
         case GdrMode::kChunked:
             return "chunked";
+        case GdrMode::kVerify:
+            return "verify";
+        case GdrMode::kCommit:
+            return "commit";
     }
     return "invalid";
 }
@@ -101,7 +105,10 @@ const GdrKernel& RequireGdrKernel(const Plan& plan)
 
 bool GatedDeltaRule::Plan(const Operation& requested, const PlanningContext& context, delta_rule::Plan* plan) const
 {
-    const bool       force_legacy = ForceLegacyGdr();
+    const bool force_legacy = ForceLegacyGdr();
+    if (force_legacy && (requested.mode == GdrMode::kVerify || requested.mode == GdrMode::kCommit)) {
+        return false;
+    }
     const Operation  operation    = SelectOperation(requested, force_legacy);
     const auto       architecture = SelectArchitecture(context.arch, force_legacy);
     const auto&      kernel       = RequireGdrKernel(operation, context, architecture);
@@ -127,6 +134,13 @@ void GatedDeltaRule::PrepareState(const core::Tensor&     state_ptrs,
 void GatedDeltaRule::Run(const Arguments& args, const delta_rule::Plan& plan, cudaStream_t stream) const
 {
     RequireGdrKernel(plan).Run(args, plan, stream);
+}
+
+void GatedDeltaRule::CommitAccepted(const AcceptedPrefixArguments& args,
+                                    DataType                       state_dtype,
+                                    cudaStream_t                   stream) const
+{
+    invokeCommitAcceptedRecurrentState(args, state_dtype, stream);
 }
 
 }  // namespace turbomind::linear_attn::delta_rule
