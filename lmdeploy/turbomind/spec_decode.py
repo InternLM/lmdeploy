@@ -38,7 +38,7 @@ _MTP_ALIASES = {'qwen3_5_mtp': 'mtp', 'hy3_mtp': 'mtp', 'deepseek_mtp': 'mtp'}
 
 
 def normalize_spec_method(method: str) -> str:
-    """Map a CLI speculative-algorithm name to the TurboMind-registered name."""
+    """Normalize a CLI speculative name to the TurboMind name."""
     return _MTP_ALIASES.get(method, method)
 
 
