@@ -7,7 +7,7 @@ _NATIVE_SYMBOL = 'capture_target_hidden_rows'
 
 def _load_native_bridge():
     try:
-        import _turbomind as tm
+        from lmdeploy.turbomind import _turbomind as tm
     except ImportError:
         return None
     return tm if hasattr(tm, _NATIVE_SYMBOL) else None

@@ -43,8 +43,8 @@ public:
     }
 
 private:
-    const Communicators& comm_;
-    Buffer_<bool>        limit_to_accept_len_host_;
+    const Communicators&             comm_;
+    Buffer_<bool>                    limit_to_accept_len_host_;
     std::vector<FixedChainPhaseData> data_;
 };
 

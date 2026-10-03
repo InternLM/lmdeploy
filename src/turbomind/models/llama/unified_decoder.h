@@ -30,10 +30,10 @@ public:
     // hidden states into its own buffer (and receive `pre_final_residual`);
     // empty leaves selection to the decoder. The typed argument is the
     // request — env keys carry no activation.
-    void Forward(int                     phase,
-                 TensorMap&              env,
+    void Forward(int                             phase,
+                 TensorMap&                      env,
                  const std::vector<WeightType*>& weights,
-                 const Tensor&           selected_hidden_buffer = {});
+                 const Tensor&                   selected_hidden_buffer = {});
 
     void CommitAcceptedState(int phase, const Buffer_<int>& accept_len)
     {

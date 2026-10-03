@@ -277,10 +277,14 @@ void ModelExecutor::Impl::ForwardTargetPass(int phase, TensorMap& env)
     TM_FUNCTION_SCOPE();
     NvtxScope forward_scope{"targetExecutorForward"};
 
+    const auto& batch = *env.at("batch").data<BatchData*>()[0];
+    if (batch.symm_buf) {
+        env.insert_or_assign("symm_buf", batch.symm_buf);
+    }
+
     RunVisionPass(phase, env);
 
-    const auto  stream = core::Context::stream().handle();
-    const auto& batch  = *env.at("batch").data<BatchData*>()[0];
+    const auto stream = core::Context::stream().handle();
 
     PrefixSum(model_.status.SequenceLength().data(), batch.bsz, env.at("k_offsets").buffer().data<int>(), stream);
 
@@ -323,14 +327,18 @@ void ModelExecutor::Impl::ForwardSpeculativeRound(int phase, TensorMap& env)
     TM_FUNCTION_SCOPE();
     NvtxScope forward_scope{"speculativeExecutorForward"};
 
+    const auto& batch = *env.at("batch").data<BatchData*>()[0];
+    if (batch.symm_buf) {
+        env.insert_or_assign("symm_buf", batch.symm_buf);
+    }
+
     RunVisionPass(phase, env);
 
     model_.input_processor.BuildTargetInputs(phase, env);
 
-    const auto&  batch  = *env.at("batch").data<BatchData*>()[0];
     cudaStream_t stream = core::Context::stream().handle();
-    PrefixSum(env.at("target_key_lengths").buffer().data<int>(), batch.bsz,
-              env.at("k_offsets").buffer().data<int>(), stream);
+    PrefixSum(
+        env.at("target_key_lengths").buffer().data<int>(), batch.bsz, env.at("k_offsets").buffer().data<int>(), stream);
 
     auto& verification = *model_.generation.Verification();
     env.produce("selected_normalized_hidden_buffer",

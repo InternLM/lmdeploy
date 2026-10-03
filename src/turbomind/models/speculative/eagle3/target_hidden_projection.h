@@ -36,10 +36,7 @@ public:
 
     int TapOrdinal(int completed_layer_count) const override;
 
-    void Capture(int           tap_ordinal,
-                 const Tensor& local_residual,
-                 const Tensor&,
-                 cudaStream_t  stream) override
+    void Capture(int tap_ordinal, const Tensor& local_residual, const Tensor&, cudaStream_t stream) override
     {
         Capture(active_phase_, tap_ordinal, local_residual, stream);
     }
@@ -55,16 +52,16 @@ private:
         Tensor projected_local;
     };
 
-    DataType              data_type_;
-    int                   hidden_units_;
-    int                   target_layer_count_;
-    LlamaLinear&          linear_;
-    const LinearWeight&   projection_weight_;
-    std::vector<int>      target_layer_ids_;
-    std::vector<int>      tap_ordinal_by_completed_layer_;
-    CollectHiddenStates   collect_;
-    std::vector<Data>     data_;
-    int                   active_phase_{};
+    DataType            data_type_;
+    int                 hidden_units_;
+    int                 target_layer_count_;
+    LlamaLinear&        linear_;
+    const LinearWeight& projection_weight_;
+    std::vector<int>    target_layer_ids_;
+    std::vector<int>    tap_ordinal_by_completed_layer_;
+    CollectHiddenStates collect_;
+    std::vector<Data>   data_;
+    int                 active_phase_{};
 };
 
 }  // namespace turbomind

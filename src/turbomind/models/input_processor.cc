@@ -45,8 +45,7 @@ InputProcessor::Impl::Impl(const EngineParam& engine,
         d.autoreg_ids_pos = {max_batch_size_, kCPU};  // ! CPU buffer
 
         /// TODO: initialize only when required
-        d.input_embeds_buf = {
-            {max_forward_token_num_ + max_batch_size_, hidden_units}, data_type, kCPUpinned};
+        d.input_embeds_buf = {{max_forward_token_num_ + max_batch_size_, hidden_units}, data_type, kCPUpinned};
     }
 }
 
@@ -203,9 +202,7 @@ void InputProcessor::Impl::PrepareOrdinary(int phase, TensorMap& env)
     env.produce("selected_token_pos", d.selected_token_pos.slice(0, d.selected_token_count));
 }
 
-void InputProcessor::Impl::StageEmbeddingPatches(int                       phase,
-                                                 const Buffer_<Sequence*>& rc,
-                                                 bool                      stage_successor)
+void InputProcessor::Impl::StageEmbeddingPatches(int phase, const Buffer_<Sequence*>& rc, bool stage_successor)
 {
     auto& d = data_.at(phase);
 
@@ -217,33 +214,31 @@ void InputProcessor::Impl::StageEmbeddingPatches(int                       phase
         auto&               c   = *rc[k];
         const SubmittedRow& row = *c.submitted;
         if (!row.autoregres) {
-            const auto& embeds  = c.input_embeds;
-            const auto& offsets = c.input_embeds_offsets;
-            const int begin = row.history_len + c.inflight_input_len;
-            const int end   = begin + row.input_len;
+            const auto&    embeds  = c.input_embeds;
+            const auto&    offsets = c.input_embeds_offsets;
+            const int      begin   = row.history_len + c.inflight_input_len;
+            const int      end     = begin + row.input_len;
             const Interval target{begin, end};
             const Interval successor{begin + 1, std::min(end + 1, c.seq_len)};
             const Interval staged{begin, std::min(end + 1, c.seq_len)};
-            const int packed_begin = input_ids_offsets_buf_[k];
+            const int      packed_begin = input_ids_offsets_buf_[k];
             for (int i = (int)offsets.size() - 1; i >= 0; --i) {
                 Interval r{offsets[i], Interval::Size{(int)embeds[i].shape(0)}};
                 auto     staged_overlap = r & staged;
                 if (auto size = (int)staged_overlap.size()) {
-                    auto src = embeds[i].slice(staged_overlap.begin() - r.begin(), size);
+                    auto src  = embeds[i].slice(staged_overlap.begin() - r.begin(), size);
                     embed_ptr = std::copy_n((const uint8_t*)src.raw_data(), src.byte_size(), embed_ptr);
 
                     if (auto o = r & target; !o.empty()) {
-                        d.target_input_patches.push_back(
-                            {static_cast<int>(o.size()),
-                             staged_row + o.begin() - staged_overlap.begin(),
-                             packed_begin + o.begin() - target.begin()});
+                        d.target_input_patches.push_back({static_cast<int>(o.size()),
+                                                          staged_row + o.begin() - staged_overlap.begin(),
+                                                          packed_begin + o.begin() - target.begin()});
                     }
                     if (stage_successor) {
                         if (auto o = r & successor; !o.empty()) {
-                            d.successor_input_patches.push_back(
-                                {static_cast<int>(o.size()),
-                                 staged_row + o.begin() - staged_overlap.begin(),
-                                 packed_begin + o.begin() - successor.begin()});
+                            d.successor_input_patches.push_back({static_cast<int>(o.size()),
+                                                                 staged_row + o.begin() - staged_overlap.begin(),
+                                                                 packed_begin + o.begin() - successor.begin()});
                         }
                     }
                     staged_row += size;
@@ -253,10 +248,10 @@ void InputProcessor::Impl::StageEmbeddingPatches(int                       phase
     }
 }
 
-void InputProcessor::Impl::ApplyPatches(const Tensor&                  source,
+void InputProcessor::Impl::ApplyPatches(const Tensor&                      source,
                                         const std::vector<EmbeddingPatch>& patches,
-                                        Tensor&                        destination,
-                                        BatchCopy&                     copy)
+                                        Tensor&                            destination,
+                                        BatchCopy&                         copy)
 {
     for (const EmbeddingPatch& patch : patches) {
         copy(source.slice(patch.source_row, patch.row_count).buffer(),

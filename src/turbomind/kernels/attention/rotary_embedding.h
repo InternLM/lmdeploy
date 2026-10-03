@@ -272,8 +272,7 @@ struct FastRoPE {
     }
 
     template<typename T>
-    __device__ __forceinline__ void rotate_pair(
-        Array<T, N>& x, Array<T, N>& y, int i, float timestep) const
+    __device__ __forceinline__ void rotate_pair(Array<T, N>& x, Array<T, N>& y, int i, float timestep) const
     {
         float c, s;
         sincosf(timestep * inv_freq_[i / 2], &s, &c);
@@ -292,8 +291,7 @@ struct FastRoPE {
     }
 
     template<typename T>
-    __device__ __forceinline__ void
-    fill_coefficient_pair(Array<T, N>& cs, int i, float timestep) const
+    __device__ __forceinline__ void fill_coefficient_pair(Array<T, N>& cs, int i, float timestep) const
     {
         float c, s;
         sincosf(timestep * inv_freq_[i / 2], &s, &c);
@@ -327,10 +325,8 @@ struct FastRoPE {
         }
     }
 
-
     template<MropeMode mode, typename T>
-    __device__ __forceinline__ void apply_mrope_impl(
-        Array<T, N>& x, Array<T, N>& y, float timestep) const
+    __device__ __forceinline__ void apply_mrope_impl(Array<T, N>& x, Array<T, N>& y, float timestep) const
     {
         const MropeCoord coord = get_mrope_coord(timestep);
         PRAGMA_UNROLL
@@ -342,8 +338,7 @@ struct FastRoPE {
     }
 
     template<MropeMode mode, typename T>
-    __device__ __forceinline__ void
-    fill_mrope_coefficients(Array<T, N>& cs, float timestep) const
+    __device__ __forceinline__ void fill_mrope_coefficients(Array<T, N>& cs, float timestep) const
     {
         const MropeCoord coord = get_mrope_coord(timestep);
         PRAGMA_UNROLL

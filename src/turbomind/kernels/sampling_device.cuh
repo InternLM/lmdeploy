@@ -17,14 +17,14 @@ namespace turbomind {
 template<int BlockSize>
 struct ProcessedDistributionSampleStorage {
     typename cub::BlockScan<float, BlockSize>::TempStorage scan;
-    float threshold;
-    int   selected_index;
+    float                                                  threshold;
+    int                                                    selected_index;
 };
 
 template<typename T, int BlockSize>
-__device__ int SampleProcessedDistribution(const T*                                         row,
-                                           int                                              kept,
-                                           curandState_t*                                   random_state,
+__device__ int SampleProcessedDistribution(const T*                                       row,
+                                           int                                            kept,
+                                           curandState_t*                                 random_state,
                                            ProcessedDistributionSampleStorage<BlockSize>& storage)
 {
     const int tid = threadIdx.x;

@@ -21,6 +21,8 @@ else()
   add_library(verification_attention STATIC stub.cc)
   target_compile_definitions(verification_attention PUBLIC
       TM_BUILD_VERIFICATION_ATTENTION_SM90=0)
+  # attention.h uses cutlass::FastDivmod; the stub target needs its include path.
+  target_link_libraries(verification_attention PRIVATE nvidia::cutlass::cutlass)
 endif()
 
 set_property(TARGET verification_attention PROPERTY POSITION_INDEPENDENT_CODE ON)

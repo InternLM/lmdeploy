@@ -31,7 +31,7 @@ __global__ void sampling(const T*       probabilities,
     indices += stride * batch_id;
 
     __shared__ ProcessedDistributionSampleStorage<BLOCK_SIZE> storage;
-    const int selected = SampleProcessedDistribution<T, BLOCK_SIZE>(
+    const int                                                 selected = SampleProcessedDistribution<T, BLOCK_SIZE>(
         probabilities, n, curandstate + curandstate_indices[batch_id], storage);
     if (tid == 0) {
         selected_tokens[batch_id] = indices[selected];

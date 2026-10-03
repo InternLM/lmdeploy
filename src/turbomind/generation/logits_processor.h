@@ -26,8 +26,10 @@ namespace turbomind {
 
 class LogitsProcessor: public BaseGenerationParam {
 public:
-    explicit LogitsProcessor(
-        const BaseGenerationParam& base, int phases, bool speculative_engine, int parameter_capacity);
+    explicit LogitsProcessor(const BaseGenerationParam& base,
+                             int                        phases,
+                             bool                       speculative_engine,
+                             int                        parameter_capacity);
 
     void Setup(int phase, TensorMap& env);
 

@@ -173,9 +173,9 @@ __global__ void InitializeTargetVerificationKernel(bool*             block_logit
     const bool verify = active && speculative_row[b];
 
     for (int position = 0; position < position_count; ++position) {
-        const int flat             = position * generation_count + g;
-        block_logits_active[flat]  = active && (position == 0 || verify);
-        effective_history[flat]    = S + position;
+        const int flat            = position * generation_count + g;
+        block_logits_active[flat] = active && (position == 0 || verify);
+        effective_history[flat]   = S + position;
 
         if (position + 1 < position_count) {
             verification_draft_ids[position * generation_count + g] =

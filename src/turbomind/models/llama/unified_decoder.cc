@@ -181,10 +181,10 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
     }
 }
 
-void UnifiedDecoder::Forward(int                     phase,
-                             TensorMap&              args,
+void UnifiedDecoder::Forward(int                             phase,
+                             TensorMap&                      args,
                              const std::vector<WeightType*>& weights,
-                             const Tensor&           selected_hidden_buffer)
+                             const Tensor&                   selected_hidden_buffer)
 {
     TM_FUNCTION_SCOPE();
     /**
@@ -235,7 +235,7 @@ void UnifiedDecoder::Forward(int                     phase,
         token_mask = (const bool*)mask->buffer().raw_data();
     }
     else if (global_token_num > 0) {
-        all_valid_mask_ = Buffer_<bool>{(size_t)global_token_num, kDEVICE};
+        all_valid_mask_ = Buffer_<bool>{global_token_num, kDEVICE};
         TM_CUDA_CHECK(cudaMemsetAsync(all_valid_mask_.data(), 1, global_token_num, core::Context::stream().handle()));
         token_mask = all_valid_mask_.data();
     }
@@ -398,8 +398,7 @@ void UnifiedDecoder::Forward(int                     phase,
             const int completed_layer_count = layer + 1;
             const int tap_ordinal           = tap->TapOrdinal(completed_layer_count);
             if (tap_ordinal >= 0) {
-                tap->Capture(
-                    tap_ordinal, local_residual, local_hidden_states, core::Context::stream().handle());
+                tap->Capture(tap_ordinal, local_residual, local_hidden_states, core::Context::stream().handle());
             }
         }
 

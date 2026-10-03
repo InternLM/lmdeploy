@@ -47,7 +47,7 @@ struct NvtxScope {
         }
     }
 
-    NvtxScope(const NvtxScope&)            = delete;
+    NvtxScope(const NvtxScope&) = delete;
     NvtxScope& operator=(const NvtxScope&) = delete;
 
     ~NvtxScope()

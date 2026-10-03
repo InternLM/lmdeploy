@@ -45,10 +45,10 @@ struct InputProcessor::Impl {
     // staging is requested only by the composed mode.
     void StageEmbeddingPatches(int phase, const Buffer_<Sequence*>& rc, bool stage_successor);
 
-    static void ApplyPatches(const Tensor&                  source,
+    static void ApplyPatches(const Tensor&                      source,
                              const std::vector<EmbeddingPatch>& patches,
-                             Tensor&                        destination,
-                             BatchCopy&                     copy);
+                             Tensor&                            destination,
+                             BatchCopy&                         copy);
 
     void PatchEmbedding(int phase, Tensor& embeds, BatchCopy& copy, TensorMap& env);
     void PatchSuccessorEmbedding(int phase, Tensor& embeds, BatchCopy& copy, TensorMap& env);
@@ -66,7 +66,7 @@ struct InputProcessor::Impl {
 
         Buffer_<int> autoreg_ids_pos;
 
-        Tensor                          input_embeds_buf;
+        Tensor                      input_embeds_buf;
         std::vector<EmbeddingPatch> target_input_patches;
         std::vector<EmbeddingPatch> successor_input_patches;
     };

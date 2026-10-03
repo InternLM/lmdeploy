@@ -60,11 +60,11 @@ struct QwenVit::Impl {
     Buffer_<int> attn_cu_seqlens_buf_;
 
     struct Data {
-        Tensor                           batch_input;
-        int                              batch_size;
-        std::vector<std::array<int, 3>>  grid_thws_host;
-        std::vector<EmbeddingPatch> target_patches;     // (rows, source, destination) for target embeddings
-        std::vector<EmbeddingPatch> successor_patches;  // (rows, source, destination) for successor embeddings
+        Tensor                          batch_input;
+        int                             batch_size;
+        std::vector<std::array<int, 3>> grid_thws_host;
+        std::vector<EmbeddingPatch>     target_patches;     // (rows, source, destination) for target embeddings
+        std::vector<EmbeddingPatch>     successor_patches;  // (rows, source, destination) for successor embeddings
 
         // for RoPE / pos-embed interpolation
         Tensor_<int> grid_thws;
@@ -118,11 +118,11 @@ struct QwenVit::Impl {
 
     std::vector<Data> data_;
 
-    Impl(const EngineParam&       engine,
-         const Context&           ctx,
-         const QwenVitWeight&     weights,
-         int                      phases,
-         bool                     successor_embeddings):
+    Impl(const EngineParam&   engine,
+         const Context&       ctx,
+         const QwenVitWeight& weights,
+         int                  phases,
+         bool                 successor_embeddings):
         weights_{weights},
         config_{weights.config()},
         linear_{*ctx.linear},
@@ -205,10 +205,10 @@ struct QwenVit::Impl {
             if ((not submitted.autoregres) && (not s.multimodal_inputs.empty())) {
                 ++mm_prefill_seqs;
                 images_total += (int)s.multimodal_inputs.size();
-                const int           begin     = submitted.history_len + s.inflight_input_len;
-                const int           end       = begin + submitted.input_len;
-                const Interval      target{begin, end};
-                const Interval      successor{begin + 1, std::min(end + 1, s.seq_len)};
+                const int      begin = submitted.history_len + s.inflight_input_len;
+                const int      end   = begin + submitted.input_len;
+                const Interval target{begin, end};
+                const Interval successor{begin + 1, std::min(end + 1, s.seq_len)};
                 for (const auto& mm : s.multimodal_inputs) {
                     const Interval target_overlap    = mm->interval & target;
                     const Interval successor_overlap = successor_embeddings_ ? mm->interval & successor : Interval{};
@@ -661,7 +661,7 @@ struct QwenVit::Impl {
             const bool          needs_table  = !submitted.autoregres && !s.multimodal_inputs.empty();
             const int           active_start = submitted.history_len + s.inflight_input_len;
             const int           active_end   = active_start + submitted.input_len;
-            const int   q_offset     = d.mrope_offsets_host.data()[i];
+            const int           q_offset     = d.mrope_offsets_host.data()[i];
 
             auto emit = [&](int run_start, int run_n, int run_base, int h2, int w2) {
                 const int a = std::max(run_start, active_start);
@@ -1064,11 +1064,8 @@ struct QwenVit::Impl {
     }
 };
 
-QwenVit::QwenVit(const EngineParam&   engine,
-                 const Context&       ctx,
-                 const QwenVitWeight& weights,
-                 int                  phases,
-                 bool                 successor_embeddings):
+QwenVit::QwenVit(
+    const EngineParam& engine, const Context& ctx, const QwenVitWeight& weights, int phases, bool successor_embeddings):
     impl_{std::make_unique<Impl>(engine, ctx, weights, phases, successor_embeddings)}
 {
 }

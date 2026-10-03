@@ -1,9 +1,9 @@
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/kernels/copy/copy.h"
+#include <algorithm>
 #include <cute/layout.hpp>
 #include <cute/tensor.hpp>
-#include <algorithm>
 #include <limits>
 
 namespace turbomind::core {
@@ -17,13 +17,17 @@ namespace kernel {
 
 extern __shared__ char smem_buf[];
 
-template<int kTileDim, int kVec, typename SrcEngine, typename SrcLayout, typename DstEngine, typename DstLayout,
+template<int kTileDim,
+         int kVec,
+         typename SrcEngine,
+         typename SrcLayout,
+         typename DstEngine,
+         typename DstLayout,
          typename TileGridShape>
-__global__ void __launch_bounds__(256)
-    TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
-                        cute::Tensor<DstEngine, DstLayout> dst,
-                        TileGridShape tile_grid_shape,
-                        int64_t tile_base)
+__global__ void __launch_bounds__(256) TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
+                                                           cute::Tensor<DstEngine, DstLayout> dst,
+                                                           TileGridShape                      tile_grid_shape,
+                                                           int64_t                            tile_base)
 {
     using T = typename SrcEngine::value_type;
     static_assert(std::is_same_v<T, typename DstEngine::value_type>,
@@ -197,16 +201,16 @@ void TransposeCopy(
         for (int i = 2; i < kRank; ++i)
             total_batch *= a.shape(i);
 
-        constexpr int smem_bytes = 2 * kTileDim * (kTileDim + kVec) * sizeof(T);
-        const auto tile_grid_shape = make_shape(N / kTileDim, M / kTileDim, total_batch);
-        const int64_t total_tiles  = product(tile_grid_shape);
-        constexpr int64_t max_blocks = std::numeric_limits<int32_t>::max();
+        constexpr int     smem_bytes      = 2 * kTileDim * (kTileDim + kVec) * sizeof(T);
+        const auto        tile_grid_shape = make_shape(N / kTileDim, M / kTileDim, total_batch);
+        const int64_t     total_tiles     = product(tile_grid_shape);
+        constexpr int64_t max_blocks      = std::numeric_limits<int32_t>::max();
         // Keep every launch within grid.x's limit while retaining 64-bit
         // logical tile indices. Normal workloads use a single launch.
         for (int64_t tile_base = 0; tile_base < total_tiles; tile_base += max_blocks) {
             const auto blocks = static_cast<uint32_t>(std::min(total_tiles - tile_base, max_blocks));
-            kernel::TransposeCopyKernel<kTileDim, kVec><<<blocks, 256, smem_bytes, stream>>>(
-                src_gmem, dst_gmem, tile_grid_shape, tile_base);
+            kernel::TransposeCopyKernel<kTileDim, kVec>
+                <<<blocks, 256, smem_bytes, stream>>>(src_gmem, dst_gmem, tile_grid_shape, tile_base);
         }
     };
 

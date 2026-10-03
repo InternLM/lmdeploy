@@ -70,7 +70,7 @@ inline ft::DataType getDataType(DLDataType source)
             }
             break;
     }
-    __builtin_unreachable();
+    TM_UNREACHABLE;
 }
 
 inline ft::core::Device getDevice(DLDevice source)
@@ -83,7 +83,7 @@ inline ft::core::Device getDevice(DLDevice source)
         case DLDeviceType::kDLCPU:
             return {ft::DeviceType::kCPU, -1};
         default:
-            __builtin_unreachable();
+            TM_UNREACHABLE;
     }
 }
 

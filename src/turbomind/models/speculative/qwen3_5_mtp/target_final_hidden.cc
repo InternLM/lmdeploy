@@ -27,12 +27,11 @@ void TargetFinalHidden::Begin(int phase, const std::vector<int>& local_token_num
     collect_.Begin(phase, local_token_nums);
 }
 
-void TargetFinalHidden::Capture(
-    int, const Tensor&, const Tensor& local_normalized_hidden, cudaStream_t stream)
+void TargetFinalHidden::Capture(int, const Tensor&, const Tensor& local_normalized_hidden, cudaStream_t stream)
 {
     const comm::OwnedTokenRows& owned = collect_.owned(active_phase_);
-    const int first = owned.local_begin();
-    const int rows  = owned.row_count();
+    const int                   first = owned.local_begin();
+    const int                   rows  = owned.row_count();
     if (rows == 0) {
         return;
     }
@@ -41,7 +40,7 @@ void TargetFinalHidden::Capture(
 
     const size_t element_bytes = byte_size(captured.dtype());
     const size_t row_bytes     = size_t(hidden_units_) * element_bytes;
-    const auto* source = static_cast<const uint8_t*>(local_normalized_hidden.raw_data())
+    const auto*  source        = static_cast<const uint8_t*>(local_normalized_hidden.raw_data())
                          + size_t(first) * local_normalized_hidden.stride(0) * element_bytes;
     TM_CUDA_CHECK(cudaMemcpy2DAsync(captured.raw_data(),
                                     captured.stride(0) * element_bytes,

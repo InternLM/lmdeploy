@@ -19,19 +19,16 @@ public:
 protected:
     HiddenStateTap* TapSource() override;
     Tensor          InitialCarry(int phase, cudaStream_t stream) override;
-    Tensor          Embed(int                phase,
+    Tensor          Embed(int                 phase,
                           const Buffer_<int>& ids,
-                          int                rows,
+                          int                 rows,
                           const DraftContext& ctx,
-                          TensorMap&         env,
-                          EmbedStage         stage) override;
+                          TensorMap&          env,
+                          EmbedStage          stage) override;
     CombineResult   Combine(int phase, Tensor embeddings, Tensor carry, int rows, TensorMap& env) override;
-    Tensor          NextCarry(const LanguageModel::DecoderOutputs& out,
-                              int                                 step,
-                              int                                 phase,
-                              TensorMap&                          env,
-                              cudaStream_t                        stream) override;
-    LanguageModel&  HeadModel() override;
+    Tensor          NextCarry(
+                 const LanguageModel::DecoderOutputs& out, int step, int phase, TensorMap& env, cudaStream_t stream) override;
+    LanguageModel& HeadModel() override;
 
 private:
     struct Data {

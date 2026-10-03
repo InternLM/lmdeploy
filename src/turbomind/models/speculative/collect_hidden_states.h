@@ -59,13 +59,13 @@ private:
         int                  token_num{};
     };
 
-    int        capture_width_;
-    int        hidden_units_;
-    int        capacity_;
-    int        attn_dp_rank_;
-    int        model_tp_group_;
-    int        model_tp_rank_;
-    int        model_tp_size_;
+    int                   capture_width_;
+    int                   hidden_units_;
+    int                   capacity_;
+    int                   attn_dp_rank_;
+    int                   model_tp_group_;
+    int                   model_tp_rank_;
+    int                   model_tp_size_;
     comm::DeviceCommImpl* d_comm_;
     std::vector<Data>     data_;
 };

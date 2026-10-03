@@ -1,5 +1,6 @@
-import _turbomind as _tm
 import torch
+
+from lmdeploy.turbomind import _tm
 
 
 def run_verification_attention(

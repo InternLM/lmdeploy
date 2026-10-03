@@ -22,8 +22,8 @@ bool SpeculativeModelRegistry::Contains(std::string_view name) const
     return factories_.find(name) != factories_.end();
 }
 
-std::unique_ptr<SpeculativeModel>
-SpeculativeModelRegistry::Create(std::string_view name, const SpeculativeModelArgs& args) const
+std::unique_ptr<SpeculativeModel> SpeculativeModelRegistry::Create(std::string_view            name,
+                                                                   const SpeculativeModelArgs& args) const
 {
     auto it = factories_.find(name);
     TM_CHECK(it != factories_.end()) << "unknown speculative method '" << name << "'";

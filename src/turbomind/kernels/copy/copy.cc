@@ -27,8 +27,7 @@ static std::pair<Layout, Layout> coalesce_copy_dims(const Layout& a, const Layou
         if (i >= begin && a.shape(i) == 1) {
             continue;
         }
-        if (shape.size() > static_cast<size_t>(begin)
-            && a.stride(i) == shape.back() * src_stride.back()
+        if (shape.size() > static_cast<size_t>(begin) && a.stride(i) == shape.back() * src_stride.back()
             && b.stride(i) == shape.back() * dst_stride.back()) {
             shape.back() *= a.shape(i);
         }
@@ -103,8 +102,8 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
     is_transpose = is_transpose && reinterpret_cast<uintptr_t>(src.raw_data()) % 16 == 0
                    && reinterpret_cast<uintptr_t>(dst.raw_data()) % 16 == 0;
     for (int i = 0; is_transpose && i < rank; ++i) {
-        is_transpose = (i == 0 || byte_size(dtype, a.stride(i)) % 16 == 0)
-                       && (i == J || byte_size(dtype, b.stride(i)) % 16 == 0);
+        is_transpose =
+            (i == 0 || byte_size(dtype, a.stride(i)) % 16 == 0) && (i == J || byte_size(dtype, b.stride(i)) % 16 == 0);
     }
 
     if (is_transpose) {

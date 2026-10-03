@@ -80,7 +80,7 @@ auto compute_thr_partition(const ssize_t* shape, int kVec) -> std::array<ssize_t
 
     ssize_t remaining = 256;
     for (int i = 0; i < kRank - 1; ++i) {
-        const ssize_t extent = shape[i] / (i == 0 ? kVec : 1);
+        const ssize_t extent  = shape[i] / (i == 0 ? kVec : 1);
         ssize_t       threads = remaining;
         while (threads > 1 && threads > extent) {
             threads /= 2;

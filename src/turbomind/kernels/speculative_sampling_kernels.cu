@@ -119,7 +119,7 @@ __device__ void VerifyOneProcessedDraft(const float*                    row,
 
     if (thread_idx == 0) {
         const float acceptance_uniform = curand_uniform(random_state);
-        accepted = storage.probability_draft == 1.f
+        accepted                       = storage.probability_draft == 1.f
                    || (storage.probability_draft > 0.f && acceptance_uniform <= storage.probability_draft);
         if (accepted) {
             selected = draft;
@@ -159,8 +159,7 @@ __device__ void VerifyOneProcessedDraft(const float*                    row,
         cub::BlockScan<float, BlockSize>(storage.recovery_scan).InclusiveSum(probability, inclusive_mass, prefix_op);
         __syncthreads();
 
-        const int candidate =
-            probability > 0.f && inclusive_mass > storage.recovery_threshold ? i : INT_MAX;
+        const int candidate = probability > 0.f && inclusive_mass > storage.recovery_threshold ? i : INT_MAX;
         const int first_crossing =
             cub::BlockReduce<int, BlockSize>(storage.index_reduce).Reduce(candidate, MinIndexOp{});
         if (thread_idx == 0 && first_crossing != INT_MAX) {
@@ -188,8 +187,7 @@ __device__ void SampleOneProcessedDistribution(const float*                    r
                                                int&                            selected,
                                                VerifySharedStorage<BlockSize>& storage)
 {
-    const int selected_index =
-        SampleProcessedDistribution<float, BlockSize>(row, kept, random_state, storage.sample);
+    const int selected_index = SampleProcessedDistribution<float, BlockSize>(row, kept, random_state, storage.sample);
     if (threadIdx.x == 0) {
         selected = token_row[selected_index];
     }
@@ -206,7 +204,7 @@ __global__ void VerifyTargetBlock(VerifyTargetBlockParams p)
         return;
     }
 
-    const int g = g_begin;
+    const int  g = g_begin;
     __shared__ VerifySharedStorage<BlockSize> storage;
     __shared__ int                            selected;
     __shared__ int                            span_len;
@@ -226,8 +224,7 @@ __global__ void VerifyTargetBlock(VerifyTargetBlockParams p)
         if (continue_verification) {
             const float* row = p.probabilities + g * p.probability_stride;
             const int*   ids = p.probability_token_ids + g * p.token_id_stride;
-            SampleOneProcessedDistribution<BlockSize>(
-                row, ids, p.kept_count[g], random_state, selected, storage);
+            SampleOneProcessedDistribution<BlockSize>(row, ids, p.kept_count[g], random_state, selected, storage);
             __syncthreads();
 
             if (threadIdx.x == 0) {
@@ -245,15 +242,8 @@ __global__ void VerifyTargetBlock(VerifyTargetBlockParams p)
                 const int*   ids   = p.probability_token_ids + flat * p.token_id_stride;
                 const int    draft = p.verification_draft_ids[position * p.draft_row_stride + g];
 
-                VerifyOneProcessedDraft<BlockSize>(row,
-                                                   ids,
-                                                   p.kept_count[flat],
-                                                   draft,
-                                                   p.greedy[flat],
-                                                   random_state,
-                                                   selected,
-                                                   accepted,
-                                                   storage);
+                VerifyOneProcessedDraft<BlockSize>(
+                    row, ids, p.kept_count[flat], draft, p.greedy[flat], random_state, selected, accepted, storage);
                 __syncthreads();
 
                 if (threadIdx.x == 0) {

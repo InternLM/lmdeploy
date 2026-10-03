@@ -21,8 +21,8 @@ public:
                       int                hidden_units,
                       DataType           data_type);
 
-    void Begin(int phase, const std::vector<int>& local_token_nums) override;
-    void SeedWarmup(int phase, cudaStream_t stream) override;
+    void   Begin(int phase, const std::vector<int>& local_token_nums) override;
+    void   SeedWarmup(int phase, cudaStream_t stream) override;
     Tensor Gather(int phase, cudaStream_t stream);
 
     int TapOrdinal(int completed_layer_count) const override
@@ -30,16 +30,13 @@ public:
         return completed_layer_count == target_layer_count_ ? 0 : -1;
     }
 
-    void Capture(int,
-                 const Tensor&,
-                 const Tensor& local_normalized_hidden,
-                 cudaStream_t  stream) override;
+    void Capture(int, const Tensor&, const Tensor& local_normalized_hidden, cudaStream_t stream) override;
 
 private:
-    int                  target_layer_count_;
-    int                  hidden_units_;
-    CollectHiddenStates  collect_;
-    int                  active_phase_{};
+    int                 target_layer_count_;
+    int                 hidden_units_;
+    CollectHiddenStates collect_;
+    int                 active_phase_{};
 };
 
 }  // namespace turbomind

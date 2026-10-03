@@ -48,10 +48,10 @@ void BindSpeculativeSequence(py::module_& module)
            py::handle finished_on_entry_object,
            py::handle speculative_row_object,
            py::handle accepted_draft_count_object,
-            py::handle request_to_generation_row_offsets_object,
-            uintptr_t  stream_ptr) {
+           py::handle request_to_generation_row_offsets_object,
+           uintptr_t  stream_ptr) {
             CudaDeviceGuard guard{GetCudaOrdinal(entry_sequence_length_object)};
-            auto block_logits_active = detail::ConsumeDLPackWithStrides(block_logits_active_object, stream_ptr);
+            auto block_logits_active    = detail::ConsumeDLPackWithStrides(block_logits_active_object, stream_ptr);
             auto effective_history      = detail::ConsumeDLPackWithStrides(effective_history_object, stream_ptr);
             auto verification_draft_ids = detail::ConsumeDLPackWithStrides(verification_draft_ids_object, stream_ptr);
             auto request_token_ids_ptrs = detail::ConsumeDLPackWithStrides(request_token_ids_ptrs_object, stream_ptr);

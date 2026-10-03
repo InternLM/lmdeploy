@@ -497,7 +497,7 @@ void CollectHiddenStates(const Tensor& src, const Buffer_<int>& idxs, Ref<Tensor
         invoke(ushort{});
     }
     else {
-        __builtin_unreachable();
+        TM_UNREACHABLE;
     }
 }
 

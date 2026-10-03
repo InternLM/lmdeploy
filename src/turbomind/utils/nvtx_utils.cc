@@ -72,7 +72,7 @@ void ftNvtxRangePush(std::string_view name)
     auto registered_name = getScope();
     registered_name.append(name.data(), name.size());
 
-    nvtxStringHandle_t name_id = nvtxDomainRegisterStringA(nullptr, registered_name.c_str());
+    nvtxStringHandle_t    name_id    = nvtxDomainRegisterStringA(nullptr, registered_name.c_str());
     nvtxEventAttributes_t attributes = {0};
     attributes.messageType           = NVTX_MESSAGE_TYPE_REGISTERED;
     attributes.message.registered    = name_id;

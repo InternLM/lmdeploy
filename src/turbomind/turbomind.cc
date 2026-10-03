@@ -330,20 +330,18 @@ void TurboMind::Impl::CreateEngine(int index)
     const ModelWeight& target_weights = *weights_[index]->text_model_ptr();
 
     const size_t prefix_before = cache_registry.prefix().accumulation_bytes();
-    auto model = std::make_unique<LanguageModel>(cache_registry, param, ctx, target_weights, phases_);
-    const size_t target_end = cache_registry.prefix().accumulation_bytes();
+    auto         model         = std::make_unique<LanguageModel>(cache_registry, param, ctx, target_weights, phases_);
+    const size_t target_end    = cache_registry.prefix().accumulation_bytes();
 
     std::unique_ptr<SpeculativeModel> spec_model;
     if (!param.spec_method.empty()) {
         auto& registry = SpeculativeModelRegistry::Instance();
         TM_CHECK(registry.Contains(param.spec_method)) << "unknown speculative method '" << param.spec_method << "'";
         TM_CHECK(draft_weights) << "speculative method '" << param.spec_method << "' has no draft weight tree";
-        spec_model = registry.Create(
-            param.spec_method, {cache_registry, param, ctx, *model, *draft_weights, phases_});
+        spec_model = registry.Create(param.spec_method, {cache_registry, param, ctx, *model, *draft_weights, phases_});
     }
-    const size_t combined_end = cache_registry.prefix().accumulation_bytes();
-    const bool successor_embeddings =
-        spec_model && spec_model->requires_successor_input_embeddings();
+    const size_t combined_end         = cache_registry.prefix().accumulation_bytes();
+    const bool   successor_embeddings = spec_model && spec_model->requires_successor_input_embeddings();
 
     TM_LOG_INFO("Target KV block bytes: {}", target_end - prefix_before);
     TM_LOG_INFO("Draft KV block bytes: {}", combined_end - target_end);
