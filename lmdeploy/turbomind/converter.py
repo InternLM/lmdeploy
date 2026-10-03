@@ -27,7 +27,11 @@ from .weight_format import (
 logger = get_logger('lmdeploy')
 
 
-def _build_quantized_formats(model_format: str | None, group_size: int | None, fp8_block_out: int | None = None) -> list[WeightFormat]:
+def _build_quantized_formats(
+    model_format: str | None,
+    group_size: int | None,
+    fp8_block_out: int | None = None,
+) -> list[WeightFormat]:
     formats: list[WeightFormat] = []
     if model_format in (None, 'hf'):
         pass

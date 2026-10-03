@@ -5,8 +5,8 @@ Ornith-style checkpoints carry float-quantized FP8 weights with a
 per-output-channel ``.weight_scale`` (BF16, shape [N, 1]) instead of the
 blocked ``.weight_scale_inv`` (shape [K//128, N//128]).
 """
-import torch
 import pytest
+import torch
 
 from lmdeploy.turbomind.converter import _build_quantized_formats
 from lmdeploy.turbomind.weight_format import FP8Format
@@ -36,15 +36,16 @@ def test_per_channel_rejects_blocked_scale():
 
 def test_per_channel_post_process_expands_to_k_groups():
     fmt = FP8Format(block_out=1)
-    K, N = 2048, 512  # down_proj: weight [N=512? no] -> after normalize [K, N]
-    # TM layout after normalize: weight [K, N], scale [N, 1]
+    K, N = 2048, 512
+    # post_process runs after normalize(): weight is TM layout [K, N] and the
+    # per-channel scale [N, 1] has been transposed to [1, N].
     weight = torch.randn(K, N)
-    scales = torch.randn(N, 1)
+    scales = torch.randn(1, N)
     out = fmt.post_process({'weight': weight, 'scales': scales})
     assert out['scales'].shape == (K // 128, N)
-    # every K-group row identical to the original per-channel column
-    assert torch.equal(out['scales'][0], scales.squeeze(1))
-    assert torch.equal(out['scales'][-1], scales.squeeze(1))
+    # every K-group row identical to the original per-channel scale
+    assert torch.equal(out['scales'][0], scales.squeeze(0))
+    assert torch.equal(out['scales'][-1], scales.squeeze(0))
 
 
 def test_blocked_post_process_untouched():
@@ -68,8 +69,10 @@ def test_dequant_per_channel_matches_reference():
     fmt = FP8Format(block_out=1)
     K, N = 256, 64
     w = torch.randn(K, N).to(torch.float8_e4m3fn)
-    scale = torch.rand(N, 1) + 0.1
+    # normalize-transposed per-channel scale [1, N] (was [N, 1] in checkpoint)
+    scale = torch.rand(1, N) + 0.1
     out = fmt.post_process({'weight': w, 'scales': scale})
+    assert out['scales'].shape == (K // 128, N)
     deq = fmt.dequant(out, torch.float16)
     ref = (w.view(torch.float8_e4m3fn).float() * scale.float().expand(K, N)).to(torch.float16)
     assert torch.allclose(deq['weight'], ref, atol=1e-3)
