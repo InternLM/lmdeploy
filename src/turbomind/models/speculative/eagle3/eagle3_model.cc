@@ -29,7 +29,7 @@ Eagle3Model::Eagle3Model(const SpeculativeModelArgs& args):
 
         if (comm_.d_comm) {
             auto symmetric_allocator = GetSymmAllocator(comm_.d_comm);
-            d.draft_carry = Tensor{{p.max_batch_size, dw.hidden_units}, dw.data_type, symmetric_allocator};
+            d.draft_carry            = Tensor{{p.max_batch_size, dw.hidden_units}, dw.data_type, symmetric_allocator};
         }
         else {
             d.draft_carry = Tensor{{p.max_batch_size, dw.hidden_units}, dw.data_type, kDEVICE};
@@ -62,12 +62,13 @@ Tensor Eagle3Model::Embed(int, const Buffer_<int>& ids, int rows, const DraftCon
 {
     const auto& dw = draft_.weights();
 
-    Tensor storage = use_ag2d_ ? Tensor{env.at("symm_buf").buffer().view(dw.data_type), {rows, dw.hidden_units}}
-                               : ctx.embedding_storage.slice({0, 0}, {rows, dw.hidden_units});
+    Tensor storage = use_ag2d_ ? Tensor{env.at("symm_buf").buffer().view(dw.data_type), {rows, dw.hidden_units}} :
+                                 ctx.embedding_storage.slice({0, 0}, {rows, dw.hidden_units});
     return draft_.Embed(ids, storage, env);
 }
 
-FixedChainSpeculativeModel::CombineResult Eagle3Model::Combine(int phase, Tensor embeddings, Tensor carry, int rows, TensorMap&)
+FixedChainSpeculativeModel::CombineResult
+Eagle3Model::Combine(int phase, Tensor embeddings, Tensor carry, int rows, TensorMap&)
 {
     Data&              data   = data_[phase];
     const auto&        dw     = draft_.weights();
@@ -94,16 +95,13 @@ FixedChainSpeculativeModel::CombineResult Eagle3Model::Combine(int phase, Tensor
     return result;
 }
 
-Tensor Eagle3Model::NextCarry(const LanguageModel::DecoderOutputs& out,
-                              int                                 step,
-                              int                                 phase,
-                              TensorMap&                          env,
-                              cudaStream_t                        stream)
+Tensor Eagle3Model::NextCarry(
+    const LanguageModel::DecoderOutputs& out, int step, int phase, TensorMap& env, cudaStream_t stream)
 {
-    Data&                data  = data_[phase];
-    FixedChainPhaseData& chain = fixed_chain_.phase_data(phase);
+    Data&                data        = data_[phase];
+    FixedChainPhaseData& chain       = fixed_chain_.phase_data(phase);
     CommonData&          common_data = common(phase);
-    const auto&          dw     = draft_.weights();
+    const auto&          dw          = draft_.weights();
 
     const int candidate_count = chain.draft_extension_query_count;
 
@@ -118,9 +116,10 @@ Tensor Eagle3Model::NextCarry(const LanguageModel::DecoderOutputs& out,
     const int tp0_size    = comm_.d_comm ? comm_.d_comm->n_ranks(0) : 1;
     const int tp1_size    = comm_.d_comm ? comm_.d_comm->n_ranks(comm_.d_tp_group) : 1;
 
-    const comm::OwnedTokenRows owned = step == 0 ?
-        comm::ComputeTokenOwnership(global_rank, tp0_size, tp1_size, batch_local_token_nums.data()) :
-        comm::ComputeTokenOwnership(global_rank, tp0_size, tp1_size, chain.draft_extension_local_token_nums.data());
+    const comm::OwnedTokenRows owned =
+        step == 0 ?
+            comm::ComputeTokenOwnership(global_rank, tp0_size, tp1_size, batch_local_token_nums.data()) :
+            comm::ComputeTokenOwnership(global_rank, tp0_size, tp1_size, chain.draft_extension_local_token_nums.data());
 
     const Buffer_<int> selected_rows = step == 0 ? common_data.draft_selected_token_pos.slice(0, candidate_count) :
                                                    draft_identity_token_pos_.slice(0, candidate_count);
@@ -138,12 +137,8 @@ Tensor Eagle3Model::NextCarry(const LanguageModel::DecoderOutputs& out,
                            stream);
 
     if (tp1_size > 1) {
-        comm_.d_comm->AllReduceSum(carry.raw_data(),
-                                   carry.raw_data(),
-                                   carry.size(),
-                                   carry.dtype(),
-                                   comm_.d_tp_group,
-                                   stream);
+        comm_.d_comm->AllReduceSum(
+            carry.raw_data(), carry.raw_data(), carry.size(), carry.dtype(), comm_.d_tp_group, stream);
     }
 
     return carry;

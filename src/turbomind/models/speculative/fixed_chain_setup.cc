@@ -25,8 +25,8 @@ FixedChainSetup::FixedChainSetup(const Communicators& comm, int phases, int max_
 
 void FixedChainSetup::Setup(int phase, const Buffer_<Sequence*>& requests, core::BatchCopy& copy)
 {
-    FixedChainPhaseData& data = data_.at(phase);
-    const int batch_size      = requests.size();
+    FixedChainPhaseData& data       = data_.at(phase);
+    const int            batch_size = requests.size();
 
     Buffer_<int>& extension = data.draft_extension_q_offsets_host;
     extension[0]            = 0;
@@ -35,15 +35,14 @@ void FixedChainSetup::Setup(int phase, const Buffer_<Sequence*>& requests, core:
     data.refresh_prefill = {};
 
     const int decode_request_count =
-        std::find_if(requests.begin(), requests.end(), [](const Sequence* request) {
-            return request->submitted->input_len > 1;
-        })
+        std::find_if(
+            requests.begin(), requests.end(), [](const Sequence* request) { return request->submitted->input_len > 1; })
         - requests.begin();
 
     for (int b = 0; b < batch_size; ++b) {
         const SubmittedRow& row = *requests[b]->submitted;
 
-        extension[b + 1] = extension[b] + static_cast<int>(row.is_extension_candidate());
+        extension[b + 1]             = extension[b] + static_cast<int>(row.is_extension_candidate());
         limit_to_accept_len_host_[b] = row.autoregres;
 
         auto& partition = b < decode_request_count ? data.refresh_decode : data.refresh_prefill;
@@ -65,9 +64,7 @@ void FixedChainSetup::Setup(int phase, const Buffer_<Sequence*>& requests, core:
     }
 
     data.draft_extension_global_query_count =
-        std::accumulate(data.draft_extension_local_token_nums.begin(),
-                        data.draft_extension_local_token_nums.end(),
-                        0);
+        std::accumulate(data.draft_extension_local_token_nums.begin(), data.draft_extension_local_token_nums.end(), 0);
 
     data.extension_decode                  = {};
     data.extension_decode.request_count    = batch_size;

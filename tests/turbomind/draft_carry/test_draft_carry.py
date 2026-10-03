@@ -5,14 +5,14 @@ from collections.abc import Sequence
 import pytest
 import torch
 
+from .draft_carry import (
+    is_available,
+    select_draft_carry,
+)
 from .reference import (
     OwnedTokenRows,
     compute_token_ownership,
     select_draft_carry_reference,
-)
-from .draft_carry import (
-    is_available,
-    select_draft_carry,
 )
 
 pytestmark = pytest.mark.skipif(

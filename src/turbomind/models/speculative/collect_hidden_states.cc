@@ -34,8 +34,7 @@ CollectHiddenStates::CollectHiddenStates(const EngineParam& engine,
     for (Data& data : data_) {
         data.captured = Tensor{{capacity_, capture_width_}, data_type, kDEVICE};
         if (model_tp_size_ > 1) {
-            data.gathered_padded = {
-                {model_tp_size_ * capacity_, hidden_units_}, data_type, symmetric_allocator};
+            data.gathered_padded = {{model_tp_size_ * capacity_, hidden_units_}, data_type, symmetric_allocator};
         }
     }
 }
@@ -54,7 +53,7 @@ void CollectHiddenStates::Begin(int phase, const std::vector<int>& local_token_n
 void CollectHiddenStates::SeedWarmup(int phase, cudaStream_t stream)
 {
     Data&     data = data_.at(phase);
-    const int rows  = data.owned.row_count();
+    const int rows = data.owned.row_count();
     if (rows > 0) {
         TM_CUDA_CHECK(cudaMemsetAsync(
             data.captured.raw_data(), 0, byte_size(data.captured.dtype(), size_t(rows) * capture_width_), stream));
@@ -64,7 +63,7 @@ void CollectHiddenStates::SeedWarmup(int phase, cudaStream_t stream)
 Tensor CollectHiddenStates::Gather(int phase, const Tensor& local_buffer, cudaStream_t stream)
 {
     Data&     data = data_.at(phase);
-    const int rows  = data.owned.row_count();
+    const int rows = data.owned.row_count();
     if (model_tp_size_ == 1) {
         return local_buffer.slice({0, 0}, {rows, local_buffer.shape(1)});
     }

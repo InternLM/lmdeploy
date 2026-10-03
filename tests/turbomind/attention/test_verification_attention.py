@@ -3,7 +3,7 @@ import math
 import pytest
 import torch
 
-import _turbomind as _tm
+from lmdeploy.turbomind import _tm
 
 from .verification_attention import run_verification_attention
 
@@ -84,13 +84,6 @@ def _reference(case, prefix_k, prefix_v, packed_qkv, q_bias,
     for request, history in enumerate(case['histories']):
         prefix_end = prefix_begin + history
         query_end = query_begin + p
-        prefix_positions = _positions(request,
-                                      history,
-                                      mrope_mode=case['mrope_mode'],
-                                      position_ids=mrope_position_ids,
-                                      position_delta=mrope_position_delta,
-                                      mrope_length=mrope_length,
-                                      device=packed_qkv.device)
         all_positions = _positions(request,
                                    history + p,
                                    mrope_mode=case['mrope_mode'],

@@ -27,9 +27,7 @@ TargetVerification::TargetVerification(GenerationShared&        shared,
                                        DataType                 hidden_dtype,
                                        bool                     enable_metrics,
                                        int                      phases):
-    shared_{shared},
-    draft_count_{policy.max_proposals()},
-    enable_metrics_{enable_metrics}
+    shared_{shared}, draft_count_{policy.max_proposals()}, enable_metrics_{enable_metrics}
 {
     const int max_batch_size = shared_.max_batch_size;
     const int K              = draft_count_ + 1;
@@ -99,8 +97,7 @@ void TargetVerification::PublishDraftInputs(int phase, TensorMap& env)
     auto& g = *shared_.data.at(phase);
 
     env.produce("request_token_ids_ptrs", d.request_token_ids_ptrs.slice(0, g.request_count));
-    env.produce("request_to_generation_row_offsets",
-                g.request_to_generation_row_offsets.slice(0, g.request_count + 1));
+    env.produce("request_to_generation_row_offsets", g.request_to_generation_row_offsets.slice(0, g.request_count + 1));
     env.produce("accept_len", d.accept_len.slice(0, g.request_count));
     env.produce("finished_on_entry", d.finished_on_entry.slice(0, g.request_count));
     env.produce("speculative_row", d.speculative_row.slice(0, g.request_count));
@@ -194,22 +191,22 @@ void TargetVerification::ProcessTargetBlock(int phase, int position_count, const
                                                        d.block_logits_active.slice(0, rows));
 
     VerifyTargetBlockParams p{};
-    p.verification_draft_ids = d.verification_draft_ids.data();
-    p.draft_row_stride       = G;
-    p.logits_active          = d.block_logits_active.data();
-    p.random_states          = reinterpret_cast<curandState_t*>(shared_.random_states.raw_data());
-    p.random_state_indices   = g.random_state_indices.data();
-    p.request_token_ids_ptrs = d.request_token_ids_ptrs.data();
-    p.entry_sequence_length  = env.at("sequence_length").data<int>();
+    p.verification_draft_ids        = d.verification_draft_ids.data();
+    p.draft_row_stride              = G;
+    p.logits_active                 = d.block_logits_active.data();
+    p.random_states                 = reinterpret_cast<curandState_t*>(shared_.random_states.raw_data());
+    p.random_state_indices          = g.random_state_indices.data();
+    p.request_token_ids_ptrs        = d.request_token_ids_ptrs.data();
+    p.entry_sequence_length         = env.at("sequence_length").data<int>();
     p.request_to_generation_offsets = g.request_to_generation_row_offsets.data();
-    p.speculative_row              = d.speculative_row.data();
-    p.selected_span_ids            = d.selected_span_ids.data();
-    p.selected_span_stride         = draft_count_ + 1;
-    p.accept_len                   = d.accept_len.data();
-    p.accepted_draft_count = enable_metrics_ ? d.accepted_draft_count.data() : nullptr;
-    p.request_count        = B;
-    p.generation_count     = G;
-    p.position_count       = position_count;
+    p.speculative_row               = d.speculative_row.data();
+    p.selected_span_ids             = d.selected_span_ids.data();
+    p.selected_span_stride          = draft_count_ + 1;
+    p.accept_len                    = d.accept_len.data();
+    p.accepted_draft_count          = enable_metrics_ ? d.accepted_draft_count.data() : nullptr;
+    p.request_count                 = B;
+    p.generation_count              = G;
+    p.position_count                = position_count;
 
     shared_.sampling->VerifyTargetBlock(phase, probabilities, p);
 }

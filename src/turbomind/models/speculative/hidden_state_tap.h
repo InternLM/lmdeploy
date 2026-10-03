@@ -11,10 +11,7 @@ namespace turbomind {
 
 class HiddenStateTap {
 public:
-    explicit HiddenStateTap(const int& is_warm_up):
-        is_warm_up_{is_warm_up}
-    {
-    }
+    explicit HiddenStateTap(const int& is_warm_up): is_warm_up_{is_warm_up} {}
 
     virtual ~HiddenStateTap() = default;
 

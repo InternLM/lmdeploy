@@ -20,8 +20,8 @@ struct VerifyTargetBlockParams {
     const int*     random_state_indices;
 
     int* const* request_token_ids_ptrs;
-    const int* entry_sequence_length;
-    const int* request_to_generation_offsets;
+    const int*  entry_sequence_length;
+    const int*  request_to_generation_offsets;
     const bool* speculative_row;
 
     int* selected_span_ids;

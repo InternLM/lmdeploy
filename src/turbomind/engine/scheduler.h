@@ -87,16 +87,16 @@ TM_ENV_VAR(CACHE, LOG_INTERVAL, 0);  // 0 = disabled; N = log every N Schedule()
 
 class Scheduler {
 public:
-    Scheduler(ObjectAllocator&   alloc,
-              CacheRegistry      registry,
-              int                logical_block_size,
-              bool               enable_prefix_caching,
-              const std::string& cache_prompt,
-              int                cache_prompt_boundary_skip,
-              const std::string& cache_generation,
-              int                session_len,
+    Scheduler(ObjectAllocator&         alloc,
+              CacheRegistry            registry,
+              int                      logical_block_size,
+              bool                     enable_prefix_caching,
+              const std::string&       cache_prompt,
+              int                      cache_prompt_boundary_skip,
+              const std::string&       cache_generation,
+              int                      session_len,
               const SpeculativePolicy* policy,
-              const int&         is_warm_up);
+              const int&               is_warm_up);
 
     ~Scheduler();
 
@@ -215,18 +215,18 @@ private:
 
     void LogProfile(const PerformanceCounter& counter) const;
 
-    bool             enable_prefix_caching_{false};
-    CacheMode        prompt_cache_mode_{CacheMode::kAuto};
-    int              cache_prompt_boundary_skip_{1};
-    CacheMode        generation_cache_mode_{CacheMode::kAuto};
-    const int        session_len_;
+    bool                     enable_prefix_caching_{false};
+    CacheMode                prompt_cache_mode_{CacheMode::kAuto};
+    int                      cache_prompt_boundary_skip_{1};
+    CacheMode                generation_cache_mode_{CacheMode::kAuto};
+    const int                session_len_;
     const SpeculativePolicy* policy_;
-    const int&       is_warm_up_;
-    ObjectAllocator& alloc_;     // owned by Engine; also used outside the scheduler
-    CacheRegistry    registry_;  // owned: registration is closed before construction
-    CacheBlockPool   cache_;
-    LogicalBlockPool logical_;
-    PrefixTrie       trie_;
+    const int&               is_warm_up_;
+    ObjectAllocator&         alloc_;     // owned by Engine; also used outside the scheduler
+    CacheRegistry            registry_;  // owned: registration is closed before construction
+    CacheBlockPool           cache_;
+    LogicalBlockPool         logical_;
+    PrefixTrie               trie_;
 
     PerformanceCounter counter_;
     PerformanceCounter interv_;

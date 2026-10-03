@@ -181,10 +181,10 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
     }
 }
 
-void UnifiedDecoder::Forward(int                     phase,
-                             TensorMap&              args,
+void UnifiedDecoder::Forward(int                             phase,
+                             TensorMap&                      args,
                              const std::vector<WeightType*>& weights,
-                             const Tensor&           selected_hidden_buffer)
+                             const Tensor&                   selected_hidden_buffer)
 {
     TM_FUNCTION_SCOPE();
     /**
@@ -398,8 +398,7 @@ void UnifiedDecoder::Forward(int                     phase,
             const int completed_layer_count = layer + 1;
             const int tap_ordinal           = tap->TapOrdinal(completed_layer_count);
             if (tap_ordinal >= 0) {
-                tap->Capture(
-                    tap_ordinal, local_residual, local_hidden_states, core::Context::stream().handle());
+                tap->Capture(tap_ordinal, local_residual, local_hidden_states, core::Context::stream().handle());
             }
         }
 

@@ -25,7 +25,7 @@ public:
 
     void Run(BatchOp op, int phase, TensorMap& env) override;
 
-    HiddenStateTap*         Tap(int phase) override;
+    HiddenStateTap* Tap(int phase) override;
 
     void RunDraft(int phase, const DraftContext& ctx, TensorMap& env) final;
 
@@ -38,7 +38,11 @@ protected:
         Tensor        draft_selected_normalized_hidden;
     };
 
-    enum class EmbedStage { kRefresh, kExtension };
+    enum class EmbedStage
+    {
+        kRefresh,
+        kExtension
+    };
 
     struct CombineResult {
         Tensor residual;
@@ -53,12 +57,8 @@ protected:
 
     /// Embedding lookup for the token entering the current step. `rows` sizes the
     /// storage; refresh-stage hooks may patch the embeddings in place.
-    virtual Tensor Embed(int                phase,
-                         const Buffer_<int>& ids,
-                         int                rows,
-                         const DraftContext& ctx,
-                         TensorMap&         env,
-                         EmbedStage         stage) = 0;
+    virtual Tensor
+    Embed(int phase, const Buffer_<int>& ids, int rows, const DraftContext& ctx, TensorMap& env, EmbedStage stage) = 0;
 
     /// Norm-concat of embeddings and carry, projected to the decoder input. The
     /// returned residual feeds the decoder; attention_input is optional.
@@ -66,11 +66,8 @@ protected:
 
     /// Carry entering step `step + 1`, derived from the previous decoder output.
     /// `step` is 0 when `out` is the refresh output.
-    virtual Tensor NextCarry(const LanguageModel::DecoderOutputs& out,
-                             int                                 step,
-                             int                                 phase,
-                             TensorMap&                          env,
-                             cudaStream_t                        stream) = 0;
+    virtual Tensor
+    NextCarry(const LanguageModel::DecoderOutputs& out, int step, int phase, TensorMap& env, cudaStream_t stream) = 0;
 
     /// The language model whose LM head turns draft hiddens into logits.
     virtual LanguageModel& HeadModel() = 0;
@@ -87,7 +84,7 @@ protected:
     const int            draft_hidden_;
 
     FixedChainPolicy policy_;
-    FixedChainSetup   fixed_chain_;
+    FixedChainSetup  fixed_chain_;
 
     Buffer_<int> draft_identity_token_pos_;
 

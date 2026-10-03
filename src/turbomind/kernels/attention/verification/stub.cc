@@ -14,8 +14,6 @@ int choose_split_count(int, int, int, int, int, int, int)
     return 1;
 }
 
-void run(const Arguments&)
-{
-}
+void run(const Arguments&) {}
 
 }  // namespace turbomind::verification_attention

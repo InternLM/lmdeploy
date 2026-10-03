@@ -28,12 +28,8 @@ TargetHiddenProjection::TargetHiddenProjection(const EngineParam&  engine,
     projection_weight_{projection_weight},
     target_layer_ids_{std::move(target_layer_ids)},
     tap_ordinal_by_completed_layer_(target_layer_count + 1, -1),
-    collect_{engine,
-             context,
-             phases,
-             static_cast<int>(target_layer_ids_.size()) * hidden_units,
-             hidden_units,
-             data_type},
+    collect_{
+        engine, context, phases, static_cast<int>(target_layer_ids_.size()) * hidden_units, hidden_units, data_type},
     data_(phases)
 {
     for (int ordinal = 0; ordinal < static_cast<int>(target_layer_ids_.size()); ++ordinal) {

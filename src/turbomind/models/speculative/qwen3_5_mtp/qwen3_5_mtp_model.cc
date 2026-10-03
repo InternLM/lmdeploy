@@ -22,12 +22,8 @@ Qwen35MtpModel::Qwen35MtpModel(const SpeculativeModelArgs& args):
     hidden_units_{target_.weights().hidden_units},
     model_tp_rank_{args.param.model_tp_rank},
     model_tp_size_{args.param.attn_cp_size * args.param.attn_tp_size},
-    final_hidden_{std::make_unique<TargetFinalHidden>(args.param,
-                                                      args.ctx,
-                                                      args.phases,
-                                                      target_.weights().num_layer,
-                                                      hidden_units_,
-                                                      target_.weights().data_type)},
+    final_hidden_{std::make_unique<TargetFinalHidden>(
+        args.param, args.ctx, args.phases, target_.weights().num_layer, hidden_units_, target_.weights().data_type)},
     data_(args.phases)
 {
     const EngineParam& param = args.param;
@@ -57,16 +53,12 @@ Tensor Qwen35MtpModel::InitialCarry(int phase, cudaStream_t stream)
     return final_hidden_->Gather(phase, stream);
 }
 
-Tensor Qwen35MtpModel::Embed(int                phase,
-                             const Buffer_<int>& ids,
-                             int                rows,
-                             const DraftContext& ctx,
-                             TensorMap&         env,
-                             EmbedStage         stage)
+Tensor Qwen35MtpModel::Embed(
+    int phase, const Buffer_<int>& ids, int rows, const DraftContext& ctx, TensorMap& env, EmbedStage stage)
 {
-    Tensor storage = use_ag2d_ ? Tensor{env.at("symm_buf").buffer().view(target_.weights().data_type),
-                                        {rows, hidden_units_}}
-                               : ctx.embedding_storage.slice({0, 0}, {rows, hidden_units_});
+    Tensor storage    = use_ag2d_ ?
+                            Tensor{env.at("symm_buf").buffer().view(target_.weights().data_type), {rows, hidden_units_}} :
+                            ctx.embedding_storage.slice({0, 0}, {rows, hidden_units_});
     Tensor embeddings = target_.Embed(ids, storage, env);
 
     if (stage == EmbedStage::kRefresh) {
@@ -78,11 +70,8 @@ Tensor Qwen35MtpModel::Embed(int                phase,
     return embeddings;
 }
 
-FixedChainSpeculativeModel::CombineResult Qwen35MtpModel::Combine(int      phase,
-                                                                  Tensor   embeddings,
-                                                                  Tensor   carry,
-                                                                  int      rows,
-                                                                  TensorMap& env)
+FixedChainSpeculativeModel::CombineResult
+Qwen35MtpModel::Combine(int phase, Tensor embeddings, Tensor carry, int rows, TensorMap& env)
 {
     Data&              data   = data_[phase];
     const cudaStream_t stream = core::Context::stream().handle();
@@ -104,11 +93,7 @@ FixedChainSpeculativeModel::CombineResult Qwen35MtpModel::Combine(int      phase
     return result;
 }
 
-Tensor Qwen35MtpModel::NextCarry(const LanguageModel::DecoderOutputs& out,
-                                 int,
-                                 int,
-                                 TensorMap&,
-                                 cudaStream_t)
+Tensor Qwen35MtpModel::NextCarry(const LanguageModel::DecoderOutputs& out, int, int, TensorMap&, cudaStream_t)
 {
     return out.selected_hidden;
 }
@@ -118,11 +103,8 @@ LanguageModel& Qwen35MtpModel::HeadModel()
     return target_;
 }
 
-Tensor Qwen35MtpModel::ProjectAndGatherFc(Data&            data,
-                                          const Tensor&    normalized_concat,
-                                          int              rows,
-                                          cudaStream_t     stream,
-                                          const TensorMap& env)
+Tensor Qwen35MtpModel::ProjectAndGatherFc(
+    Data& data, const Tensor& normalized_concat, int rows, cudaStream_t stream, const TensorMap& env)
 {
     const int local_hidden = hidden_units_ / model_tp_size_;
     if (rows == 0) {
@@ -136,8 +118,8 @@ Tensor Qwen35MtpModel::ProjectAndGatherFc(Data&            data,
     }
 
     if (use_ag2d_) {
-        Tensor gathered = data.projected_full.slice({0, 0}, {rows, hidden_units_})
-                              .view({rows, model_tp_size_, local_hidden});
+        Tensor gathered =
+            data.projected_full.slice({0, 0}, {rows, hidden_units_}).view({rows, model_tp_size_, local_hidden});
         Tensor local = gathered.slice({0, model_tp_rank_, 0}, {rows, 1, local_hidden}).squeeze(1);
         linear_.Forward(normalized_concat, *spec_weights_.fc, local);
         comm_.d_comm->AllGather2D(local.raw_data(),
@@ -153,16 +135,11 @@ Tensor Qwen35MtpModel::ProjectAndGatherFc(Data&            data,
         return gathered.view({rows, hidden_units_});
     }
 
-    Tensor gathered{env.at("symm_buf").buffer().view(normalized_concat.dtype()),
-                    {model_tp_size_, rows, local_hidden}};
+    Tensor gathered{env.at("symm_buf").buffer().view(normalized_concat.dtype()), {model_tp_size_, rows, local_hidden}};
     Tensor local = gathered.slice({model_tp_rank_, 0, 0}, {1, rows, local_hidden}).squeeze(0);
     linear_.Forward(normalized_concat, *spec_weights_.fc, local);
-    comm_.d_comm->AllGather(local.raw_data(),
-                            gathered.raw_data(),
-                            local.size(),
-                            local.dtype(),
-                            comm_.d_tp_group,
-                            stream);
+    comm_.d_comm->AllGather(
+        local.raw_data(), gathered.raw_data(), local.size(), local.dtype(), comm_.d_tp_group, stream);
 
     Tensor full = data.projected_full.slice({0, 0}, {rows, hidden_units_});
     invokeTransposeAxis01(static_cast<uint16_t*>(full.raw_data()),

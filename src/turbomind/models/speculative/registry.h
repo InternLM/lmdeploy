@@ -32,9 +32,7 @@ private:
     namespace {                                                                                                        \
     static const bool _tm_speculative_registered_##ModelClass = [] {                                                   \
         ::turbomind::SpeculativeModelRegistry::Instance().Register(                                                    \
-            name, [](const ::turbomind::SpeculativeModelArgs& args) {                                                  \
-                return std::make_unique<ModelClass>(args);                                                             \
-            });                                                                                                        \
+            name, [](const ::turbomind::SpeculativeModelArgs& args) { return std::make_unique<ModelClass>(args); });   \
         return true;                                                                                                   \
     }();                                                                                                               \
     }

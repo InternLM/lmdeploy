@@ -87,9 +87,9 @@ struct Generation::Impl {
     Buffer_<int>      output_ids_buf_;
     Buffer_<int>      request_to_generation_row_offsets_buf_;
 
-    const int                     max_batch_size_;
-    const int                     session_len_;
-    const int                     token_row_width_;
+    const int                      max_batch_size_;
+    const int                      session_len_;
+    const int                      token_row_width_;
     const SpeculativePolicy* const policy_;
 
     GenerationShared shared_;
@@ -98,15 +98,15 @@ struct Generation::Impl {
     // verification half); the ordinary lifecycle below never enters it.
     std::unique_ptr<TargetVerification> verification_;
 
-    Impl(DataType              dtype,
-         int                   max_batch_size,
-         int                   session_len,
-         int                   vocab_size,
-         int                   vocab_size_padded,
-         int                   hidden_units,
-         DataType              hidden_dtype,
-         const comm::HostComm& tp_group,
-         int                   phases,
+    Impl(DataType                 dtype,
+         int                      max_batch_size,
+         int                      session_len,
+         int                      vocab_size,
+         int                      vocab_size_padded,
+         int                      hidden_units,
+         DataType                 hidden_dtype,
+         const comm::HostComm&    tp_group,
+         int                      phases,
          const SpeculativePolicy* policy,
          bool                     enable_metrics);
 

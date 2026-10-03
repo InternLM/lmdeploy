@@ -250,8 +250,8 @@ void Sampling::Setup(int phase, TensorMap& env)
         }
     }
 
-    const int G = d.generation_size;
-    const int P = parameter_capacity_ == max_batch_size_ ? 1 : env.at("verification_positions").data<int>()[0];
+    const int G   = d.generation_size;
+    const int P   = parameter_capacity_ == max_batch_size_ ? 1 : env.at("verification_positions").data<int>()[0];
     const int bsz = P * G;
     if (bsz == 0) {
         d.max_topk = d.min_topk = 0;
@@ -262,12 +262,12 @@ void Sampling::Setup(int phase, TensorMap& env)
 
     for (int position = 0; position < P; ++position) {
         for (int g = 0; g < G; ++g) {
-            const int row = position * G + g;
+            const int   row    = position * G + g;
             const auto& config = generating_requests[g]->gen_cfg;
-            top_k_[row]  = config.top_k;
-            top_p_[row]  = config.top_p;
-            min_p_[row]  = config.min_p;
-            greedy_[row] = config.top_k == 1;
+            top_k_[row]        = config.top_k;
+            top_p_[row]        = config.top_p;
+            min_p_[row]        = config.min_p;
+            greedy_[row]       = config.top_k == 1;
         }
     }
 

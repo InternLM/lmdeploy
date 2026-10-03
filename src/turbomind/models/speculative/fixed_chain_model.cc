@@ -39,8 +39,7 @@ FixedChainSpeculativeModel::FixedChainSpeculativeModel(const SpeculativeModelArg
         data.draft_candidate_active   = {param.max_batch_size, kDEVICE};
         data.draft_proposal_ids       = {param.max_batch_size, kDEVICE};
 
-        data.draft_selected_normalized_hidden = {
-            {param.max_batch_size, draft_hidden_}, draft_type, kDEVICE};
+        data.draft_selected_normalized_hidden = {{param.max_batch_size, draft_hidden_}, draft_type, kDEVICE};
     }
 }
 
@@ -58,9 +57,7 @@ HiddenStateTap* FixedChainSpeculativeModel::Tap(int)
 
 void FixedChainSpeculativeModel::Setup(int phase, TensorMap& env)
 {
-    fixed_chain_.Setup(phase,
-                       env.at("requests").buffer(),
-                       *env.at("copy").data<core::BatchCopy*>()[0]);
+    fixed_chain_.Setup(phase, env.at("requests").buffer(), *env.at("copy").data<core::BatchCopy*>()[0]);
     draft_.Run(BatchOp::kSetup, phase, env);
 }
 
@@ -88,10 +85,10 @@ void FixedChainSpeculativeModel::RunDraft(int phase, const DraftContext& ctx, Te
     CommonData&          data  = data_[phase];
     FixedChainPhaseData& chain = fixed_chain_.phase_data(phase);
 
-    const int target_query_count = chain.refresh_decode.query_count + chain.refresh_prefill.query_count;
-    const int candidate_count    = chain.draft_extension_query_count;
-    const int k                  = policy_.max_proposals();
-    const cudaStream_t stream    = core::Context::stream().handle();
+    const int          target_query_count = chain.refresh_decode.query_count + chain.refresh_prefill.query_count;
+    const int          candidate_count    = chain.draft_extension_query_count;
+    const int          k                  = policy_.max_proposals();
+    const cudaStream_t stream             = core::Context::stream().handle();
 
     AttentionForwardMetadata refresh_metadata{};
     refresh_metadata.decode    = chain.refresh_decode;
@@ -128,12 +125,8 @@ void FixedChainSpeculativeModel::RunDraft(int phase, const DraftContext& ctx, Te
                                   candidate_count,
                                   stream);
 
-    Tensor embeddings = Embed(phase,
-                              data.draft_input_ids.slice(0, target_query_count),
-                              target_query_count,
-                              ctx,
-                              env,
-                              EmbedStage::kRefresh);
+    Tensor embeddings = Embed(
+        phase, data.draft_input_ids.slice(0, target_query_count), target_query_count, ctx, env, EmbedStage::kRefresh);
 
     TensorMap draft_env       = env;
     draft_env.at("finished")  = ctx.finished_on_entry;
@@ -143,11 +136,11 @@ void FixedChainSpeculativeModel::RunDraft(int phase, const DraftContext& ctx, Te
     CombineResult combined = Combine(phase, std::move(embeddings), std::move(carry), target_query_count, env);
 
     LanguageModel::DecoderInputs refresh_in;
-    refresh_in.residual               = std::move(combined.residual);
-    refresh_in.attention_input        = std::move(combined.attention_input);
-    refresh_in.selected_token_pos     = data.draft_selected_token_pos.slice(0, candidate_count);
-    refresh_in.selected_hidden_buffer = data.draft_selected_normalized_hidden.slice(
-        {0, 0}, {candidate_count, draft_hidden_});
+    refresh_in.residual           = std::move(combined.residual);
+    refresh_in.attention_input    = std::move(combined.attention_input);
+    refresh_in.selected_token_pos = data.draft_selected_token_pos.slice(0, candidate_count);
+    refresh_in.selected_hidden_buffer =
+        data.draft_selected_normalized_hidden.slice({0, 0}, {candidate_count, draft_hidden_});
     refresh_in.attention_metadata = &refresh_metadata;
 
     LanguageModel::DecoderOutputs out = draft_.RunDecoder(phase, refresh_in, draft_env);
@@ -155,7 +148,7 @@ void FixedChainSpeculativeModel::RunDraft(int phase, const DraftContext& ctx, Te
     if (candidate_count > 0) {
         const auto& hw     = HeadModel().weights();
         Tensor      logits = ctx.head_storage.slice({0, 0}, {candidate_count, hw.vocab_size_padded});
-        logits            = HeadModel().Logits(out.selected_hidden, logits, draft_env);
+        logits             = HeadModel().Logits(out.selected_hidden, logits, draft_env);
         invokeDraftArgmaxAndStoreToken(logits,
                                        data.draft_proposal_ids.data(),
                                        ctx.request_token_ids_ptrs,
@@ -183,14 +176,14 @@ void FixedChainSpeculativeModel::RunDraft(int phase, const DraftContext& ctx, Te
     for (int step = 1; step < k; ++step) {
         const int i = step - 1;
 
-        carry       = NextCarry(out, i, phase, env, stream);
-        embeddings  = Embed(phase,
-                            data.draft_proposal_ids.slice(0, candidate_count),
-                            candidate_count,
-                            ctx,
-                            extension_env,
-                            EmbedStage::kExtension);
-        combined    = Combine(phase, std::move(embeddings), std::move(carry), candidate_count, extension_env);
+        carry      = NextCarry(out, i, phase, env, stream);
+        embeddings = Embed(phase,
+                           data.draft_proposal_ids.slice(0, candidate_count),
+                           candidate_count,
+                           ctx,
+                           extension_env,
+                           EmbedStage::kExtension);
+        combined   = Combine(phase, std::move(embeddings), std::move(carry), candidate_count, extension_env);
 
         invokeBuildDraftExtensionKeyOffsets(chain.draft_extension_k_offsets.data(),
                                             chain.draft_extension_q_offsets.data(),
@@ -201,11 +194,11 @@ void FixedChainSpeculativeModel::RunDraft(int phase, const DraftContext& ctx, Te
                                             stream);
 
         LanguageModel::DecoderInputs extension_in;
-        extension_in.residual               = std::move(combined.residual);
-        extension_in.attention_input        = std::move(combined.attention_input);
-        extension_in.selected_token_pos     = draft_identity_token_pos_.slice(0, candidate_count);
-        extension_in.selected_hidden_buffer = data.draft_selected_normalized_hidden.slice(
-            {0, 0}, {candidate_count, draft_hidden_});
+        extension_in.residual           = std::move(combined.residual);
+        extension_in.attention_input    = std::move(combined.attention_input);
+        extension_in.selected_token_pos = draft_identity_token_pos_.slice(0, candidate_count);
+        extension_in.selected_hidden_buffer =
+            data.draft_selected_normalized_hidden.slice({0, 0}, {candidate_count, draft_hidden_});
         extension_in.attention_metadata = &extension_metadata;
 
         out = draft_.RunDecoder(phase, extension_in, extension_env);
@@ -213,7 +206,7 @@ void FixedChainSpeculativeModel::RunDraft(int phase, const DraftContext& ctx, Te
         if (candidate_count > 0) {
             const auto& hw     = HeadModel().weights();
             Tensor      logits = ctx.head_storage.slice({0, 0}, {candidate_count, hw.vocab_size_padded});
-            logits            = HeadModel().Logits(out.selected_hidden, logits, extension_env);
+            logits             = HeadModel().Logits(out.selected_hidden, logits, extension_env);
             invokeDraftArgmaxAndStoreToken(logits,
                                            data.draft_proposal_ids.data(),
                                            ctx.request_token_ids_ptrs,

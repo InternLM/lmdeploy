@@ -55,8 +55,10 @@ struct LogitsProcessor::Data {
     bool has_temperature_penalty{};
 };
 
-LogitsProcessor::LogitsProcessor(
-    const BaseGenerationParam& base, int phases, bool speculative_engine, int parameter_capacity):
+LogitsProcessor::LogitsProcessor(const BaseGenerationParam& base,
+                                 int                        phases,
+                                 bool                       speculative_engine,
+                                 int                        parameter_capacity):
     BaseGenerationParam{base}, speculative_engine_{speculative_engine}
 {
     buf_ = std::make_shared<Data>(parameter_capacity, kCPUpinned);

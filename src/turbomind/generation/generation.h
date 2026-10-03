@@ -19,15 +19,15 @@ class Generation {
 public:
     ~Generation();
 
-    Generation(DataType              data_type,
-               int                   max_batch_size,
-               int                   session_len,
-               int                   vocab_size,
-               int                   vocab_size_padded,
-               int                   hidden_units,
-               DataType              hidden_dtype,
-               const comm::HostComm& tp_group,
-               int                   phases,
+    Generation(DataType                 data_type,
+               int                      max_batch_size,
+               int                      session_len,
+               int                      vocab_size,
+               int                      vocab_size_padded,
+               int                      hidden_units,
+               DataType                 hidden_dtype,
+               const comm::HostComm&    tp_group,
+               int                      phases,
                const SpeculativePolicy* policy,
                bool                     enable_metrics);
 

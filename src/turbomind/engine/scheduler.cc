@@ -262,7 +262,7 @@ struct Scheduler::ScheduleState {
     Replay                          replay;                    // alloc/evict ops of the current phase
     size_t                          committed_replay_size{0};  // replay prefix from committed requests (phase 1)
     std::vector<bool>               committed;
-    std::vector<SubmittedRow>       candidates;             // one prepared forward per request
+    std::vector<SubmittedRow>       candidates;            // one prepared forward per request
     std::vector<LogicalBlock*>      pending_populate;      // partial sibling node per request, nullptr = none
     std::vector<PublishPlan>        pending_publish;       // checkpoint publication intent per request
     bool                            has_optionals{false};  // any optional intent recorded => run phase 2
@@ -294,16 +294,16 @@ TokenSpan Scheduler::TokenSegment(const Sequence& s, int offset, int size) const
     return MakeTokenSpan(s.token_ids + offset, size);
 }
 
-Scheduler::Scheduler(ObjectAllocator&   alloc,
-                     CacheRegistry      registry,
-                     int                logical_block_size,
-                     bool               enable_prefix_caching,
-                     const std::string& cache_prompt,
-                     int                cache_prompt_boundary_skip,
-                     const std::string& cache_generation,
-                     int                session_len,
+Scheduler::Scheduler(ObjectAllocator&         alloc,
+                     CacheRegistry            registry,
+                     int                      logical_block_size,
+                     bool                     enable_prefix_caching,
+                     const std::string&       cache_prompt,
+                     int                      cache_prompt_boundary_skip,
+                     const std::string&       cache_generation,
+                     int                      session_len,
                      const SpeculativePolicy* policy,
-                     const int&         is_warm_up):
+                     const int&               is_warm_up):
     enable_prefix_caching_{enable_prefix_caching},
     prompt_cache_mode_{ParseCacheMode(cache_prompt)},
     cache_prompt_boundary_skip_{cache_prompt_boundary_skip < 1 ? 1 : cache_prompt_boundary_skip},
@@ -1119,40 +1119,36 @@ void Scheduler::PlanRequests(ScheduleState& pass)
     for (int i = 0; i < static_cast<int>(pass.requests.size()); ++i) {
         Sequence& s = *pass.requests[i];
 
-        const std::optional<SubmittedRow> prior       = s.submitted;
-        const std::optional<SubmittedRow> outstanding = s.inflight != 0 ? prior : std::nullopt;
+        const std::optional<SubmittedRow> prior          = s.submitted;
+        const std::optional<SubmittedRow> outstanding    = s.inflight != 0 ? prior : std::nullopt;
         const bool                        was_generating = prior && prior->generating;
 
-        const bool outstanding_speculative =
-            outstanding && outstanding->is_verification_row();
-        const bool outstanding_final_prompt =
-            outstanding && !outstanding->is_verification_row() && outstanding->generating
-            && outstanding->key_capacity_end == s.prompt_len;
-        const bool no_outstanding_decode_row =
-            s.inflight == 0 && s.seq_len > s.prompt_len && s.filled_len == s.seq_len - 1
-            && s.resume_len == s.filled_len;
+        const bool outstanding_speculative  = outstanding && outstanding->is_verification_row();
+        const bool outstanding_final_prompt = outstanding && !outstanding->is_verification_row()
+                                              && outstanding->generating
+                                              && outstanding->key_capacity_end == s.prompt_len;
+        const bool no_outstanding_decode_row = s.inflight == 0 && s.seq_len > s.prompt_len
+                                               && s.filled_len == s.seq_len - 1 && s.resume_len == s.filled_len;
 
         const int begin       = s.resume_len + s.inflight_input_len;
         const int context_end = s.seq_len + s.inflight_new_tokens;
 
         SubmittedRow& row = pass.candidates[i];
 
-        if (policy_ != nullptr
-            && (outstanding_speculative || outstanding_final_prompt || no_outstanding_decode_row)) {
+        if (policy_ != nullptr && (outstanding_speculative || outstanding_final_prompt || no_outstanding_decode_row)) {
             row.history_len = s.resume_len;
             row.generating  = true;
             row.autoregres  = true;
 
-            row.query_begin = outstanding_speculative
-                                  ? s.filled_len + outstanding->query_count
-                                  : (outstanding_final_prompt ? s.prompt_len : s.filled_len);
+            row.query_begin       = outstanding_speculative ? s.filled_len + outstanding->query_count :
+                                                              (outstanding_final_prompt ? s.prompt_len : s.filled_len);
             row.cache_write_begin = outstanding_speculative ? s.filled_len + 1 : row.query_begin;
 
             const RoundExtent extent = policy_->Extent({row.query_begin, s.prompt_len});
-            row.query_count      = extent.query_rows;
-            row.input_len        = extent.query_rows;
-            row.key_capacity_end = row.query_begin + extent.query_rows;
-            row.cache_write_end  = row.key_capacity_end + extent.private_tail;
+            row.query_count          = extent.query_rows;
+            row.input_len            = extent.query_rows;
+            row.key_capacity_end     = row.query_begin + extent.query_rows;
+            row.cache_write_end      = row.key_capacity_end + extent.private_tail;
 
             row.verification_positions = extent.query_rows;
             row.min_grant              = extent.query_rows;
@@ -1227,10 +1223,10 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         EvictingIterator evicting{evict_pos, pass.cutoff[i]};
         uint64_t         evict_ts = max_evict_ts;
 
-        const bool was_active      = s.is_active;
-        const bool was_generating = s.submitted && s.submitted->generating;
-        const int  context_end    = s.seq_len + s.inflight_new_tokens;
-        SubmittedRow candidate     = pass.candidates[i];
+        const bool   was_active     = s.is_active;
+        const bool   was_generating = s.submitted && s.submitted->generating;
+        const int    context_end    = s.seq_len + s.inflight_new_tokens;
+        SubmittedRow candidate      = pass.candidates[i];
 
         if (candidate.query_count <= 0) {
             continue;
@@ -1243,17 +1239,13 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         }
 
         if (admitted < candidate.query_count) {
-            const int end = ClampForwardEnd(s,
-                                            candidate.query_begin,
-                                            candidate.query_begin + admitted,
-                                            context_end);
+            const int end = ClampForwardEnd(s, candidate.query_begin, candidate.query_begin + admitted, context_end);
             candidate.query_count      = end - candidate.query_begin;
             candidate.input_len        = candidate.query_count;
             candidate.key_capacity_end = end;
             candidate.cache_write_end  = end;
             candidate.generating       = end == context_end;
-            candidate.autoregres       = was_active && was_generating && candidate.generating
-                                   && candidate.query_count == 1;
+            candidate.autoregres = was_active && was_generating && candidate.generating && candidate.query_count == 1;
 
             SetOrdinaryEffects(candidate);
 
@@ -1262,19 +1254,16 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
             }
         }
 
-        const int existing_end = std::min(
-            candidate.cache_write_end,
-            static_cast<int>(s.block_ids.size()) * bs);
+        const int existing_end = std::min(candidate.cache_write_end, static_cast<int>(s.block_ids.size()) * bs);
         if (candidate.cache_write_begin < existing_end) {
-            if (const ProducerConflict conflict =
-                    CheckProducers(s, candidate.cache_write_begin, existing_end);
+            if (const ProducerConflict conflict = CheckProducers(s, candidate.cache_write_begin, existing_end);
                 conflict.producer) {
                 LogDeferred(s, candidate, bs, conflict);
                 continue;
             }
         }
 
-        const int required_end = candidate.cache_write_end;
+        const int                    required_end = candidate.cache_write_end;
         std::vector<LogicalBlockPtr> staged_blocks;
         std::vector<CacheBlock*>     staged_prefix;
 
@@ -1316,7 +1305,7 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
         }
 
         resource.Commit(s, candidate);
-        s.submitted = candidate;
+        s.submitted                = candidate;
         s.is_active                = true;
         pass.committed[i]          = true;
         pass.committed_replay_size = pass.replay.size();

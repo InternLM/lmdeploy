@@ -67,7 +67,6 @@ struct AcceptedPrefixArguments {
     int    sm_count{};
 };
 
-void invokeCommitAcceptedRecurrentState(
-    const AcceptedPrefixArguments& args, DataType state_dtype, cudaStream_t stream);
+void invokeCommitAcceptedRecurrentState(const AcceptedPrefixArguments& args, DataType state_dtype, cudaStream_t stream);
 
 }  // namespace turbomind::linear_attn::delta_rule

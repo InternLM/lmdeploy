@@ -63,14 +63,14 @@ struct InternVit::Impl {
     Buffer_<int> attn_cu_seqlens_buf_;
 
     struct Data {
-        Tensor                           batch_input;
-        int                              batch_size{};
-        std::vector<EmbeddingPatch>     target_patches;
-        std::vector<EmbeddingPatch>     successor_patches;
-        Tensor_<int>                     attn_cu_seqlens;
-        Tensor_<bool>                    attn_finished;
-        int                              token_num{};
-        int                              seq_len{};
+        Tensor                      batch_input;
+        int                         batch_size{};
+        std::vector<EmbeddingPatch> target_patches;
+        std::vector<EmbeddingPatch> successor_patches;
+        Tensor_<int>                attn_cu_seqlens;
+        Tensor_<bool>               attn_finished;
+        int                         token_num{};
+        int                         seq_len{};
 
         void Clear()
         {
@@ -251,10 +251,10 @@ struct InternVit::Impl {
             if ((not submitted.autoregres) && (not s.multimodal_inputs.empty())) {
                 ++mm_prefill_seqs;
                 images_total += (int)s.multimodal_inputs.size();
-                const int           begin     = submitted.history_len + s.inflight_input_len;
-                const int           end       = begin + submitted.input_len;
-                const Interval      target{begin, end};
-                const Interval      successor{begin + 1, std::min(end + 1, s.seq_len)};
+                const int      begin = submitted.history_len + s.inflight_input_len;
+                const int      end   = begin + submitted.input_len;
+                const Interval target{begin, end};
+                const Interval successor{begin + 1, std::min(end + 1, s.seq_len)};
                 for (const auto& mm : s.multimodal_inputs) {
                     const Interval target_overlap    = mm->interval & target;
                     const Interval successor_overlap = successor_embeddings_ ? mm->interval & successor : Interval{};

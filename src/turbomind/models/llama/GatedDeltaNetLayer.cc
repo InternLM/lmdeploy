@@ -199,8 +199,8 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
         data_.at(phase).conv_state_offsets          = {layer_num_, kDEVICE};
         // Engine-thread kSetup has no pinned allocator. Keep each phase's
         // staging storage alive until its executor-stream copy completes.
-        data_.at(phase).commit_state_ptrs_buf = {
-            core::ssize_t(layer_num_) * engine.max_batch_size * num_head_groups_, kCPUpinned};
+        data_.at(phase).commit_state_ptrs_buf = {core::ssize_t(layer_num_) * engine.max_batch_size * num_head_groups_,
+                                                 kCPUpinned};
     }
 
     work_counter_ = {1, kDEVICE};
@@ -259,10 +259,9 @@ void GatedDeltaNetLayer::Run(BatchOp op, int phase, TensorMap& env)
         data.reset_ptrs.clear();
 
         if (data.commit_plan) {
-            const core::ssize_t count = core::ssize_t(layer_num_) * data.speculative_request_count;
-            auto host_ptrs = data.commit_state_ptrs_buf.slice(0, count * num_head_groups_);
-            data.commit_state_ptrs = Tensor{empty_like(host_ptrs, kDEVICE),
-                                            core::Layout{{count, num_head_groups_}}};
+            const core::ssize_t count     = core::ssize_t(layer_num_) * data.speculative_request_count;
+            auto                host_ptrs = data.commit_state_ptrs_buf.slice(0, count * num_head_groups_);
+            data.commit_state_ptrs = Tensor{empty_like(host_ptrs, kDEVICE), core::Layout{{count, num_head_groups_}}};
             data.commit_state_tma_descs = {{count, num_head_groups_, 128}, kUint8, kDEVICE};
             data.commit_lengths         = {{count}, kInt32, kDEVICE};
             Copy(host_ptrs, data.commit_state_ptrs.buffer());
@@ -270,12 +269,8 @@ void GatedDeltaNetLayer::Run(BatchOp op, int phase, TensorMap& env)
             // Each flattened request points at one layer slice of its cache part.
             auto state_ptrs  = data.commit_state_ptrs.view({1, count, num_head_groups_});
             auto state_descs = data.commit_state_tma_descs.view({1, count, num_head_groups_, 128});
-            delta_rule_.PrepareState(state_ptrs,
-                                     state_descs,
-                                     1,
-                                     1,
-                                     *data.commit_plan,
-                                     core::Context::stream().handle());
+            delta_rule_.PrepareState(
+                state_ptrs, state_descs, 1, 1, *data.commit_plan, core::Context::stream().handle());
         }
 
         if (data.verify_plan) {
@@ -323,7 +318,7 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
     data.input_lens.resize(data.batch_size);
     data.reset_ptrs.clear();
     data.speculative_request_count = 0;
-    data.verify_positions    = env.at("verification_positions").data<int>()[0];
+    data.verify_positions          = env.at("verification_positions").data<int>()[0];
 
     std::vector<int32_t> host_offsets(data.batch_size + 1, 0);
     for (int sequence = 0; sequence < data.batch_size; ++sequence) {
@@ -335,17 +330,17 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
         }
         host_offsets[sequence + 1] = host_offsets[sequence] + data.input_lens[sequence];
     }
-    const int token_slots   = *env.at("token_num").data<int>();
-    data.verify_count = 0;
-    data.decode_count       = 0;
-    data.prefill_count      = 0;
+    const int token_slots = *env.at("token_num").data<int>();
+    data.verify_count     = 0;
+    data.decode_count     = 0;
+    data.prefill_count    = 0;
     data.verify_plan.reset();
     data.commit_plan.reset();
     data.recurrent_plan.reset();
     data.chunked_plan.reset();
-    data.chunked_workspace            = {};
-    data.verify_state_tma_descs = {};
-    data.recurrent_state_tma_descs    = {};
+    data.chunked_workspace         = {};
+    data.verify_state_tma_descs    = {};
+    data.recurrent_state_tma_descs = {};
 
     auto make_context = [&] {
         linear_attn::delta_rule::PlanningContext planning{};
@@ -364,7 +359,7 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
     };
 
     const bool verify_candidate = arch_ == 900 && input_dtype_ == kBfloat16 && head_dim_ == 128
-                                        && data.speculative_request_count != 0 && data.verify_positions <= 16;
+                                  && data.speculative_request_count != 0 && data.verify_positions <= 16;
     if (verify_candidate) {
         auto planning              = make_context();
         planning.physical_batch    = data.speculative_request_count;
@@ -383,8 +378,8 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
     }
 
     const bool commit_candidate = arch_ == 900 && input_dtype_ == kBfloat16 && head_dim_ == 128
-                                  && data.speculative_request_count != 0
-                                  && data.verify_positions >= 1 && data.verify_positions <= 16;
+                                  && data.speculative_request_count != 0 && data.verify_positions >= 1
+                                  && data.verify_positions <= 16;
     if (commit_candidate) {
         auto planning              = make_context();
         planning.physical_batch    = layer_num_ * data.speculative_request_count;
@@ -485,9 +480,9 @@ void GatedDeltaNetLayer::Setup(int phase, TensorMap& env)
             TM_CHECK_EQ(speculative_request_indices_buf_[request], request);
         }
         for (int layer = 0; layer < layer_num_; ++layer) {
-            const int layer_group = layer / layers_per_block_;
-            const size_t layer_bytes = byte_size(recurrent_state_dtype_,
-                size_t(layer % layers_per_block_) * heads_per_block_ * head_dim_ * head_dim_);
+            const int    layer_group = layer / layers_per_block_;
+            const size_t layer_bytes = byte_size(
+                recurrent_state_dtype_, size_t(layer % layers_per_block_) * heads_per_block_ * head_dim_ * head_dim_);
             for (int request = 0; request < requests; ++request) {
                 for (int head_group = 0; head_group < num_head_groups_; ++head_group) {
                     const core::ssize_t source =
@@ -748,12 +743,11 @@ void GatedDeltaNetLayer::CommitAcceptedState(int phase, const Buffer_<int>& acce
                                                            stream);
 
     if (data.commit_plan) {
-        const int requests       = data.speculative_request_count;
-        const int positions      = data.verify_positions;
-        const core::ssize_t count = core::ssize_t(layer_num_) * requests;
-        Tensor accepted_lengths{accept_len.slice(0, requests),
-                                 core::Layout{{layer_num_, requests}, {0, 1}}};
-        auto commit_lengths = data.commit_lengths.view({layer_num_, requests});
+        const int           requests  = data.speculative_request_count;
+        const int           positions = data.verify_positions;
+        const core::ssize_t count     = core::ssize_t(layer_num_) * requests;
+        Tensor accepted_lengths{accept_len.slice(0, requests), core::Layout{{layer_num_, requests}, {0, 1}}};
+        auto   commit_lengths = data.commit_lengths.view({layer_num_, requests});
         core::GenericCopy(accepted_lengths, commit_lengths, stream);
 
         linear_attn::delta_rule::Arguments args{};
@@ -809,9 +803,9 @@ size_t GatedDeltaNetLayer::SpeculativeStateJournalBytes(int request_count, int v
     const size_t rows           = size_t(layer_num_) * request_count * verify_positions;
     const size_t input_elements = size_t(conv_dim_) + size_t(num_k_heads_ + num_v_heads_) * 128;
     const size_t gate_elements  = size_t(2) * num_v_heads_;
-    size_t bytes = rows * (byte_size(input_dtype_, input_elements) + gate_elements * sizeof(float));
-    if (arch_ == 900 && input_dtype_ == kBfloat16 && head_dim_ == 128
-        && verify_positions >= 1 && verify_positions <= 16) {
+    size_t       bytes          = rows * (byte_size(input_dtype_, input_elements) + gate_elements * sizeof(float));
+    if (arch_ == 900 && input_dtype_ == kBfloat16 && head_dim_ == 128 && verify_positions >= 1
+        && verify_positions <= 16) {
         // Commit metadata has the same executor-stream lifetime as the journal.
         const size_t commit_rows = size_t(layer_num_) * request_count;
         bytes += commit_rows * (num_head_groups_ * (sizeof(void*) + 128) + sizeof(int));

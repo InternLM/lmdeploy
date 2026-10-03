@@ -67,8 +67,8 @@ struct PlanningContext {
 };
 
 struct Arguments {
-    core::Tensor  q, k, v, g, beta;
-    core::Tensor  state_ptrs, state_tma_descs, q_offsets, finished;
+    core::Tensor q, k, v, g, beta;
+    core::Tensor state_ptrs, state_tma_descs, q_offsets, finished;
     // Commit consumes [0, commit_lengths[request]) and writes only recurrent state.
     // Device int32 [batch], with each length in [0, token_slots]. Q and out are unused.
     core::Tensor  commit_lengths;

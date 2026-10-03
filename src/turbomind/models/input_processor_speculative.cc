@@ -49,7 +49,7 @@ void InputProcessor::Impl::SetupSpeculative(int phase, TensorMap& env)
             continue;
         }
 
-        const int q_end   = input_ids_offsets_buf_[i + 1];
+        const int q_end = input_ids_offsets_buf_[i + 1];
 
         for (int position = 0; position < position_count; ++position) {
             // Wide rows carry width == input_len; positions beyond a row's width clamp to its last token.

@@ -79,24 +79,21 @@ void BindSpeculativeSampling(py::module_& module)
             auto            probabilities = detail::ConsumeDLPackWithStrides(probabilities_object, stream_ptr);
             auto probability_token_ids    = detail::ConsumeDLPackWithStrides(probability_token_ids_object, stream_ptr);
             auto kept_count               = detail::ConsumeDLPackWithStrides(kept_count_object, stream_ptr);
-            auto verification_draft_ids = detail::ConsumeDLPackWithStrides(verification_draft_ids_object, stream_ptr);
-            auto greedy                 = detail::ConsumeDLPackWithStrides(greedy_object, stream_ptr);
-            auto logits_active          = detail::ConsumeDLPackWithStrides(logits_active_object, stream_ptr);
-            auto random_states          = detail::ConsumeDLPackWithStrides(random_states_object, stream_ptr);
-            auto random_state_indices   = detail::ConsumeDLPackWithStrides(random_state_indices_object, stream_ptr);
-            auto request_token_ids_ptrs =
-                detail::ConsumeDLPackWithStrides(request_token_ids_ptrs_object, stream_ptr);
-            auto entry_sequence_length =
-                detail::ConsumeDLPackWithStrides(entry_sequence_length_object, stream_ptr);
+            auto verification_draft_ids   = detail::ConsumeDLPackWithStrides(verification_draft_ids_object, stream_ptr);
+            auto greedy                   = detail::ConsumeDLPackWithStrides(greedy_object, stream_ptr);
+            auto logits_active            = detail::ConsumeDLPackWithStrides(logits_active_object, stream_ptr);
+            auto random_states            = detail::ConsumeDLPackWithStrides(random_states_object, stream_ptr);
+            auto random_state_indices     = detail::ConsumeDLPackWithStrides(random_state_indices_object, stream_ptr);
+            auto request_token_ids_ptrs   = detail::ConsumeDLPackWithStrides(request_token_ids_ptrs_object, stream_ptr);
+            auto entry_sequence_length    = detail::ConsumeDLPackWithStrides(entry_sequence_length_object, stream_ptr);
             auto request_to_generation_offsets =
                 detail::ConsumeDLPackWithStrides(request_to_generation_offsets_object, stream_ptr);
-            auto speculative_row   = detail::ConsumeDLPackWithStrides(speculative_row_object, stream_ptr);
-            auto selected_span_ids = detail::ConsumeDLPackWithStrides(selected_span_ids_object, stream_ptr);
-            auto accept_len         = detail::ConsumeDLPackWithStrides(accept_len_object, stream_ptr);
-            auto accepted_draft_count =
-                accepted_draft_count_object.is_none() ?
-                    core::Tensor{} :
-                    detail::ConsumeDLPackWithStrides(accepted_draft_count_object, stream_ptr);
+            auto speculative_row      = detail::ConsumeDLPackWithStrides(speculative_row_object, stream_ptr);
+            auto selected_span_ids    = detail::ConsumeDLPackWithStrides(selected_span_ids_object, stream_ptr);
+            auto accept_len           = detail::ConsumeDLPackWithStrides(accept_len_object, stream_ptr);
+            auto accepted_draft_count = accepted_draft_count_object.is_none() ?
+                                            core::Tensor{} :
+                                            detail::ConsumeDLPackWithStrides(accepted_draft_count_object, stream_ptr);
 
             VerifyTargetBlockParams params{};
             params.probabilities          = probabilities.data_or(static_cast<float*>(nullptr));
@@ -111,21 +108,20 @@ void BindSpeculativeSampling(py::module_& module)
             params.random_states =
                 reinterpret_cast<curandState_t*>(random_states.data_or(static_cast<uint8_t*>(nullptr)));
             params.random_state_indices = random_state_indices.data_or(static_cast<int*>(nullptr));
-            params.request_token_ids_ptrs = reinterpret_cast<int* const*>(
-                request_token_ids_ptrs.data_or(static_cast<int64_t*>(nullptr)));
-            params.entry_sequence_length = entry_sequence_length.data_or(static_cast<int*>(nullptr));
-            params.request_to_generation_offsets =
-                request_to_generation_offsets.data_or(static_cast<int*>(nullptr));
-            params.speculative_row      = speculative_row.data_or(static_cast<bool*>(nullptr));
-            params.selected_span_ids    = selected_span_ids.data_or(static_cast<int*>(nullptr));
-            params.selected_span_stride = static_cast<int>(selected_span_ids.stride(0));
-            params.accept_len           = accept_len.data_or(static_cast<int*>(nullptr));
-            params.accepted_draft_count = accepted_draft_count_object.is_none() ?
-                                              nullptr :
-                                              accepted_draft_count.data_or(static_cast<int*>(nullptr));
-            params.request_count    = static_cast<int>(entry_sequence_length.shape(0));
-            params.generation_count = static_cast<int>(random_state_indices.shape(0));
-            params.position_count   = position_count;
+            params.request_token_ids_ptrs =
+                reinterpret_cast<int* const*>(request_token_ids_ptrs.data_or(static_cast<int64_t*>(nullptr)));
+            params.entry_sequence_length         = entry_sequence_length.data_or(static_cast<int*>(nullptr));
+            params.request_to_generation_offsets = request_to_generation_offsets.data_or(static_cast<int*>(nullptr));
+            params.speculative_row               = speculative_row.data_or(static_cast<bool*>(nullptr));
+            params.selected_span_ids             = selected_span_ids.data_or(static_cast<int*>(nullptr));
+            params.selected_span_stride          = static_cast<int>(selected_span_ids.stride(0));
+            params.accept_len                    = accept_len.data_or(static_cast<int*>(nullptr));
+            params.accepted_draft_count          = accepted_draft_count_object.is_none() ?
+                                                       nullptr :
+                                                       accepted_draft_count.data_or(static_cast<int*>(nullptr));
+            params.request_count                 = static_cast<int>(entry_sequence_length.shape(0));
+            params.generation_count              = static_cast<int>(random_state_indices.shape(0));
+            params.position_count                = position_count;
 
             invokeVerifyTargetBlock(params, reinterpret_cast<cudaStream_t>(stream_ptr));
         },

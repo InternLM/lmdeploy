@@ -32,9 +32,9 @@ public:
     Qwen35MtpWeight() = default;
     explicit Qwen35MtpWeight(const core::Qwen35MtpWeightConfig&) {}
 
-#define QWEN35_MTP_WEIGHT_CHILDREN(X)                                                                                 \
-    X(LinearWeight, fc)                                                                                               \
-    X(NormWeight, pre_fc_norm_embedding)                                                                              \
+#define QWEN35_MTP_WEIGHT_CHILDREN(X)                                                                                  \
+    X(LinearWeight, fc)                                                                                                \
+    X(NormWeight, pre_fc_norm_embedding)                                                                               \
     X(NormWeight, pre_fc_norm_hidden)
 
 #define QWEN35_MTP_WEIGHT_PARAMS(X)

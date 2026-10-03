@@ -27,15 +27,15 @@ using std::unique_ptr;
 using std::shared_ptr;
 using std::vector;
 
-Generation::Impl::Impl(DataType              dtype,
-                       int                   max_batch_size,
-                       int                   session_len,
-                       int                   vocab_size,
-                       int                   vocab_size_padded,
-                       int                   hidden_units,
-                       DataType              hidden_dtype,
-                       const comm::HostComm& tp_group,
-                       int                   phases,
+Generation::Impl::Impl(DataType                 dtype,
+                       int                      max_batch_size,
+                       int                      session_len,
+                       int                      vocab_size,
+                       int                      vocab_size_padded,
+                       int                      hidden_units,
+                       DataType                 hidden_dtype,
+                       const comm::HostComm&    tp_group,
+                       int                      phases,
                        const SpeculativePolicy* policy,
                        bool                     enable_metrics):
     max_batch_size_{max_batch_size},
@@ -54,13 +54,12 @@ Generation::Impl::Impl(DataType              dtype,
 {
     TM_CHECK_EQ(dtype, kFloat32);
     BaseGenerationParam base{max_batch_size, vocab_size, vocab_size_padded};
-    const int verification_capacity = policy ? policy->max_proposals() + 1 : 1;
-    const int parameter_capacity    = max_batch_size_ * verification_capacity;
-    logits_processor_ =
-        std::make_unique<LogitsProcessor>(base, phases, policy != nullptr, parameter_capacity);
-    sampling_ = std::make_unique<Sampling>(base, phases, tp_group->rank(), parameter_capacity);
-    stop_criteria_   = std::make_unique<StopCriteria>(base, phases);
-    guided_decoding_ = std::make_unique<GuidedDecoding>(base, tp_group, phases);
+    const int           verification_capacity = policy ? policy->max_proposals() + 1 : 1;
+    const int           parameter_capacity    = max_batch_size_ * verification_capacity;
+    logits_processor_ = std::make_unique<LogitsProcessor>(base, phases, policy != nullptr, parameter_capacity);
+    sampling_         = std::make_unique<Sampling>(base, phases, tp_group->rank(), parameter_capacity);
+    stop_criteria_    = std::make_unique<StopCriteria>(base, phases);
+    guided_decoding_  = std::make_unique<GuidedDecoding>(base, tp_group, phases);
 
     static_assert(sizeof(curandState_t) % alignof(curandState_t) == 0);
     random_states_ = {{max_batch_size_, (int)sizeof(curandState_t)}, kDEVICE};
@@ -94,8 +93,8 @@ Generation::Impl::Impl(DataType              dtype,
     }
 
     if (policy_) {
-        verification_ = std::make_unique<TargetVerification>(
-            shared_, *policy_, hidden_units, hidden_dtype, enable_metrics, phases);
+        verification_ =
+            std::make_unique<TargetVerification>(shared_, *policy_, hidden_units, hidden_dtype, enable_metrics, phases);
     }
 }
 
@@ -286,15 +285,15 @@ void Generation::Impl::Forward(int phase, TensorMap& env)
 
 Generation::~Generation() = default;
 
-Generation::Generation(DataType              dtype,
-                       int                   max_batch_size,
-                       int                   session_len,
-                       int                   vocab_size,
-                       int                   vocab_size_padded,
-                       int                   hidden_units,
-                       DataType              hidden_dtype,
-                       const comm::HostComm& tp_group,
-                       int                   phases,
+Generation::Generation(DataType                 dtype,
+                       int                      max_batch_size,
+                       int                      session_len,
+                       int                      vocab_size,
+                       int                      vocab_size_padded,
+                       int                      hidden_units,
+                       DataType                 hidden_dtype,
+                       const comm::HostComm&    tp_group,
+                       int                      phases,
                        const SpeculativePolicy* policy,
                        bool                     enable_metrics):
     impl_{std::make_unique<Impl>(dtype,

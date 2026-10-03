@@ -76,8 +76,8 @@ public:
     std::vector<int> layer_types;
 
     // --- From ModelWeightConfig at construction ---
-    int tp_size{};
-    int tp_rank{};
+    int  tp_size{};
+    int  tp_rank{};
     bool decoder_only{};
 
 private:

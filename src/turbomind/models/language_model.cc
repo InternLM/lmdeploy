@@ -44,11 +44,8 @@ struct LanguageModel::Impl {
         unified_decoder_->Run(op, phase, env);
     }
 
-    Impl(CacheRegistry&     registry,
-         const EngineParam& engine,
-         const Context&     ctx,
-         const ModelWeight& weights,
-         int                phases);
+    Impl(
+        CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
 
     Tensor LookupEmbedding(const Buffer_<int>& input_ids,
                            const Tensor&       embedding_table,
@@ -59,24 +56,20 @@ struct LanguageModel::Impl {
                          Buffer              model_tp_gather_buffer,
                          Tensor              logits);
 
-    bool has_embedding() const;
-    bool has_head() const;
-    Tensor Embed(const Buffer_<int>& input_ids, Tensor out, const TensorMap& env);
+    bool                          has_embedding() const;
+    bool                          has_head() const;
+    Tensor                        Embed(const Buffer_<int>& input_ids, Tensor out, const TensorMap& env);
     LanguageModel::DecoderOutputs RunDecoder(int phase, const LanguageModel::DecoderInputs& in, TensorMap& env);
-    Tensor Logits(const Tensor& hidden, Tensor out, const TensorMap& env);
-    const ModelWeight& weights() const;
-    int max_logits_len(const TensorMap& env) const;
-    bool logits_use_workspace() const;
-    void CommitAcceptedState(int phase, const Buffer_<int>& accept_len);
-    size_t SpeculativeStateJournalBytes(int request_count, int verification_positions) const;
-
+    Tensor                        Logits(const Tensor& hidden, Tensor out, const TensorMap& env);
+    const ModelWeight&            weights() const;
+    int                           max_logits_len(const TensorMap& env) const;
+    bool                          logits_use_workspace() const;
+    void                          CommitAcceptedState(int phase, const Buffer_<int>& accept_len);
+    size_t                        SpeculativeStateJournalBytes(int request_count, int verification_positions) const;
 };
 
-LanguageModel::Impl::Impl(CacheRegistry&     registry,
-                          const EngineParam& engine,
-                          const Context&     ctx,
-                          const ModelWeight& weights,
-                          int                phases):
+LanguageModel::Impl::Impl(
+    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases):
     comm_{ctx.comm},
     weights_{weights},
     linear_{*ctx.linear},
@@ -91,9 +84,9 @@ LanguageModel::Impl::Impl(CacheRegistry&     registry,
 
     if (has_head()) {
         TM_CHECK_GT(weights_.vocab_size_padded, 0) << "a model without a head has no logits length";
-        max_logits_len_ = std::max<int>(
-            core::ssize_t(engine.max_forward_token_num) * weights_.hidden_units / weights_.vocab_size_padded,
-            max_logits_rows);
+        max_logits_len_ = std::max<int>(core::ssize_t(engine.max_forward_token_num) * weights_.hidden_units
+                                            / weights_.vocab_size_padded,
+                                        max_logits_rows);
     }
 }
 
@@ -333,11 +326,8 @@ LanguageModel::~LanguageModel() = default;
 
 LanguageModel::LanguageModel(LanguageModel&&) noexcept = default;
 
-LanguageModel::LanguageModel(CacheRegistry&     registry,
-                             const EngineParam& engine,
-                             const Context&     ctx,
-                             const ModelWeight& weights,
-                             int                phases)
+LanguageModel::LanguageModel(
+    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases)
 {
     impl_ = std::make_unique<Impl>(registry, engine, ctx, weights, phases);
 }
@@ -357,8 +347,7 @@ Tensor LanguageModel::Embed(const Buffer_<int>& input_ids, Tensor out, const Ten
     return TM_CHECK_NOTNULL(impl_)->Embed(input_ids, std::move(out), env);
 }
 
-LanguageModel::DecoderOutputs
-LanguageModel::RunDecoder(int phase, const DecoderInputs& in, TensorMap& env)
+LanguageModel::DecoderOutputs LanguageModel::RunDecoder(int phase, const DecoderInputs& in, TensorMap& env)
 {
     return TM_CHECK_NOTNULL(impl_)->RunDecoder(phase, in, env);
 }

@@ -16,16 +16,16 @@ class LanguageModel;
 class ModelWeight;
 
 struct DraftContext {
-    int           batch_size;
-    Buffer_<int>  target_q_offsets;
-    Buffer_<int>  target_k_offsets;
-    Buffer_<int>  accept_len;
-    Buffer_<int>  sequence_length;
-    Buffer_<bool> finished_on_entry;
-    int* const*   request_token_ids_ptrs;
-    Tensor        target_pre_final_residual;
-    Tensor        embedding_storage;
-    Tensor        head_storage;
+    int             batch_size;
+    Buffer_<int>    target_q_offsets;
+    Buffer_<int>    target_k_offsets;
+    Buffer_<int>    accept_len;
+    Buffer_<int>    sequence_length;
+    Buffer_<bool>   finished_on_entry;
+    int* const*     request_token_ids_ptrs;
+    Tensor          target_pre_final_residual;
+    Tensor          embedding_storage;
+    Tensor          head_storage;
     InputProcessor* input_processor{};
 };
 

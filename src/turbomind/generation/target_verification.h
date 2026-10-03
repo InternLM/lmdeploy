@@ -21,12 +21,12 @@ struct GenerationShared;
 // GenerationShared.
 class TargetVerification {
 public:
-    TargetVerification(GenerationShared&     shared,
+    TargetVerification(GenerationShared&        shared,
                        const SpeculativePolicy& policy,
-                       int                   hidden_units,
-                       DataType              hidden_dtype,
-                       bool                  enable_metrics,
-                       int                   phases);
+                       int                      hidden_units,
+                       DataType                 hidden_dtype,
+                       bool                     enable_metrics,
+                       int                      phases);
     ~TargetVerification();
 
     // Spec-side participation in the shared BatchOp lifecycle.
