@@ -186,8 +186,13 @@ def get_tm_config(model_path,
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
         version = quant_config.get('version')
-        assert engine_config.model_format is None or engine_config.model_format == quant_method, (
-            f'mismatched quant method: user input "{engine_config.model_format}" '
+        # Allow --model-format fp8 for compressed-tensors checkpoints whose
+        # weights are float-quantized 8-bit (i.e. FP8 in substance). The CT
+        # branch below validates the actual bit-width.
+        _fmt = engine_config.model_format
+        assert _fmt is None or _fmt == quant_method or (
+            _fmt == 'fp8' and quant_method == 'compressed-tensors'
+        ), (f'mismatched quant method: user input "{_fmt}" '
             f'vs model quant_config "{quant_method}"')
         assert not group_size or group_size == _group_size, (
             f'mismatched quant group size: user input "{group_size}" '
