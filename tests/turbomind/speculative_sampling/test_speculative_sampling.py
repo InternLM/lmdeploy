@@ -3,7 +3,6 @@ from dataclasses import dataclass
 import pytest
 import torch
 
-from .reference import greedy_reference, recovery_token_reference
 from .speculative_sampling import (
     allocate_random_states,
     append_one_token_and_advance_sequence,

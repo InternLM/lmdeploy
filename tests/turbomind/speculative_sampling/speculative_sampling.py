@@ -1,5 +1,6 @@
-import _turbomind as _tm
 import torch
+
+from lmdeploy.turbomind import _tm
 
 STATE_CAPACITY_PER_LOGICAL_STATE = 4096
 

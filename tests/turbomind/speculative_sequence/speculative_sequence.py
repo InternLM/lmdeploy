@@ -14,7 +14,7 @@ def initialize_target_verification(
     accepted_draft_count: torch.Tensor | None,
     request_to_generation_row_offsets: torch.Tensor,
 ) -> None:
-    import _turbomind
+    from lmdeploy.turbomind import _turbomind
 
     stream = torch.cuda.current_stream(entry_sequence_length.device)
 
@@ -39,7 +39,7 @@ def build_draft_extension_key_offsets(
     accept_len: torch.Tensor,
     extension_index: int,
 ) -> None:
-    import _turbomind
+    from lmdeploy.turbomind import _turbomind
 
     stream = torch.cuda.current_stream(q_offsets.device)
 
@@ -60,7 +60,7 @@ def stop_criteria(
     sequence_length_limit: torch.Tensor,
     finished: torch.Tensor,
 ) -> None:
-    import _turbomind
+    from lmdeploy.turbomind import _turbomind
 
     stream = torch.cuda.current_stream(token_ids_ptrs.device)
 
@@ -82,7 +82,7 @@ def speculative_stop_criteria(
     sequence_length_limit: torch.Tensor,
     finished: torch.Tensor,
 ) -> None:
-    import _turbomind
+    from lmdeploy.turbomind import _turbomind
 
     stream = torch.cuda.current_stream(token_ids_ptrs.device)
 
@@ -109,7 +109,7 @@ def build_draft_refresh_inputs(
     limit_to_accept_len: torch.Tensor,
     finished: torch.Tensor,
 ) -> None:
-    import _turbomind
+    from lmdeploy.turbomind import _turbomind
 
     stream = torch.cuda.current_stream(refresh_q_offsets.device)
 
@@ -139,7 +139,7 @@ def draft_argmax_and_store_token(
     proposal_index: int,
     vocab_size: int,
 ) -> None:
-    import _turbomind
+    from lmdeploy.turbomind import _turbomind
 
     stream = torch.cuda.current_stream(logits.device)
 
