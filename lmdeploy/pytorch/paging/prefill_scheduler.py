@@ -130,20 +130,56 @@ class _PrefillReorderer:
 
         prefill = self.prefill_scheduler
         chunk_limit = prefill._long_context_chunk_limit(seq)
-        if seq.num_token_ids <= chunk_limit:
+        kv_token_limit = prefill._prefill_kv_token_limit(seq)
+        if kv_token_limit is None:
             info = _PrefillReorderInfo(prefill_token_count=seq.num_token_ids,
                                        is_nonfinal_long_prefill=False,
                                        estimated_long_chunks=1)
         else:
-            kv_token_limit = prefill._next_long_context_chunk_end(seq, chunk_limit)
-            safe_chunk_limit = max(1, chunk_limit)
             info = _PrefillReorderInfo(
                 prefill_token_count=max(0, kv_token_limit - seq.num_history_ids),
                 is_nonfinal_long_prefill=True,
-                estimated_long_chunks=max(1, (seq.num_token_ids + safe_chunk_limit - 1) // safe_chunk_limit),
+                estimated_long_chunks=self._estimate_long_chunks(seq, chunk_limit, kv_token_limit),
             )
         self._info_cache[seq_key] = info
         return info
+
+    def _estimate_long_chunks(self, seq: SchedulerSequence, chunk_limit: int, first_chunk_end: int):
+        """Count the planned first chunk and estimate its continuation in O(1).
+
+        The continuation accounts for save alignment but treats future tokens as text. Later multimodal spans can change
+        its boundaries, so this remains an ordering estimate, never an allocation or execution plan.
+        """
+        chunk_limit = max(1, chunk_limit)
+        end = seq.num_history_ids + seq.num_token_ids
+        remaining = end - first_chunk_end
+        ordinary_chunks = 1 + (remaining + chunk_limit - 1) // chunk_limit
+        cache = self.prefill_scheduler.cache_config
+        if not cache.num_store_state_caches or len(seq.history_embeddings) > 0:
+            return ordinary_chunks
+
+        alignment = cache.mooncake_prefill_save_alignment
+        if chunk_limit >= alignment:
+            # A forward can skip alignment points. After the next aligned end,
+            # full chunks advance by the largest alignment multiple that fits.
+            next_end = min(end, first_chunk_end + chunk_limit) // alignment * alignment
+            if next_end <= first_chunk_end:
+                return 2  # Only the unaligned final tail remains.
+            aligned_end = end // alignment * alignment
+            aligned_chunk_size = chunk_limit // alignment * alignment
+            full_chunks = (aligned_end - next_end + aligned_chunk_size - 1) // aligned_chunk_size
+            return 2 + full_chunks + int(aligned_end < end)
+
+        # A forward cannot skip an alignment point. Count the partial first
+        # interval, complete intervals, and the final tail separately.
+        next_end = (first_chunk_end // alignment + 1) * alignment
+        if next_end >= end:
+            return ordinary_chunks
+        intervals, tail = divmod(end - next_end, alignment)
+        first_interval_chunks = (next_end - first_chunk_end + chunk_limit - 1) // chunk_limit
+        chunks_per_interval = (alignment + chunk_limit - 1) // chunk_limit
+        tail_chunks = (tail + chunk_limit - 1) // chunk_limit
+        return 1 + first_interval_chunks + intervals * chunks_per_interval + tail_chunks
 
     def _long_priority_key(self, seq: SchedulerSequence, now: float):
         """Prefer smaller long prompts, with age credit to avoid starvation."""
@@ -229,7 +265,7 @@ class _PrefillAdmissionResult:
 class _PrefixMatchStateSnapshot:
     """Committed state restored when a tentative local match is rejected.
 
-    Load failure after worker writes uses its block-aligned fallback instead.
+    Failures after worker writes are handled separately by the load coordinator.
     """
 
     # Committed sequence progress and block ownership before tentative match.
@@ -357,6 +393,11 @@ class _TentativePrefixMatch:
 
     def _restore_snapshot(self, snapshot: _PrefixMatchStateSnapshot) -> None:
         seq = self.seq
+        if self.is_ssm:
+            # External lookup can reject a tentative SSM hit before its restore
+            # is pinned. Neither the selection nor a pin belongs to the baseline.
+            self.block_trie.state_checkpoints.unpin_restore(seq)
+            seq.prefix_cache.restore.clear()
         if seq.num_blocks < snapshot.num_blocks:
             raise RuntimeError(
                 'tentative prefix match removed sequence-owned baseline blocks')
@@ -516,7 +557,8 @@ class _PrefillAdmissionAttempt:
         prefill = self.prefill_scheduler
         seq = self.seq
         state_checkpoints = prefill.block_trie.state_checkpoints
-        if not prefill.is_ssm or state_checkpoints.make_runtime_state_available():
+        if (not prefill.is_ssm or prefill.state_manager.is_allocated(seq)
+                or state_checkpoints.make_runtime_state_available()):
             return None
 
         gate_rejection = self._rollback_match_after_resource_failure(
@@ -535,12 +577,16 @@ class _PrefillAdmissionAttempt:
         prefill = self.prefill_scheduler
         if self._load_ready:
             return None
-        admission = self.load_coordinator.try_load(
-            self.seq,
-            prealloc_size=self.prealloc_size,
-            evictable_seqs=self._evictable_sequences(),
-            eviction_helper=prefill.eviction_helper,
-        )
+        try:
+            admission = self.load_coordinator.try_load(
+                self.seq,
+                prealloc_size=self.prealloc_size,
+                evictable_seqs=self._evictable_sequences(),
+                eviction_helper=prefill.eviction_helper,
+            )
+        except Exception:
+            self._prefix_match.rollback('external load admission failed')
+            raise
         if admission is KVLoadAdmission.NO_LOAD:
             return None
         if admission is KVLoadAdmission.PENDING:
@@ -548,6 +594,13 @@ class _PrefillAdmissionAttempt:
             prefill.last_schedule_had_pending_lookup = True
             return _PrefillAdmissionResult.skip()
         if admission is KVLoadAdmission.STARTED:
+            seq = self.seq
+            if self._prefix_match.is_matched and not seq.prefix_cache.suppress_match_stats:
+                # A remote extension overwrites the partial local FA block.
+                # Like vLLM, attribute that tail to the external hit instead.
+                partial_hit = min(seq.num_history_ids % seq.block_size,
+                                  max(0, seq.num_history_ids - seq.prefix_cache.match_start_step))
+                prefill.block_trie.stats.num_hit_tokens -= partial_hit
             self._prefix_match.commit()
             return _PrefillAdmissionResult.load_started()
         if admission is KVLoadAdmission.FULL_PREFILL_UNAVAILABLE:
@@ -619,7 +672,7 @@ class _PrefillAdmissionAttempt:
         """Reject non-final long prefills when this turn excludes them."""
         prefill = self.prefill_scheduler
         seq = self.seq
-        if (self.turn_policy.allows_nonfinal_long_prefill
+        if ((self.turn_policy.allows_nonfinal_long_prefill and not self.batch_has_prefill)
                 or prefill._prefill_kv_token_limit(seq) is None):
             return None
 
@@ -627,7 +680,7 @@ class _PrefillAdmissionAttempt:
             return _PrefillAdmissionResult.skip()
         if prefill._prefill_kv_token_limit(seq) is not None:
             self._prefix_match.rollback(
-                'still non-final long prefill on short turn')
+                'non-final chunk requires a dedicated prefill forward')
             return _PrefillAdmissionResult.skip()
         self._accept_gate_enabling_match(
             _PrefillAdmissionResult.skip())
@@ -693,7 +746,8 @@ class _PrefillAdmissionAttempt:
             prefill.block_trie.allocate(seq)
         if prefill.is_ssm:
             prefill.state_manager.allocate(seq)
-        if prefill.block_trie.enabled:
+        if not self._load_ready and (prefill.block_trie.enabled or self.load_coordinator.connector is not None):
+            self.load_coordinator.record_cache_query(seq, seq.num_history_ids)
             prefill.block_trie.finalize_match(seq)
         self.load_coordinator.track_prefill(
             seq,
@@ -762,15 +816,18 @@ class _PrefillScheduler:
             seq,
             max_prefill_num,
             include_multimodals=False,
+            save_alignment=(self.cache_config.mooncake_prefill_save_alignment
+                            if self.cache_config.num_store_state_caches else 0),
         )
         return plan.chunk_end
 
     def _prefill_kv_token_limit(self, seq: SchedulerSequence):
         """Limit KV allocation for a non-final long-context prefill chunk."""
         max_prefill_num = self._long_context_chunk_limit(seq)
-        if seq.num_token_ids <= max_prefill_num:
+        if seq.num_token_ids <= max_prefill_num and not self.cache_config.num_store_state_caches:
             return None
-        return self._next_long_context_chunk_end(seq, max_prefill_num)
+        end = self._next_long_context_chunk_end(seq, max_prefill_num)
+        return end if end < seq.num_history_ids + seq.num_token_ids else None
 
     def _prefill_admission_token_count(self, seq: SchedulerSequence):
         """Return token budget cost for the next prefill or chunk."""

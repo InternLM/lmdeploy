@@ -9,7 +9,7 @@ metadata, dispatches it to the executor, and updates local running state.
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -133,6 +133,7 @@ class InputsMakerConfig:
     enable_chunked_prefill: bool = False
     use_mrope: bool = False
     prefill_interval: int = 16
+    mooncake_prefill_save_alignment: int = 0
 
     @staticmethod
     def from_engine(engine: 'Engine'):
@@ -155,6 +156,8 @@ class InputsMakerConfig:
             window_size=cache_config.window_size,
             enable_prefix_caching=cache_config.enable_prefix_caching,
             prefix_cache_decode_state_interval=cache_config.prefix_cache_decode_state_interval,
+            mooncake_prefill_save_alignment=(cache_config.mooncake_prefill_save_alignment
+                                             if cache_config.num_store_state_caches else 0),
             is_ssm=len(cache_config.states_shapes) > 0,
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
@@ -166,15 +169,17 @@ class InputsMakerConfig:
 class LongContextChunker:
     """Split a single long prefill into model-safe chunks.
 
-    Multimodal spans are indivisible, so a span larger than
+    Multimodal spans, together with any preceding draft input dependency,
+    are indivisible, so a span larger than
     ``max_prefill_token_num`` temporarily raises the chunk limit.  Prefix-cache
     restore can skip over the span itself, but the enlarged limit still needs
     to be derived from the whole request history so the remaining text tail is
     chunked the same way as the no-cache path.
     """
 
-    def __init__(self, max_prefill_token_num: int):
+    def __init__(self, max_prefill_token_num: int, save_alignment: int = 0):
         self.max_prefill_token_num = max_prefill_token_num
+        self.save_alignment = save_alignment
 
         # long prefill seq
         self.clear()
@@ -185,6 +190,10 @@ class LongContextChunker:
 
     def is_long_context(self, seq: 'SchedulerSequence'):
         """Is long context."""
+        if self.save_alignment:
+            plan = plan_long_context_chunk(seq, get_long_context_chunk_limit(seq, self.max_prefill_token_num),
+                                           include_multimodals=False, save_alignment=self.save_alignment)
+            return not plan.is_last_chunk
         return seq.num_token_ids > self.max_prefill_token_num
 
     def set_seq(self, seq: 'SchedulerSequence'):
@@ -204,13 +213,18 @@ class LongContextChunker:
         if seq is None:
             return 0, None
 
-        plan = plan_long_context_chunk(seq, self.max_prefill_num, self.multimodals)
+        plan = plan_long_context_chunk(seq, self.max_prefill_num, self.multimodals,
+                                       save_alignment=self.save_alignment)
         return plan.chunk_size, plan.multimodals
 
     def is_last_chunk(self):
         """Is last chunk."""
         if self.seq is None:
             return True
+        if self.save_alignment:
+            return plan_long_context_chunk(self.seq, self.max_prefill_num, self.multimodals,
+                                           include_multimodals=False,
+                                           save_alignment=self.save_alignment).is_last_chunk
         return self.seq.num_token_ids <= self.max_prefill_num
 
     def clear(self):
@@ -244,9 +258,8 @@ class LongContextChunker:
             return
         if self.seq.status != MessageStatus.RUNNING:
             # A stopped long request no longer has a valid continuation.  We do
-            # not send a cleanup-only worker forward here: normal prefill/decode
-            # ignore chunk carry, and the next first chunk resets carry before
-            # use.  Avoiding a no-work forward also keeps DP ranks aligned.
+            # not send a cleanup-only worker forward here. Avoiding a no-work
+            # forward also keeps DP ranks aligned.
             self.clear()
 
 
@@ -392,16 +405,29 @@ class _ForwardInputsTask:
 
         result = self.result
         connector_token_lens = ()
+        connector_state_ids = ()
         connector_enabled = maker.scheduler.has_kv_connector()
         if (connector_enabled and result.inputs is not None
                 and not result.inputs.is_decoding and not result.inputs.is_dummy):
             connector_token_lens = self._get_connector_token_lens(result.inputs)
+            if connector_token_lens and maker.config.is_ssm:
+                connector_state_ids = tuple(result.inputs.state_offsets.tolist())
         # Build metadata even without model work: a pending load/save still
         # needs executor steps to submit work and poll asynchronous completion.
         result.kv_connector_metadata = self.scheduler.build_connector_meta(
             result.running,
             connector_token_lens=connector_token_lens,
+            connector_state_ids=connector_state_ids,
         )
+        if result.kv_connector_metadata is not None:
+            state_copies = result.kv_connector_metadata.get_state_save_copies()
+            if state_copies:
+                cache_inputs = result.cache_inputs or CacheCheckpointInputs()
+                src, dst = _make_state_checkpoint_copy_plan(state_copies)
+                if cache_inputs.state_save_plan is not None:
+                    prev_src, prev_dst = cache_inputs.state_save_plan
+                    src, dst = prev_src + src, prev_dst + dst
+                result.cache_inputs = replace(cache_inputs, state_save_plan=(src, dst))
         if result.is_empty():
             return None
         return self._build_payload()
@@ -409,15 +435,8 @@ class _ForwardInputsTask:
     def _get_connector_token_lens(self, inputs: ModelInputs):
         """Get the safe prefill boundary for connector saves.
 
-        Target and MTP forwards have different effective query lengths for a
-        non-final chunk: the MTP cache is one row behind the target cache.  A
-        common boundary keeps the corresponding target and MTP rows in every
-        saved block.  The Mooncake scheduler still rounds this boundary down
-        to complete blocks.
-
-        Regular prefill and the final chunk fill the last MTP row using the
-        next token sampled by the target. That token is already accepted;
-        subsequent unverified draft rows lie beyond this prefill boundary.
+        Non-final chunks fill the last MTP row using the next known prompt token; final chunks use the target's sampled
+        token. Both caches are complete at the target boundary before the connector saves them.
         """
         if (self.maker.spec_decoding and inputs.logits_indices is not None
                 and inputs.seq_logit_length is not None):
@@ -425,8 +444,6 @@ class _ForwardInputsTask:
             # do not send an MTP-inclusive save with stale draft rows.
             return ()
         token_lens = inputs.history_lengths + inputs.seq_length
-        if (self.maker.spec_decoding and inputs.is_chunk and not inputs.is_last_chunk):
-            token_lens = token_lens.sub(1).clamp_min(0)
         return tuple(token_lens.tolist())
 
     def _select_active_chunk_work(self):
@@ -583,9 +600,7 @@ class _ForwardInputsTask:
                 # A prefix-cache restore can skip past a large multimodal
                 # span, leaving a tail that fits the multimodal-expanded chunk
                 # limit.  Treat it as normal prefill so the model sees the same
-                # single tail chunk as the no-cache path.  Do not set chunk
-                # flags here: spec decoding uses them as a cross-chunk carry
-                # protocol.
+                # single tail chunk as the no-cache path.
                 maker.long_context_chunker.clear()
                 (result.inputs, result.delta, result.extra_inputs,
                  result.cache_inputs) = self._build_prefill_inputs(running)
@@ -779,7 +794,8 @@ class InputsMakerAsync:
         self.forward_inputs = None
         self.running_seqs: list[SchedulerSequence] = []
         self.to_evict_seqs: list[SchedulerSequence] = []
-        self.long_context_chunker = LongContextChunker(self.config.max_prefill_token_num)
+        self.long_context_chunker = LongContextChunker(self.config.max_prefill_token_num,
+                                                     self.config.mooncake_prefill_save_alignment)
 
     def reset_runtime_state(self):
         """Discard request-local scheduling state after sleep cancels
@@ -970,6 +986,10 @@ class InputsMakerAsync:
         save_steps: tuple[int, ...] | None,
     ) -> tuple[torch.LongTensor | None, StateCacheCopyPlan | None]:
         """Reserve checkpoints and build prefill save plans."""
+        if self.spec_decoding and any(msg.logprob_start_pos >= 0 for msg in messages):
+            # Scoring-only batches skip MTP, so cannot publish a checkpoint
+            # containing both target and MTP KV.
+            return None, None
         copy_plan = self.state_checkpoints.reserve_prefill_save_batch(messages, save_steps)
         state_save_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs)
         kv_save_plan = None
@@ -1127,6 +1147,8 @@ class InputsMakerAsync:
             sum_kv_seqlen=sum_kv_seqlen,
             model_metas=model_metas,
             is_chunk=True,
+            prefill_next_token_ids=(torch.as_tensor(seq.token_ids[chunk_size:chunk_size + 1])
+                                    if seq.prefill_input_shift else None),
         )
         model_inputs = fill_logits_indices(model_inputs, [seq], [chunk_size])
 

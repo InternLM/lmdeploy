@@ -9,6 +9,7 @@ import torch
 from lmdeploy.pytorch.backends import get_backend
 
 from ...config import CacheConfig, ModelConfig, StateCacheSpec
+from ...kv_connector.base import KVCachePool
 from .layout import CacheAllocation
 from .schema import CacheTensorSpec, build_state_cache_tensor_specs
 from .view import NamedCacheView
@@ -61,6 +62,11 @@ class StateCacheEngine:
     def named_state_caches(self) -> Mapping[str, torch.Tensor]:
         """Return model-facing state-cache tensors keyed by semantic name."""
         return self._named_state_caches
+
+    @property
+    def connector_state_cache_pools(self) -> tuple[KVCachePool, ...]:
+        """Return owning state pools for external cache registration."""
+        return tuple(KVCachePool(pool.tensor, pool.entry_axis) for pool in self.allocation.pools)
 
     def zero_slots(self, slot_ids: torch.Tensor | None, zero_mask: torch.Tensor) -> None:
         """Zero the selected state slots in every physical tensor."""

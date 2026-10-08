@@ -32,7 +32,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         super().__post_init__()
         self._num_valid_ids: int = len(self.history_cache)
         self._strategy: ARSpecSequenceStrategy = self._seq_meta.strategy
-        self.prefix_cache.recompute_overlap.recompute_blocks = 1
+        self.prefix_cache.recompute_overlap.recompute_blocks = self._strategy.recompute_blocks
 
     @property
     def num_valid_ids(self):
@@ -180,6 +180,10 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
 
 
 class ARSpecSequenceStrategy(ARSequenceStrategy):
+
+    def __init__(self, recompute_blocks: int = 1, prefill_input_shift: int = 1):
+        self.recompute_blocks = recompute_blocks
+        self.prefill_input_shift = prefill_input_shift
 
     def make_sequence(self,
                       seq_id: int,

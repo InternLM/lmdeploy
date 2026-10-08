@@ -81,6 +81,7 @@ class Scheduler:
         self.kv_connector = kv_connector
         seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
         seq_meta.enable_prefix_caching = self.cache_config.enable_prefix_caching
+        seq_meta.enable_mooncake_store = cache_config.use_mooncake_store
         self.seq_meta = seq_meta
         self.seq_manager = SequenceManager(seq_meta)
 
@@ -89,13 +90,12 @@ class Scheduler:
         self.is_ssm = len(self.cache_config.states_shapes) > 0
         transfer_config = cache_config.kv_transfer_config
         # A producer-only connector still needs the save path below, but must
-        # not issue lookups. SSM restore owns a different state-cache protocol
-        # and is deliberately excluded from external KV load admission.
+        # not issue lookups. Hybrid loads also acquire a runtime state slot
+        # before admitting the asynchronous write.
         external_lookup_enabled = (
             kv_connector is not None
             and transfer_config is not None
             and transfer_config.is_kv_consumer
-            and not self.is_ssm
         )
         checkpoint_state_manager = self.state_manager if self.is_ssm else None
         self.block_trie = BlockTrie(allocator=self.block_manager.allocator,
@@ -120,6 +120,7 @@ class Scheduler:
             block_manager=self.block_manager,
             block_trie=self.block_trie,
             sessions=self.sessions,
+            state_manager=self.state_manager if self.is_ssm else None,
         )
         self.eviction_helper = build_eviction_helper(
             self.scheduler_config.eviction_type,
@@ -423,6 +424,7 @@ class Scheduler:
         self,
         running: SeqList,
         connector_token_lens: tuple[int, ...] = (),
+        connector_state_ids: tuple[int, ...] = (),
     ):
         """Build and lease one connector payload after work selection.
 
@@ -453,6 +455,7 @@ class Scheduler:
             connector_token_lens=connector_token_lens,
             connector_block_ids=block_ids,
             connector_logical_block_ids=logical_block_ids,
+            connector_state_ids=connector_state_ids,
         )
         metadata = connector.build_connector_meta(step_input)
         if metadata is not None:
@@ -593,10 +596,15 @@ class Scheduler:
         cache_usage = 1.0 - free_blocks / total_blocks if total_blocks else 0.0
         if _envs.enable_request_cache_usage_metric:
             cache_usage = self._get_request_cache_usage(total_blocks)
+        external_stats = self.kv_load_coordinator.prefix_cache_stats
         return ScheduleMetrics(
             active_seqs=self.num_running(),
             waiting_seqs=self.num_waiting() + self.num_ready() + self.num_remote_loading(),
             cache_usage=cache_usage,
             prefix_cache_hit_rate=self.block_trie.stats.hit_rate(),
             scheduler_tick=self.scheduler_tick,
+            external_prefix_cache_hit_rate=(
+                external_stats.hit_rate() if self.cache_config.use_mooncake_store else None),
+            external_prefix_cache_queries=external_stats.num_query_tokens,
+            external_prefix_cache_hits=external_stats.num_hit_tokens,
         )

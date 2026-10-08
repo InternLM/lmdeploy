@@ -1,13 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import ctypes
 import json
 import sys
+import threading
+from dataclasses import replace
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import torch
 
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
-from lmdeploy.pytorch.kv_connector import KVConnectorOutput
+from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
+from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
+from lmdeploy.pytorch.engine.model_agent.agent import _save_cache_checkpoint
+from lmdeploy.pytorch.kv_connector import KVCachePool, KVConnectorOutput
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker as worker_module
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker_threads as worker_threads_module
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
@@ -17,7 +25,10 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     MooncakeStoreConnectorMetadata,
     MooncakeStoreKeyMetadata,
     MooncakeStoreLoadRequest,
+    MooncakeStoreRegistration,
     MooncakeStoreSaveRequest,
+    MooncakeStoreStateRegistration,
+    MooncakeStoreStateSave,
     build_prefix_block_hashes,
     build_store_key,
 )
@@ -36,6 +47,7 @@ class FakeStore:
         close_ret=0,
         lookup_results=None,
         lookup_error=None,
+        existing_keys=None,
         get_results=None,
         get_error=None,
         put_results=None,
@@ -49,6 +61,7 @@ class FakeStore:
         self.close_ret = close_ret
         self.lookup_results = lookup_results
         self.lookup_error = lookup_error
+        self.existing_keys = existing_keys
         self.get_results = get_results
         self.get_error = get_error
         self.put_results = put_results
@@ -83,6 +96,8 @@ class FakeStore:
         self.lookup_calls.append(list(keys))
         if self.lookup_error is not None:
             raise self.lookup_error
+        if self.existing_keys is not None:
+            return [int(key in self.existing_keys) for key in keys]
         if self.lookup_results is None:
             return [0] * len(keys)
         return self.lookup_results
@@ -136,14 +151,18 @@ class FakeTensor:
     def numel(self):
         return self._size
 
+    def dim(self):
+        return len(self.shape)
+
     def element_size(self):
         return 1
 
     def data_ptr(self):
         return self._address
 
-    def stride(self):
-        return (1, )
+    def stride(self, dim=None):
+        strides = (1, )
+        return strides if dim is None else strides[dim]
 
     def untyped_storage(self):
         return FakeStorage(self._storage_address, self._storage_size)
@@ -173,6 +192,9 @@ class RecordingLogger:
 
     def debug(self, message, *args, **kwargs):
         self._record('debug', message, *args, **kwargs)
+
+    def info(self, message, *args, **kwargs):
+        self._record('info', message, *args, **kwargs)
 
     def error(self, message, *args, **kwargs):
         self._record('error', message, *args, **kwargs)
@@ -401,7 +423,7 @@ def test_store_create_setup_and_close_are_logged_with_ranks(tmp_path, patch_work
         '127.0.0.1:50051',
     )]
     worker.shutdown()
-    assert {level for level, _ in patch_worker_runtime.messages} == {'debug'}
+    assert {level for level, _ in patch_worker_runtime.messages} == {'info'}
     messages = [message for _, message in patch_worker_runtime.messages]
     for operation in ('create', 'setup', 'close'):
         assert any(f'interaction before: operation={operation}' in message for message in messages)
@@ -500,10 +522,12 @@ def test_producer_worker_does_not_start_lookup_server(tmp_path):
     ('replica_num', 'unique_ranks'),
     [(1, 8), (4, 2), (8, 1)],
 )
+@pytest.mark.parametrize('recompute_blocks', [0, 1])
 def test_lookup_expands_unique_kv_namespaces_block_major(
     tmp_path,
     replica_num,
     unique_ranks,
+    recompute_blocks,
 ):
     store = FakeStore(lookup_results=[1] * (3 * unique_ranks))
     worker, _ = make_worker(
@@ -514,7 +538,7 @@ def test_lookup_expands_unique_kv_namespaces_block_major(
     )
     block_hashes = build_prefix_block_hashes(range(192), 64)
 
-    assert worker.lookup(192, block_hashes) == 192
+    assert worker.lookup(192, block_hashes, recompute_blocks=recompute_blocks) == 192 - recompute_blocks * 64
     assert store.lookup_calls == [[
         build_store_key(worker.key_metadata, rank, block_hashes[block_index])
         for block_index in range(3)
@@ -523,7 +547,8 @@ def test_lookup_expands_unique_kv_namespaces_block_major(
     worker.shutdown()
 
 
-def test_lookup_requires_all_namespaces_and_a_contiguous_prefix(tmp_path):
+@pytest.mark.parametrize('recompute_blocks', [0, 1])
+def test_lookup_requires_all_namespaces_and_a_contiguous_prefix(tmp_path, recompute_blocks):
     store = FakeStore(lookup_results=[1, 1, 1, 0, 1, 1])
     worker, _ = make_worker(
         tmp_path,
@@ -532,7 +557,90 @@ def test_lookup_requires_all_namespaces_and_a_contiguous_prefix(tmp_path):
         kv_head_replica_num=4,
     )
 
-    assert worker.lookup(192, build_prefix_block_hashes(range(192), 64)) == 64
+    assert worker.lookup(192, build_prefix_block_hashes(range(192), 64),
+                         recompute_blocks=recompute_blocks) == 64 - recompute_blocks * 64
+    worker.shutdown()
+
+
+@pytest.mark.parametrize(('state_boundaries', 'missing_key', 'expected'), [
+    pytest.param((128, 256), None, 256, id='full-hit'),
+    pytest.param((256,), None, 256, id='only-last-state'),
+    pytest.param((128,), None, 128, id='earlier-state'),
+    pytest.param((), None, 0, id='fa-only'),
+    pytest.param((64, 192), None, 0, id='states-outside-save-alignment'),
+    pytest.param((128, 256), (1, 7, 256), 128, id='last-state-missing-one-tp-rank'),
+    pytest.param((128, 256), (0, 1, 192), 128, id='fa-interior-hole'),
+    pytest.param((128, 256), (0, 1, 64), 0, id='fa-first-interval-hole'),
+])
+def test_hybrid_lookup_finds_joint_boundary(tmp_path, state_boundaries, missing_key, expected):
+    config = replace(make_cache_config(write_store_config(tmp_path)),
+                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=128)
+    store = FakeStore(existing_keys=set())
+    worker = MooncakeStoreWorker(config, tp_size=8, kv_head_replica_num=4, store_factory=lambda: store)
+    hashes = build_prefix_block_hashes(range(320), 64)
+    fa_keys = [build_store_key(worker.key_metadata, rank, h) for h in hashes for rank in range(2)]
+    store.existing_keys.update(fa_keys)
+    store.existing_keys.update(
+        build_store_key(worker.key_metadata, rank, hashes[end // 64 - 1], group_id=1)
+        for end in state_boundaries for rank in range(8))
+    if missing_key is not None:
+        group, rank, end = missing_key
+        store.existing_keys.remove(build_store_key(worker.key_metadata, rank, hashes[end // 64 - 1], group_id=group))
+
+    assert worker.lookup(320, hashes) == expected
+    # The 320-token tail is outside the last save boundary. FA still checks
+    # every interior block, while GDN probes only 128 and 256 on all TP ranks.
+    assert store.lookup_calls == [fa_keys[:8] + [
+        build_store_key(worker.key_metadata, rank, hashes[index], group_id=1)
+        for index in (1, 3) for rank in range(8)
+    ]]
+    worker.shutdown()
+
+
+@pytest.mark.parametrize(('token_len', 'hash_count', 'expected'), [
+    (127, 5, 0),
+    (320, 1, 0),
+    (320, 3, 128),
+    (192, 5, 128),
+])
+def test_hybrid_lookup_limits_candidates_by_tokens_and_hashes(tmp_path, token_len, hash_count, expected):
+    config = replace(make_cache_config(write_store_config(tmp_path)),
+                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=128)
+    store = FakeStore(lookup_results=[1, 1, 1])  # Two FA blocks and one state at 128.
+    worker = MooncakeStoreWorker(config, store_factory=lambda: store)
+    hashes = build_prefix_block_hashes(range(320), 64)
+
+    assert worker.lookup(token_len, hashes[:hash_count]) == expected
+    assert len(store.lookup_calls) == int(expected > 0)
+    worker.shutdown()
+
+
+@pytest.mark.parametrize(('fa_tokens', 'state_boundaries', 'expected_hits'), [
+    (256, (128, 256), (256, 128)),
+    (320, (128, 256), (256, 256)),
+    (256, (256,), (256, 0)),
+    (192, (128, 256), (128, 128)),
+    (128, (128,), (128, 0)),
+    (384, (128, 384), (384, 128)),
+])
+@pytest.mark.parametrize('save_alignment', [64, 128])
+def test_hybrid_lookup_rewinds_fa_before_selecting_an_existing_state(
+        tmp_path, fa_tokens, state_boundaries, expected_hits, save_alignment):
+    config = replace(make_cache_config(write_store_config(tmp_path)),
+                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=save_alignment)
+    store = FakeStore(existing_keys=set())
+    worker = MooncakeStoreWorker(config, tp_size=8, kv_head_replica_num=4, store_factory=lambda: store)
+    hashes = build_prefix_block_hashes(range(384), 64)
+    store.existing_keys.update(build_store_key(worker.key_metadata, rank, h)
+                               for h in hashes[:fa_tokens // 64] for rank in range(2))
+    store.existing_keys.update(
+        build_store_key(worker.key_metadata, rank, hashes[end // 64 - 1], group_id=1)
+        for end in state_boundaries for rank in range(8))
+
+    for recompute_blocks, expected in enumerate(expected_hits):
+        assert worker.lookup(384, hashes, recompute_blocks=recompute_blocks) == expected
+    # The FA rewind and sparse state selection use one Store query per lookup.
+    assert len(store.lookup_calls) == 2
     worker.shutdown()
 
 
@@ -543,13 +651,17 @@ def test_lookup_requires_all_namespaces_and_a_contiguous_prefix(tmp_path):
         FakeStore(lookup_error=RuntimeError('lookup failed')),
     ],
 )
-def test_lookup_external_errors_fail_closed(tmp_path, store):
+@pytest.mark.parametrize('hybrid', [False, True])
+def test_lookup_external_errors_fail_closed(tmp_path, store, hybrid):
     worker, _ = make_worker(
         tmp_path,
         store=store,
         tp_size=8,
         kv_head_replica_num=4,
     )
+    if hybrid:
+        worker._cache_config.states_shapes = [((2,), torch.float32)]
+        worker._cache_config.mooncake_prefill_save_alignment = 128
 
     assert worker.lookup(128, build_prefix_block_hashes(range(128), 64)) == 0
     worker.shutdown()
@@ -608,6 +720,42 @@ def test_register_failure_propagates_without_cleanup(tmp_path):
     assert worker.store is store
 
 
+def test_registers_state_pools_as_whole_storages_without_block_alignment(tmp_path):
+    path = write_store_config(tmp_path)
+    store = FakeStore()
+    worker = MooncakeStoreWorker(
+        make_cache_config(path, num_gpu_blocks=4, role='kv_producer'),
+        global_rank=0,
+        tp_rank=0,
+        tp_size=1,
+        store_factory=lambda: store,
+    )
+    state_pool = KVCachePool(
+        FakeTensor(0x2000, size=7, storage_address=0x3000, storage_size=11),
+        entry_axis=0,
+    )
+    duplicate_state_pool = KVCachePool(
+        FakeTensor(0x2100, size=5, storage_address=0x3000, storage_size=11),
+        entry_axis=0,
+    )
+
+    worker.register_kv_caches(
+        {'row': FakeTensor(0x1000, size=8)},
+        state_cache_pools=(state_pool, duplicate_state_pool),
+    )
+
+    assert store.register_calls == [(0x1000, 8), (0x3000, 11)]
+    assert worker._registered_state_regions == (
+        MooncakeStoreStateRegistration(
+            name='state_pool.0',
+            address=0x3000,
+            size=11,
+            slot_count=7,
+            slot_size=1,
+        ), )
+    worker.shutdown()
+
+
 def test_register_exception_propagates_without_cleanup(tmp_path):
     store = FakeStore(register_error_at=2)
     worker, _ = make_worker(tmp_path, store=store)
@@ -661,7 +809,7 @@ def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path
 
     assert worker.get_finished() == KVConnectorOutput(
         finished_receiving={19},
-        invalid_block_ids={1},
+        failed_receiving={19},
     )
     assert worker.get_finished() == KVConnectorOutput()
     assert store.get_calls == [(
@@ -722,6 +870,98 @@ def test_async_load_writes_target_and_mtp_cache_rows(tmp_path, monkeypatch):
         [[100, 200, 150, 250], [100, 200, 150, 250]],
     )]
     worker.shutdown()
+
+
+@pytest.mark.parametrize('fa_exists', [False, True])
+def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(tmp_path, monkeypatch, fa_exists):
+    metadata = MooncakeStoreKeyMetadata('model', 'prefix', 8, 64, kv_head_replica_num=4)
+    hashes = build_prefix_block_hashes(range(512), 64)
+    request = MooncakeStoreSaveRequest(1, 2, 0, tuple(range(8)), tuple(range(8)), hashes,
+                                      state=MooncakeStoreStateSave(1, 3, 512))
+    written = []
+    for rank in range(8):
+        store = FakeStore()
+        completed = []
+        sender = worker_threads_module.KVCacheStoreSendingThread(
+            store=store, registrations=(MooncakeStoreRegistration('fa', 0x1000, 512),),
+            row_block_sizes=(64,), num_gpu_blocks=8, key_metadata=metadata, global_rank=rank, tp_rank=rank,
+            tp_size=8, completion_callback=completed.append, replicate_config=object(),
+            state_registrations=(MooncakeStoreStateRegistration('state', 0x2000, 64, 4, 16),))
+        state_key = f'prefix@model@tp_rank:{rank}@group:1@{hashes[-1].hex()}'
+        entries = sender._owned_entries(request)
+        # Exercise both orders: a state entry need not follow the FA entries.
+        if rank % 2:
+            entries.reverse()
+        monkeypatch.setattr(sender, '_owned_entries', lambda request, entries=entries: entries)
+        store.lookup_results = [0 if entry.key == state_key else int(fa_exists) for entry in entries]
+        sender.start()
+        sender.add_request(request, FakeCudaEvent())
+        sender.close()
+        assert completed == [1]
+        keys, addresses, sizes, _ = store.put_calls[0]
+        state_index = keys.index(state_key)
+        assert addresses[state_index] == [0x2000 + 3 * 16]
+        assert sizes[state_index] == [16]
+        written.extend(keys)
+    expected_states = {build_store_key(metadata, rank, hashes[-1], group_id=1) for rank in range(8)}
+    expected_fa = set() if fa_exists else {
+        f'prefix@model@tp_rank:{rank}@group:0@{block_hash.hex()}' for rank in range(2) for block_hash in hashes}
+    assert len(written) == len(expected_states | expected_fa)
+    assert set(written) == expected_states | expected_fa
+
+    # Query the actual save keys, including FA already present before this save.
+    existing_keys = set(written) | {
+        build_store_key(metadata, rank, h) for h in hashes for rank in range(2)}
+    config = replace(make_cache_config(write_store_config(tmp_path)),
+                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=512)
+    config.kv_transfer_config.kv_connector_extra_config.update(model_name='model', cache_prefix='prefix')
+    worker = MooncakeStoreWorker(config, tp_size=8, kv_head_replica_num=4,
+                                store_factory=lambda: FakeStore(existing_keys=existing_keys))
+    assert worker.lookup(512, hashes) == 512
+    worker.shutdown()
+
+
+@pytest.mark.parametrize('put_result', [0, -1])
+def test_hybrid_sender_reads_frozen_snapshot_across_all_pool_rows(put_result):
+    conv = torch.zeros((4, 6), dtype=torch.uint8)
+    recurrent = torch.zeros((2, 4, 5), dtype=torch.uint8)
+    conv[1] = torch.arange(6)
+    recurrent[:, 1] = torch.arange(10).reshape(2, 5) + 10
+    expected = bytes(conv[1].tolist()) + bytes(recurrent[:, 1].flatten().tolist())
+    engine = object.__new__(StateCacheEngine)
+    engine.cache_config = SimpleNamespace(num_state_caches=4)
+    engine._cache_tensors = [conv, recurrent]
+    engine._slot_tensors = ((conv, 0), (recurrent, 1))
+    _save_cache_checkpoint(SimpleNamespace(is_dummy=False),
+                           CacheCheckpointInputs(state_save_plan=((1,), (3,))), None, engine)
+    conv[1].fill_(99)
+    recurrent[:, 1].fill_(99)
+    event = FakeCudaEvent()
+    store = FakeStore(lookup_results=[1, 0], put_results=[put_result])
+    observed = []
+    completed = []
+    sender = worker_threads_module.KVCacheStoreSendingThread(
+        store=store, registrations=(MooncakeStoreRegistration('fa', 0x1000, 64),), row_block_sizes=(64,),
+        num_gpu_blocks=1, key_metadata=MooncakeStoreKeyMetadata('model', '', 1, 64),
+        global_rank=0, tp_rank=0, tp_size=1, completion_callback=completed.append, replicate_config=object(),
+        state_registrations=(
+            MooncakeStoreStateRegistration('conv', conv.data_ptr(), conv.numel(), 4, 6),
+            MooncakeStoreStateRegistration('recurrent', recurrent.data_ptr(), recurrent.numel(), 4, 5)))
+
+    def read_snapshot():
+        _, addresses, sizes, _ = store.put_calls[-1]
+        actual = b''.join(ctypes.string_at(address, size) for address, size in zip(addresses[0], sizes[0]))
+        observed.append((event.synchronize_calls, actual))
+
+    store.put_callback = read_snapshot
+    sender.start()
+    request = MooncakeStoreSaveRequest(0, 0, 0, (0,), (0,), (bytes(32),),
+                                      state=MooncakeStoreStateSave(1, 3, 64))
+    sender.add_request(request, event)
+    sender.close()
+    assert completed == [0]
+    assert observed == [(1, expected)]
+    assert store.put_calls[0][2] == [[6, 5, 5]]
 
 
 def test_async_save_waits_for_forward_and_writes_only_owned_missing_blocks(
@@ -840,3 +1080,175 @@ def test_shutdown_is_idempotent_and_propagates_close_error(tmp_path):
 
     assert store.close_calls == 1
     assert worker.store is None
+
+
+@pytest.mark.parametrize('layout', ['packed', 'layer_major'])
+def test_hybrid_save_load_roundtrip_restores_all_rank_local_bytes(layout):
+    class BytesStore(FakeStore):
+
+        def __init__(self):
+            super().__init__()
+            self.values = {}
+
+        def batch_put_from_multi_buffers(self, keys, addresses, sizes, replicate_config):
+            for key, parts, lengths in zip(keys, addresses, sizes):
+                self.values[key] = [ctypes.string_at(p, n) for p, n in zip(parts, lengths)]
+            return super().batch_put_from_multi_buffers(keys, addresses, sizes, replicate_config)
+
+        def batch_get_into_multi_buffers(self, keys, addresses, sizes):
+            for key, parts, lengths in zip(keys, addresses, sizes):
+                values = self.values[key]
+                assert list(map(len, values)) == lengths
+                for address, value in zip(parts, values):
+                    ctypes.memmove(address, value, len(value))
+            return super().batch_get_into_multi_buffers(keys, addresses, sizes)
+
+    store = BytesStore()
+    metadata = MooncakeStoreKeyMetadata('model', 'prefix', 4, 4, kv_head_replica_num=2)
+    hashes = build_prefix_block_hashes(range(16), 4)
+    rank_caches = []
+    for rank in range(4):
+        # Group 0 includes target rows and MTP rows. Group 1 retains every
+        # speculative conv/recurrent ring entry (num_spec_tokens=3).
+        fa = [torch.arange(6 * width, dtype=torch.uint8).reshape(6, width) + rank // 2
+              for width in (5, 7, 3)]
+        if layout == 'packed':
+            pool = torch.zeros((4, 92), dtype=torch.uint8)
+            conv = pool[:, :28].view(torch.float16).reshape(4, 2, 7)
+            recurrent = pool[:, 28:].view(torch.float32).reshape(4, 4, 2, 2)
+            state_pools = [(pool, 92)]
+        else:
+            conv_pool = torch.zeros((2, 4, 2, 7), dtype=torch.float16)
+            recurrent_pool = torch.zeros((2, 4, 4, 2, 2), dtype=torch.float32)
+            conv, recurrent = conv_pool.transpose(0, 1), recurrent_pool.transpose(0, 1)
+            state_pools = [(conv_pool, 28), (recurrent_pool, 64)]
+        for state in (conv, recurrent):
+            state[3].copy_(torch.arange(state[3].numel()).reshape(state[3].shape) + rank * 100)
+        registrations = tuple(MooncakeStoreRegistration(name, t.data_ptr(), t.numel())
+                              for name, t in zip(('target.k', 'target.v', 'mtp.kv'), fa))
+        state_registrations = tuple(
+            MooncakeStoreStateRegistration(str(i), t.data_ptr(), t.numel() * t.element_size(), 4, size)
+            for i, (t, size) in enumerate(state_pools))
+        kwargs = dict(store=store, registrations=registrations, row_block_sizes=(5, 7, 3), num_gpu_blocks=6,
+                      key_metadata=metadata, global_rank=rank, tp_rank=rank, tp_size=4,
+                      state_registrations=state_registrations)
+        completed = []
+        sender = worker_threads_module.KVCacheStoreSendingThread(
+            **kwargs, completion_callback=completed.append, replicate_config=object())
+        sender.start()
+        sender.add_request(MooncakeStoreSaveRequest(
+            rank, rank, 0, (0, 1, 2, 3), (0, 1, 2, 3), hashes,
+            state=MooncakeStoreStateSave(1, 3, 16)), FakeCudaEvent())
+        sender.close()
+        assert completed == [rank]
+        rank_caches.append((fa, conv, recurrent, state_pools, kwargs))
+
+    for rank, (fa, conv, recurrent, state_pools, kwargs) in enumerate(rank_caches):
+        expected_fa = [t[:4].clone() for t in fa]
+        for t in fa:
+            t.fill_(255)
+        conv[1].fill_(99)
+        recurrent[1].fill_(99)
+        untouched = [t.clone() for t in (conv, recurrent)]
+        completed = []
+        receiver = worker_threads_module.KVCacheStoreRecvingThread(
+            **kwargs, completion_callback=lambda request_id, success: completed.append((request_id, success)))
+        receiver.start()
+        receiver.add_request(MooncakeStoreLoadRequest(rank, (5, 3, 1, 4), hashes, 4, state_slot=2))
+        receiver.close()
+        assert completed == [(rank, True)]
+        for actual, expected in zip(fa, expected_fa):
+            torch.testing.assert_close(actual[[5, 3, 1, 4]], expected)
+            assert (actual[[0, 2]] == 255).all()
+        for actual, before in zip((conv, recurrent), untouched):
+            torch.testing.assert_close(actual[2], before[3])
+            torch.testing.assert_close(actual[[0, 1, 3]], before[[0, 1, 3]])
+        assert store.get_calls[-1][0] == [build_store_key(metadata, rank // 2, h) for h in hashes] + [
+            build_store_key(metadata, rank, hashes[-1], group_id=1)]
+    assert len(store.get_calls) == 4
+
+
+@pytest.mark.parametrize('results', [[0, 0], [-1, 0], [0, -1], [0], [0, True], RuntimeError('get failed')])
+def test_hybrid_load_prepares_before_fence_and_reports_request_failure(tmp_path, monkeypatch, results):
+    ready = threading.Event()
+    waiting = threading.Event()
+
+    class BlockingEvent(FakeCudaEvent):
+
+        def synchronize(self):
+            super().synchronize()
+            waiting.set()
+            assert ready.wait(timeout=5)
+
+    event = BlockingEvent()
+    monkeypatch.setattr(worker_module.torch.cuda, 'Event', lambda: event)
+    scatter = Mock(wraps=worker_threads_module._scatter_block)
+    make_key = Mock(wraps=worker_threads_module.build_store_key)
+    monkeypatch.setattr(worker_threads_module, '_scatter_block', scatter)
+    monkeypatch.setattr(worker_threads_module, 'build_store_key', make_key)
+    store = FakeStore(get_error=results) if isinstance(results, Exception) else FakeStore(get_results=results)
+    worker, _ = make_worker(tmp_path, store=store)
+    monkeypatch.setattr(worker, '_start_lookup_server', lambda: None)
+    worker.register_kv_caches({'fa': FakeTensor(0x1000)},
+                              state_cache_pools=(KVCachePool(FakeTensor(0x2000, size=4), entry_axis=0),))
+    request = MooncakeStoreLoadRequest(7, (0,), (bytes(32),), 1, state_slot=1)
+    try:
+        worker.start_load_kv(MooncakeStoreConnectorMetadata(
+            load_requests=(request, replace(request, request_id=8, state_slot=2))))
+        assert waiting.wait(timeout=5)
+        assert event.record_calls == 1
+        # Both FA and state descriptors are ready while the GPU fence is
+        # still pending, but no destination bytes may be written yet.
+        assert scatter.call_count == make_key.call_count == 2
+        assert store.get_calls == []
+        assert worker.get_finished() == KVConnectorOutput()
+    finally:
+        ready.set()
+        worker.kv_recv_thread.request_queue.join()
+        worker.shutdown()
+    assert event.synchronize_calls == 2
+    assert len(store.get_calls) == 2
+    assert worker.get_finished() == KVConnectorOutput(
+        finished_receiving={7, 8}, failed_receiving=set() if results == [0, 0] else {7, 8})
+
+
+@pytest.mark.parametrize('failure_stage', [
+    'ready_event', 'reserved_state_slot', 'state_slot_out_of_range', 'fa_block_out_of_range'])
+def test_hybrid_load_failure_before_get_completes_once_and_receiver_continues(
+        tmp_path, monkeypatch, failure_stage):
+    class FailingEvent(FakeCudaEvent):
+
+        def synchronize(self):
+            super().synchronize()
+            raise RuntimeError('event failed')
+
+    event = FailingEvent() if failure_stage == 'ready_event' else FakeCudaEvent()
+    monkeypatch.setattr(worker_module.torch.cuda, 'Event', lambda: event)
+    worker, store = make_worker(tmp_path)
+    monkeypatch.setattr(worker, '_start_lookup_server', lambda: None)
+    worker.register_kv_caches({'fa': FakeTensor(0x1000)},
+                              state_cache_pools=(KVCachePool(FakeTensor(0x2000, size=4), entry_axis=0),))
+    receiver = worker.kv_recv_thread
+    completed = Mock(wraps=receiver.completion_callback)
+    monkeypatch.setattr(receiver, 'completion_callback', completed)
+    state_slot = {'reserved_state_slot': 0, 'state_slot_out_of_range': 4}.get(failure_stage, 1)
+    block_id = 1 if failure_stage == 'fa_block_out_of_range' else 0
+    request = MooncakeStoreLoadRequest(7, (block_id,), (bytes(32),), 1, state_slot=state_slot)
+    try:
+        worker.start_load_kv(MooncakeStoreConnectorMetadata(load_requests=(request,)))
+        receiver.request_queue.join()
+        assert store.get_calls == []
+        assert event.synchronize_calls == (1 if failure_stage == 'ready_event' else 0)
+        assert worker.get_finished() == KVConnectorOutput(finished_receiving={7}, failed_receiving={7})
+        assert worker.get_finished() == KVConnectorOutput()
+
+        monkeypatch.setattr(worker_module.torch.cuda, 'Event', FakeCudaEvent)
+        valid_request = replace(request, request_id=8, block_ids=(0,), state_slot=1)
+        worker.start_load_kv(MooncakeStoreConnectorMetadata(load_requests=(valid_request,)))
+        receiver.request_queue.join()
+        assert len(store.get_calls) == 1
+        assert worker.get_finished() == KVConnectorOutput(finished_receiving={8})
+        assert worker.get_finished() == KVConnectorOutput()
+        assert [entry.args for entry in completed.call_args_list] == [(7, False), (8, True)]
+    finally:
+        worker.shutdown()

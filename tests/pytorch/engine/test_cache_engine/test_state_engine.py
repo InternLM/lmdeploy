@@ -105,6 +105,16 @@ def _make_multi_pool_state_cache_engine(num_caches: int = 4):
     return cache_engine
 
 
+def test_connector_state_cache_pools_expose_owning_pools_and_axes():
+    cache_engine = _make_multi_pool_state_cache_engine()
+
+    pools = cache_engine.connector_state_cache_pools
+
+    assert [pool.entry_axis for pool in pools] == [0, 1]
+    assert all(pool.tensor is allocation_pool.tensor
+               for pool, allocation_pool in zip(pools, cache_engine.allocation.pools))
+
+
 def test_state_cache_engine_zero_slots_uses_each_pool_entry_axis():
     cache_engine = _make_multi_pool_state_cache_engine()
     first, second = cache_engine.state_caches

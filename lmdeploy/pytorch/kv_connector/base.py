@@ -24,6 +24,14 @@ KVOperationId = int
 KVCacheValue = torch.Tensor | Sequence[torch.Tensor]
 
 
+@dataclass(frozen=True)
+class KVCachePool:
+    """One owning cache pool and the axis that indexes its entries."""
+
+    tensor: torch.Tensor
+    entry_axis: int
+
+
 class KVConnectorRole(enum.Enum):
     """Process role of a KV connector instance."""
 
@@ -39,6 +47,7 @@ class KVConnectorStepInput:
     connector_token_lens: tuple[int, ...] = ()
     connector_block_ids: tuple[tuple[int, ...], ...] = ()
     connector_logical_block_ids: tuple[tuple[int, ...], ...] = ()
+    connector_state_ids: tuple[int, ...] = ()
 
 
 class KVConnectorMetadata(ABC):
@@ -50,6 +59,10 @@ class KVConnectorMetadata(ABC):
 
     def get_save_block_leases(self) -> tuple['KVSaveBlockLease', ...]:
         """Return scheduler-owned block leases required by this step."""
+        return ()
+
+    def get_state_save_copies(self) -> tuple[tuple[int, int], ...]:
+        """Return host (runtime, snapshot) slot pairs copied after forward."""
         return ()
 
 
@@ -71,13 +84,14 @@ class KVConnectorOutput:
     because chunked prefill can enqueue several concurrent saves for the same
     request. Save completion is terminal whether the Store write succeeded or
     failed, allowing the scheduler to release its block lease in either case.
-    ``invalid_block_ids`` may arrive before the request-level receive
-    completion and is therefore consumed by the scheduler-side connector.
+    ``failed_receiving`` may arrive before all workers finish the request.
+    The scheduler-side connector retains these failures until completion;
+    state slots and FA block IDs need not share an address space.
     """
 
     completed_save_ids: set[KVOperationId] | None = None
     finished_receiving: set[RequestId] | None = None
-    invalid_block_ids: set[int] = field(default_factory=set)
+    failed_receiving: set[RequestId] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -137,7 +151,7 @@ class KVConnectorOutputAggregator:
         # The slots are positions in ``outputs``, not distributed global ranks.
         self._saving_ranks: dict[KVOperationId, set[int]] = {}
         # Load request ID -> executor worker slots that finished receiving it.
-        # Load success is carried separately by ``invalid_block_ids``.
+        # Load success is carried separately by ``failed_receiving``.
         self._receiving_ranks: dict[RequestId, set[int]] = {}
 
     def _aggregate_completions(
@@ -170,16 +184,16 @@ class KVConnectorOutputAggregator:
     ) -> KVConnectorOutput:
         """Merge one rank-local output per worker into all-rank progress.
 
-        Save/load completions wait for every worker. Invalid destination block IDs are unioned and published immediately
-        because one rank failure is sufficient to make a load unusable; the scheduler-side connector keeps them until
-        the corresponding request-level completion arrives.
+        Save/load completions wait for every worker. Failed request IDs are unioned and published immediately because
+        one rank failure makes a load unusable. The scheduler-side connector retains failures until completion, when
+        every worker has stopped writing the request's destinations.
         """
         if len(outputs) != self.world_size:
             raise ValueError(
                 f'expected {self.world_size} TP connector outputs, got {len(outputs)}')
         saving_by_rank: list[set[KVOperationId] | None] = []
         receiving_by_rank: list[set[RequestId] | None] = []
-        invalid_block_ids = set()
+        failed_receiving = set()
         for output in outputs:
             if output is None:
                 saving_by_rank.append(None)
@@ -187,7 +201,7 @@ class KVConnectorOutputAggregator:
                 continue
             saving_by_rank.append(output.completed_save_ids)
             receiving_by_rank.append(output.finished_receiving)
-            invalid_block_ids.update(output.invalid_block_ids)
+            failed_receiving.update(output.failed_receiving)
         return KVConnectorOutput(
             completed_save_ids=self._aggregate_completions(
                 saving_by_rank,
@@ -197,7 +211,7 @@ class KVConnectorOutputAggregator:
                 receiving_by_rank,
                 self._receiving_ranks,
             ),
-            invalid_block_ids=invalid_block_ids,
+            failed_receiving=failed_receiving,
         )
 
     def clear(self) -> None:
@@ -231,11 +245,18 @@ class KVConnectorBase(ABC):
 
     # Worker-side methods.
 
-    def register_kv_caches(self, kv_caches: Mapping[str, KVCacheValue]) -> None:
+    def register_kv_caches(
+        self,
+        kv_caches: Mapping[str, KVCacheValue],
+        *,
+        state_cache_pools: Sequence[KVCachePool] = (),
+    ) -> None:
         """Register GPU KV-cache tensors with the external store.
 
-        This is a no-op for connectors that do not require memory registration. Implementations must not retain
-        temporary tensor views in a way that changes ownership of the underlying cache allocation.
+        ``state_cache_pools`` contains owning pools for non-paged state caches.
+        This is a no-op for connectors that do not require memory registration.
+        Implementations must not retain temporary tensor views in a way that
+        changes ownership of the underlying cache allocation.
         """
         return None
 

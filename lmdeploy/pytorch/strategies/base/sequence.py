@@ -13,6 +13,9 @@ if TYPE_CHECKING:
 
 class SequenceStrategy(ABC):
 
+    # Offset from a target row to the input consumed by its draft row.
+    prefill_input_shift: int = 0
+
     @abstractmethod
     def make_sequence(self,
                       seq_id: int,

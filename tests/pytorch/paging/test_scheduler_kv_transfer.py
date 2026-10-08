@@ -367,9 +367,10 @@ def test_async_lookup_pending_preserves_private_partial_prefix():
     assert scheduler.block_trie.stats.num_query_tokens == 0
 
 
-def test_external_cached_tokens_survive_remote_ready_admission():
+@pytest.mark.parametrize('enable_prefix_caching', [False, True])
+def test_external_cached_tokens_survive_remote_ready_admission(enable_prefix_caching):
     connector = _AsyncLookupConnector([(8, True)])
-    scheduler = _make_async_lookup_scheduler(connector)
+    scheduler = _make_async_lookup_scheduler(connector, enable_prefix_caching=enable_prefix_caching)
     seq = scheduler.add_session(73).add_sequence(torch.arange(13))
 
     started = scheduler.schedule(is_prefill=True)
@@ -380,12 +381,18 @@ def test_external_cached_tokens_survive_remote_ready_admission():
     assert seq.num_history_ids == 8
     assert seq.cached_tokens == 8
     assert seq.prefix_cache.match_start_step == 0
+    assert scheduler.block_trie.stats.num_query_tokens == (13 if enable_prefix_caching else 0)
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 13
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == 8
 
     admitted = scheduler.schedule(is_prefill=True)
 
     assert admitted.running == [seq]
     assert seq.cached_tokens == 8
     assert seq.prefix_cache.match_start_step == 0
+    assert scheduler.schedule_metrics.prefix_cache_hit_rate == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_hit_rate == pytest.approx(8 / 13)
 
 
 @pytest.mark.parametrize('enable_prefix_caching', [False, True])
@@ -403,7 +410,8 @@ def test_mtp_remote_hit_recomputes_boundary_in_private_block(enable_prefix_cachi
         ),
     )
     connector = MooncakeStoreScheduler(cache_config)
-    connector.client.lookup = Mock(return_value=8)
+    # The worker has already dropped the final block from an eight-token hit.
+    connector.client.lookup = Mock(return_value=4)
     scheduler = _make_async_lookup_scheduler(
         connector,
         enable_prefix_caching=enable_prefix_caching,
@@ -691,8 +699,9 @@ def test_soft_reservation_blocks_new_load_until_capacity_is_released():
     ]
 
 
-def test_failed_async_load_preserves_local_prefix_and_releases_remote_tail():
-    connector = _AsyncLookupConnector([(4, True)])
+@pytest.mark.parametrize('recompute', [False, True])
+def test_failed_async_load_preserves_local_prefix_and_releases_remote_tail(recompute):
+    connector = _AsyncLookupConnector([(4, True), (0, False)])
     scheduler = _make_async_lookup_scheduler(connector)
     tokens = torch.arange(13)
     cached = scheduler.add_session(79).add_sequence(tokens[:9])
@@ -700,6 +709,7 @@ def test_failed_async_load_preserves_local_prefix_and_releases_remote_tail():
     scheduler.block_trie.allocate(cached)
     cached.state.stop()
     seq = scheduler.add_session(80).add_sequence(tokens)
+    seq.prefix_cache.suppress_match_stats = recompute
     scheduler.schedule(is_prefill=True)
     connector.failed_ids.add(seq.seq_id)
 
@@ -709,8 +719,18 @@ def test_failed_async_load_preserves_local_prefix_and_releases_remote_tail():
     assert seq.status == MessageStatus.WAITING
     assert seq.num_history_ids == 8
     assert seq.num_blocks == 2
-    assert seq.cached_tokens == 8
+    assert seq.cached_tokens == (0 if recompute else 8)
     assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
+    assert scheduler.block_trie.stats.num_query_tokens == (0 if recompute else 13)
+    assert scheduler.block_trie.stats.num_hit_tokens == (0 if recompute else 8)
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == (0 if recompute else 5)
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == (0 if recompute else 4)
+
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert scheduler.block_trie.stats.num_query_tokens == (0 if recompute else 18)
+    assert scheduler.block_trie.stats.num_hit_tokens == (0 if recompute else 8)
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == (0 if recompute else 10)
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == (0 if recompute else 4)
 
 
 def test_async_load_soft_reservation_shrinks_across_chunks():

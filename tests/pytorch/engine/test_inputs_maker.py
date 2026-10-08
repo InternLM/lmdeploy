@@ -21,6 +21,12 @@ from lmdeploy.pytorch.engine.inputs_maker import (
 )
 from lmdeploy.pytorch.engine.model_agent.agent import BatchedOutputs
 from lmdeploy.pytorch.kv_connector import KVConnectorOutput
+from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
+    MooncakeStoreConnectorMetadata,
+    MooncakeStoreSaveRequest,
+    MooncakeStoreStateSave,
+)
+from lmdeploy.pytorch.long_context import get_long_context_chunk_limit, plan_long_context_chunk
 from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore, StateCheckpointSaveReservation
 from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import CheckpointCopyPlan
 
@@ -70,6 +76,8 @@ class _DummyMultiModal:
 
 class _DummySeq:
 
+    prefill_input_shift = 0
+
     def __init__(self,
                  history_ids: int,
                  token_ids: int,
@@ -79,6 +87,7 @@ class _DummySeq:
         self.num_history_ids = history_ids
         self.num_token_ids = token_ids
         self.history_multimodals = SimpleNamespace(multimodals=all_multimodals)
+        self.history_embeddings = []
         self._input_multimodals = input_multimodals
         self.prefix_cache = SimpleNamespace(match_start_step=match_start_step)
         self.return_logits = False
@@ -203,6 +212,7 @@ class _FakeScheduler:
         self,
         running,
         connector_token_lens=(),
+        connector_state_ids=(),
     ):
         self.connector_meta_calls.append(tuple(connector_token_lens))
         return None
@@ -238,6 +248,96 @@ def _make_inputs_maker_config():
                              window_size=-1,
                              enable_prefix_caching=False,
                              prefix_cache_decode_state_interval=0)
+
+
+@pytest.mark.parametrize(('history', 'end', 'budget', 'span', 'expected'), [
+    (0, 63, 32768, None, 63),
+    (0, 8191, 32768, None, 8191),
+    (0, 8192, 32768, None, 8192),
+    (0, 8193, 32768, None, 8192),
+    (0, 20000, 32768, None, 16384),
+    (16384, 20000, 32768, None, 20000),
+    (0, 20000, 4096, None, 4096),
+    (4096, 20000, 4096, None, 8192),
+    (8191, 9000, 32768, None, 8192),
+    (0, 20000, 32768, (16000, 18000), 8192),
+    (8192, 20000, 32768, (16000, 18000), 20000),
+    (0, 20000, 4096, (0, 17000), 17000),
+])
+def test_mooncake_prefill_uses_last_safe_aligned_boundary(history, end, budget, span, expected):
+    multimodals = {'image': [_DummyMultiModal(*span)]} if span else {}
+    seq = _DummySeq(history, end - history, multimodals, multimodals)
+    chunker = LongContextChunker(budget, save_alignment=8192)
+    plan = plan_long_context_chunk(seq, get_long_context_chunk_limit(seq, budget), save_alignment=8192)
+
+    assert plan.chunk_end == expected
+    assert plan.is_last_chunk == (expected == end)
+    assert chunker.is_long_context(seq) == (expected != end)
+    chunker.set_seq(seq)
+    assert chunker.next_chunk_size()[0] == expected - history
+    assert chunker.is_last_chunk() == plan.is_last_chunk
+    for spans in (plan.multimodals or {}).values():
+        assert all(data.end <= expected for data in spans)
+
+
+@pytest.mark.parametrize(('spans', 'budget', 'alignment', 'ends'), [
+    ([(2, 4)], 3, 0, [1, 4, 6]),
+    ([(2, 4)], 2, 0, [1, 4, 6]),
+    ([(0, 2)], 2, 0, [2, 4, 6]),
+    ([(2, 4), (4, 6)], 3, 0, [1, 6, 8]),
+    ([(2, 4), (5, 7)], 3, 0, [1, 4, 7, 9]),
+    ([(1, 3), (3, 5)], 1, 0, [5, 7]),
+    ([(2, 6)], 2, 0, [1, 6]),
+    ([(8, 12)], 10, 8, [7, 16, 20]),
+    ([(16, 24)], 20, 8, [8, 24, 32]),
+])
+def test_shifted_prefill_keeps_multimodal_embeddings_in_their_chunk(spans, budget, alignment, ends):
+    multimodals = {'image': [_DummyMultiModal(*span) for span in spans]}
+    seq = _DummySeq(0, ends[-1], multimodals, multimodals)
+    seq.prefill_input_shift = 1
+    chunker = LongContextChunker(budget, save_alignment=alignment)
+    chunker.set_seq(seq)
+
+    for expected_end in ends:
+        plan = plan_long_context_chunk(seq, chunker.max_prefill_num, save_alignment=alignment)
+        assert seq.num_history_ids < plan.chunk_end == expected_end
+        assert plan.is_last_chunk == (expected_end == ends[-1])
+        assert chunker.is_last_chunk() == plan.is_last_chunk
+        assert chunker.next_chunk_size()[0] == plan.chunk_size
+        assert all(not start <= expected_end < end for start, end in spans)
+        seq.set_step(expected_end)
+        seq.num_token_ids = ends[-1] - expected_end
+        seq._input_multimodals = {'image': [mm for mm in multimodals['image'] if mm.start >= expected_end]}
+        chunker.multimodals = seq._input_multimodals
+
+
+@pytest.mark.parametrize('local_copy', [None, ((1,), (3,))])
+def test_store_state_copy_is_attached_to_actual_prefill_without_apc(local_copy):
+    seq = _DummySeq(0, 16, {}, {})
+    maker = _make_policy_maker(seq)
+    maker.config.is_ssm = True
+    maker.long_context_chunker.clear()
+    maker.scheduler = _FakeScheduler([seq])
+    maker.scheduler.kv_connector = object()
+    inputs = _fake_model_inputs()
+    inputs.history_lengths = torch.tensor([0])
+    inputs.seq_length = torch.tensor([16])
+    inputs.state_offsets = torch.tensor([1])
+    maker.create_model_inputs = lambda seqs, is_prefill: inputs
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+    maker._prepare_prefill_cache_inputs = lambda seqs: CacheCheckpointInputs(state_save_plan=local_copy)
+    request = MooncakeStoreSaveRequest(7, 0, 0, (2,), (12,), (bytes(32),),
+                                      state=MooncakeStoreStateSave(1, 4, 16))
+
+    def build_meta(running, connector_token_lens, connector_state_ids):
+        assert connector_token_lens == (16,)
+        assert connector_state_ids == (1,)
+        return MooncakeStoreConnectorMetadata(save_requests=(request,))
+
+    maker.scheduler.build_connector_meta = build_meta
+    payload = maker._make_forward_inputs(prefill=True)
+    expected = ((1,), (4,)) if local_copy is None else ((1, 1), (3, 4))
+    assert payload['cache_inputs'].state_save_plan == expected
 
 
 def _fake_model_inputs(is_chunk: bool = False):
@@ -769,7 +869,7 @@ def test_prefill_passes_actual_computed_token_boundaries_to_kv_connector():
     ('is_chunk', 'is_last_chunk', 'expected'),
     [
         pytest.param(False, False, (24, ), id='regular-prefill'),
-        pytest.param(True, False, (23, ), id='non-final-chunk'),
+        pytest.param(True, False, (24, ), id='non-final-chunk'),
         pytest.param(True, True, (24, ), id='final-chunk'),
     ],
 )
@@ -812,6 +912,29 @@ def test_spec_decoding_connector_boundary_uses_common_chunk_length(
     maker._make_forward_inputs(prefill=True)
 
     assert maker.scheduler.connector_meta_calls == [expected]
+
+
+def test_long_context_inputs_carry_next_prompt_token_for_mtp():
+    seq = SimpleNamespace(token_ids=np.arange(8, 17), num_history_ids=8, num_ignored_history=0,
+                          model_meta=None, logprob_start_pos=-1, logical_state=3,
+                          prefill_input_shift=1,
+                          mrope_pos_ids=np.arange(27).reshape(9, 3))
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(is_ssm=True, use_mrope=True)
+    maker.spec_decoding = True
+    maker.scheduler = SimpleNamespace(get_block_tables=lambda seqs: [np.array([2, 3, 4])])
+    maker.executor = SimpleNamespace(device_type='cuda')
+    maker.adapter_manager = SimpleNamespace(num_adapters=lambda: 1)
+    maker.kernel_blocks_per_kv = 1
+
+    inputs = maker.create_model_inputs_long_context(seq, 4).to_device('cpu')
+
+    assert inputs.input_ids.tolist() == [[8, 9, 10, 11]]
+    assert inputs.prefill_next_token_ids.tolist() == [12]
+    assert inputs.seq_length.tolist() == [4]
+    assert inputs.history_lengths.tolist() == [8]
+    assert inputs.state_offsets.tolist() == [3]
+    assert inputs.mrope_pos_ids.tolist() == seq.mrope_pos_ids[:4].T.tolist()
 
 
 def test_spec_decoding_input_logprobs_do_not_save_stale_mtp_rows():
@@ -1579,8 +1702,11 @@ def test_state_checkpoint_copy_plan_is_compact():
     assert _make_state_checkpoint_copy_plan(()) is None
 
 
-def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans():
+@pytest.mark.parametrize('scoring', [False, True])
+def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans(scoring):
     messages = [_state_seq(4, 11), _state_seq(5)]
+    for seq in messages:
+        seq.logprob_start_pos = 0 if scoring else -1
     events = []
 
     class _StateCheckpoints:
@@ -1593,18 +1719,20 @@ def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans():
             return CheckpointCopyPlan(state_pairs=((11, 4), ))
 
         def reserve_prefill_save_batch(self, seqs, steps=None):
+            assert not scoring, 'Scoring skips MTP and must not reserve a hybrid checkpoint.'
             assert steps is None
             return CheckpointCopyPlan(state_pairs=((4, 21), ))
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
     maker.state_checkpoints = _StateCheckpoints()
+    maker.spec_decoding = True
 
     cache_inputs = maker._prepare_prefill_cache_inputs(messages)
 
     assert events == ['pin_restores']
     assert cache_inputs.state_restore_plan == ((11, ), (4, ))
-    assert cache_inputs.state_save_plan == ((4, ), (21, ))
+    assert cache_inputs.state_save_plan == (None if scoring else ((4, ), (21, )))
 
 
 def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():
@@ -1624,6 +1752,7 @@ def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
     maker.state_checkpoints = _StateCheckpoints()
+    maker.spec_decoding = False
 
     cache_inputs = maker._prepare_prefill_cache_inputs([seq], save_steps=(160, ))
 
@@ -1654,6 +1783,7 @@ def test_prepare_prefill_cache_inputs_groups_partial_kv_restore_and_save_plans()
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True, block_size=16)
     maker.scheduler = scheduler
     maker.state_checkpoints = _StateCheckpoints()
+    maker.spec_decoding = False
 
     cache_inputs = maker._prepare_prefill_cache_inputs(messages)
 

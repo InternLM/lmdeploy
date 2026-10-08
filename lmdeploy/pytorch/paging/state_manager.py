@@ -136,6 +136,10 @@ def build_state_manager(cache_config: CacheConfig) -> StateManager:
     num_state_caches = cache_config.num_state_caches
     if num_state_caches is None:
         num_state_caches = num_reserved
+    else:
+        # Store snapshots have a separate allocator over the tail of the same
+        # registered pool. Neither runtime nor trie checkpoints may reuse them.
+        num_state_caches -= cache_config.num_store_state_caches
 
     # `num_state_caches` is the number of allocated cache rows, including
     # reserved rows. StateManager subtracts reserved rows internally, so pass

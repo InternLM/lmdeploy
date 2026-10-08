@@ -455,7 +455,7 @@ class Engine(EngineBase):
 
             input_ids = result.input_ids
             input_multimodals = result.input_multimodals
-            if self.cache_config.enable_prefix_caching:
+            if self.cache_config.needs_prefix_cache_identity:
                 input_multimodals = ensure_multimodal_content_hashes(input_multimodals)
 
             req_data['token_ids'] = input_ids

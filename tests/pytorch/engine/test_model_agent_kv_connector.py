@@ -104,9 +104,10 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
     events = []
     target_rows = {'kv': object(), 'index': object()}
     mtp_rows = {'kv': object(), 'index': object()}
+    state_pools = (object(), )
     cache_engine = SimpleNamespace(connector_kv_caches=target_rows)
     mtp_cache_engine = SimpleNamespace(connector_kv_caches=mtp_rows)
-    state_cache_engine = object()
+    state_cache_engine = SimpleNamespace(connector_state_cache_pools=state_pools)
 
     class _OldConnector:
 
@@ -115,8 +116,8 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
 
     class _NewConnector:
 
-        def register_kv_caches(self, caches):
-            events.append(('register', caches))
+        def register_kv_caches(self, caches, *, state_cache_pools=()):
+            events.append(('register', caches, state_cache_pools))
 
         def shutdown(self):
             events.append('new-shutdown')
@@ -178,10 +179,53 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
             'index': target_rows['index'],
             'mtp.kv': mtp_rows['kv'],
             'mtp.index': mtp_rows['index'],
-        })
+        },
+        state_pools)
     assert agent.kv_connector is new_connector
     assert agent.cache_engine is cache_engine
     assert agent.state_cache_engine is state_cache_engine
+
+
+def test_build_cache_engine_registers_state_pools_with_connector(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    events = []
+    row_mapping = {'kv': object()}
+    state_pools = (object(), )
+    cache_engine = SimpleNamespace(connector_kv_caches=row_mapping)
+    state_cache_engine = SimpleNamespace(connector_state_cache_pools=state_pools)
+
+    class _Connector:
+
+        def register_kv_caches(self, caches, *, state_cache_pools=()):
+            events.append((caches, state_cache_pools))
+
+        def shutdown(self):
+            pass
+
+    connector = _Connector()
+    agent = _bare_model_agent()
+    agent.cache_config.states_shapes = [((1, ), torch.float32)]
+    agent.kv_connector = None
+    agent.spec_agent = SimpleNamespace(
+        cache_engine=None,
+        specdecode_config=None,
+        build_cache_engine=lambda stream: None,
+    )
+
+    monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: cache_engine)
+    monkeypatch.setattr(agent_module, 'StateCacheEngine', lambda *args, **kwargs: state_cache_engine)
+    monkeypatch.setattr(agent_module, 'build_kv_connector', lambda *args, **kwargs: connector)
+    monkeypatch.setattr(
+        agent_module,
+        'get_dist_manager',
+        lambda: SimpleNamespace(current_context=lambda: SimpleNamespace(
+            attn_tp_group=SimpleNamespace(rank=0))),
+    )
+
+    agent.build_cache_engine()
+
+    assert events == [(row_mapping, state_pools)]
 
 
 def test_build_cache_engine_propagates_registration_error(monkeypatch):
@@ -191,7 +235,7 @@ def test_build_cache_engine_propagates_registration_error(monkeypatch):
 
     class _Connector:
 
-        def register_kv_caches(self, caches):
+        def register_kv_caches(self, caches, *, state_cache_pools=()):
             events.append('register')
             raise RuntimeError('registration failed')
 
@@ -208,7 +252,8 @@ def test_build_cache_engine_propagates_registration_error(monkeypatch):
     cache_engine = SimpleNamespace(connector_kv_caches={'kv': object()})
     dist_ctx = SimpleNamespace(attn_tp_group=SimpleNamespace(rank=3))
     monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: cache_engine)
-    monkeypatch.setattr(agent_module, 'StateCacheEngine', lambda *args, **kwargs: object())
+    monkeypatch.setattr(agent_module, 'StateCacheEngine',
+                        lambda *args, **kwargs: SimpleNamespace(connector_state_cache_pools=()))
     monkeypatch.setattr(agent_module, 'build_kv_connector', lambda *args, **kwargs: _Connector())
     monkeypatch.setattr(agent_module, 'get_dist_manager',
                         lambda: SimpleNamespace(current_context=lambda: dist_ctx))
@@ -363,8 +408,8 @@ def test_connector_output_aggregator_waits_for_every_tp_rank():
     aggregator = KVConnectorOutputAggregator(world_size=2)
 
     first = aggregator.aggregate([
-        KVConnectorOutput(finished_receiving={11}, invalid_block_ids={3}),
-        KVConnectorOutput(invalid_block_ids={4}),
+        KVConnectorOutput(finished_receiving={11}, failed_receiving={11}),
+        KVConnectorOutput(failed_receiving={12}),
     ])
     second = aggregator.aggregate([
         KVConnectorOutput(completed_save_ids={23}),
@@ -376,7 +421,7 @@ def test_connector_output_aggregator_waits_for_every_tp_rank():
     ])
 
     assert first.finished_receiving is None
-    assert first.invalid_block_ids == {3, 4}
+    assert first.failed_receiving == {11, 12}
     assert second.finished_receiving == {11}
     assert second.completed_save_ids is None
     assert third.completed_save_ids == {23}
@@ -400,7 +445,7 @@ def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(mon
             events.append('finished')
             return KVConnectorOutput(
                 finished_receiving={11},
-                invalid_block_ids={3},
+                failed_receiving={11},
             )
 
         def clear_connector_metadata(self):
@@ -436,7 +481,7 @@ def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(mon
     assert outputs[0].next_token_ids is None
     assert outputs[0].kv_connector_output == KVConnectorOutput(
         finished_receiving={11},
-        invalid_block_ids={3},
+        failed_receiving={11},
     )
 
 
@@ -545,10 +590,21 @@ def test_model_agent_connector_save_hook_runs_between_forward_and_progress_poll(
     ]
 
 
-def test_model_agent_defers_connector_save_until_speculative_forward(monkeypatch):
+@pytest.mark.parametrize('scoring', [False, True])
+def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(monkeypatch, scoring):
+    from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
     events = []
+    checkpoint = CacheCheckpointInputs(kv_restore_plan=torch.tensor([[3], [4]]),
+                                       kv_save_plan=None if scoring else torch.tensor([[4], [5]]))
+
+    def copy_mtp_blocks(plan):
+        if plan is checkpoint.kv_restore_plan:
+            events.append('mtp_restore')
+        else:
+            assert plan is checkpoint.kv_save_plan
+            events.append('mtp_save')
 
     class _Connector:
 
@@ -587,7 +643,8 @@ def test_model_agent_defers_connector_save_until_speculative_forward(monkeypatch
     agent = agent_module.BaseModelAgent.__new__(agent_module.BaseModelAgent)
     agent.rank = 0
     agent.kv_connector = _Connector()
-    agent.spec_agent = SimpleNamespace(is_enabled=lambda: True)
+    agent.spec_agent = SimpleNamespace(is_enabled=lambda: True,
+                                       cache_engine=SimpleNamespace(copy_logical_blocks=copy_mtp_blocks))
     agent.need_output = False
     agent.memdecode_agent = None
     agent.cache_engine = None
@@ -609,8 +666,8 @@ def test_model_agent_defers_connector_save_until_speculative_forward(monkeypatch
         is_first_chunk=False,
         is_last_chunk=False,
         dp_meta=None,
-        logits_indices=None,
-        seq_logit_length=None,
+        logits_indices=torch.tensor([0]) if scoring else None,
+        seq_logit_length=torch.tensor([1]) if scoring else None,
     )
     sampling_inputs = SimpleNamespace(get_delta=lambda: None)
 
@@ -619,17 +676,11 @@ def test_model_agent_defers_connector_save_until_speculative_forward(monkeypatch
         inputs=inputs,
         sampling_inputs=sampling_inputs,
         kv_connector_metadata=metadata,
+        cache_inputs=checkpoint,
     ))
 
-    assert events == [
-        ('bind', metadata),
-        'load',
-        'target',
-        'mtp',
-        'save',
-        'poll',
-        'clear',
-    ]
+    assert events == [('bind', metadata), 'load', 'mtp_restore', 'target'] + (
+        [] if scoring else ['mtp', 'mtp_save']) + ['save', 'poll', 'clear']
 
 
 def test_release_shuts_down_connector_before_dropping_cache(monkeypatch):

@@ -52,6 +52,17 @@ class ExecutorBase:
         self.world_size = dist_config.world_size
         self.device_type = device_type
         self.specdecode_config = specdecode_config
+        if cache_config.use_mooncake_store and model_config.states_shapes and specdecode_config is not None:
+            if (specdecode_config.method != 'qwen3_5_mtp' or not model_config.is_gated_delta
+                    or specdecode_config.model_config.states_shapes or specdecode_config.model_config.num_layers != 1):
+                raise ValueError('Hybrid Mooncake Store speculative decoding requires a Qwen3.5 GDN target '
+                                 'and one full-attention MTP layer')
+        if (cache_config.use_mooncake_store and model_config.states_shapes
+                and model_config.is_gated_delta and device_type == 'cuda'):
+            from lmdeploy.pytorch.backends.cuda.utils import has_tilelang
+            if not has_tilelang():
+                raise RuntimeError('Hybrid Mooncake Store requires TileLang causal convolution on CUDA: '
+                                   'the Dao backend does not restore prefill initial states')
         self._maybe_disable_unsupported_prefix_caching(check_window=not self._has_cache_update_hook())
 
     def _has_cache_update_hook(self):
@@ -286,7 +297,8 @@ class ExecutorBase:
             # max_batches runtime slots plus one spare for rolling prefill;
             # prefix-cache checkpoints use an explicitly configured extra budget.
             # TODO: Share memory between state cache and pageable cache
-            num_state_caches = int(cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget)
+            num_state_caches = int(cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget
+                                   + cache_config.num_store_state_caches)
             cache_config.num_state_caches = num_state_caches
 
         if model_config is None:
@@ -413,6 +425,9 @@ class ExecutorBase:
         self._sync_spec_cache_block_size()
         self._validate_memdecode_configs()
         self.cache_config.states_shapes = self.model_config.states_shapes
+        if (self.cache_config.num_store_state_caches
+                and self.cache_config.mooncake_prefill_save_alignment % self.cache_config.block_size != 0):
+            raise ValueError('mooncake_prefill_save_alignment must be a multiple of block_size')
 
         spec_cache_config, spec_model_config = self._get_spec_configs()
         cache_block_sizes = self._prepare_worker_cache_plans(self.cache_config, spec_cache_config)

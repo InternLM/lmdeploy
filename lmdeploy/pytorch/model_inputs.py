@@ -229,6 +229,8 @@ class ModelInputs:
     target_hidden_states: torch.Tensor | None = None
     target_position_ids: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
+    # Known prompt token immediately after a non-final prefill chunk, per request.
+    prefill_next_token_ids: torch.Tensor | None = None
     # Hidden-state positions requiring lm-head projection.
     logits_indices: torch.LongTensor | None = None
     # Number of compact logprob rows emitted for each sequence.

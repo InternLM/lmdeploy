@@ -99,9 +99,12 @@ def get_speculative_config(args):
             model=args.speculative_draft_model,
             num_speculative_tokens=args.speculative_num_draft_tokens,
             dflash_block_size=dflash_block_size,
+            disable_prefix_cache_block_drop=args.speculative_disable_prefix_cache_block_drop,
         )
     elif dflash_block_size is not None:
         raise ValueError('--speculative-dflash-block-size requires --speculative-algorithm dflash.')
+    elif args.speculative_disable_prefix_cache_block_drop:
+        raise ValueError('--speculative-disable-prefix-cache-block-drop requires --speculative-algorithm.')
     return speculative_config
 
 
@@ -625,6 +628,26 @@ class ArgumentHelper:
                                    'but use more checkpoint memory and copy work. Only used by the PyTorch engine.')
 
     @staticmethod
+    def mooncake_prefill_save_alignment(parser):
+        """Add the hybrid Mooncake prefill save alignment."""
+        return parser.add_argument('--mooncake-prefill-save-alignment',
+                                   type=int,
+                                   default=8192,
+                                   help='Token alignment for hybrid Mooncake prefill saves. Must be a positive '
+                                   'multiple of cache block size; intermediate aligned positions may be skipped. '
+                                   'Only used by the PyTorch engine.')
+
+    @staticmethod
+    def mooncake_state_save_slots(parser):
+        """Add the bounded hybrid Mooncake snapshot capacity."""
+        return parser.add_argument('--mooncake-state-save-slots',
+                                   type=int,
+                                   default=8,
+                                   help='Number of temporary state snapshots for hybrid Mooncake saves. '
+                                   'Must be positive. When full, saves are skipped without blocking inference. '
+                                   'Only used by the PyTorch engine.')
+
+    @staticmethod
     def num_tokens_per_iter(parser):
         return parser.add_argument('--num-tokens-per-iter',
                                    type=int,
@@ -847,6 +870,13 @@ class ArgumentHelper:
                                 type=int,
                                 default=1,
                                 help='The number of speculative tokens to generate per step')
+
+        spec_group.add_argument(
+            '--speculative-disable-prefix-cache-block-drop',
+            action='store_true',
+            help='Reuse the trailing prefix-cache block for autoregressive MTP/EAGLE methods. '
+            'Can improve hybrid Mooncake Store hit rates; may affect speculative-token acceptance rates. '
+            'DFlash and DSpark are not supported.')
 
         spec_group.add_argument(
             '--speculative-dflash-block-size',
