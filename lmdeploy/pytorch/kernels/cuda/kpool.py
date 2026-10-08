@@ -371,50 +371,36 @@ def _write_ring(K, S, NewK, NewS, Ids, History, Lengths, Starts,
 
 
 def read_raw_tail(keys, scores, state_ids, history, pool_size=4):
-    """Read the incomplete pool at the *accepted* history, never trial end.
+    """Read the incomplete pool on CUDA at accepted history, never trial end.
 
     Capacity must retain Q new rows plus the previous pool_size-1 rows. Slot
     strides may include other layers; only the token/dimension axes are dense.
     Invalid graph rows produce zero scratch and never touch a live state.
     """
+    if not keys.is_cuda:
+        raise ValueError('read_raw_tail requires CUDA tensors.')
     shape = (state_ids.numel(), pool_size, keys.size(-1))
     out_k, out_s = keys.new_empty(shape), scores.new_empty(shape)
-    if keys.is_cuda:
-        _read_tail[(shape[0],)](
-            keys, scores, state_ids, history, out_k, out_s,
-            keys.stride(0), scores.stride(0), keys.size(1), keys.size(2),
-            pool_size, triton.next_power_of_2(keys.size(2)))
-    else:
-        slots = torch.arange(pool_size, device=keys.device)
-        n = history.remainder(pool_size)
-        pos = (history[:, None] - n[:, None] + slots).remainder(keys.size(1))
-        valid = (state_ids[:, None] >= 0) & (slots < n[:, None])
-        out_k.copy_(keys[state_ids.clamp_min(0)[:, None], pos].masked_fill(~valid[..., None], 0))
-        out_s.copy_(scores[state_ids.clamp_min(0)[:, None], pos].masked_fill(~valid[..., None], 0))
+    _read_tail[(shape[0],)](
+        keys, scores, state_ids, history, out_k, out_s,
+        keys.stride(0), scores.stride(0), keys.size(1), keys.size(2),
+        pool_size, triton.next_power_of_2(keys.size(2)))
     return out_k, out_s
 
 
 def write_raw_ring(keys, scores, new_keys, new_scores, state_ids, history, lengths, starts):
-    """Persist only the newest capacity rows, after all old-tail consumers.
+    """Persist the newest capacity rows on CUDA, after all old-tail consumers.
 
     Prefill compresses the entire chunk separately. Rejected proposals may
     remain in storage but cannot be read beyond the subsequent accepted history.
     """
+    if not keys.is_cuda:
+        raise ValueError('write_raw_ring requires CUDA tensors.')
     cap, dim = keys.shape[1:]
-    if keys.is_cuda:
-        _write_ring[(state_ids.numel(),)](
-            keys, scores, new_keys, new_scores, state_ids, history, lengths, starts,
-            keys.stride(0), scores.stride(0), new_keys.stride(0), new_scores.stride(0),
-            cap, dim, triton.next_power_of_2(cap), triton.next_power_of_2(dim))
-    else:
-        for b, sid in enumerate(state_ids.tolist()):
-            if sid < 0:
-                continue
-            q, h, start = int(lengths[b]), int(history[b]), int(starts[b])
-            local = torch.arange(max(0, q - cap), q, device=keys.device)
-            pos = (h + local).remainder(cap)
-            keys[sid, pos] = new_keys[start + local]
-            scores[sid, pos] = new_scores[start + local]
+    _write_ring[(state_ids.numel(),)](
+        keys, scores, new_keys, new_scores, state_ids, history, lengths, starts,
+        keys.stride(0), scores.stride(0), new_keys.stride(0), new_scores.stride(0),
+        cap, dim, triton.next_power_of_2(cap), triton.next_power_of_2(dim))
 
 
 @triton.jit
