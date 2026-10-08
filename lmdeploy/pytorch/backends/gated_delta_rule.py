@@ -31,7 +31,7 @@ class GatedDeltaMeta:
 
         range_idx = torch.arange(-conv_kernel_size, 0, device=device)
         self.conv_idx = self.cu_seqlens[1:, None] + range_idx[None]
-        if not self.is_decoding and self.num_spec_tokens == 0:
+        if not self.is_decoding:
             self.conv_history_mask = self.conv_idx < self.cu_seqlens[:-1, None]
             self.conv_history_idx = (seqlens[:, None] + range_idx[None] + conv_kernel_size - 1).clamp(
                 0, conv_kernel_size - 2).long()

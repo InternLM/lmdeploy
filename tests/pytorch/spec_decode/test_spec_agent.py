@@ -265,15 +265,13 @@ class _NoForkGuidedHelper:
         return {0: object()}
 
 
-def test_prepare_inputs_from_main_dp_non_last_first_chunk_shifts_last_token_indices():
-    """DP non-last first chunks run draft forwards, so indices must match
-    shifted draft inputs."""
+def test_prepare_inputs_from_main_dp_chunk_uses_lookahead_without_changing_lengths():
+    """Target and MTP finish the same prefix on every DP rank."""
     from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
     from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
     from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
     agent = object.__new__(SpecModelAgent)
-    agent._prev_chunk_last = {}
     agent.proposer = _DummyProposer()
 
     model_inputs = ModelInputs(
@@ -290,6 +288,7 @@ def test_prepare_inputs_from_main_dp_non_last_first_chunk_shifts_last_token_indi
         is_chunk=True,
         is_first_chunk=True,
         is_last_chunk=False,
+        prefill_next_token_ids=torch.tensor([14]),
     )
     target_hidden_states = torch.arange(4 * 2, dtype=torch.float32).view(1, 4, 2)
     extra_inputs = ARSpecExtraInputs(
@@ -300,15 +299,14 @@ def test_prepare_inputs_from_main_dp_non_last_first_chunk_shifts_last_token_indi
 
     draft_inputs, draft_extra_inputs = agent._prepare_inputs_from_main(model_inputs, extra_inputs)
 
-    torch.testing.assert_close(draft_inputs.input_ids, torch.tensor([[11, 12, 13]], dtype=torch.long))
-    torch.testing.assert_close(draft_inputs.seq_length, torch.tensor([3], dtype=torch.long))
-    assert draft_inputs.max_q_seqlen == 3
-    assert draft_inputs.max_kv_seqlen == 3
-    assert draft_inputs.sum_kv_seqlen == 3
-    torch.testing.assert_close(draft_extra_inputs.last_token_indices, torch.tensor([2], dtype=torch.long))
+    torch.testing.assert_close(draft_inputs.input_ids, torch.tensor([[11, 12, 13, 14]], dtype=torch.long))
+    torch.testing.assert_close(draft_inputs.seq_length, torch.tensor([4], dtype=torch.long))
+    assert draft_inputs.max_q_seqlen == 4
+    assert draft_inputs.max_kv_seqlen == 4
+    assert draft_inputs.sum_kv_seqlen == 4
+    torch.testing.assert_close(draft_extra_inputs.last_token_indices, torch.tensor([3], dtype=torch.long))
     assert draft_extra_inputs.last_token_indices.max().item() < draft_inputs.input_ids.size(1)
-    torch.testing.assert_close(draft_inputs.target_hidden_states, target_hidden_states[:, :-1])
-    torch.testing.assert_close(agent._prev_chunk_last['hidden_states'], target_hidden_states[:, -1:])
+    torch.testing.assert_close(draft_inputs.target_hidden_states, target_hidden_states)
     assert draft_inputs.dp_meta is model_inputs.dp_meta
     assert agent.proposer.model.update_inputs_calls == 1
 
@@ -406,8 +404,6 @@ def test_prepare_inputs_from_main_last_chunk_keeps_long_context_kv_metadata():
     from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
     agent = object.__new__(SpecModelAgent)
-    saved_hidden_states = torch.tensor([[[100.0, 101.0]]])
-    agent._prev_chunk_last = {'hidden_states': saved_hidden_states}
     agent.proposer = _DummyProposer()
 
     long_kv_seqlen = 94218
@@ -435,21 +431,20 @@ def test_prepare_inputs_from_main_last_chunk_keeps_long_context_kv_metadata():
 
     draft_inputs, draft_extra_inputs = agent._prepare_inputs_from_main(model_inputs, extra_inputs)
 
-    torch.testing.assert_close(draft_inputs.input_ids, torch.tensor([[20, 21, 22, 23]], dtype=torch.long))
-    torch.testing.assert_close(draft_inputs.seq_length, torch.tensor([4], dtype=torch.long))
-    assert draft_inputs.max_q_seqlen == 4
+    torch.testing.assert_close(draft_inputs.input_ids, torch.tensor([[21, 22, 23]], dtype=torch.long))
+    torch.testing.assert_close(draft_inputs.seq_length, torch.tensor([3], dtype=torch.long))
+    assert draft_inputs.max_q_seqlen == 3
     assert draft_inputs.max_kv_seqlen == long_kv_seqlen
     assert draft_inputs.sum_kv_seqlen == long_kv_seqlen
-    torch.testing.assert_close(draft_inputs.history_lengths, torch.tensor([long_kv_seqlen - 4], dtype=torch.long))
+    torch.testing.assert_close(draft_inputs.history_lengths, torch.tensor([long_kv_seqlen - 3], dtype=torch.long))
     torch.testing.assert_close(draft_inputs.seq_length + draft_inputs.history_lengths,
                                torch.tensor([long_kv_seqlen], dtype=torch.long))
     assert draft_inputs.sum_kv_seqlen == int((draft_inputs.seq_length + draft_inputs.history_lengths).sum())
     assert draft_inputs.max_kv_seqlen == int((draft_inputs.seq_length + draft_inputs.history_lengths).max())
-    torch.testing.assert_close(draft_extra_inputs.last_token_indices, torch.tensor([3], dtype=torch.long))
+    torch.testing.assert_close(draft_extra_inputs.last_token_indices, torch.tensor([2], dtype=torch.long))
     assert draft_extra_inputs.last_token_indices.max().item() < draft_inputs.input_ids.size(1)
     torch.testing.assert_close(draft_inputs.target_hidden_states,
-                               torch.cat([saved_hidden_states, target_hidden_states], dim=1))
-    assert 'hidden_states' not in agent._prev_chunk_last
+                               target_hidden_states)
     assert draft_inputs.dp_meta is model_inputs.dp_meta
     assert agent.proposer.model.update_inputs_calls == 1
 
@@ -943,13 +938,6 @@ def test_dflash_proposer_requires_explicit_proposal_context():
         asyncio.run(proposer.propose(None, None, None))
 
 
-def test_dflash_spec_agent_reset_runtime_state_discards_chunk_carry():
-    agent = SpecModelAgent.__new__(SpecModelAgent)
-    agent._prev_chunk_last = {'hidden_states': object()}
-
-    agent.reset_runtime_state()
-
-    assert agent._prev_chunk_last == {}
 def _model_inputs(input_ids,
                   *,
                   is_decoding=False,
@@ -987,55 +975,183 @@ def _extra(hidden_values):
     )
 
 
-def test_prepare_inputs_from_main_keeps_chunk_carry_across_decode():
+@pytest.mark.parametrize('interleaved_decode', [False, True])
+def test_chunked_mtp_inputs_match_full_prefill_with_interleaved_requests(interleaved_decode):
     agent = SpecModelAgent.__new__(SpecModelAgent)
-    agent._prev_chunk_last = {}
-
-    first_chunk = _model_inputs([10, 11, 12], is_chunk=True, is_first_chunk=True)
-    agent._prepare_inputs_from_main(first_chunk, _extra([[1, 10], [2, 20], [3, 30]]))
-    saved_first_chunk_last = agent._prev_chunk_last['hidden_states'].clone()
-
-    decode = _model_inputs([90, 91, 92], is_decoding=True)
-    agent._prepare_inputs_from_main(decode, _extra([[9, 90], [8, 80], [7, 70]]))
-
-    assert torch.equal(agent._prev_chunk_last['hidden_states'], saved_first_chunk_last)
-
-    middle_chunk = _model_inputs([20, 21, 22], is_chunk=True)
-    draft_inputs, _ = agent._prepare_inputs_from_main(middle_chunk, _extra([[4, 40], [5, 50], [6, 60]]))
-
-    assert torch.equal(draft_inputs.target_hidden_states[:, :1], saved_first_chunk_last)
-    assert torch.equal(agent._prev_chunk_last['hidden_states'], torch.tensor([[[6., 60.]]]))
-
-
-def test_prepare_inputs_from_main_keeps_chunk_carry_across_interleaved_prefill():
-    agent = SpecModelAgent.__new__(SpecModelAgent)
-    saved = torch.ones(1, 1, 2)
-    agent._prev_chunk_last = {'hidden_states': saved.clone()}
-
-    prefill = _model_inputs([10, 11, 12])
-    agent._prepare_inputs_from_main(prefill, _extra([[1, 10], [2, 20], [3, 30]]))
-
-    torch.testing.assert_close(agent._prev_chunk_last['hidden_states'], saved)
-
-
-def test_prepare_inputs_from_main_first_chunk_clears_stale_chunk_carry():
-    agent = SpecModelAgent.__new__(SpecModelAgent)
-    agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
-
-    first_chunk = _model_inputs([10, 11, 12], is_chunk=True, is_first_chunk=True)
-    agent._prepare_inputs_from_main(first_chunk, _extra([[1, 10], [2, 20], [3, 30]]))
-
-    torch.testing.assert_close(agent._prev_chunk_last['hidden_states'], torch.tensor([[[3., 30.]]]))
-
-
-def test_prepare_inputs_from_main_keeps_chunk_carry_for_dp_local_decode_global_prefill():
-    agent = SpecModelAgent.__new__(SpecModelAgent)
-    saved = torch.ones(1, 1, 2)
-    agent._prev_chunk_last = {'hidden_states': saved.clone()}
     agent.proposer = _DummyProposer()
+    agent.proposer.embed_input_ids = lambda ids: ids.float()[..., None].expand(-1, 2)
+    full = _model_inputs([10, 11, 12, 13, 14, 15])
+    full.mrope_pos_ids = torch.arange(18).reshape(3, 6)
+    extra = _extra([[i, i + 10] for i in range(6)])
+    extra.target_position_ids = torch.arange(6)[None]
+    extra.target_inputs_embeds = agent.proposer.embed_input_ids(full.input_ids[0])[None]
+    expected, _ = agent._prepare_inputs_from_main(full, extra)
 
-    dp_meta = DPMeta(dp_batches=[1, 1], dp_is_decoding=False)
-    inputs = _model_inputs([90, 91, 92], is_decoding=True, dp_meta=dp_meta)
-    agent._prepare_inputs_from_main(inputs, _extra([[9, 90], [8, 80], [7, 70]]))
+    chunks = []
+    for start, end in ((0, 1), (1, 4), (4, 6)):
+        chunk = _model_inputs(full.input_ids[0, start:end].tolist(), is_chunk=True,
+                              is_first_chunk=start == 0, is_last_chunk=end == 6)
+        chunk.history_lengths.fill_(start)
+        chunk.max_kv_seqlen = chunk.sum_kv_seqlen = end
+        chunk.mrope_pos_ids = full.mrope_pos_ids[:, start:end]
+        if end < 6:
+            chunk.prefill_next_token_ids = full.input_ids[0, end:end + 1]
+        chunk_extra = extra.clone(
+            target_hidden_states=extra.target_hidden_states[:, start:end],
+            target_position_ids=extra.target_position_ids[:, start:end],
+            target_inputs_embeds=extra.target_inputs_embeds[:, start:end],
+            last_token_indices=torch.tensor([end - start - 1]),
+        )
+        draft, _ = agent._prepare_inputs_from_main(chunk, chunk_extra)
+        assert draft.seq_length.item() == end - start
+        assert draft.history_lengths.item() == start
+        assert draft.max_kv_seqlen == draft.sum_kv_seqlen == end
+        chunks.append(draft)
+        # Interleaved prefill/decode, including DP-local decode during global
+        # prefill, cannot affect another request's next chunk.
+        other = _model_inputs([90, 91, 92], is_decoding=interleaved_decode,
+                              dp_meta=DPMeta(dp_batches=[1, 1], dp_is_decoding=False))
+        agent._prepare_inputs_from_main(other, _extra([[9, 90], [8, 80], [7, 70]]))
 
-    assert torch.equal(agent._prev_chunk_last['hidden_states'], saved)
+    for field in ('input_ids', 'target_hidden_states', 'target_position_ids',
+                  'target_inputs_embeds', 'mrope_pos_ids'):
+        torch.testing.assert_close(torch.cat([getattr(chunk, field) for chunk in chunks], dim=1),
+                                   getattr(expected, field))
+
+
+class _CausalPrefillReference(torch.nn.Module):
+    """Small CPU attention with persistent KV, independent of chunk
+    planning."""
+
+    def __init__(self):
+        super().__init__()
+        weights = torch.sin(torch.arange(128 * 4, dtype=torch.float64).reshape(128, 4) / 7)
+        self.embeddings = torch.nn.Embedding.from_pretrained(weights)
+        self.kv = weights.new_empty(1, 0, 4)
+
+    def get_input_embeddings(self):
+        return self.embeddings
+
+    def forward(self, inputs_embeds, **kwargs):
+        history = self.kv.size(1)
+        self.kv = torch.cat((self.kv, inputs_embeds), dim=1)
+        mask = torch.arange(self.kv.size(1))[None] <= history + torch.arange(inputs_embeds.size(1))[:, None]
+        return torch.nn.functional.scaled_dot_product_attention(inputs_embeds, self.kv, self.kv, attn_mask=mask)
+
+
+@pytest.mark.parametrize('store_enabled', [False, True])
+@pytest.mark.parametrize(('spans', 'history'), [
+    ([(4, 8)], 0),
+    ([(4, 8)], 4),
+    ([(4, 8)], 8),
+    ([(4, 6), (6, 8)], 0),
+    ([(3, 5), (6, 8)], 0),
+])
+def test_multimodal_mtp_chunks_match_full_prefill_kv_and_outputs(store_enabled, spans, history):
+    from lmdeploy.messages import KVTransferConfig
+    from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+    from lmdeploy.pytorch.engine.inputs_maker import InputsMakerAsync, LongContextChunker
+    from lmdeploy.pytorch.messages import SequenceMeta
+    from lmdeploy.pytorch.models.qwen3_5 import Qwen3_5Model
+    from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+    from lmdeploy.pytorch.paging.scheduler import Scheduler
+    from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
+
+    class Visual(torch.nn.Module):
+        spatial_merge_size = 1
+        encoded_tokens = 0
+
+        def forward(self, pixel_values, **kwargs):
+            self.encoded_tokens += pixel_values.size(0)
+            return pixel_values
+
+    # Exercise Qwen3.5's actual visual-embedding merge with an identity vision
+    # encoder and small CPU attention references for the target and draft.
+    target = Qwen3_5Model.__new__(Qwen3_5Model)
+    torch.nn.Module.__init__(target)
+    target.language_model = _CausalPrefillReference()
+    target.visual = Visual()
+    draft_model = _CausalPrefillReference()
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent.proposer = SimpleNamespace(embed_input_ids=target.get_input_embeddings())
+    multimodals = {'image': [MultiModalData(
+        torch.arange((end - start) * 4, dtype=torch.float64).reshape(-1, 4) / 17 + start,
+        start, end) for start, end in spans]}
+
+    def prepare_draft(inputs, images):
+        start = inputs.history_lengths.item()
+        positions = torch.arange(start, start + inputs.input_ids.numel())[None]
+        mask = torch.zeros_like(inputs.input_ids, dtype=torch.bool)
+        for image in images:
+            mask[:, image.start - start:image.end - start] = True
+        hidden, embeddings, _ = target(
+            input_ids=inputs.input_ids, position_ids=positions, past_key_values=[],
+            attn_metadata=None, state_ids=None, return_input_embeds=True,
+            pixel_values=torch.cat([image.data for image in images]) if images else None,
+            vis_cu_seqlens=None, vis_pos_emb=(torch.empty(0), torch.empty(0)),
+            multimodal_mask=mask, grid_thw=torch.tensor([[1, 1, image.end - image.start] for image in images]))
+        extra = ARSpecExtraInputs(target_hidden_states=hidden, target_inputs_embeds=embeddings,
+                                  target_position_ids=positions, next_token_ids=torch.tensor([99]),
+                                  last_token_indices=inputs.seq_length.cumsum(0) - 1)
+        return agent._prepare_inputs_from_main(inputs, extra)[0]
+
+    full_inputs = _model_inputs(list(range(10, 23)))
+    full_draft = prepare_draft(full_inputs, multimodals['image'])
+    full_outputs = draft_model(full_draft.target_hidden_states + full_draft.target_inputs_embeds)
+    full_target_kv, full_draft_kv = target.language_model.kv, draft_model.kv
+    # A cache hit resumes from an exact prefix without any hidden-state carry.
+    target.language_model.kv = full_target_kv[:, :history].clone()
+    draft_model.kv = full_draft_kv[:, :history].clone()
+    target.visual.encoded_tokens = 0
+
+    cache = CacheConfig(max_batches=1, block_size=4, num_cpu_blocks=0, num_gpu_blocks=16,
+                        max_prefill_token_num=5, num_state_caches=4, mooncake_state_save_slots=1,
+                        states_shapes=[((2,), torch.float32)] if store_enabled else [],
+                        mooncake_prefill_save_alignment=4,
+                        kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector',
+                                                           kv_role='kv_producer') if store_enabled else None)
+    scheduler = Scheduler(SchedulerConfig(max_batches=1, max_session_len=32), cache,
+                          seq_meta=SequenceMeta(4, strategy=ARSpecSequenceStrategy()))
+    seq = scheduler.add_session(0).add_sequence(full_inputs.input_ids[0], multimodals=multimodals)
+    seq.set_step(history)
+    seq.prefix_cache.match_start_step = 0
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    scheduler.activate_seqs([seq])
+    chunker = LongContextChunker(5, save_alignment=4 if store_enabled else 0)
+    chunker.set_seq(seq)
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(is_ssm=store_enabled, use_mrope=False)
+    maker.scheduler = scheduler
+    maker.executor = SimpleNamespace(device_type='cuda')
+    maker.adapter_manager = SimpleNamespace(num_adapters=lambda: 1)
+    maker.kernel_blocks_per_kv = 1
+    outputs = []
+    while seq.num_token_ids:
+        start = seq.num_history_ids
+        size, images = chunker.next_chunk_size()
+        last = chunker.is_last_chunk()
+        assert size > 0
+        assert scheduler._prefill_scheduler._next_long_context_chunk_end(seq) == start + size
+        assert scheduler.reserve_long_context_chunk(seq, size, is_last_chunk=last)
+        inputs = maker.create_model_inputs_long_context(seq, size, images)
+        inputs.is_first_chunk, inputs.is_last_chunk = start == history, last
+        draft = prepare_draft(inputs, (images or {}).get('image', []))
+        end = start + size
+        assert draft.history_lengths.item() == start
+        assert draft.seq_length.item() == size
+        for field in ('input_ids', 'target_hidden_states', 'target_inputs_embeds', 'target_position_ids'):
+            torch.testing.assert_close(getattr(draft, field), getattr(full_draft, field)[:, start:end])
+        outputs.append(draft_model(draft.target_hidden_states + draft.target_inputs_embeds))
+        torch.testing.assert_close(target.language_model.kv, full_target_kv[:, :end])
+        torch.testing.assert_close(draft_model.kv, full_draft_kv[:, :end])
+        chunker.update_step(inputs)
+        seq.set_step(end)
+
+    actual = torch.cat(outputs, dim=1)
+    torch.testing.assert_close(actual, full_outputs[:, history:])
+    logits = actual @ target.get_input_embeddings().weight.T
+    expected_logits = full_outputs[:, history:] @ target.get_input_embeddings().weight.T
+    torch.testing.assert_close(logits, expected_logits)
+    assert torch.equal(logits.argmax(-1), expected_logits.argmax(-1))
+    assert target.visual.encoded_tokens == sum(end - start for start, end in spans if start >= history)
+    scheduler.shutdown()

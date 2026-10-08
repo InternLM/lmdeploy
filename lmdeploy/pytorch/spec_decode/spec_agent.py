@@ -118,16 +118,6 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         # make dummy meta
         self.make_dummy_meta = self.inputs_strategy.create_make_dummy_meta(self.model_config)
-        self._init_runtime_state()
-
-    def _init_runtime_state(self):
-        """Initialize request-local draft carry state."""
-        self._prev_chunk_last = {}
-
-    def reset_runtime_state(self):
-        """Discard request-local draft carry state after sleep cancels
-        sessions."""
-        self._prev_chunk_last.clear()
 
     @staticmethod
     def _shift_packed_prefill_inputs(input_tensor: torch.Tensor,
@@ -247,108 +237,21 @@ class SpecModelAgent(BaseSpecModelAgent):
     def _prepare_inputs_from_main(self, model_inputs: ModelInputs, extra_inputs: ExtraInputs):
         """Update inputs from main model inputs."""
         next_token_ids = extra_inputs.next_token_ids
+        if model_inputs.is_chunk and not model_inputs.is_last_chunk:
+            # Complete the MTP row at the target boundary using the next known
+            # prompt token. The chunk planner keeps multimodal spans with their
+            # preceding row, so this lookahead has an ordinary token embedding.
+            assert model_inputs.prefill_next_token_ids is not None
+            next_token_ids = model_inputs.prefill_next_token_ids
         last_token_indices = extra_inputs.last_token_indices
-        # create new inputs for draft model (offset by 1 from main model)
-        target_hidden_states = extra_inputs.target_hidden_states
-        target_position_ids = extra_inputs.target_position_ids
+        replacement_indices = last_token_indices if model_inputs.is_decoding else None
+        input_ids = self._shift_packed_prefill_inputs(
+            model_inputs.input_ids, model_inputs.seq_length, next_token_ids, replacement_indices)
         target_inputs_embeds = extra_inputs.target_inputs_embeds
-        mrope_pos_ids = model_inputs.mrope_pos_ids
-        seq_length = model_inputs.seq_length
-        max_q_seqlen = model_inputs.max_q_seqlen
-        max_kv_seqlen = model_inputs.max_kv_seqlen
-        sum_kv_seqlen = model_inputs.sum_kv_seqlen
-        history_lengths = model_inputs.history_lengths.clone()
-
-        if not model_inputs.is_chunk:
-            # Non-chunk prefill/decode can be interleaved between long-context
-            # chunks. Keep pending chunk carry here; a new first chunk clears it
-            # explicitly, and the final chunk consumes it.
-            # Case A: non-chunked — shift left by 1, place next_token at end
-            input_ids = self._shift_packed_prefill_inputs(
-                model_inputs.input_ids,
-                model_inputs.seq_length,
-                next_token_ids,
-                replacement_indices=(
-                    last_token_indices if model_inputs.is_decoding else None),
-            )
-
-            if target_inputs_embeds is not None:
-                target_inputs_embeds = self._shift_packed_prefill_inputs(
-                    target_inputs_embeds,
-                    model_inputs.seq_length,
-                    self.proposer.embed_input_ids(next_token_ids),
-                    replacement_indices=(
-                        last_token_indices
-                        if model_inputs.is_decoding else None),
-                )
-
-        else:
-            if model_inputs.is_first_chunk:
-                # clear each time
-                self._prev_chunk_last.clear()
-                # Case B: first chunk — skip first token, save last for next chunk
-                input_ids = model_inputs.input_ids[:, 1:]
-                seq_length = model_inputs.seq_length - 1
-                # Shift indices into the draft layout after dropping the first token.
-                last_token_indices = last_token_indices - 1
-                max_q_seqlen = model_inputs.max_q_seqlen - 1
-                max_kv_seqlen = model_inputs.max_kv_seqlen - 1
-                sum_kv_seqlen = model_inputs.sum_kv_seqlen - 1
-
-                target_hidden_states = self._prepare_long_context_chunk_save_last('hidden_states', target_hidden_states)
-                if target_position_ids is not None:
-                    target_position_ids = self._prepare_long_context_chunk_save_last(
-                        'position_ids', target_position_ids)
-                if target_inputs_embeds is not None:
-                    target_inputs_embeds = target_inputs_embeds[:, 1:]
-                if mrope_pos_ids is not None:
-                    mrope_pos_ids = self._prepare_long_context_chunk_save_last('mrope_pos_ids', mrope_pos_ids)
-
-            elif model_inputs.is_last_chunk:
-                # Case C: last chunk — prepend saved last, append next_token
-                seq_length = model_inputs.seq_length + 1
-                max_q_seqlen = model_inputs.max_q_seqlen + 1
-                last_token_indices = last_token_indices + 1
-                # history_lengths is decremented below, while seq_length is
-                # incremented above. The final KV length is unchanged, so keep
-                # the aggregate KV metadata aligned with kv_seqlens.
-                max_kv_seqlen = model_inputs.max_kv_seqlen
-                sum_kv_seqlen = model_inputs.sum_kv_seqlen
-                history_lengths = model_inputs.history_lengths - 1
-                input_ids = torch.cat([model_inputs.input_ids, next_token_ids.unsqueeze(0)], dim=-1)
-
-                target_hidden_states = self._prepare_long_context_chunk_prepend_saved('hidden_states',
-                                                                                      target_hidden_states,
-                                                                                      save_last=False)
-                if target_position_ids is not None:
-                    target_position_ids = self._prepare_long_context_chunk_prepend_saved('position_ids',
-                                                                                         target_position_ids,
-                                                                                         save_last=False)
-                if target_inputs_embeds is not None:
-                    next_token_embeds = self.proposer.embed_input_ids(next_token_ids)[None]
-                    target_inputs_embeds = torch.cat(
-                        [target_inputs_embeds, next_token_embeds], dim=1)
-                if mrope_pos_ids is not None:
-                    mrope_pos_ids = self._prepare_long_context_chunk_prepend_saved('mrope_pos_ids',
-                                                                                   mrope_pos_ids,
-                                                                                   save_last=False)
-
-                # clear cross-chunk state
-                self._prev_chunk_last.clear()
-            else:
-                # Case D: middle chunk — prepend saved last, save current last
-                input_ids = model_inputs.input_ids
-                max_kv_seqlen = model_inputs.max_kv_seqlen - 1
-                sum_kv_seqlen = model_inputs.sum_kv_seqlen - 1
-                history_lengths = model_inputs.history_lengths - 1
-
-                target_hidden_states = self._prepare_long_context_chunk_prepend_saved(
-                    'hidden_states', target_hidden_states)
-                if target_position_ids is not None:
-                    target_position_ids = self._prepare_long_context_chunk_prepend_saved(
-                        'position_ids', target_position_ids)
-                if mrope_pos_ids is not None:
-                    mrope_pos_ids = self._prepare_long_context_chunk_prepend_saved('mrope_pos_ids', mrope_pos_ids)
+        if target_inputs_embeds is not None:
+            target_inputs_embeds = self._shift_packed_prefill_inputs(
+                target_inputs_embeds, model_inputs.seq_length,
+                self.proposer.embed_input_ids(next_token_ids), replacement_indices)
 
         # Keep draft model local decoding state; DP-global state stays in dp_meta.
         is_decoding = model_inputs.is_decoding
@@ -356,18 +259,18 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         new_model_inputs = ModelInputs(
             input_ids=input_ids,
-            seq_length=seq_length,
-            max_kv_seqlen=max_kv_seqlen,
-            max_q_seqlen=max_q_seqlen,
-            sum_kv_seqlen=sum_kv_seqlen,
-            history_lengths=history_lengths,
+            seq_length=model_inputs.seq_length,
+            max_kv_seqlen=model_inputs.max_kv_seqlen,
+            max_q_seqlen=model_inputs.max_q_seqlen,
+            sum_kv_seqlen=model_inputs.sum_kv_seqlen,
+            history_lengths=model_inputs.history_lengths.clone(),
             block_offsets=model_inputs.block_offsets,
             num_ignored_history=model_inputs.num_ignored_history,
             is_decoding=is_decoding,
-            target_hidden_states=target_hidden_states,
-            target_position_ids=target_position_ids,
+            target_hidden_states=extra_inputs.target_hidden_states,
+            target_position_ids=extra_inputs.target_position_ids,
             target_inputs_embeds=target_inputs_embeds,
-            mrope_pos_ids=mrope_pos_ids,
+            mrope_pos_ids=model_inputs.mrope_pos_ids,
             is_chunk=model_inputs.is_chunk,
             is_first_chunk=model_inputs.is_first_chunk,
             is_last_chunk=model_inputs.is_last_chunk,
@@ -390,21 +293,6 @@ class SpecModelAgent(BaseSpecModelAgent):
             last_token_indices=last_token_indices,
         )
         return new_model_inputs, new_extra_inputs
-
-    def _prepare_long_context_chunk_save_last(self, key, tensor):
-        """Save the last entry of a tensor for cross-chunk carry-over."""
-        self._prev_chunk_last[key] = tensor[:, -1:]
-        return tensor[:, :-1]
-
-    def _prepare_long_context_chunk_prepend_saved(self, key, tensor, save_last=True):
-        """Prepend saved last entry from previous chunk."""
-        saved = self._prev_chunk_last[key]
-        if save_last:
-            self._prev_chunk_last[key] = tensor[:, -1:]
-            tensor = tensor[:, :-1]
-        else:
-            self._prev_chunk_last.pop(key, None)
-        return torch.cat([saved, tensor], dim=1)
 
     async def _rejection_sampling(self, model_inputs: ModelInputs, extra_inputs: ARSpecExtraInputs,
                                   sampling_inputs: SamplingInputs):
@@ -787,7 +675,6 @@ class SpecModelAgent(BaseSpecModelAgent):
     def reset_graph_runner(self):
         """Reset graph runner."""
         with self.draft_context():
-            self._prev_chunk_last.clear()
             if self.proposer.model is not None and hasattr(self.proposer.model, 'reset'):
                 self.proposer.model.reset()
 

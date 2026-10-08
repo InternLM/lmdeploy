@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from lmdeploy.messages import KVTransferConfig
-from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig, SpecDecodeConfig
 from lmdeploy.pytorch.engine.inputs_maker import InputsMakerAsync
 from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVConnectorStepInput
 from lmdeploy.pytorch.kv_connector.base import KVConnectorOutputAggregator
@@ -16,6 +16,7 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging.kv_load_coordinator import KVLoadAdmission
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
 
 
 @pytest.fixture
@@ -23,7 +24,7 @@ def make_scheduler():
     schedulers = []
 
     def create(*, apc=True, role='kv_both', state_budget=1, remote_hit=16, num_gpu_blocks=16,
-               max_batches=1, max_prefill_token_num=4):
+               max_batches=1, max_prefill_token_num=4, mtp=False, no_drop=True):
         save_slots = 2 if role in ('kv_producer', 'kv_both') else 0
         config = CacheConfig(
             max_batches=max_batches, block_size=4, num_cpu_blocks=0, num_gpu_blocks=num_gpu_blocks,
@@ -36,9 +37,13 @@ def make_scheduler():
         connector = MooncakeStoreScheduler(config)
         if connector.client is not None:
             connector.client.lookup = Mock(return_value=remote_hit)
+        strategy = ARSequenceStrategy()
+        if mtp:
+            strategy = ARSpecStrategyFactory(SimpleNamespace(bos_token_id=0), SpecDecodeConfig(
+                model='draft', method='qwen3_5_mtp', disable_prefix_cache_block_drop=no_drop)).build_sequence_strategy()
         scheduler = Scheduler(
             SchedulerConfig(max_batches=max_batches, max_session_len=64, max_request_output_len=16), config,
-            SequenceMeta(4, strategy=ARSequenceStrategy()), kv_connector=connector)
+            SequenceMeta(4, strategy=strategy), kv_connector=connector)
         schedulers.append(scheduler)
         return scheduler, connector
 
@@ -69,11 +74,12 @@ def test_mooncake_producer_reports_zero_external_hit_rate_without_lookup(make_sc
     assert scheduler.schedule_metrics.external_prefix_cache_hit_rate == 0
 
 
+@pytest.mark.parametrize('mtp', [False, True])
 @pytest.mark.parametrize('local_step', [4, 6, 10])
 @pytest.mark.parametrize('remote_hit', [0, 16])
 def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary(
-        make_scheduler, local_step, remote_hit):
-    scheduler, connector = make_scheduler(remote_hit=remote_hit)
+        make_scheduler, local_step, remote_hit, mtp):
+    scheduler, connector = make_scheduler(remote_hit=remote_hit, mtp=mtp)
     checkpoint = _publish_local_checkpoint(scheduler, local_step)
     seq = scheduler.add_session(1).add_sequence(torch.arange(21))
     output = scheduler.schedule(is_prefill=True)
@@ -128,11 +134,33 @@ def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary
     # must not overwrite the state that was just loaded at H.
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
+    maker.spec_decoding = mtp
     maker.state_checkpoints = scheduler.state_checkpoints
     maker.scheduler = scheduler
     cache_inputs = maker._prepare_prefill_cache_inputs([seq], save_steps=(20,))
     assert cache_inputs is None or cache_inputs.state_restore_plan is None
     assert cache_inputs is None or cache_inputs.kv_restore_plan is None
+
+
+@pytest.mark.parametrize(('no_drop', 'remote_hit'), [(False, 8), (True, 16)])
+def test_hybrid_mtp_load_preserves_the_workers_reusable_state_boundary(make_scheduler, no_drop, remote_hit):
+    scheduler, connector = make_scheduler(apc=False, mtp=True, no_drop=no_drop, remote_hit=remote_hit)
+    seq = scheduler.add_session(1).add_sequence(torch.arange(25))
+    output = scheduler.schedule(is_prefill=True)
+    assert output.running == []
+    load = connector.build_connector_meta(output).load_requests[0]
+    assert load.remote_block_count == remote_hit // 4
+    assert load.state_slot == seq.logical_state > 0
+    assert connector.client.lookup.call_args.args[1] == (24 if no_drop else 20)
+    assert connector.client.lookup.call_args.kwargs['recompute_blocks'] == (0 if no_drop else 1)
+
+    scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+    assert seq.num_history_ids == seq.cached_tokens == remote_hit
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == remote_hit
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert seq.num_history_ids == remote_hit
+    assert seq.logical_state == load.state_slot
+    connector.client.lookup.assert_called_once()
 
 
 @pytest.mark.parametrize('apc', [False, True])

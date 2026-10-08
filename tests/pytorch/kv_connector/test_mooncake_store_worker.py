@@ -522,10 +522,12 @@ def test_producer_worker_does_not_start_lookup_server(tmp_path):
     ('replica_num', 'unique_ranks'),
     [(1, 8), (4, 2), (8, 1)],
 )
+@pytest.mark.parametrize('recompute_blocks', [0, 1])
 def test_lookup_expands_unique_kv_namespaces_block_major(
     tmp_path,
     replica_num,
     unique_ranks,
+    recompute_blocks,
 ):
     store = FakeStore(lookup_results=[1] * (3 * unique_ranks))
     worker, _ = make_worker(
@@ -536,7 +538,7 @@ def test_lookup_expands_unique_kv_namespaces_block_major(
     )
     block_hashes = build_prefix_block_hashes(range(192), 64)
 
-    assert worker.lookup(192, block_hashes) == 192
+    assert worker.lookup(192, block_hashes, recompute_blocks=recompute_blocks) == 192 - recompute_blocks * 64
     assert store.lookup_calls == [[
         build_store_key(worker.key_metadata, rank, block_hashes[block_index])
         for block_index in range(3)
@@ -545,7 +547,8 @@ def test_lookup_expands_unique_kv_namespaces_block_major(
     worker.shutdown()
 
 
-def test_lookup_requires_all_namespaces_and_a_contiguous_prefix(tmp_path):
+@pytest.mark.parametrize('recompute_blocks', [0, 1])
+def test_lookup_requires_all_namespaces_and_a_contiguous_prefix(tmp_path, recompute_blocks):
     store = FakeStore(lookup_results=[1, 1, 1, 0, 1, 1])
     worker, _ = make_worker(
         tmp_path,
@@ -554,7 +557,8 @@ def test_lookup_requires_all_namespaces_and_a_contiguous_prefix(tmp_path):
         kv_head_replica_num=4,
     )
 
-    assert worker.lookup(192, build_prefix_block_hashes(range(192), 64)) == 64
+    assert worker.lookup(192, build_prefix_block_hashes(range(192), 64),
+                         recompute_blocks=recompute_blocks) == 64 - recompute_blocks * 64
     worker.shutdown()
 
 
@@ -608,6 +612,35 @@ def test_hybrid_lookup_limits_candidates_by_tokens_and_hashes(tmp_path, token_le
 
     assert worker.lookup(token_len, hashes[:hash_count]) == expected
     assert len(store.lookup_calls) == int(expected > 0)
+    worker.shutdown()
+
+
+@pytest.mark.parametrize(('fa_tokens', 'state_boundaries', 'expected_hits'), [
+    (256, (128, 256), (256, 128)),
+    (320, (128, 256), (256, 256)),
+    (256, (256,), (256, 0)),
+    (192, (128, 256), (128, 128)),
+    (128, (128,), (128, 0)),
+    (384, (128, 384), (384, 128)),
+])
+@pytest.mark.parametrize('save_alignment', [64, 128])
+def test_hybrid_lookup_rewinds_fa_before_selecting_an_existing_state(
+        tmp_path, fa_tokens, state_boundaries, expected_hits, save_alignment):
+    config = replace(make_cache_config(write_store_config(tmp_path)),
+                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=save_alignment)
+    store = FakeStore(existing_keys=set())
+    worker = MooncakeStoreWorker(config, tp_size=8, kv_head_replica_num=4, store_factory=lambda: store)
+    hashes = build_prefix_block_hashes(range(384), 64)
+    store.existing_keys.update(build_store_key(worker.key_metadata, rank, h)
+                               for h in hashes[:fa_tokens // 64] for rank in range(2))
+    store.existing_keys.update(
+        build_store_key(worker.key_metadata, rank, hashes[end // 64 - 1], group_id=1)
+        for end in state_boundaries for rank in range(8))
+
+    for recompute_blocks, expected in enumerate(expected_hits):
+        assert worker.lookup(384, hashes, recompute_blocks=recompute_blocks) == expected
+    # The FA rewind and sparse state selection use one Store query per lookup.
+    assert len(store.lookup_calls) == 2
     worker.shutdown()
 
 
@@ -1075,26 +1108,28 @@ def test_hybrid_save_load_roundtrip_restores_all_rank_local_bytes(layout):
     hashes = build_prefix_block_hashes(range(16), 4)
     rank_caches = []
     for rank in range(4):
+        # Group 0 includes target rows and MTP rows. Group 1 retains every
+        # speculative conv/recurrent ring entry (num_spec_tokens=3).
         fa = [torch.arange(6 * width, dtype=torch.uint8).reshape(6, width) + rank // 2
-              for width in (5, 7)]
+              for width in (5, 7, 3)]
         if layout == 'packed':
-            pool = torch.zeros((4, 32), dtype=torch.uint8)
-            conv = pool[:, :8].view(torch.float32)
-            recurrent = pool[:, 8:].view(torch.float32)
-            state_pools = [(pool, 32)]
+            pool = torch.zeros((4, 92), dtype=torch.uint8)
+            conv = pool[:, :28].view(torch.float16).reshape(4, 2, 7)
+            recurrent = pool[:, 28:].view(torch.float32).reshape(4, 4, 2, 2)
+            state_pools = [(pool, 92)]
         else:
-            conv_pool = torch.zeros((2, 4, 3), dtype=torch.float16)
-            recurrent_pool = torch.zeros((2, 4, 2), dtype=torch.float32)
+            conv_pool = torch.zeros((2, 4, 2, 7), dtype=torch.float16)
+            recurrent_pool = torch.zeros((2, 4, 4, 2, 2), dtype=torch.float32)
             conv, recurrent = conv_pool.transpose(0, 1), recurrent_pool.transpose(0, 1)
-            state_pools = [(conv_pool, 6), (recurrent_pool, 8)]
-        conv[3].fill_(rank + 1)
-        recurrent[3].fill_(rank + 11)
-        registrations = tuple(MooncakeStoreRegistration(str(i), t.data_ptr(), t.numel())
-                              for i, t in enumerate(fa))
+            state_pools = [(conv_pool, 28), (recurrent_pool, 64)]
+        for state in (conv, recurrent):
+            state[3].copy_(torch.arange(state[3].numel()).reshape(state[3].shape) + rank * 100)
+        registrations = tuple(MooncakeStoreRegistration(name, t.data_ptr(), t.numel())
+                              for name, t in zip(('target.k', 'target.v', 'mtp.kv'), fa))
         state_registrations = tuple(
             MooncakeStoreStateRegistration(str(i), t.data_ptr(), t.numel() * t.element_size(), 4, size)
             for i, (t, size) in enumerate(state_pools))
-        kwargs = dict(store=store, registrations=registrations, row_block_sizes=(5, 7), num_gpu_blocks=6,
+        kwargs = dict(store=store, registrations=registrations, row_block_sizes=(5, 7, 3), num_gpu_blocks=6,
                       key_metadata=metadata, global_rank=rank, tp_rank=rank, tp_size=4,
                       state_registrations=state_registrations)
         completed = []

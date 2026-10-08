@@ -41,16 +41,18 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
             read_offsets, write_offsets = gated_delta_meta.spec_conv_offsets
             channels = torch.arange(conv_state.size(1), device=conv_state.device)[None, :, None]
             all_inits = conv_state[state_ids[:, None, None], channels, read_offsets[:, None, :]]
-            conv_state[state_ids[:, None, None], channels, write_offsets[:, None, :]] = final_state
-            all_inits.masked_fill_(gated_delta_meta.is_init[:, None, None], 0.0)
         else:
             all_inits = conv_state[state_ids, :, 1:]
-            all_inits.masked_fill_(gated_delta_meta.is_init[:, None, None], 0.0)
-            # A short prefill keeps the missing rows from this sequence's
-            # previous state, never from the preceding packed sequence.
-            history = all_inits.gather(2, gated_delta_meta.conv_history_idx[:, None, :].expand(
-                -1, all_inits.size(1), -1))
-            final_state = torch.where(gated_delta_meta.conv_history_mask[:, None, :], history, final_state)
+
+        all_inits.masked_fill_(gated_delta_meta.is_init[:, None, None], 0.0)
+        # A short prefill keeps its own history, including when that history
+        # was restored into a speculative ring buffer.
+        history = all_inits.gather(2, gated_delta_meta.conv_history_idx[:, None, :].expand(
+            -1, all_inits.size(1), -1))
+        final_state = torch.where(gated_delta_meta.conv_history_mask[:, None, :], history, final_state)
+        if gated_delta_meta.spec_conv_offsets is not None:
+            conv_state[state_ids[:, None, None], channels, write_offsets[:, None, :]] = final_state
+        else:
             conv_state.index_copy_(0, state_ids, final_state)
 
         output = self.conv1d_fn(

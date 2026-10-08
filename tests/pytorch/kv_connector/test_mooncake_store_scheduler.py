@@ -174,7 +174,8 @@ def test_hybrid_multimodal_save_lookup_and_load_without_local_prefix_cache(looku
     worker.tp_size = 1
     worker.store = SimpleNamespace(batch_is_exist=lambda keys: [int(key in stored_keys) for key in keys])
     consumer.client.lookup = Mock(
-        side_effect=lambda req_id, token_len, hashes, non_block: worker.lookup(token_len, hashes))
+        side_effect=lambda req_id, token_len, hashes, non_block, recompute_blocks: worker.lookup(
+            token_len, hashes, recompute_blocks=recompute_blocks))
     consumer_paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), config,
                                 seq_meta=SequenceMeta(4, strategy=ARSequenceStrategy()), kv_connector=consumer)
     assert not consumer_paging.block_trie.enabled
@@ -235,12 +236,14 @@ def test_hybrid_save_alignment_must_be_a_multiple_of_block_size(role):
     (25, 12, 8),
     (25, 7, 0),
 ])
-def test_hybrid_lookup_respects_prompt_and_logprob_limits(prompt_len, logprob_start, expected):
+@pytest.mark.parametrize('mtp', [False, True])
+def test_hybrid_lookup_respects_prompt_and_logprob_limits(prompt_len, logprob_start, expected, mtp):
     config = _hybrid_cache_config('kv_consumer')
     connector = MooncakeStoreConnector(KVConnectorRole.SCHEDULER, config)
     consumer = connector.connector_scheduler
+    strategy = ARSpecSequenceStrategy(recompute_blocks=0) if mtp else ARSequenceStrategy()
     paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), config,
-                       seq_meta=SequenceMeta(4, strategy=ARSequenceStrategy()), kv_connector=connector)
+                       seq_meta=SequenceMeta(4, strategy=strategy), kv_connector=connector)
     request = paging.add_session(0).add_sequence(range(prompt_len))
     request.sampling_param.num_logprobs = 1
     request.sampling_param.logprob_start_len = logprob_start
@@ -250,7 +253,8 @@ def test_hybrid_lookup_respects_prompt_and_logprob_limits(prompt_len, logprob_st
     assert consumer.get_num_new_matched_tokens(request, 0) == (expected, expected > 0)
     if expected:
         consumer.client.lookup.assert_called_once_with(
-            request.seq_id, expected, build_prefix_block_hashes(request.all_ids[:expected], 4), non_block=True)
+            request.seq_id, expected, build_prefix_block_hashes(request.all_ids[:expected], 4), non_block=True,
+            recompute_blocks=0)
         assert consumer._lookup_plans[request.seq_id].remote_token_len == expected
     else:
         consumer.client.lookup.assert_not_called()
@@ -346,7 +350,8 @@ def test_fa_multimodal_lookup_load_restores_only_safe_boundaries(spans, remote_h
     consumer.client.lookup = Mock(return_value=remote_hit)
 
     result = paging.schedule(is_prefill=True)
-    consumer.client.lookup.assert_called_once_with(request.seq_id, 16, save.block_hashes, non_block=True)
+    consumer.client.lookup.assert_called_once_with(request.seq_id, 16, save.block_hashes, non_block=True,
+                                                  recompute_blocks=0)
     assert not paging.block_trie.enabled
     metadata = paging.build_connector_meta([])
     if expected_end:
@@ -408,7 +413,8 @@ def test_scheduler_extends_hashes_and_reports_pending_miss_and_hit(monkeypatch):
         hash_extensions.append(len(kwargs['previous_hashes']))
         return original_build(token_ids, block_size, **kwargs)
 
-    def lookup(req_id, token_len, block_hashes, non_block):
+    def lookup(req_id, token_len, block_hashes, non_block, recompute_blocks):
+        assert recompute_blocks == 0
         lookup_calls.append((req_id, token_len, tuple(block_hashes), non_block))
         return next(lookup_results)
 
@@ -457,7 +463,8 @@ def test_scheduler_reuses_positive_lookup_until_allocation():
         pytest.param(12, 5, 3, id='partial-local-block'),
     ],
 )
-def test_spec_external_lookup_drops_last_actual_hit_block(remote_hit, local_hit, expected):
+@pytest.mark.parametrize('no_drop', [False, True])
+def test_spec_external_lookup_obeys_block_drop_policy(remote_hit, local_hit, expected, no_drop):
     block_size = 4
     paging_scheduler = Scheduler(
         scheduler_config=SchedulerConfig(
@@ -473,15 +480,18 @@ def test_spec_external_lookup_drops_last_actual_hit_block(remote_hit, local_hit,
             num_gpu_blocks=8,
             enable_prefix_caching=True,
         ),
-        seq_meta=SequenceMeta(block_size, strategy=ARSpecSequenceStrategy()),
+        seq_meta=SequenceMeta(block_size, strategy=ARSpecSequenceStrategy(recompute_blocks=0 if no_drop else 1)),
     )
     request = paging_scheduler.add_session(0).add_sequence(range(13))
     mooncake_scheduler = MooncakeStoreScheduler(_cache_config())
-    mooncake_scheduler.client.lookup = Mock(side_effect=(None, remote_hit))
+    reusable_hit = remote_hit if no_drop else max(0, remote_hit - block_size)
+    mooncake_scheduler.client.lookup = Mock(side_effect=(None, reusable_hit))
 
-    # The prompt cap alone cannot protect a shorter remote hit. Query the full
-    # candidate prefix, then drop the last block from the actual lookup result.
-    assert request.get_prefix_cache_max_match_step() == 8
+    # The worker applies the policy to the actual FA hit. The scheduler must
+    # forward that policy and retain the returned boundary without another drop.
+    if no_drop:
+        expected = max(0, remote_hit - local_hit)
+    assert request.get_prefix_cache_max_match_step() == (12 if no_drop else 8)
     assert mooncake_scheduler.get_num_new_matched_tokens(request, local_hit) == (None, False)
     assert mooncake_scheduler.get_num_new_matched_tokens(request, local_hit) == (expected, expected > 0)
 
@@ -490,6 +500,7 @@ def test_spec_external_lookup_drops_last_actual_hit_block(remote_hit, local_hit,
         12,
         build_prefix_block_hashes(request.all_ids[:12], block_size),
         non_block=True,
+        recompute_blocks=0 if no_drop else 1,
     )
     if expected:
         # Allocation retries reuse the already-trimmed result; loading must not
@@ -497,7 +508,7 @@ def test_spec_external_lookup_drops_last_actual_hit_block(remote_hit, local_hit,
         assert mooncake_scheduler.get_num_new_matched_tokens(request, local_hit) == (expected, True)
         assert mooncake_scheduler.client.lookup.call_count == 2
         load_start = local_hit // block_size * block_size
-        load_end = remote_hit - block_size
+        load_end = remote_hit if no_drop else remote_hit - block_size
         block_ids = tuple(range(load_start // block_size, load_end // block_size))
         mooncake_scheduler.update_state_after_alloc(request, block_ids, load_end - load_start)
         load = mooncake_scheduler.build_connector_meta(_scheduler_output()).load_requests[0]
@@ -660,27 +671,29 @@ def test_scheduler_builds_incremental_save_operations_and_poll_metadata():
 
 
 @pytest.mark.parametrize(
-    ('history', 'token_len', 'final_chunk'),
+    ('history', 'token_len', 'final_chunk', 'hybrid'),
     [
-        pytest.param(0, 8, False, id='regular-aligned'),
-        pytest.param(0, 10, False, id='regular-partial-tail'),
-        pytest.param(4, 8, False, id='regular-cached-prefix-aligned'),
-        pytest.param(4, 10, False, id='regular-cached-prefix-partial-tail'),
-        pytest.param(8, 12, True, id='final-chunk-aligned'),
-        pytest.param(8, 14, True, id='final-chunk-partial-tail'),
+        pytest.param(0, 8, False, False, id='regular-aligned'),
+        pytest.param(0, 10, False, False, id='regular-partial-tail'),
+        pytest.param(4, 8, False, False, id='regular-cached-prefix-aligned'),
+        pytest.param(4, 10, False, False, id='regular-cached-prefix-partial-tail'),
+        pytest.param(8, 12, True, False, id='final-chunk-aligned'),
+        pytest.param(8, 14, True, False, id='final-chunk-partial-tail'),
+        pytest.param(0, 16, False, True, id='hybrid-prefill'),
+        pytest.param(8, 16, True, True, id='hybrid-chunks'),
     ],
 )
-def test_mtp_prefill_save_boundary_follows_written_rows(history, token_len, final_chunk):
+def test_mtp_prefill_save_boundary_follows_written_rows(history, token_len, final_chunk, hybrid):
     """Check real target sampling, MTP input preparation and save planning.
 
     CPU rows record the token paired with each KV row, without model weights or GPU kernels. The final MTP row must use
     the accepted target token; unverified draft rows and incomplete blocks must stay out of saves.
     """
-    scheduler = MooncakeStoreScheduler(_cache_config('kv_producer'))
+    scheduler = MooncakeStoreScheduler(_hybrid_cache_config() if hybrid else _cache_config('kv_producer'))
     request = _request(range(token_len))
+    request.is_prefix_cache_boundary_safe = lambda step: True
     task = _ForwardInputsTask(SimpleNamespace(scheduler=scheduler, spec_decoding=True), prefill=True)
     agent = object.__new__(SpecModelAgent)
-    agent._init_runtime_state()
     agent.misc_config = SimpleNamespace(logprobs_mode=None)
     agent.guided_helper = GuidedSpecHelper(None)
     sampling_inputs = SamplingInputs(max_top_k=1, batch_size=1, logits_processors=[[]], max_num_logprobs=-1)
@@ -701,6 +714,8 @@ def test_mtp_prefill_save_boundary_follows_written_rows(history, token_len, fina
             sum_kv_seqlen=end,
             **chunk_flags,
         )
+        if inputs.is_chunk and not inputs.is_last_chunk:
+            inputs.prefill_next_token_ids = torch.tensor([end])
         logits = torch.zeros(1, 100)
         logits[0, 99] = 10
         extra = ARSpecExtraInputs(
@@ -728,16 +743,21 @@ def test_mtp_prefill_save_boundary_follows_written_rows(history, token_len, fina
             token_lens=token_lens,
             block_ids=(block_ids, ),
             logical_block_ids=(block_ids, ),
+            state_ids=(1, ),
         ))
-        return draft, token_lens, metadata.save_requests[0]
+        save = metadata.save_requests[0]
+        if hybrid:
+            assert save.state.boundary_tokens == end
+            assert metadata.get_state_save_copies() == ((1, save.state.snapshot_slot), )
+        return draft, token_lens, save
 
     if final_chunk:
         first_draft, first_boundary, first_save = prefill(0, history, is_chunk=True, is_first_chunk=True)
-        assert first_boundary == (7, )
-        assert first_draft.seq_length.tolist() == [7]
-        assert first_save.block_ids == (0, )
-        assert mtp_rows[7].item() == -1
-        first_saved_mtp_rows = mtp_rows[:4].clone()
+        assert first_boundary == (8, )
+        assert first_draft.seq_length.tolist() == [8]
+        assert first_save.block_ids == (0, 1)
+        assert mtp_rows[7].item() == 8
+        first_saved_mtp_rows = mtp_rows[:8].clone()
     else:
         # Existing target and MTP history, as after a safe prefix load.
         target_rows[:history] = torch.arange(history)
@@ -747,17 +767,16 @@ def test_mtp_prefill_save_boundary_follows_written_rows(history, token_len, fina
     assert boundary == (token_len, )
     torch.testing.assert_close(target_rows[:token_len], torch.arange(token_len))
     torch.testing.assert_close(mtp_rows[:token_len], torch.tensor([*range(1, token_len), 99]))
-    first_block = 1 if final_chunk else 0
+    first_block = 2 if final_chunk else 0
     full_blocks = token_len // 4
     assert save.start_block == first_block
     assert save.block_ids == tuple(range(first_block, full_blocks))
     assert save.block_hashes == build_prefix_block_hashes(request.all_ids, 4)[first_block:full_blocks]
     assert torch.all(mtp_rows[first_block * 4:full_blocks * 4] >= 0)
     if final_chunk:
-        assert draft.history_lengths.tolist() == [7]
+        assert draft.history_lengths.tolist() == [8]
         assert mtp_rows[7].item() == 8
-        torch.testing.assert_close(mtp_rows[:4], first_saved_mtp_rows)
-        assert agent._prev_chunk_last == {}
+        torch.testing.assert_close(mtp_rows[:8], first_saved_mtp_rows)
     scheduler.shutdown()
 
 

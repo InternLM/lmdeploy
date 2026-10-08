@@ -479,7 +479,7 @@ class MooncakeStoreWorker:
             failed_receiving=failed_receiving,
         )
 
-    def lookup(self, token_len: int, block_hashes: Sequence[bytes]) -> int:
+    def lookup(self, token_len: int, block_hashes: Sequence[bytes], *, recompute_blocks: int = 0) -> int:
         """Find a complete FA prefix and, for hybrid, its latest stored
         state."""
         store = self.store
@@ -492,8 +492,10 @@ class MooncakeStoreWorker:
         is_hybrid = bool(self._cache_config.states_shapes)
         if is_hybrid:
             state_interval_blocks = self._cache_config.mooncake_prefill_save_alignment // block_size
-            full_blocks = full_blocks // state_interval_blocks * state_interval_blocks
-        if full_blocks == 0:
+            # Probe eligible state boundaries and the FA margin needed to reuse them.
+            full_blocks = (max(0, full_blocks - recompute_blocks) // state_interval_blocks * state_interval_blocks
+                           + recompute_blocks)
+        if full_blocks <= recompute_blocks:
             return 0
 
         unique_kv_ranks = key_metadata.num_kv_head_shards
@@ -508,7 +510,8 @@ class MooncakeStoreWorker:
             # independent of FA's replicated KV-head namespaces.
             keys.extend(
                 build_store_key(key_metadata, rank, block_hashes[block_index], group_id=1)
-                for block_index in range(state_interval_blocks - 1, full_blocks, state_interval_blocks)
+                for block_index in range(
+                    state_interval_blocks - 1, full_blocks - recompute_blocks, state_interval_blocks)
                 for rank in range(self.tp_size)
             )
         logger.info(
@@ -549,7 +552,10 @@ class MooncakeStoreWorker:
                 break
             matched_blocks += 1
         fa_matched_tokens = matched_blocks * block_size
-        matched_tokens = fa_matched_tokens
+        # The final MTP row depends on the following token. Apply the sequence's
+        # rewind policy once, before choosing an exact recurrent-state boundary.
+        matched_blocks = max(0, matched_blocks - recompute_blocks)
+        matched_tokens = matched_blocks * block_size
         if is_hybrid:
             matched_tokens = 0
             state_offset = full_blocks * unique_kv_ranks

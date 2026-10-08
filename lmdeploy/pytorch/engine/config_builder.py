@@ -264,5 +264,6 @@ class ConfigBuilder:
                 model_format=draft_model_format,
                 hf_overrides=engine_config.hf_overrides,
                 dist_config=draft_dist_config,
+                disable_prefix_cache_block_drop=speculative_config.disable_prefix_cache_block_drop,
             )
         return specdecode_config

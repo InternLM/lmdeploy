@@ -590,10 +590,21 @@ def test_model_agent_connector_save_hook_runs_between_forward_and_progress_poll(
     ]
 
 
-def test_model_agent_defers_connector_save_until_speculative_forward(monkeypatch):
+@pytest.mark.parametrize('scoring', [False, True])
+def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(monkeypatch, scoring):
+    from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
     events = []
+    checkpoint = CacheCheckpointInputs(kv_restore_plan=torch.tensor([[3], [4]]),
+                                       kv_save_plan=None if scoring else torch.tensor([[4], [5]]))
+
+    def copy_mtp_blocks(plan):
+        if plan is checkpoint.kv_restore_plan:
+            events.append('mtp_restore')
+        else:
+            assert plan is checkpoint.kv_save_plan
+            events.append('mtp_save')
 
     class _Connector:
 
@@ -632,7 +643,8 @@ def test_model_agent_defers_connector_save_until_speculative_forward(monkeypatch
     agent = agent_module.BaseModelAgent.__new__(agent_module.BaseModelAgent)
     agent.rank = 0
     agent.kv_connector = _Connector()
-    agent.spec_agent = SimpleNamespace(is_enabled=lambda: True)
+    agent.spec_agent = SimpleNamespace(is_enabled=lambda: True,
+                                       cache_engine=SimpleNamespace(copy_logical_blocks=copy_mtp_blocks))
     agent.need_output = False
     agent.memdecode_agent = None
     agent.cache_engine = None
@@ -654,8 +666,8 @@ def test_model_agent_defers_connector_save_until_speculative_forward(monkeypatch
         is_first_chunk=False,
         is_last_chunk=False,
         dp_meta=None,
-        logits_indices=None,
-        seq_logit_length=None,
+        logits_indices=torch.tensor([0]) if scoring else None,
+        seq_logit_length=torch.tensor([1]) if scoring else None,
     )
     sampling_inputs = SimpleNamespace(get_delta=lambda: None)
 
@@ -664,17 +676,11 @@ def test_model_agent_defers_connector_save_until_speculative_forward(monkeypatch
         inputs=inputs,
         sampling_inputs=sampling_inputs,
         kv_connector_metadata=metadata,
+        cache_inputs=checkpoint,
     ))
 
-    assert events == [
-        ('bind', metadata),
-        'load',
-        'target',
-        'mtp',
-        'save',
-        'poll',
-        'clear',
-    ]
+    assert events == [('bind', metadata), 'load', 'mtp_restore', 'target'] + (
+        [] if scoring else ['mtp', 'mtp_save']) + ['save', 'poll', 'clear']
 
 
 def test_release_shuts_down_connector_before_dropping_cache(monkeypatch):

@@ -53,7 +53,10 @@ class ExecutorBase:
         self.device_type = device_type
         self.specdecode_config = specdecode_config
         if cache_config.use_mooncake_store and model_config.states_shapes and specdecode_config is not None:
-            raise ValueError('Hybrid Mooncake Store does not support speculative decoding')
+            if (specdecode_config.method != 'qwen3_5_mtp' or not model_config.is_gated_delta
+                    or specdecode_config.model_config.states_shapes or specdecode_config.model_config.num_layers != 1):
+                raise ValueError('Hybrid Mooncake Store speculative decoding requires a Qwen3.5 GDN target '
+                                 'and one full-attention MTP layer')
         if (cache_config.use_mooncake_store and model_config.states_shapes
                 and model_config.is_gated_delta and device_type == 'cuda'):
             from lmdeploy.pytorch.backends.cuda.utils import has_tilelang

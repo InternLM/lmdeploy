@@ -99,9 +99,12 @@ def get_speculative_config(args):
             model=args.speculative_draft_model,
             num_speculative_tokens=args.speculative_num_draft_tokens,
             dflash_block_size=dflash_block_size,
+            disable_prefix_cache_block_drop=args.speculative_disable_prefix_cache_block_drop,
         )
     elif dflash_block_size is not None:
         raise ValueError('--speculative-dflash-block-size requires --speculative-algorithm dflash.')
+    elif args.speculative_disable_prefix_cache_block_drop:
+        raise ValueError('--speculative-disable-prefix-cache-block-drop requires --speculative-algorithm.')
     return speculative_config
 
 
@@ -867,6 +870,13 @@ class ArgumentHelper:
                                 type=int,
                                 default=1,
                                 help='The number of speculative tokens to generate per step')
+
+        spec_group.add_argument(
+            '--speculative-disable-prefix-cache-block-drop',
+            action='store_true',
+            help='Reuse the trailing prefix-cache block for autoregressive MTP/EAGLE methods. '
+            'Can improve hybrid Mooncake Store hit rates; may affect speculative-token acceptance rates. '
+            'DFlash and DSpark are not supported.')
 
         spec_group.add_argument(
             '--speculative-dflash-block-size',

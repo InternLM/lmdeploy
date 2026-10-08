@@ -883,14 +883,23 @@ class SpeculativeConfig:
         dflash_block_size: DFlash query/verify window length. When set, this
             DFlash-specific value overrides ``num_speculative_tokens`` using
             ``num_speculative_tokens = dflash_block_size - 1``.
+        disable_prefix_cache_block_drop: Reuse the trailing prefix-cache block
+            for autoregressive MTP/EAGLE methods. Its boundary draft KV may depend on a different
+            following token, which can affect acceptance rates. Target-model
+            verification remains enabled. For hybrid Mooncake Store, this can
+            avoid rewinding to an earlier linear-attention state checkpoint.
+            DFlash and DSpark are not supported.
     """
     method: str
     model: str = ''
     num_speculative_tokens: int = 1
     dflash_block_size: int | None = None
+    disable_prefix_cache_block_drop: bool = False
 
     def __post_init__(self):
-        """Resolve the DFlash block-size override."""
+        """Validate method-specific options and resolve the draft window."""
+        if self.disable_prefix_cache_block_drop and self.method in ('dflash', 'dspark'):
+            raise ValueError(f'disable_prefix_cache_block_drop is not supported for {self.method}.')
         if self.dflash_block_size is not None:
             if self.method != 'dflash':
                 raise ValueError('dflash_block_size is supported only when method="dflash".')

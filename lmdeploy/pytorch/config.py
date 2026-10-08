@@ -728,6 +728,7 @@ class SpecDecodeConfig:
     dist_config: DistConfig = field(default_factory=DistConfig)
     target_layer_ids: tuple[int, ...] | None = None
     mask_token_id: int | None = None
+    disable_prefix_cache_block_drop: bool = False
 
     @classmethod
     def from_config(
@@ -742,6 +743,7 @@ class SpecDecodeConfig:
         model_format: str = None,
         hf_overrides: dict[str, Any] = None,
         dist_config: DistConfig = None,
+        disable_prefix_cache_block_drop: bool = False,
     ):
         draft_model = model or target_model
         dist_config = dist_config or DistConfig()
@@ -816,6 +818,7 @@ class SpecDecodeConfig:
             num_speculative_tokens=num_speculative_tokens,
             target_layer_ids=target_layer_ids,
             mask_token_id=mask_token_id,
+            disable_prefix_cache_block_drop=disable_prefix_cache_block_drop,
         )
         return obj
 

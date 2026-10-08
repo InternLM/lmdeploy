@@ -410,7 +410,8 @@ def test_mtp_remote_hit_recomputes_boundary_in_private_block(enable_prefix_cachi
         ),
     )
     connector = MooncakeStoreScheduler(cache_config)
-    connector.client.lookup = Mock(return_value=8)
+    # The worker has already dropped the final block from an eight-token hit.
+    connector.client.lookup = Mock(return_value=4)
     scheduler = _make_async_lookup_scheduler(
         connector,
         enable_prefix_caching=enable_prefix_caching,

@@ -698,6 +698,11 @@ class SchedulerSequence:
         return self._seq_meta.block_size
 
     @property
+    def prefill_input_shift(self) -> int:
+        """Draft input lookahead that prefill chunk boundaries must support."""
+        return self._seq_meta.strategy.prefill_input_shift
+
+    @property
     def history_image_num(self) -> int:
         """Get history image number."""
         return self._num_history_images

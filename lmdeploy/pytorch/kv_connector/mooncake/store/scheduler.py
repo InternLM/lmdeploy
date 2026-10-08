@@ -125,15 +125,15 @@ class MooncakeStoreScheduler:
         block_size = self._cache_config.block_size
         token_len = request.clamp_prefix_cache_match_step(
             request.get_prefix_cache_max_candidate_step())
-        # Hybrid reuse needs an exact state checkpoint. Discard the tail past
-        # the last save boundary before hashing or issuing the lookup.
+        recompute_blocks = max(0, request.prefix_cache.recompute_overlap.recompute_blocks)
+        recompute_tokens = recompute_blocks * block_size
         lookup_alignment = self._cache_config.mooncake_prefill_save_alignment if self._is_hybrid else block_size
-        token_len = token_len // lookup_alignment * lookup_alignment
-        # Hybrid + speculative decoding is rejected during engine setup.
-        recompute_tokens = (0 if self._is_hybrid else
-                            max(0, request.prefix_cache.recompute_overlap.recompute_blocks) * block_size)
-        if token_len < lookup_alignment or num_computed_tokens >= token_len - recompute_tokens:
+        max_hit_tokens = max(0, token_len - recompute_tokens) // lookup_alignment * lookup_alignment
+        if max_hit_tokens == 0 or num_computed_tokens >= max_hit_tokens:
             return 0, False
+        # Check the rewind margin beyond the latest possible state boundary.
+        # A matching FA block there can make that state reusable with MTP.
+        token_len = max_hit_tokens + recompute_tokens
 
         req_id = int(request.seq_id)
         if req_id in self._failed_load_requests:
@@ -160,6 +160,7 @@ class MooncakeStoreScheduler:
             token_len,
             block_hashes,
             non_block=True,
+            recompute_blocks=recompute_blocks,
         )
         # ``None`` means the asynchronous RPC is still running; zero is a
         # completed lookup with no remotely reusable suffix.
@@ -176,12 +177,6 @@ class MooncakeStoreScheduler:
                              req_id, remote_token_len)
                 return 0, False
         else:
-            # MTP KV at position N-1 depends on token N, outside that block's
-            # target-token hash. Reserve the last actually matched block for
-            # recomputation, even when the remote hit is shorter than the prompt.
-            # Querying the untrimmed candidate avoids dropping two blocks on a
-            # full hit. Cached plans retain this already-safe boundary.
-            remote_token_len = max(0, int(remote_token_len) - recompute_tokens)
             # FA can reuse a shorter prefix if the hit ends inside a media span.
             remote_token_len = request.clamp_prefix_cache_match_step(remote_token_len)
 

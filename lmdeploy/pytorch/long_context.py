@@ -29,7 +29,8 @@ class LongContextChunkPlan:
             accepted prefix-cache hit has advanced the sequence.
         chunk_end: Exclusive absolute prompt position where the planned chunk
             ends.  If a multimodal span would cross the budget boundary, this
-            is clamped back to the span start.
+            is clamped back to the span start, including the preceding token
+            when the draft consumes shifted inputs.
         chunk_size: Number of tokens to send in the next forward,
             ``chunk_end - chunk_start``.
         is_last_chunk: Whether this chunk reaches the end of the prefill.
@@ -71,14 +72,26 @@ def _iter_sorted_multimodals(multimodals: 'MultiModalInputs'):
     yield from sorted(multimodal_data, key=lambda item: item[1].start)
 
 
-def _max_multimodal_span(multimodals: 'MultiModalInputs') -> int:
-    return max([data.end - data.start for modal_datas in multimodals.values() for data in modal_datas], default=0)
+def _iter_multimodal_chunk_spans(sorted_multimodals, input_shift: int):
+    """Merge spans that share a shifted draft-input dependency."""
+    group_start = group_end = 0
+    for _, data in sorted_multimodals:
+        span_start = max(0, data.start - input_shift)
+        if span_start >= group_end:
+            if group_end > group_start:
+                yield group_start, group_end
+            group_start = span_start
+        group_end = max(group_end, data.end)
+    if group_end > group_start:
+        yield group_start, group_end
 
 
 def get_long_context_chunk_limit(seq: 'SchedulerSequence', max_prefill_token_num: int) -> int:
     """Return the token budget for one long-context chunk."""
     mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
-    return max(max_prefill_token_num, _max_multimodal_span(mm_for_chunk_limit))
+    spans = _iter_multimodal_chunk_spans(_iter_sorted_multimodals(mm_for_chunk_limit), seq.prefill_input_shift)
+    max_span = max((end - start for start, end in spans), default=0)
+    return max(max_prefill_token_num, max_span)
 
 
 def plan_long_context_chunk(seq: 'SchedulerSequence',
@@ -98,22 +111,23 @@ def plan_long_context_chunk(seq: 'SchedulerSequence',
     if multimodals is None:
         multimodals = seq.get_input_multimodals()
     spans = list(_iter_sorted_multimodals(multimodals))
-    for _, data in spans:
-        assert data.start >= start, 'multimodal data should be sorted by start'
-        if data.start >= end:
+    chunk_spans = []
+    # The preceding MTP row needs the first multimodal embedding. Compute
+    # them in the same chunk, after the target has encoded the whole span.
+    for span_start, span_end in _iter_multimodal_chunk_spans(spans, seq.prefill_input_shift):
+        if span_start >= end:
             break
-        if data.end > end:
-            # Do not split a multimodal span; recompute from its start in the
-            # next chunk instead.
-            end = data.start
+        chunk_spans.append((span_start, span_end))
+        if span_end > end:
+            end = span_start
             break
 
     # Embedding-only inputs do not yet have a Store content identity.
     if save_alignment and len(seq.history_embeddings) == 0:
         save_end = end // save_alignment * save_alignment
-        for _, data in reversed(spans):
-            if data.start < save_end < data.end:
-                save_end = data.start // save_alignment * save_alignment
+        for span_start, span_end in reversed(chunk_spans):
+            if span_start < save_end < span_end:
+                save_end = span_start // save_alignment * save_alignment
         if save_end > start:
             end = save_end
 

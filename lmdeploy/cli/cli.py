@@ -177,6 +177,7 @@ class CLI:
             'speculative_draft_model',
             'speculative_num_draft_tokens',
             'speculative_dflash_block_size',
+            'speculative_disable_prefix_cache_block_drop',
         ]
         for key in to_remove:
             kwargs.pop(key)

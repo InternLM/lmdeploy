@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -46,10 +47,14 @@ def test_scheduler_publishes_cached_tokens_for_accepted_prefix_hit():
     assert seq.prefix_cache.match_start_step == -1
 
 
-def test_scheduler_ar_spec_prefix_hit_recomputes_overlap_block():
-    from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
+@pytest.mark.parametrize('no_drop', [False, True])
+def test_scheduler_ar_spec_prefix_hit_obeys_block_drop_policy(no_drop):
+    from lmdeploy.pytorch.config import SpecDecodeConfig
+    from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
     block_size = 16
-    seq_meta = SequenceMeta(block_size, strategy=ARSpecSequenceStrategy())
+    strategy = ARSpecStrategyFactory(SimpleNamespace(bos_token_id=0), SpecDecodeConfig(
+        model='draft', method='qwen3_5_mtp', disable_prefix_cache_block_drop=no_drop)).build_sequence_strategy()
+    seq_meta = SequenceMeta(block_size, strategy=strategy)
     cache_config = CacheConfig(max_batches=1,
                                block_size=block_size,
                                num_cpu_blocks=0,
@@ -74,13 +79,14 @@ def test_scheduler_ar_spec_prefix_hit_recomputes_overlap_block():
     output = scheduler.schedule(is_prefill=True)
 
     assert output.running == [seq]
-    assert seq.prefix_cache.recompute_overlap.recompute_blocks == 1
-    assert seq.num_history_ids == block_size * 2
-    assert seq.cached_tokens == block_size * 2
-    assert seq.logical_blocks[2] != cached_blocks[2]
+    expected_hit = block_size * (3 if no_drop else 2)
+    assert seq.prefix_cache.recompute_overlap.recompute_blocks == (0 if no_drop else 1)
+    assert seq.num_history_ids == expected_hit
+    assert seq.cached_tokens == expected_hit
+    assert (seq.logical_blocks[2] == cached_blocks[2]) == no_drop
     assert seq.prefix_cache.recompute_overlap.fresh_block_range is None
     assert scheduler.block_trie.stats.num_query_tokens == len(token_ids)
-    assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2
+    assert scheduler.block_trie.stats.num_hit_tokens == expected_hit
 
 
 def test_scheduler_prefix_match_rollback_clears_recompute_overlap_window(monkeypatch):
@@ -433,6 +439,33 @@ def _make_scheduler_for_long_context_chunks(num_gpu_blocks: int = 6):
                                        eviction_type='recompute')
     scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
     return scheduler, block_size
+
+
+@pytest.mark.parametrize('method', [
+    None, 'qwen3_5_mtp', 'deepseek_mtp', 'hy3_mtp', 'eagle', 'eagle3', 'dflash', 'dspark'])
+def test_multimodal_chunk_reservation_obeys_the_draft_input_shift(method):
+    from lmdeploy.pytorch.config import SpecDecodeConfig
+    from lmdeploy.pytorch.engine.inputs_maker import LongContextChunker
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
+
+    strategy = ARSequenceStrategy() if method is None else ARSpecStrategyFactory(
+        SimpleNamespace(bos_token_id=0), SpecDecodeConfig(model='draft', method=method)).build_sequence_strategy()
+    cache = CacheConfig(max_batches=1, block_size=4, num_cpu_blocks=0, num_gpu_blocks=8,
+                        max_prefill_token_num=3)
+    scheduler = Scheduler(SchedulerConfig(max_batches=1, max_session_len=32), cache,
+                          seq_meta=SequenceMeta(4, strategy=strategy))
+    seq = scheduler.add_session(0).add_sequence(range(9), multimodals={
+        'image': [MultiModalData(torch.zeros(2, 2), 2, 4), MultiModalData(torch.ones(2, 2), 4, 6)]})
+    shifted = method not in (None, 'dflash', 'dspark')
+    assert seq.prefill_input_shift == int(shifted)
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    chunker = LongContextChunker(3)
+    chunker.set_seq(seq)
+    assert chunker.max_prefill_num == (5 if shifted else 3)
+    assert chunker.next_chunk_size()[0] == seq.kv_token_limit == (1 if shifted else 2)
+    assert seq.num_blocks == 1
+    scheduler.shutdown()
 
 
 def _make_mooncake_prefill_scheduler(budget: int = 32, hybrid: bool = True):
