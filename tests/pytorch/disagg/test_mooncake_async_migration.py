@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lmdeploy.pytorch.disagg.backend.mooncake import MooncakeMigrationBackend
+from lmdeploy.pytorch.disagg.backend.mooncake import MooncakeMigrationManagement
 
 
 @pytest.mark.asyncio
@@ -23,7 +23,7 @@ async def test_p2p_migrate_async_awaits_executor_not_orphan_future(monkeypatch):
         True,
     )
 
-    backend = object.__new__(MooncakeMigrationBackend)
+    backend = object.__new__(MooncakeMigrationManagement)
     called = {'n': 0}
 
     def fake_migrate(_assignment):
@@ -43,7 +43,7 @@ async def test_p2p_migrate_sync_path_calls_migrate_directly(monkeypatch):
         False,
     )
 
-    backend = object.__new__(MooncakeMigrationBackend)
+    backend = object.__new__(MooncakeMigrationManagement)
     backend._migrate = MagicMock()
     assignment = SimpleNamespace(batch=[])
 
