@@ -29,6 +29,7 @@ _FRAME_INPUT_NAMES = (
     'past_key_values',
     'attn_metadata',
     'state_ids',
+    'kpool_tail_states',
 )
 _STANDARD_FORWARD_INPUT_NAMES = frozenset(_GRAPH_TOKEN_INPUT_AXES) | frozenset(_FRAME_INPUT_NAMES)
 _FORWARD_CONSTANT_TYPES = (bool, int, float, str, bytes, torch.dtype, torch.device)
@@ -95,6 +96,8 @@ class StandardDecoderPiecewiseGraphRuntime:
         graph_input_names = tuple(name for name in _GRAPH_TOKEN_INPUT_AXES if kwargs.get(name) is not None)
         token_bucket = self._round_up_token_bucket(raw_tokens)
         if token_bucket is None:
+            return None
+        if raw_tokens != token_bucket and not getattr(self.model, 'piecewise_cuda_graph_token_padding', True):
             return None
         return _StandardGraphDescriptor(token_bucket, graph_input_names, forward_constants)
 

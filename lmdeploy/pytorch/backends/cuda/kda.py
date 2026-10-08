@@ -7,6 +7,7 @@ state-ring kernel with gated-delta rule for both AR and MTP decode.
 """
 
 from copy import copy
+from functools import partial
 from typing import Any
 
 import torch
@@ -57,11 +58,46 @@ class CudaKdaImpl(KdaImpl):
         self.kda_gate = kda_gate_fwd
         self.recurrent_func = fused_recurrent_gated_delta_rule
         self.fused_recurrent_kda = self._decode_recurrent
+        self._piecewise_forward = None
         register_step_metadata_impl(self)
 
     def get_step_metadata_provider(self):
         """Reuse FLA chunk-index preparation outside model forward."""
         return GatedDeltaStepMetaUpdater()
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Keep recurrence, convolution and live state updates eager."""
+        return True
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Bind current KDA metadata between captured projection pieces."""
+        if self._piecewise_forward is not None:
+            return
+        from .graph_runner.piecewise import (
+            ViewTolerantPaddedAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        original_forward = self.forward
+
+        @eager_boundary(
+            adapter_factory=partial(ViewTolerantPaddedAdapter, token_axis=1),
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager(mixed_qkv, raw_gate, raw_beta, *args, **kwargs):
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            rows = execution.raw_tokens
+            return original_forward(mixed_qkv[:, :rows], raw_gate[:, :rows], raw_beta[:, :rows], *args, **kwargs)
+
+        def piecewise_forward(mixed_qkv, raw_gate, raw_beta, *args, **kwargs):
+            if get_piecewise_graph_execution() is None:
+                return original_forward(mixed_qkv, raw_gate, raw_beta, *args, **kwargs)
+            return run_eager(mixed_qkv, raw_gate, raw_beta, *args, **kwargs)
+
+        self._piecewise_forward = piecewise_forward
+        self.forward = piecewise_forward
 
     def _forward_spec(self, mixed_qkv, raw_gate, raw_beta, conv_state,
                       recurrent_state, metadata, **kwargs):
