@@ -18,11 +18,13 @@ from lmdeploy.pytorch.backends.cuda.kpool import (
     CudaKPoolAttention,
     kpool_compress_quantize_cuda,
     kpool_decode_metadata_cuda,
+    kpool_decode_update_cuda,
     kpool_dense_indices_cuda,
     kpool_expand_groups_cuda,
     kpool_gather_token_tail_cuda,
     kpool_prefill_metadata,
     kpool_prefill_update_cuda,
+    kpool_raw_decode_update_cuda,
     kpool_rotate_query_cuda,
     kpool_score_contiguous_cuda,
     kpool_score_paged_cuda,
@@ -918,6 +920,15 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         """Target owns the raw ring; pool assembly only consumes a scratch tail."""
         if tail_state is None or len(tail_state) != 2 or state_ids is None:
             raise RuntimeError('GLM-5.3 KPool requires raw key/score rings and stable state ids.')
+        if attn_metadata.is_decoding and tail_state[0].is_cuda:
+            key = self.indexer.project_key(hidden_states)[0]
+            score = self.indexer.project_compress_score(hidden_states)[0]
+            cache = self.indexer.get_block_cache()
+            kpool_raw_decode_update_cuda(
+                key, score, *tail_state, state_ids, attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
+                attn_metadata.cu_seqlens_q, cache, attn_metadata.block_offsets,
+                self.indexer.index_kpool_compress_ape, self.index_kpool, self.indexer.scale_fmt is not None)
+            return cache
         from lmdeploy.pytorch.kernels.cuda.kpool import read_raw_tail, write_raw_ring
         history = attn_metadata.kv_seqlens - attn_metadata.q_seqlens
         tail = read_raw_tail(*tail_state, state_ids, history, self.index_kpool)
@@ -2058,8 +2069,21 @@ class Glm5NextMTPAttention(Glm5NextSparseAttention):
             tail_keys, tail_scores, state_ids = kpool_gather_token_tail_cuda(
                 cache, attn_metadata.block_offsets, attn_metadata.q_seqlens,
                 attn_metadata.kv_seqlens, self.index_kpool)
-            result = self._write_kpool_pools(
-                key, score, (tail_keys, tail_scores), state_ids >= 0, attn_metadata)
+            if attn_metadata.is_decoding:
+                batch = state_ids.numel()
+                if not batch or key.size(0) % batch:
+                    raise RuntimeError('KPool decode rows must be divisible by request count.')
+                steps = key.size(0) // batch
+                result = self.indexer.get_block_cache()
+                kpool_decode_update_cuda(
+                    key.unflatten(0, (batch, steps)), score.unflatten(0, (batch, steps)),
+                    tail_keys, tail_scores, state_ids, None,
+                    result, attn_metadata.block_offsets, self.indexer.index_kpool_compress_ape,
+                    self.index_kpool, self.indexer.scale_fmt is not None,
+                    q_seqlens=attn_metadata.q_seqlens, kv_seqlens=attn_metadata.kv_seqlens)
+            else:
+                result = self._write_kpool_pools(
+                    key, score, (tail_keys, tail_scores), state_ids >= 0, attn_metadata)
             kpool_write_token_cache_cuda(
                 cache, key, score, attn_metadata.block_offsets,
                 attn_metadata.q_seqlens, attn_metadata.kv_seqlens,

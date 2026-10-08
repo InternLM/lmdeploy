@@ -7,10 +7,10 @@ import triton.language.extra.cuda.libdevice as libdevice
 
 @triton.jit
 def _update_kpool_kernel(
-    Keys, Scores, TailKeys, TailScores, StateIds, History,
+    Keys, Scores, TailKeys, TailScores, StateIds, History, QLens,
     ClosedKeys, ClosedScores, GroupIds, Valid,
     BATCH: tl.constexpr, STEPS: tl.constexpr, STATES: tl.constexpr, RING: tl.constexpr,
-    POOL: tl.constexpr, WIDTH: tl.constexpr, BLOCK_D: tl.constexpr,
+    POOL: tl.constexpr, WIDTH: tl.constexpr, BLOCK_D: tl.constexpr, FROM_LENGTHS: tl.constexpr,
     stride_kb: tl.constexpr, stride_kt: tl.constexpr, stride_kd: tl.constexpr,
     stride_sb: tl.constexpr, stride_st: tl.constexpr, stride_sd: tl.constexpr,
     stride_tkb: tl.constexpr, stride_tkr: tl.constexpr,
@@ -19,7 +19,10 @@ def _update_kpool_kernel(
     request = tl.program_id(0)
     state_id = tl.load(StateIds + request).to(tl.int64)
     valid = (state_id >= 0) & (state_id < STATES)
-    history = tl.maximum(tl.load(History + request).to(tl.int64), 0)
+    history = tl.load(History + request).to(tl.int64)
+    if FROM_LENGTHS:
+        history -= tl.load(QLens + request).to(tl.int64)
+    history = tl.maximum(history, 0)
     slot = tl.arange(0, POOL)[:, None]
     d = tl.arange(0, BLOCK_D)[None, :]
     mask = valid & (d < WIDTH)
@@ -49,18 +52,24 @@ def _update_kpool_kernel(
         tl.store(TailScores + state_id * stride_tsb + checkpoint * stride_tsr + slot * WIDTH + d, tail_s, mask)
 
 
-def update_kpool(keys, scores, tail_keys, tail_scores, state_ids, history_lengths, pool_size):
+def update_kpool(keys, scores, tail_keys, tail_scores, state_ids, history_lengths, pool_size,
+                 *, q_seqlens=None, kv_seqlens=None):
     """Update decode/verify tails in place, emitting step-major closed pools.
 
     Inputs use [batch, steps, width]. State uses [states, pool, width] for AR or [states, ring, pool, width] for
     verification. Live state ids must be unique; invalid ids never write state. All output shapes depend only on input
-    shapes.
+    shapes. If history_lengths is None, query/KV lengths are required and history subtraction is fused into the kernel.
     """
     if keys.ndim != 3 or scores.shape != keys.shape:
         raise ValueError('Expected matching [batch, steps, width] keys and scores.')
     batch, steps, width = keys.shape
     if not batch or not steps or pool_size <= 1 or pool_size & (pool_size - 1):
         raise ValueError('Expected a nonempty batch/sequence and a power-of-two pool size.')
+    from_lengths = history_lengths is None
+    if from_lengths:
+        if q_seqlens is None or kv_seqlens is None or q_seqlens.shape != (batch,) or kv_seqlens.shape != (batch,):
+            raise ValueError('Expected one query/KV length per request when history is not precomputed.')
+        history_lengths = kv_seqlens
     if state_ids.shape != (batch,) or history_lengths.shape != (batch,):
         raise ValueError('Expected one state id and history length per request.')
     if tail_keys.shape != tail_scores.shape or tail_keys.ndim not in (3, 4):
@@ -81,9 +90,98 @@ def update_kpool(keys, scores, tail_keys, tail_scores, state_ids, history_length
     valid = torch.empty(steps * batch, device=keys.device, dtype=torch.bool)
     _update_kpool_kernel[(batch,)](
         keys, scores, tail_keys, tail_scores, state_ids.contiguous(), history_lengths.contiguous(),
+        q_seqlens.contiguous() if from_lengths else None,
         closed_keys, closed_scores, groups, valid,
-        batch, steps, tail_keys.size(0), tail_keys.size(1), pool_size, width, triton.next_power_of_2(width),
+        batch, steps, tail_keys.size(0), tail_keys.size(1), pool_size, width,
+        triton.next_power_of_2(width), from_lengths,
         *keys.stride(), *scores.stride(), *tail_keys.stride()[:2], *tail_scores.stride()[:2], num_warps=4)
+    return closed_keys, closed_scores, groups, valid
+
+
+@triton.jit
+def _update_raw_kpool_kernel(
+    Keys, Scores, RawKeys, RawScores, StateIds, QLens, KVLens, Starts,
+    ClosedKeys, ClosedScores, GroupIds, Valid,
+    BATCH: tl.constexpr, STEPS: tl.constexpr, STATES: tl.constexpr, CAPACITY: tl.constexpr,
+    POOL: tl.constexpr, WIDTH: tl.constexpr, BLOCK_D: tl.constexpr,
+    stride_kt: tl.constexpr, stride_kd: tl.constexpr,
+    stride_st: tl.constexpr, stride_sd: tl.constexpr,
+    stride_rkb: tl.constexpr, stride_rsb: tl.constexpr,
+):
+    request = tl.program_id(0)
+    state = tl.load(StateIds + request).to(tl.int64)
+    length = tl.load(QLens + request).to(tl.int64)
+    history = tl.load(KVLens + request).to(tl.int64) - length
+    start = tl.load(Starts + request).to(tl.int64)
+    live = (state >= 0) & (state < STATES)
+    slot = tl.arange(0, POOL)[:, None]
+    feature = tl.arange(0, BLOCK_D)[None, :]
+    tail_length = history % POOL
+    position = (history - tail_length + slot) % CAPACITY
+    mask = live & (slot < tail_length) & (feature < WIDTH)
+    tail_keys = tl.load(RawKeys + state * stride_rkb + position * WIDTH + feature, mask, other=0)
+    tail_scores = tl.load(RawScores + state * stride_rsb + position * WIDTH + feature, mask, other=0)
+    for step in range(STEPS):
+        active = live & (step < length)
+        key = tl.load(Keys + (start + step) * stride_kt + feature * stride_kd,
+                      active & (feature < WIDTH), other=0)
+        score = tl.load(Scores + (start + step) * stride_st + feature * stride_sd,
+                        active & (feature < WIDTH), other=0)
+        insert = (history + step) % POOL
+        tail_keys = tl.where(slot == insert, key, tail_keys)
+        tail_scores = tl.where(slot == insert, score, tail_scores)
+        row = step * BATCH + request
+        close = active & (insert == POOL - 1)
+        output = (row * POOL + slot) * WIDTH + feature
+        tl.store(ClosedKeys + output, tail_keys, close & (feature < WIDTH))
+        tl.store(ClosedScores + output, tail_scores, close & (feature < WIDTH))
+        tl.store(GroupIds + row, (history + step) // POOL)
+        tl.store(Valid + row, close)
+        raw_position = (history + step) % CAPACITY
+        tl.store(RawKeys + state * stride_rkb + raw_position * WIDTH + feature,
+                 key, active & (feature < WIDTH))
+        tl.store(RawScores + state * stride_rsb + raw_position * WIDTH + feature,
+                 score, active & (feature < WIDTH))
+
+
+def update_raw_kpool(keys, scores, raw_keys, raw_scores, state_ids, q_seqlens, kv_seqlens,
+                     cu_seqlens_q, pool_size):
+    """Assemble decode pools and persist raw tokens without materializing scratch tails.
+
+    Live state rows and writable cache owners must be request-private. Input rows are packed by cu_seqlens_q;
+    graph padding may have shorter query lengths. Capacity retains every trial token plus the accepted-history tail,
+    so rejection can reconstruct any accepted prefix from the raw ring. Closed pools use step-major ordering.
+    """
+    batch = state_ids.numel()
+    if keys.ndim != 2 or scores.shape != keys.shape or not batch or keys.size(0) % batch:
+        raise ValueError('Expected matching flattened decode keys/scores and a nonempty uniform batch capacity.')
+    steps, width = keys.size(0) // batch, keys.size(1)
+    if not steps or pool_size <= 1 or pool_size & (pool_size - 1):
+        raise ValueError('Expected positive decode capacity and a power-of-two pool size.')
+    if raw_keys.ndim != 3 or raw_scores.shape != raw_keys.shape or raw_keys.size(2) != width:
+        raise ValueError('Expected matching [states, capacity, width] raw rings.')
+    if raw_keys.size(1) < steps + pool_size - 1:
+        raise ValueError('Raw ring capacity must retain the trial tokens and the previous incomplete pool.')
+    if raw_keys.stride()[1:] != (width, 1) or raw_scores.stride()[1:] != (width, 1):
+        raise ValueError('Raw ring token and feature dimensions must be contiguous.')
+    if keys.dtype != raw_keys.dtype or scores.dtype != raw_scores.dtype:
+        raise ValueError('Projected keys/scores must match their raw ring dtypes.')
+    if state_ids.shape != (batch,) or q_seqlens.shape != (batch,) or kv_seqlens.shape != (batch,):
+        raise ValueError('Expected one state id and query/KV length per request.')
+    if cu_seqlens_q.ndim != 1 or cu_seqlens_q.numel() not in (batch, batch + 1):
+        raise ValueError('Expected one packed input start per request.')
+    tensors = (keys, scores, raw_keys, raw_scores, state_ids, q_seqlens, kv_seqlens, cu_seqlens_q)
+    if not keys.is_cuda or any(value.device != keys.device for value in tensors):
+        raise ValueError('Raw-ring decode requires CUDA tensors on the same device.')
+    closed_keys = keys.new_empty((steps * batch, pool_size, width))
+    closed_scores = scores.new_empty((steps * batch, pool_size, width))
+    groups = kv_seqlens.new_empty(steps * batch)
+    valid = torch.empty(steps * batch, device=keys.device, dtype=torch.bool)
+    _update_raw_kpool_kernel[(batch,)](
+        keys, scores, raw_keys, raw_scores, state_ids.contiguous(), q_seqlens.contiguous(),
+        kv_seqlens.contiguous(), cu_seqlens_q.contiguous(), closed_keys, closed_scores, groups, valid,
+        batch, steps, raw_keys.size(0), raw_keys.size(1), pool_size, width, triton.next_power_of_2(width),
+        *keys.stride(), *scores.stride(), raw_keys.stride(0), raw_scores.stride(0), num_warps=4)
     return closed_keys, closed_scores, groups, valid
 
 

@@ -21,6 +21,7 @@ from lmdeploy.pytorch.kernels.cuda.kpool import (
     prepare_kpool_decode_metadata,
     rotate_kpool_query,
     update_kpool,
+    update_raw_kpool,
     write_kpool_token_cache,
 )
 from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
@@ -80,13 +81,27 @@ def kpool_dense_indices_cuda(q_seqlens, kv_seqlens, rows, pool_size, topk):
 
 def kpool_decode_update_cuda(keys, scores, tail_keys, tail_scores, state_ids,
                              history_lengths, packed_cache, block_offsets,
-                             ape, pool_size, round_scale):
+                             ape, pool_size, round_scale, *, q_seqlens=None, kv_seqlens=None):
     """Batch verification updates and reuse indexed cache writes."""
     closed_keys, closed_scores, groups, valid = update_kpool(
-        keys, scores, tail_keys, tail_scores, state_ids, history_lengths, pool_size)
+        keys, scores, tail_keys, tail_scores, state_ids, history_lengths, pool_size,
+        q_seqlens=q_seqlens, kv_seqlens=kv_seqlens)
     compress = (compress_kpool if torch.cuda.get_device_capability(keys.device)[0] >= 9
                 else kpool_compress_quantize_cuda)
     values, scales = compress(
+        closed_keys, closed_scores, ape, mode='decode', round_scale=round_scale, valid=valid)
+    cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
+    fill_indexed_key_cache(values, scales, groups, valid, block_offsets,
+                           cache_keys, cache_scales,
+                           page_step=cache_keys.size(1) * pool_size // KPOOL_PAGE_SIZE)
+
+
+def kpool_raw_decode_update_cuda(keys, scores, raw_keys, raw_scores, state_ids, q_seqlens, kv_seqlens,
+                                  cu_seqlens_q, packed_cache, block_offsets, ape, pool_size, round_scale):
+    """Fuse raw-ring decode state updates while retaining compact cache addressing."""
+    closed_keys, closed_scores, groups, valid = update_raw_kpool(
+        keys, scores, raw_keys, raw_scores, state_ids, q_seqlens, kv_seqlens, cu_seqlens_q, pool_size)
+    values, scales = kpool_compress_quantize_cuda(
         closed_keys, closed_scores, ape, mode='decode', round_scale=round_scale, valid=valid)
     cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
     fill_indexed_key_cache(values, scales, groups, valid, block_offsets,
