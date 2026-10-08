@@ -37,6 +37,12 @@ class HCPrePostImpl(ABC):
         """Expand one hidden state back to ``[..., hc, dim]``."""
         raise NotImplementedError
 
+    def post_expand_with_fp32(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
+                              comb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Also prepare the rounded output for the next FP32 HC projection."""
+        out = self.post_expand(x, residual, post, comb)
+        return out, out.float()
+
 
 @dataclass(frozen=True)
 class HCPrePostBuildSpec(BuildSpec[HCPrePostImpl]):

@@ -982,7 +982,8 @@ def _moe_reduce_kernel(
 
 def moe_reduce(hidden_states: torch.Tensor, topk_weights: torch.Tensor, fp32_acc: bool = False,
                *, output_scale: float = 1.0) -> torch.Tensor:
-    """Weight and reduce experts with optional FP32 products and output scaling."""
+    """Weight and reduce experts with optional FP32 products and output
+    scaling."""
     assert hidden_states.dim() == 3
     assert topk_weights.dim() == 2
     assert hidden_states.size(0) == topk_weights.size(0)

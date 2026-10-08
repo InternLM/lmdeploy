@@ -4,6 +4,7 @@ import triton
 import triton.language as tl
 from triton.language.extra import libdevice
 
+from .blocked_gemm_fp8 import fast_round_scale
 from .utils import get_device_props
 
 fast_expf = tl.math.exp
@@ -112,6 +113,7 @@ def _silu_and_mul_moe_ep_kernel(
     gateup_ptr,
     out_ptr,
     mask_ptr,
+    scale_ptr,
     N: tl.constexpr,
     M: tl.constexpr,
     stride_gue: tl.constexpr,
@@ -124,10 +126,15 @@ def _silu_and_mul_moe_ep_kernel(
     BLOCK_SIZE_N: tl.constexpr,
     SWIGLU_LIMIT: tl.constexpr,
     PRECISE_MUL: tl.constexpr,
+    GROUP_SIZE: tl.constexpr,
+    ROUND_SCALE: tl.constexpr,
+    FP8_MIN: tl.constexpr,
+    FP8_MAX: tl.constexpr,
 ):
     """Silu and mul kernel."""
     n_block_id = tl.program_id(0)
-    e_id = tl.program_id(1)
+    # Expert-capacity strides can exceed the signed 32-bit element range.
+    e_id = tl.program_id(1).to(tl.int64)
     m_id_start = tl.program_id(2)
     m_id_stride = tl.num_programs(2)
 
@@ -140,13 +147,13 @@ def _silu_and_mul_moe_ep_kernel(
 
     mask_m = tl.load(mask_ptr + e_id * stride_m)
     mask_m = tl.minimum(mask_m, M)
-    if mask_m < m_id_start:
+    if mask_m <= m_id_start:
         return
     gate_ptrs = gateup_ptr + e_id * stride_gue + m_id_start * stride_gum + offs_n * stride_gun
     up_ptrs = gate_ptrs + N * stride_gun
     out_ptrs = out_ptr + e_id * stride_oe + m_id_start * stride_om + offs_n * stride_on
 
-    for _ in tl.range(m_id_start, mask_m, m_id_stride):
+    for m_id in tl.range(m_id_start, mask_m, m_id_stride):
         gate = tl.load(gate_ptrs, mask=mask)
         up = tl.load(up_ptrs, mask=mask)
         if SWIGLU_LIMIT is not None:
@@ -162,6 +169,25 @@ def _silu_and_mul_moe_ep_kernel(
             gate = gate.to(gateup_ptr.dtype.element_ty)
         out = gate * up
 
+        if scale_ptr is not None:
+            # Preserve the materialized activation's rounding before quantization.
+            out = out.to(gateup_ptr.dtype.element_ty)
+            groups: tl.constexpr = BLOCK_SIZE_N // GROUP_SIZE
+            values = out.reshape(groups, GROUP_SIZE)
+            amax = tl.max(tl.abs(values), axis=1)
+            amax = tl.maximum(amax, 1e-6).to(tl.float32)
+            if ROUND_SCALE:
+                scale = fast_round_scale(amax, 1 / FP8_MAX)
+                rscale = 1 / scale
+            else:
+                scale = amax * (1 / FP8_MAX)
+                rscale = FP8_MAX / amax
+            out = values.to(tl.float32) * rscale[:, None]
+            out = tl.clamp(out, FP8_MIN, FP8_MAX).reshape(BLOCK_SIZE_N)
+            group_offsets = n_block_id * groups + tl.arange(0, groups)
+            scale_offsets = (e_id * M + m_id) * (N // GROUP_SIZE) + group_offsets
+            tl.store(scale_ptr + scale_offsets, scale, group_offsets < N // GROUP_SIZE)
+
         tl.store(out_ptrs, out, mask=mask)
 
         gate_ptrs += m_id_stride * stride_gum
@@ -170,7 +196,9 @@ def _silu_and_mul_moe_ep_kernel(
 
 
 def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.Tensor = None,
-                       swiglu_limit: float | None = None, precise_mul: bool = False):
+                        swiglu_limit: float | None = None, precise_mul: bool = False,
+                        output_scale: torch.Tensor = None, quant_group_size: int = 128,
+                        scale_fmt: str | None = None):
     """Silu and mul for moe with expert parallelism."""
     # gate_up: [num_experts, batch_size, 2*hidden_size]
     assert gate_up.dim() == 3
@@ -200,9 +228,17 @@ def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.
     grid_size0 = triton.cdiv(N, BLOCK_SIZE_N)
     grid_size1 = min(M, triton.cdiv(ctas_per_device, grid_size0 * E))
     grid = (grid_size0, E, grid_size1)
+    if output_scale is not None:
+        assert out.is_contiguous() and output_scale.is_contiguous()
+        assert out.shape == (E, M, N)
+        assert output_scale.shape == (E, M, N // quant_group_size)
+        assert N % quant_group_size == 0 and BLOCK_SIZE_N % quant_group_size == 0
+        assert scale_fmt in (None, 'ue8m0')
+        finfo = torch.finfo(out.dtype)
     _silu_and_mul_moe_ep_kernel[grid](gate_up,
                                       out,
                                       mask_m,
+                                      output_scale,
                                       N,
                                       M,
                                       stride_gue=gate_up.stride(0),
@@ -215,6 +251,10 @@ def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.
                                       BLOCK_SIZE_N=BLOCK_SIZE_N,
                                       SWIGLU_LIMIT=swiglu_limit,
                                       PRECISE_MUL=precise_mul,
+                                      GROUP_SIZE=quant_group_size,
+                                      ROUND_SCALE=scale_fmt == 'ue8m0',
+                                      FP8_MIN=finfo.min if output_scale is not None else 0,
+                                      FP8_MAX=finfo.max if output_scale is not None else 0,
                                       num_warps=num_warps,
                                       num_stages=num_stages)
 
@@ -222,9 +262,13 @@ def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.
 
 
 def silu_and_mul_masked_post_quant_fwd(input: torch.Tensor, output: torch.Tensor, output_scale: torch.Tensor,
-                                       quant_group_size: int, masked_m: torch.Tensor, act_func=None):
-    """Apply masked MoE SiLU-and-mul, then quantize to the preallocated FP8
-    output."""
+                                       quant_group_size: int, masked_m: torch.Tensor, act_func=None, *,
+                                       swiglu_limit: float | None = None, precise_mul: bool = False,
+                                       scale_fmt: str | None = None):
+    """Fuse activation and FP8 quantization for valid expert rows only.
+
+    Invalid rows are left untouched; the following masked GEMM must ignore them.
+    """
     assert input.is_contiguous()
     assert output.is_contiguous()
     assert input.dim() == 3
@@ -232,12 +276,13 @@ def silu_and_mul_masked_post_quant_fwd(input: torch.Tensor, output: torch.Tensor
     assert input.shape[-1] % 2 == 0
     size_n = input.shape[-1] // 2
     assert size_n % quant_group_size == 0
-    # Custom EP activations consume the same valid-row counts as masked GEMM;
-    # padded expert rows must not incur activation work or mutate live rows.
-    activated = (silu_and_mul_moe_ep(input, masked_m) if act_func is None
-                 else act_func(input, masked_m=masked_m))
-    from .blocked_gemm_fp8 import _quant_fp8_launcher
-    _quant_fp8_launcher(activated.reshape(-1, size_n),
-                        quant_group_size,
-                        output.reshape(-1, size_n),
-                        output_scale.reshape(-1, size_n // quant_group_size))
+    if act_func is not None:
+        activated = act_func(input, masked_m=masked_m)
+        from .blocked_gemm_fp8 import _quant_fp8_launcher
+        _quant_fp8_launcher(activated.reshape(-1, size_n), quant_group_size,
+                            output.reshape(-1, size_n),
+                            output_scale.reshape(-1, size_n // quant_group_size), scale_fmt=scale_fmt)
+        return
+    silu_and_mul_moe_ep(input, masked_m, output, swiglu_limit=swiglu_limit,
+                        precise_mul=precise_mul, output_scale=output_scale,
+                        quant_group_size=quant_group_size, scale_fmt=scale_fmt)

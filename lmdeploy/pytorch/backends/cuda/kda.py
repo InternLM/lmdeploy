@@ -66,14 +66,11 @@ class CudaKdaImpl(KdaImpl):
         return GatedDeltaStepMetaUpdater()
 
     def supports_piecewise_cuda_graph(self) -> bool:
+        """Keep recurrence, convolution and live state updates eager."""
         return True
 
     def enable_piecewise_cuda_graph(self) -> None:
-        """Keep ragged convolution/recurrence and state writes in one island.
-
-        Projections and the output gate/norm remain captured. Metadata is the
-        live value produced by the existing gated-delta metadata boundary.
-        """
+        """Bind current KDA metadata between captured projection pieces."""
         if self._piecewise_forward is not None:
             return
         from .graph_runner.piecewise import (
@@ -82,21 +79,25 @@ class CudaKdaImpl(KdaImpl):
             get_piecewise_graph_execution,
         )
 
-        original = self.forward
+        original_forward = self.forward
 
-        @eager_boundary(adapter_factory=partial(ViewTolerantPaddedAdapter, token_axis=1),
-                        reuse_bridge_after_next_step=True)
-        def run_eager(mixed_qkv, raw_gate, raw_beta, **kwargs):
-            count = get_piecewise_graph_execution().raw_tokens
-            return original(mixed_qkv[:, :count], raw_gate[:, :count], raw_beta[:, :count], **kwargs)
+        @eager_boundary(
+            adapter_factory=partial(ViewTolerantPaddedAdapter, token_axis=1),
+            reuse_bridge_after_next_step=True,
+        )
+        def run_eager(mixed_qkv, raw_gate, raw_beta, *args, **kwargs):
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            rows = execution.raw_tokens
+            return original_forward(mixed_qkv[:, :rows], raw_gate[:, :rows], raw_beta[:, :rows], *args, **kwargs)
 
-        def forward(mixed_qkv, raw_gate, raw_beta, **kwargs):
+        def piecewise_forward(mixed_qkv, raw_gate, raw_beta, *args, **kwargs):
             if get_piecewise_graph_execution() is None:
-                return original(mixed_qkv, raw_gate, raw_beta, **kwargs)
-            return run_eager(mixed_qkv, raw_gate, raw_beta, **kwargs)
+                return original_forward(mixed_qkv, raw_gate, raw_beta, *args, **kwargs)
+            return run_eager(mixed_qkv, raw_gate, raw_beta, *args, **kwargs)
 
-        self._piecewise_forward = forward
-        self.forward = forward
+        self._piecewise_forward = piecewise_forward
+        self.forward = piecewise_forward
 
     def _forward_spec(self, mixed_qkv, raw_gate, raw_beta, conv_state,
                       recurrent_state, metadata, **kwargs):

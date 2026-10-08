@@ -101,6 +101,7 @@ def _hc_post_expand_kernel(
     post_ptr,
     comb_ptr,
     out_ptr,
+    fp32_ptr,
     x_stride_n,
     x_stride_d,
     residual_stride_n,
@@ -117,6 +118,7 @@ def _hc_post_expand_kernel(
     dim: tl.constexpr,
     hc_mult: tl.constexpr,
     BLOCK_D: tl.constexpr,
+    STORE_FP32: tl.constexpr,
 ):
     row_h = tl.program_id(0)
     row_id = row_h // hc_mult
@@ -141,6 +143,10 @@ def _hc_post_expand_kernel(
         acc += weight * residual
 
     tl.store(out_ptr + row_id * out_stride_n + out_h * out_stride_h + offs_d * out_stride_d, acc, mask=mask)
+    if STORE_FP32:
+        # Retain the original output rounding before preparing the next GEMM.
+        rounded = acc.to(out_ptr.dtype.element_ty).to(tl.float32)
+        tl.store(fp32_ptr + (row_id * hc_mult + out_h) * dim + offs_d, rounded, mask=mask)
 
 
 def hc_pre_reduce(
@@ -186,11 +192,14 @@ def hc_post_expand(
     post: torch.Tensor,
     comb: torch.Tensor,
     hc_mult: int,
+    out_fp32: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Expand DeepSeek-V4 HC states from ``[..., dim]`` to ``[..., hc,
     dim]``."""
     dim = x.size(-1)
     out_shape = (*x.shape[:-1], hc_mult, dim)
+    if out_fp32 is not None:
+        assert out_fp32.shape == out_shape and out_fp32.dtype == torch.float32 and out_fp32.is_contiguous()
     out = torch.empty(out_shape, device=x.device, dtype=x.dtype)
     if x.numel() == 0:
         return out
@@ -213,6 +222,7 @@ def hc_post_expand(
         post,
         comb,
         out,
+        out_fp32,
         *x.stride(),
         *residual.stride(),
         *post.stride(),
@@ -224,6 +234,7 @@ def hc_post_expand(
         dim,
         hc_mult,
         block_d,
+        out_fp32 is not None,
         num_warps=4,
     )
     return out.reshape(out_shape)

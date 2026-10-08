@@ -8,6 +8,12 @@ from lmdeploy.pytorch.backends.hc_prepost import HCPrePostBuildSpec
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
+@torch.compile(dynamic=True)
+def _cast_fp32(x: torch.Tensor) -> torch.Tensor:
+    """Vectorize the large HC input conversion without changing reductions."""
+    return x.float()
+
+
 class HcPrePost(nn.Module):
     """DeepSeek-V4 hyper-connection pre/post reduction wrapper."""
 
@@ -27,10 +33,18 @@ class HcPrePost(nn.Module):
         hc_base: torch.Tensor,
         norm_eps: float,
         norm_weight: torch.Tensor | None = None,
+        x_fp32: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         from lmdeploy.pytorch.nn.norm import rms_scale
         hidden_states, dtype = x, x.dtype
-        x = x.flatten(2).float()
+        if x_fp32 is not None:
+            assert x_fp32.shape == x.shape and x_fp32.dtype == torch.float32
+        x = x.flatten(2)
+        # Long prefills amortize the additional compiled-call overhead.
+        if x_fp32 is not None:
+            x = x_fp32.flatten(2)
+        else:
+            x = _cast_fp32(x) if x.is_contiguous() and x.size(0) * x.size(1) >= 8192 else x.float()
         if self.avoid_gemv and x.size(0) == 1 and x.size(1) == 1:
             # Single-token decode otherwise selects GEMV, whose reduction
             # order can differ from multi-token speculative verification.
@@ -47,3 +61,7 @@ class HcPrePost(nn.Module):
     def post_expand(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
                     comb: torch.Tensor) -> torch.Tensor:
         return self.impl.post_expand(x, residual, post, comb)
+
+    def post_expand_with_fp32(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
+                              comb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.impl.post_expand_with_fp32(x, residual, post, comb)

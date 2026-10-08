@@ -10,6 +10,13 @@ from ..linear import LinearImpl
 class DefaultLinearImpl(LinearImpl):
     """Linear implementation api."""
 
+    supports_batched = True
+
+    def forward_batched(self, x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        """Batch equal-sized local projections without changing
+        accumulation."""
+        return torch.bmm(x, weight.transpose(1, 2))
+
     def forward(self,
                 x,
                 weight: torch.Tensor,

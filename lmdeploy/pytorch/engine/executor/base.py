@@ -218,7 +218,8 @@ class ExecutorBase:
 
     def _get_dsa_score_workspace_size(self) -> int:
         """Return the bounded sparse-indexer score workspace in bytes."""
-        if getattr(self.model_config, 'mla_index_topk', None) is None:
+        if (getattr(self.model_config, 'mla_index_topk', None) is None
+                and not getattr(self.model_config, 'reserve_dsa_score_workspace', False)):
             return 0
         return _envs.dsa_indexer_max_logits_mb * (1 << 20)
 
