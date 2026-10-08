@@ -125,7 +125,8 @@ def test_rms_norm_fuses_or_falls_back(monkeypatch):
     impl.forward.assert_called_once_with(input, norm.weight, residual)
 
 
-def test_flashinfer_allreduce_in_place_and_dtype_guards(monkeypatch):
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16, torch.float32])
+def test_flashinfer_allreduce_in_place_and_dtype_guards(monkeypatch, dtype):
     from lmdeploy.pytorch.backends.cuda.comm import flashinfer_allreduce as flashinfer_module
 
     FlashInferAllReduce = flashinfer_module.FlashInferAllReduce
@@ -134,19 +135,20 @@ def test_flashinfer_allreduce_in_place_and_dtype_guards(monkeypatch):
     flashinfer.is_available = Mock(return_value=True)
     assert flashinfer.supports(torch.float16)
     assert flashinfer.supports(torch.bfloat16)
-    assert not flashinfer.supports(torch.float32)
+    assert flashinfer.supports(torch.float32)
+    assert not flashinfer.supports(torch.float64)
 
     flashinfer._max_size = 1024
     flashinfer._one_shot_max_size = 1024
     flashinfer._comm = SimpleNamespace(
         AllReduceFusionPattern=SimpleNamespace(kAllReduce=0),
         allreduce_fusion=Mock(
-            return_value=torch.full((2, 4), 2.0, dtype=torch.bfloat16)),
+            return_value=torch.full((2, 4), 2.0, dtype=dtype)),
     )
     flashinfer._get_workspace = Mock(return_value='workspace')
     flashinfer.supports = Mock(return_value=True)
 
-    input = torch.ones(1, 2, 4, dtype=torch.bfloat16)
+    input = torch.ones(1, 2, 4, dtype=dtype)
     assert flashinfer.all_reduce_(input)
     torch.testing.assert_close(input, torch.full_like(input, 2.0))
     call_kwargs = flashinfer._comm.allreduce_fusion.call_args.kwargs
@@ -178,9 +180,8 @@ def test_flashinfer_allreduce_in_place_and_dtype_guards(monkeypatch):
     workspace_error._world_size = 2
     workspace_error._max_size = 1024
     workspace_error._one_shot_max_size = 1024
-    workspace_error._workspace = None
-    workspace_error._hidden_dim = None
-    workspace_error._dtype = None
+    workspace_error._workspaces = {}
+    workspace_error._comm_backend = Mock()
     workspace_error._disabled = False
     create_workspace = Mock(side_effect=RuntimeError('unsupported topology'))
     workspace_error._comm = SimpleNamespace(

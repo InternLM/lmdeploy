@@ -354,7 +354,9 @@ def test_fp8_ep_prefill_quant_uses_configured_dtype_and_scale_fmt(monkeypatch):
     assert calls[-1] == (hidden_states, 64, torch.float8_e4m3fn, 'ue8m0')
 
 
-def test_fp8_ep_builder_passes_activation_dtype_and_scale_fmt(monkeypatch):
+@pytest.mark.parametrize('fp32_acc', [False, True])
+@pytest.mark.parametrize('low_latency_mode', [False, True])
+def test_fp8_ep_builder_passes_activation_dtype_and_scale_fmt(monkeypatch, fp32_acc, low_latency_mode):
     from lmdeploy.pytorch.backends.cuda.moe import blocked_fp8
 
     calls = []
@@ -376,8 +378,12 @@ def test_fp8_ep_builder_passes_activation_dtype_and_scale_fmt(monkeypatch):
     impl.scale_fmt = 'ue8m0'
     impl.num_max_dispatch_tokens_per_rank = 256
     impl.layer_idx = 3
+    impl.fp32_acc = fp32_acc
 
-    assert blocked_fp8.FusedDeepEpMoEBlockedF8Impl.fusedmoe_build(impl, low_latency_mode=False) == 'moe'
+    assert impl.fusedmoe_build(low_latency_mode=low_latency_mode) == 'moe'
+
+    assert calls[0][0][0] is low_latency_mode
+    assert calls[0][1]['fp32_acc'] is fp32_acc
 
     assert calls[0][1]['fp8_dtype'] == torch.float8_e5m2
     assert calls[0][1]['scale_fmt'] == 'ue8m0'

@@ -79,8 +79,11 @@ class GLM5NextVisionModel(VisionModel):
         )
 
     def build_preprocessor(self, trust_remote_code: bool = False):
-        processor = AutoProcessor.from_pretrained(
-            self.model_path, trust_remote_code=trust_remote_code)
+        try:
+            processor = AutoProcessor.from_pretrained(
+                self.model_path, trust_remote_code=trust_remote_code)
+        except (ImportError, ValueError):
+            processor = None
         if not (hasattr(processor, 'image_processor')
                 and hasattr(processor, 'video_processor')):
             processor = self._build_compat_processor(trust_remote_code)

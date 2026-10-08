@@ -1,4 +1,6 @@
 import os
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -203,3 +205,67 @@ class TestQwen3VLChatTemplate:
                                                             return_dict=True)
             prompt = model.get_input_prompt(mock_pure_text_messages, chat_template)
             assert prompt == reference
+
+
+class TestGLM5NextProcessorCompatibility:
+
+    @pytest.fixture
+    def model(self):
+        from lmdeploy.vl.model.glm5_next import GLM5NextVisionModel
+
+        model = GLM5NextVisionModel.__new__(GLM5NextVisionModel)
+        model.model_path = 'glm5-next'
+        model.hf_config = SimpleNamespace(image_token_id=42, video_token_id=43)
+        return model
+
+    @pytest.mark.parametrize('trust_remote_code', [False, True])
+    @pytest.mark.parametrize('mode', ['native', 'missing_image', 'missing_video', ImportError, ValueError])
+    def test_build_preprocessor(self, monkeypatch, model, trust_remote_code, mode):
+        from lmdeploy.vl.model import glm5_next
+
+        processor = SimpleNamespace(image_processor=object(), video_processor=object(),
+                                    image_token='<image>', video_token='<video>')
+        loader = Mock(return_value=processor)
+        if isinstance(mode, type):
+            loader.side_effect = mode('unsupported processor')
+        elif mode.startswith('missing_'):
+            loader.return_value = SimpleNamespace(**{
+                key: value for key, value in vars(processor).items()
+                if key != mode.removeprefix('missing_') + '_processor'
+            })
+        compat = Mock(return_value=processor)
+        monkeypatch.setattr(glm5_next.AutoProcessor, 'from_pretrained', loader)
+        monkeypatch.setattr(model, '_build_compat_processor', compat)
+
+        model.build_preprocessor(trust_remote_code=trust_remote_code)
+
+        loader.assert_called_once_with(model.model_path, trust_remote_code=trust_remote_code)
+        if mode == 'native':
+            compat.assert_not_called()
+        else:
+            compat.assert_called_once_with(trust_remote_code)
+        assert model.processor is processor
+        assert model.mm_tokens.image_token_id == 42
+        assert model.mm_tokens.video_token_id == 43
+
+    @pytest.mark.parametrize('error', [OSError, RuntimeError])
+    def test_unrelated_load_error_propagates(self, monkeypatch, model, error):
+        from lmdeploy.vl.model import glm5_next
+
+        monkeypatch.setattr(glm5_next.AutoProcessor, 'from_pretrained', Mock(side_effect=error('load failed')))
+        compat = Mock()
+        monkeypatch.setattr(model, '_build_compat_processor', compat)
+        with pytest.raises(error, match='load failed'):
+            model.build_preprocessor()
+        compat.assert_not_called()
+
+    def test_compat_error_propagates(self, monkeypatch, model):
+        from lmdeploy.vl.model import glm5_next
+
+        monkeypatch.setattr(glm5_next.AutoProcessor, 'from_pretrained',
+                            Mock(side_effect=ValueError('unsupported processor')))
+        compat = Mock(side_effect=ImportError('missing GLM-4V components'))
+        monkeypatch.setattr(model, '_build_compat_processor', compat)
+        with pytest.raises(ImportError, match='missing GLM-4V components'):
+            model.build_preprocessor()
+        compat.assert_called_once_with(False)

@@ -176,7 +176,7 @@ ChatCompletion(id='2', choices=[Choice(finish_reason='tool_calls', index=0, logp
 
 ### Llama3.1
 
-Meta 在 [Llama3 的官方用户指南](https://llama.meta.com/docs/model-cards-and-prompt-formats/llama3_1)中宣布（注：下文为原文的中文翻译）：
+Meta 在 [Llama3 的官方用户指南](https://github.com/meta-llama/llama-models/blob/main/models/llama3_1/prompt_format.md)中宣布（注：下文为原文的中文翻译）：
 
 > 有三个内置工具（brave_search、wolfram_alpha 和 code interpreter）可以使用系统提示词打开：
 >
