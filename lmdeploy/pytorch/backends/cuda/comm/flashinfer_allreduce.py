@@ -56,8 +56,9 @@ class FlashInferAllReduce:
         """Initialize lazy FlashInfer state for ``group``."""
         self.group = group
         self._comm = None
-        self._workspaces = {}
-        self._comm_backend = None
+        self._workspace = None
+        self._hidden_dim = None
+        self._dtype = None
         self._disabled = False
         self._world_size = dist.get_world_size(group)
         major, minor = torch.cuda.get_device_capability()
@@ -81,7 +82,6 @@ class FlashInferAllReduce:
         try:
             import flashinfer.comm as comm
             from flashinfer.comm.cuda_ipc import cudart
-            from flashinfer.comm.mnnvl import TorchDistBackend
             if not (hasattr(comm, 'allreduce_fusion') and hasattr(
                     comm, 'create_allreduce_fusion_workspace')):
                 raise ImportError(message)
@@ -89,7 +89,6 @@ class FlashInferAllReduce:
             # Resolve FlashInfer's CUDA runtime before TileLang loads its
             # libcudart shim, which the lazy loader could otherwise select.
             cudart.cudaSetDevice(torch.cuda.current_device())
-            self._comm_backend = TorchDistBackend(group=self.group)
         except Exception as e:
             self._disable(e)
             return False
@@ -102,11 +101,11 @@ class FlashInferAllReduce:
 
     def supports(self, dtype: torch.dtype) -> bool:
         """Whether this group can handle the given dtype."""
-        return dtype in (torch.float16, torch.bfloat16, torch.float32) and self.is_available()
+        return dtype in (torch.float16, torch.bfloat16) and self.is_available()
 
     def _supports_input(self, input: torch.Tensor) -> bool:
         """Whether a flattened input satisfies the FlashInfer launch limits."""
-        return (input.numel() > 0 and input.nbytes <= self._max_size
+        return (input.nbytes <= self._max_size
                 and input.size(0) <= _MAX_TOKEN_NUM
                 and input.is_contiguous()
                 and self.supports(input.dtype))
@@ -114,9 +113,9 @@ class FlashInferAllReduce:
     def _get_workspace(self, input: torch.Tensor):
         """Return the workspace for the input shape and dtype."""
         hidden_dim = input.size(-1)
-        key = (hidden_dim, input.dtype)
-        if key in self._workspaces:
-            return self._workspaces[key]
+        if self._workspace is not None:
+            assert self._hidden_dim == hidden_dim and self._dtype == input.dtype
+            return self._workspace
 
         rank = dist.get_rank(self.group)
         max_token_num = min(_MAX_TOKEN_NUM, self._max_size // input[0].nbytes)
@@ -128,7 +127,7 @@ class FlashInferAllReduce:
                 max_token_num=max_token_num,
                 hidden_dim=hidden_dim,
                 dtype=input.dtype,
-                comm_backend=self._comm_backend,
+                group=self.group,
             )
             if workspace is None:
                 raise RuntimeError('workspace creation returned None')
@@ -136,11 +135,13 @@ class FlashInferAllReduce:
             self._disable(f'workspace initialization failed: {e}')
             return None
 
-        self._workspaces[key] = workspace
+        self._workspace = workspace
+        self._hidden_dim = hidden_dim
+        self._dtype = input.dtype
         logger.info(
             f'FlashInfer all-reduce workspace initialized: rank={rank}, world_size={self._world_size}, '
             f'max_token_num={max_token_num}, hidden_dim={hidden_dim}')
-        return workspace
+        return self._workspace
 
     def all_reduce_(self, input: torch.Tensor) -> bool:
         """All-reduce ``input`` in place, returning whether it was handled."""
@@ -170,7 +171,7 @@ class FlashInferAllReduce:
                                            weight: torch.Tensor,
                                            eps: float):
         """Fuse all-reduce, residual addition and RMSNorm when supported."""
-        if input.dtype not in (torch.float16, torch.bfloat16) or weight.dtype != input.dtype:
+        if weight.dtype != input.dtype:
             return None
         input_2d = input.flatten(0, -2)
         residual_2d = residual.flatten(0, -2)
@@ -203,6 +204,6 @@ class FlashInferAllReduce:
 
     def close(self):
         """Release the group-bound FlashInfer workspace."""
-        for workspace in self._workspaces.values():
-            workspace.destroy()
-        self._workspaces.clear()
+        if self._workspace is not None:
+            self._workspace.destroy()
+            self._workspace = None
