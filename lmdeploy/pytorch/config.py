@@ -170,6 +170,10 @@ class CacheConfig:
     num_state_caches: int = None
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
+    # Model-owned policy: only save complete owners and materialize a reusable
+    # aligned checkpoint before the final prefill suffix. Not a public option.
+    prefix_cache_block_aligned: bool = False
+    prefix_cache_token_lookahead: int = 0
     states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.

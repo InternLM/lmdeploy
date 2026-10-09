@@ -159,7 +159,6 @@ def _silu_and_mul_moe_ep_kernel(
         if SWIGLU_LIMIT is not None:
             gate = tl.minimum(gate, SWIGLU_LIMIT)
             up = tl.maximum(tl.minimum(up, SWIGLU_LIMIT), -SWIGLU_LIMIT)
-        # exp expect fp32
         gate = gate.to(tl.float32)
         if PRECISE_MUL:
             exp_neg_gate = libdevice.exp(-gate)
@@ -263,7 +262,7 @@ def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.
 
 
 def silu_and_mul_masked_post_quant_fwd(input: torch.Tensor, output: torch.Tensor, output_scale: torch.Tensor,
-                                       quant_group_size: int, masked_m: torch.Tensor,
+                                       quant_group_size: int, masked_m: torch.Tensor, act_func=None, *,
                                        swiglu_limit: float | None = None, precise_mul: bool = False,
                                        scale_fmt: str | None = None):
     """Fuse activation and FP8 quantization for valid expert rows only.
@@ -277,6 +276,13 @@ def silu_and_mul_masked_post_quant_fwd(input: torch.Tensor, output: torch.Tensor
     assert input.shape[-1] % 2 == 0
     size_n = input.shape[-1] // 2
     assert size_n % quant_group_size == 0
+    if act_func is not None:
+        activated = act_func(input, masked_m=masked_m)
+        from .blocked_gemm_fp8 import _quant_fp8_launcher
+        _quant_fp8_launcher(activated.reshape(-1, size_n), quant_group_size,
+                            output.reshape(-1, size_n),
+                            output_scale.reshape(-1, size_n // quant_group_size), scale_fmt=scale_fmt)
+        return
     silu_and_mul_moe_ep(input, masked_m, output, swiglu_limit=swiglu_limit,
                         precise_mul=precise_mul, output_scale=output_scale,
                         quant_group_size=quant_group_size, scale_fmt=scale_fmt)

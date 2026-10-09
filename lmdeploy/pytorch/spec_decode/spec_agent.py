@@ -259,7 +259,26 @@ class SpecModelAgent(BaseSpecModelAgent):
         sum_kv_seqlen = model_inputs.sum_kv_seqlen
         history_lengths = model_inputs.history_lengths.clone()
 
-        if not model_inputs.is_chunk:
+        if model_inputs.draft_full_prefill:
+            # Unlike the generic carry-one-row protocol, a GLM cached chunk
+            # receives x[end] from the known prompt. All h[start:end] rows can
+            # now be paired with x[start+1:end+1], completing the draft owner
+            # before this forward's checkpoint becomes consumable.
+            if model_inputs.is_decoding:
+                raise ValueError('Full draft prefill metadata is invalid for decoding.')
+            replacement = model_inputs.draft_chunk_next_token_ids
+            if replacement is None:
+                if model_inputs.is_chunk and not model_inputs.is_last_chunk:
+                    raise ValueError('Missing known draft lookahead for a non-final chunk.')
+                replacement = next_token_ids
+            input_ids = self._shift_packed_prefill_inputs(model_inputs.input_ids, seq_length, replacement)
+            if target_inputs_embeds is not None:
+                # The shared chunk planner keeps each image with its preceding
+                # draft row. Vision embeddings are shifted within this chunk;
+                # only an ordinary/sampled token uses the vocabulary below.
+                target_inputs_embeds = self._shift_packed_prefill_inputs(
+                    target_inputs_embeds, seq_length, self.proposer.embed_input_ids(replacement))
+        elif not model_inputs.is_chunk:
             # Non-chunk prefill/decode can be interleaved between long-context
             # chunks. Keep pending chunk carry here; a new first chunk clears it
             # explicitly, and the final chunk consumes it.

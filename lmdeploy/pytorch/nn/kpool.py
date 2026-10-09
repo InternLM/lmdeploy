@@ -180,11 +180,12 @@ class KPoolIndexer(nn.Module):
     def get_block_cache_requests(self, context: BlockCacheRequestContext):
         """Declare the pooled index cache through the shared cache planner."""
         geometry = context.geometry
-        if geometry.logical_block_size != 64 or geometry.kernel_block_size != 64:
-            raise ValueError('GLM-5.3 KPool requires logical and kernel block_size=64.')
+        if (geometry.logical_block_size != KPOOL_PAGE_SIZE
+                or geometry.kernel_block_size != KPOOL_PAGE_SIZE):
+            raise ValueError('GLM-5.3 KPool requires logical block_size=64 and kernel_block_size=64.')
         return (BlockCacheRequest(
             name=DSA_INDEXER_K_CACHE_NAME,
-            shape=dsa_packed_indexer_k_cache_shape(64, self.head_dim),
+            shape=dsa_packed_indexer_k_cache_shape(KPOOL_PAGE_SIZE // self.index_kpool, self.head_dim),
             dtype=torch.uint8,
             per_row_contiguous=True,
         ), )
@@ -545,13 +546,18 @@ def kpool_score(
     return logits * pooled_key_scale.float().unsqueeze(0)
 
 
-def kpool_pooled_block_offsets(token_block_offsets: Tensor, pool_size: int) -> Tensor:
-    """Build the pooled page table by selecting every ``pool_size`` token
-    page."""
+def kpool_pooled_block_offsets(token_block_offsets: Tensor, pool_size: int,
+                               page_size: int = KPOOL_PAGE_SIZE) -> Tensor:
+    """Map compact16 owners directly; subsample columns for legacy page64."""
     _validate_pool_geometry(pool_size)
     if token_block_offsets.ndim < 1:
         raise ValueError('token_block_offsets must have at least one dimension.')
-    columns = torch.arange(0, token_block_offsets.size(-1), pool_size, device=token_block_offsets.device)
+    stride = page_size * pool_size // KPOOL_PAGE_SIZE
+    if page_size * pool_size % KPOOL_PAGE_SIZE or stride < 1:
+        raise ValueError("KPool storage pages must cover whole token pages.")
+    if stride == 1:
+        return token_block_offsets
+    columns = torch.arange(0, token_block_offsets.size(-1), stride, device=token_block_offsets.device)
     return token_block_offsets.index_select(-1, columns)
 
 
@@ -563,13 +569,13 @@ def kpool_pooled_write_locations(
 ) -> Tensor:
     """Map request-local logical pool ids to packed physical cache slots."""
     _validate_pool_geometry(pool_size)
-    if page_size != KPOOL_PAGE_SIZE:
-        raise ValueError(f'KPool currently requires page_size={KPOOL_PAGE_SIZE}, got {page_size}.')
+    if page_size not in (KPOOL_PAGE_SIZE, KPOOL_PAGE_SIZE // pool_size):
+        raise ValueError(f"Unsupported KPool storage page size: {page_size}.")
     if token_block_offsets.ndim != 1 or group_ids.ndim != 1:
         raise ValueError('token_block_offsets and group_ids must both be one-dimensional.')
     group_ids = group_ids.to(torch.int64)
     page_group = torch.div(group_ids, page_size, rounding_mode='floor')
-    token_page_column = page_group * pool_size
+    token_page_column = page_group * (page_size * pool_size // KPOOL_PAGE_SIZE)
     if token_page_column.numel() and int(token_page_column.max()) >= token_block_offsets.numel():
         raise ValueError('token_block_offsets is too short for the requested logical pool ids.')
     physical_page = token_block_offsets.index_select(0, token_page_column)
@@ -583,7 +589,8 @@ def kpool_packed_cache_views(
     """Expose FP8 values and FP32 scales from one packed DSA cache row.
 
     The byte layout intentionally matches the existing DeepGEMM DSA cache:
-    every page stores all 64 value rows first, followed by all 64 scales.
+    each page stores its value rows first, followed by its scales. Compact
+    pages hold 16 rows; the legacy layout holds 64.
     """
     if packed_cache.dtype != torch.uint8:
         raise TypeError(
@@ -674,7 +681,7 @@ def kpool_write_packed_cache_batched(
     group_ids = group_ids.to(torch.int64)
     page_group = torch.div(
         group_ids, values.size(1), rounding_mode='floor')
-    token_page_column = page_group * pool_size
+    token_page_column = page_group * (values.size(1) * pool_size // KPOOL_PAGE_SIZE)
     token_page_column = token_page_column.clamp(
         min=0, max=token_block_offsets.size(1) - 1)
     physical_page = token_block_offsets.gather(

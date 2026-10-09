@@ -71,14 +71,54 @@ def _iter_sorted_multimodals(multimodals: 'MultiModalInputs'):
     yield from sorted(multimodal_data, key=lambda item: item[1].start)
 
 
-def _max_multimodal_span(multimodals: 'MultiModalInputs') -> int:
-    return max([data.end - data.start for modal_datas in multimodals.values() for data in modal_datas], default=0)
+def _multimodal_chunk_spans(sorted_items, token_lookahead: int):
+    """Atomic spans, including the draft rows conditioned on vision tokens.
+
+    Full-frontier MTP obtains the final row's next-token embedding from the
+    vocabulary. Keep the preceding row with the image instead, so shifting
+    target embeddings supplies its actual vision embedding within one chunk.
+    Merge overlapping extended spans: adjacent images cannot be separated by
+    a vocabulary-only lookahead either.
+    """
+    spans = []
+    for _, data in sorted_items:
+        start, end = max(0, data.start - token_lookahead), data.end
+        if spans and start < spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
+        else:
+            spans.append((start, end))
+    return spans
+
+
+def _token_lookahead(seq: 'SchedulerSequence') -> int:
+    return getattr(getattr(seq, '_seq_meta', None), 'prefix_cache_token_lookahead', 0)
+
+
+def get_long_context_chunk_capacity(seq: 'SchedulerSequence', max_prefill_token_num: int) -> int:
+    """Static capacity for this input, including historical atomic spans."""
+    multimodals = seq.get_chunk_limit_multimodals()
+    if not multimodals:
+        return max_prefill_token_num
+    spans = _multimodal_chunk_spans(_iter_sorted_multimodals(multimodals), _token_lookahead(seq))
+    return max(max_prefill_token_num, max((end - start for start, end in spans), default=0))
+
+
+def limit_long_context_checkpoint(seq: 'SchedulerSequence', limit: int) -> int:
+    """Apply the history-dependent final checkpoint cut to a static capacity."""
+    alignment = getattr(getattr(seq, '_seq_meta', None), 'prefix_cache_checkpoint_block_size', 0)
+    if alignment:
+        # A state at the very end of a prompt cannot serve an identical next
+        # request: matching leaves at least one input for logits. Capture the
+        # preceding aligned state instead, at most one extra cut per prompt.
+        step = ((seq.input_end_pos - 1) // alignment) * alignment
+        if seq.num_history_ids < step and seq.is_prefix_cache_boundary_safe(step):
+            limit = min(limit, step - seq.num_history_ids)
+    return limit
 
 
 def get_long_context_chunk_limit(seq: 'SchedulerSequence', max_prefill_token_num: int) -> int:
-    """Return the token budget for one long-context chunk."""
-    mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
-    return max(max_prefill_token_num, _max_multimodal_span(mm_for_chunk_limit))
+    """Stateless scheduler entry; chunkers can reuse the static capacity."""
+    return limit_long_context_checkpoint(seq, get_long_context_chunk_capacity(seq, max_prefill_token_num))
 
 
 def plan_long_context_chunk(seq: 'SchedulerSequence',
@@ -100,15 +140,16 @@ def plan_long_context_chunk(seq: 'SchedulerSequence',
                                     is_last_chunk=seq.num_token_ids <= chunk_limit,
                                     multimodals=None)
 
+    sorted_items = list(_iter_sorted_multimodals(multimodals))
+    for span_start, span_end in _multimodal_chunk_spans(sorted_items, _token_lookahead(seq)):
+        if span_start < end < span_end:
+            end = span_start
+            break
+
     out_multimodals = defaultdict(list)
-    for modal_type, data in _iter_sorted_multimodals(multimodals):
+    for modal_type, data in sorted_items:
         assert data.start >= start, 'multimodal data should be sorted by start'
         if data.start >= end:
-            break
-        if data.end > end:
-            # Do not split a multimodal span; recompute from its start in the
-            # next chunk instead.
-            end = data.start
             break
         if include_multimodals:
             out_multimodals[modal_type].append(data)

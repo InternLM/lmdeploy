@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import functools
+import inspect
 from dataclasses import dataclass
 
 import torch
@@ -20,6 +21,7 @@ from lmdeploy.pytorch.kernels.cuda.kpool import (
     prepare_kpool_decode_metadata,
     rotate_kpool_query,
     update_kpool,
+    update_raw_kpool,
     write_kpool_token_cache,
 )
 from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
@@ -27,13 +29,14 @@ from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
     sparse_index_topk,
 )
 from lmdeploy.pytorch.nn.kpool import (
+    KPOOL_PAGE_SIZE,
     kpool_compress,
     kpool_expand_selected_groups,
     kpool_packed_cache_views,
+    kpool_pooled_block_offsets,
     kpool_quantize_fp8,
 )
 
-from .gated_delta_rule import _state_scatter
 from .nsa import _get_max_score_rows
 
 # Fuse the existing integer index expansion instead of materializing its
@@ -55,13 +58,14 @@ class KPoolDecodeMetadata:
     schedule: Tensor | None
 
 
-def kpool_decode_metadata_cuda(attn_metadata, rows, pool_size, with_scores=True):
+def kpool_decode_metadata_cuda(attn_metadata, rows, pool_size, with_scores=True, *, page_size=64):
     """Prepare decode metadata once; graph replay refills the same buffers."""
     seq, groups, context, schedule_lengths, table = prepare_kpool_decode_metadata(
         attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
-        attn_metadata.block_offsets, rows, pool_size, with_scores)
+        attn_metadata.block_offsets, rows, pool_size, with_scores,
+        page_step=page_size * pool_size // KPOOL_PAGE_SIZE)
     schedule = None
-    if with_scores and table.size(1):
+    if with_scores and table.size(1) and page_size == 64:
         deep_gemm = _get_deep_gemm()
         schedule = deep_gemm.get_paged_mqa_logits_metadata(
             schedule_lengths, 64, deep_gemm.get_num_sms())
@@ -77,36 +81,60 @@ def kpool_dense_indices_cuda(q_seqlens, kv_seqlens, rows, pool_size, topk):
 
 def kpool_decode_update_cuda(keys, scores, tail_keys, tail_scores, state_ids,
                              history_lengths, packed_cache, block_offsets,
-                             ape, pool_size, round_scale):
+                             ape, pool_size, round_scale, *, q_seqlens=None, kv_seqlens=None):
     """Batch verification updates and reuse indexed cache writes."""
     closed_keys, closed_scores, groups, valid = update_kpool(
-        keys, scores, tail_keys, tail_scores, state_ids, history_lengths, pool_size)
+        keys, scores, tail_keys, tail_scores, state_ids, history_lengths, pool_size,
+        q_seqlens=q_seqlens, kv_seqlens=kv_seqlens)
     compress = (compress_kpool if torch.cuda.get_device_capability(keys.device)[0] >= 9
                 else kpool_compress_quantize_cuda)
     values, scales = compress(
         closed_keys, closed_scores, ape, mode='decode', round_scale=round_scale, valid=valid)
     cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
     fill_indexed_key_cache(values, scales, groups, valid, block_offsets,
-                           cache_keys, cache_scales, page_step=pool_size)
+                           cache_keys, cache_scales,
+                           page_step=cache_keys.size(1) * pool_size // KPOOL_PAGE_SIZE)
+
+
+def kpool_raw_decode_update_cuda(keys, scores, raw_keys, raw_scores, state_ids, q_seqlens, kv_seqlens,
+                                  cu_seqlens_q, packed_cache, block_offsets, ape, pool_size, round_scale):
+    """Fuse raw-ring decode state updates while retaining compact cache addressing."""
+    closed_keys, closed_scores, groups, valid = update_raw_kpool(
+        keys, scores, raw_keys, raw_scores, state_ids, q_seqlens, kv_seqlens, cu_seqlens_q, pool_size)
+    values, scales = kpool_compress_quantize_cuda(
+        closed_keys, closed_scores, ape, mode='decode', round_scale=round_scale, valid=valid)
+    cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
+    fill_indexed_key_cache(values, scales, groups, valid, block_offsets,
+                           cache_keys, cache_scales,
+                           page_step=cache_keys.size(1) * pool_size // KPOOL_PAGE_SIZE)
 
 
 def kpool_prefill_update_cuda(keys, scores, tail_keys, tail_scores, state_ids,
                               q_seqlens, kv_seqlens, packed_cache, block_offsets,
                               ape, pool_size, round_scale):
     """Batch ragged pool assembly without a host read or cache-arena copy."""
-    closed_keys, closed_scores, group_ids, requests, valid, next_keys, next_scores = partition_kpool(
+    closed_keys, closed_scores, group_ids, requests, valid = partition_kpool(
         keys, scores, tail_keys, tail_scores, state_ids, q_seqlens, kv_seqlens, pool_size)
     if closed_keys.size(0):
-        compress = (compress_kpool if torch.cuda.get_device_capability(keys.device)[0] >= 9
-                    else kpool_compress_quantize_cuda)
-        values, scales = compress(
-            closed_keys, closed_scores, ape, mode='extend', round_scale=round_scale)
+        values, scales = kpool_compress_quantize_cuda(
+            closed_keys, closed_scores, ape, mode='extend', round_scale=round_scale, valid=valid)
         cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
         fill_indexed_key_cache(values, scales, group_ids, valid, block_offsets,
-                               cache_keys, cache_scales, page_step=pool_size, request_ids=requests)
-    slots = torch.zeros_like(state_ids)
-    _state_scatter(tail_keys.unsqueeze(1), state_ids, slots, next_keys)
-    _state_scatter(tail_scores.unsqueeze(1), state_ids, slots, next_scores)
+                               cache_keys, cache_scales, page_step=cache_keys.size(1) * pool_size // KPOOL_PAGE_SIZE,
+                               request_ids=requests)
+
+
+def kpool_write_decode_cuda(packed_cache, block_offsets, group_ids, values, scales, pool_size, valid):
+    """Masked scatter for one decode step, with no read-modify-write.
+
+    The scheduler gives live requests private writable owners. Thus at most
+    one valid row writes each destination in this launch. Keep MTP steps in
+    separate launches: different steps may close the same logical pool.
+    """
+    cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, values.size(-1))
+    fill_indexed_key_cache(values, scales, group_ids, valid, block_offsets,
+                           cache_keys, cache_scales,
+                           page_step=cache_keys.size(1) * pool_size // KPOOL_PAGE_SIZE)
 
 
 @functools.lru_cache
@@ -129,6 +157,20 @@ def _get_deep_gemm():
     return deep_gemm
 
 
+@functools.lru_cache
+def _mqa_has_local_columns() -> bool:
+    """New DeepGEMM can return compact, request-local logits columns.
+
+    Older pybind wheels expose only their signature docstring. Conservatively
+    use the shared absolute-column API when no compact signature is advertised.
+    """
+    func = _get_deep_gemm().fp8_mqa_logits
+    try:
+        return 'max_seqlen_k' in inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return 'max_seqlen_k' in (func.__doc__ or '')
+
+
 def kpool_compress_quantize_cuda(
     slot_k: Tensor,
     slot_score: Tensor,
@@ -138,11 +180,10 @@ def kpool_compress_quantize_cuda(
     round_scale: bool,
     valid: Tensor | None = None,
 ) -> tuple[Tensor, Tensor]:
-    """Compress and quantize closed pools with LMDeploy's reusable
-    semantics."""
+    """Reuse fused compression for both prefill and decode closed pools."""
+    if slot_k.is_cuda and torch.cuda.get_device_capability(slot_k.device)[0] >= 9:
+        return compress_kpool(slot_k, slot_score, ape, mode=mode, round_scale=round_scale, valid=valid)
     if valid is not None:
-        # The reference fallback still computes every row, but closed buffers
-        # are only initialized for valid pools by the sequence updater.
         slot_k = torch.where(valid[:, None, None], slot_k, 0)
         slot_score = torch.where(valid[:, None, None], slot_score, 0)
     pooled = kpool_compress(slot_k, slot_score, ape, mode=mode)
@@ -166,7 +207,7 @@ def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
     counts, starts, seq, lengths, query_starts, query_ends = kpool_prefill_metadata(
         q_seqlens, kv_seqlens, rows, pool_size)
     keys, scales = kpool_packed_cache_views(packed_cache, query_fp8.size(-1))
-    blocks = block_offsets[:, ::pool_size].contiguous()
+    blocks = kpool_pooled_block_offsets(block_offsets, pool_size, keys.size(1)).contiguous()
     # Sum(floor(kv / pool)) can be up to batch - 1 below floor(sum(kv) / pool).
     # Give the shared flatten kernel enough pages to zero this padded tail.
     tail_pages = (counts.numel() + keys.size(1) - 1) // keys.size(1)
@@ -176,9 +217,11 @@ def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
     flat_keys, flat_scales = flatten_kv_cache(
         keys.view(torch.uint8).unsqueeze(2), scales.view(torch.uint8).unsqueeze(2),
         counts, blocks, start_loc=starts, out_size=max(1, kv_flatten_size // pool_size))
-    max_groups = block_offsets.size(1) * keys.size(1) // pool_size
+    max_groups = block_offsets.size(1) * KPOOL_PAGE_SIZE // pool_size
+    local_columns = _mqa_has_local_columns()
+    score_columns = max_groups if local_columns else flat_keys.size(1)
     max_rows = _get_max_score_rows(
-        max_groups, _envs.dsa_indexer_max_logits_mb * (1 << 20), num_heads=query_fp8.size(1))
+        score_columns, _envs.dsa_indexer_max_logits_mb * (1 << 20), num_heads=query_fp8.size(1))
     flat_kv = (flat_keys[0].view(torch.float8_e4m3fn), flat_scales[0].view(torch.float32).flatten())
     selected = None
     if rows > max_rows:
@@ -188,10 +231,12 @@ def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
         logits = _get_deep_gemm().fp8_mqa_logits(
             query_fp8[row_slice].contiguous(), flat_kv, query_weight[row_slice].contiguous(),
             query_starts[row_slice], query_ends[row_slice],
-            clean_logits=False, max_seqlen_k=max_groups)
+            clean_logits=False, **({'max_seqlen_k': max_groups} if local_columns else {}))
         # Keep request-local causal lengths and deterministic Top-K unchanged.
         chunk = kpool_select_groups_cuda(
-            logits, lengths[row_slice], group_topk=topk // pool_size, max_group_length=max_groups)
+            logits, lengths[row_slice], group_topk=topk // pool_size,
+            row_starts=None if local_columns else query_starts[row_slice],
+            max_group_length=min(max_groups, logits.size(1)))
         if selected is None:
             selected = chunk
         else:
@@ -329,7 +374,11 @@ def kpool_score_paged_cuda(
     *,
     metadata: KPoolDecodeMetadata | None = None,
 ) -> Tensor:
-    """Score pooled decode history with DeepGEMM's paged MQA primitive."""
+    """Score compact16 pages with Triton, or legacy page64 with DeepGEMM.
+
+    Only columns below group_lengths are defined in either path. Pass the
+    same lengths to the selector so graph padding is never consumed.
+    """
     _validate_query(query_fp8, query_weight)
     rows = query_fp8.size(0)
     if packed_cache.dtype != torch.uint8 or packed_cache.ndim != 4:
@@ -350,6 +399,13 @@ def kpool_score_paged_cuda(
     if pooled_block_offsets.size(1) == 0:
         return torch.empty(
             (rows, 0), dtype=torch.float32, device=query_fp8.device)
+
+    if page_size == 16:
+        from lmdeploy.pytorch.kernels.cuda.kpool import score_paged
+        return score_paged(query_fp8, query_weight, packed_cache,
+                           group_lengths, pooled_block_offsets)
+    if page_size != 64:
+        raise ValueError(f'Unsupported KPool storage page size: {page_size}.')
 
     deep_gemm = _get_deep_gemm()
     if metadata is None:
@@ -373,3 +429,45 @@ def kpool_score_paged_cuda(
         block_table.size(1) * page_size,
         clean_logits=False,
     )
+
+
+class CudaKPoolAttention:
+    """Sequence-dependent KPool/MLA execution between captured projections.
+
+    The supplied attention operation owns model math and cache updates; this
+    CUDA adapter owns raw-token slicing and its PCG output bridge. It never
+    captures the dense/sparse decision or request-local state indexing.
+    """
+
+    def __init__(self, attention):
+        from .step_metadata import register_piecewise_graph_impl
+        self.forward = attention
+        self._piecewise_forward = None
+        register_piecewise_graph_impl(self)
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        return True
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        if self._piecewise_forward is not None:
+            return
+        from .graph_runner.piecewise import (
+            ViewTolerantPaddedAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+        original = self.forward
+
+        @eager_boundary(adapter_factory=ViewTolerantPaddedAdapter, reuse_bridge_after_next_step=True)
+        def run_eager(hidden_states, q_lora, query, key, value, **kwargs):
+            count = get_piecewise_graph_execution().raw_tokens
+            return original(hidden_states[:, :count], q_lora[:, :count],
+                            query[:count], key[:count], value[:count], **kwargs)
+
+        def forward(hidden_states, q_lora, query, key, value, **kwargs):
+            if get_piecewise_graph_execution() is None:
+                return original(hidden_states, q_lora, query, key, value, **kwargs)
+            return run_eager(hidden_states, q_lora, query, key, value, **kwargs)
+
+        self._piecewise_forward = forward
+        self.forward = forward
