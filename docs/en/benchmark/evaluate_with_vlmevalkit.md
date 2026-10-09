@@ -28,11 +28,11 @@ Modify `VLMEvalKit/vlmeval/config.py`, add following LMDeploy API configurations
 The `<task_name>` is a custom name for your evaluation task (e.g., `lmdeploy_qwen3vl-4b`). The `model` parameter should match the `<model_path>` used in the `lmdeploy serve` command.
 
 ```python
-// filepath: VLMEvalKit/vlmeval/config.py
-// ...existing code...
+# filepath: VLMEvalKit/vlmeval/config.py
+# ...existing code...
 api_models = {
     # lmdeploy api
-    ...,
+    # ...existing API model entries...
     "<task_name>": partial(
         LMDeployAPI,
         api_base="http://0.0.0.0:23333/v1/chat/completions",
@@ -42,9 +42,9 @@ api_models = {
         temperature=0.7, # modify if needed
         max_new_tokens=16384, # modify if needed
     ),
-    ...
+    # ...existing API model entries...
 }
-// ...existing code...
+# ...existing code...
 ```
 
 3. **Start Evaluations**
