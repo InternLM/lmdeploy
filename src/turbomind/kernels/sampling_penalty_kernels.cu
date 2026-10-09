@@ -137,10 +137,15 @@ __global__ void RepetitionPenaltyKernel(T*                logits,
                                         const float*      penalties,
                                         const int* const* token_ids_ptrs,
                                         const int*        sequence_length,
+                                        const bool*       logits_active,
                                         int               vocab_size,
                                         int               mask_size)
 {
     const int bi = blockIdx.x;
+
+    if (logits_active != nullptr && !logits_active[bi]) {
+        return;
+    }
 
     const int  seq_len   = sequence_length[bi];
     const int* token_ids = token_ids_ptrs[bi];
@@ -176,6 +181,7 @@ void ApplyRepetitionPenalty(Tensor&               logits,
                             const Buffer_<float>& penalties,
                             const Buffer_<int*>&  token_ids_ptrs,
                             const Buffer_<int>&   sequence_length,
+                            const bool*           logits_active,
                             cudaStream_t          stream)
 {
     TM_CHECK_EQ(logits.ndim(), 2);
@@ -189,8 +195,13 @@ void ApplyRepetitionPenalty(Tensor&               logits,
             TM_CHECK_EQ(cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size), 0);
         }
         TM_LOG_DEBUG("smem_size = {}", smem_size);
-        func<<<bsz, 1024, smem_size, stream>>>(
-            logits.data<T>(), penalties.data(), token_ids_ptrs.data(), sequence_length.data(), vocab_size, mask_size);
+        func<<<bsz, 1024, smem_size, stream>>>(logits.data<T>(),
+                                               penalties.data(),
+                                               token_ids_ptrs.data(),
+                                               sequence_length.data(),
+                                               logits_active,
+                                               vocab_size,
+                                               mask_size);
     };
     invoke(float{});
     TM_CUDA_CHECK(cudaGetLastError());

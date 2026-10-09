@@ -153,6 +153,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                                          cu_seq_lens.data().get(),
                                          cu_block_cnts.data().get(),
                                          nullptr,  // readonly_block_num (test writes all)
+                                         nullptr,  // finished
                                          RopeKernelParam{},
                                          2 * head_num * seq_len,
                                          0,
@@ -179,6 +180,7 @@ void TestBlocks(const thrust::universal_vector<T>& k_cache,        // [B, H, S, 
                                          k_ptrs.data().get(),
                                          cu_seq_lens.data().get(),
                                          cu_block_cnts.data().get(),
+                                         nullptr,  // finished
                                          RopeKernelParam{},
                                          2 * head_num * seq_len,
                                          0,
@@ -566,6 +568,7 @@ int test_attention()
                                      k_ptrs.data().get(),
                                      cu_kv_lens.data().get(),
                                      cu_block_cnts.data().get(),
+                                     nullptr,            // finished
                                      RopeKernelParam{},  // DECODING ? nullptr : params.rope_theta,
                                      KvHeadNum * kContextLen,
                                      0,

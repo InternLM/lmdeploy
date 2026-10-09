@@ -1,4 +1,5 @@
 // Copyright (c) OpenMMLab. All rights reserved.
+#pragma once
 
 #include <memory>
 
@@ -6,12 +7,13 @@
 
 #include "src/turbomind/engine/batch.h"
 #include "src/turbomind/engine/queue.h"
-#include "src/turbomind/models/language_model.h"
-#include "src/turbomind/models/vision_model.h"
 
 #include "src/turbomind/models/llama/context.h"
+#include "src/turbomind/models/llama/llama_params.h"
 
 namespace turbomind {
+
+class Model;
 
 // Model executor for auto-regressive language models, optionally
 // preceded by a per-batch ViT pass for VLM checkpoints.
@@ -28,8 +30,8 @@ public:
         return static_cast<bool>(impl_);
     }
 
-    ModelExecutor(LanguageModel&                     model,
-                  VisionModel*                       vision_model,  // nullable
+    ModelExecutor(Model&                             model,
+                  const EngineParam&                 param,
                   Context&                           context,
                   int                                device_id,
                   Queue<std::unique_ptr<BatchData>>& inbound,

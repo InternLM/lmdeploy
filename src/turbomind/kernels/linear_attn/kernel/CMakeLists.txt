@@ -9,7 +9,8 @@ set(LINEAR_ATTN_GDR_SM90_KERNEL_SOURCES
         sm_90/plan.cc
         sm_90/tma_desc_prepare.cu
         sm_90/kkt_solve.cu
-        sm_90/recurrent.cu)
+        sm_90/recurrent.cu
+        sm_90/verification_fwd.cu)
 
 set(LINEAR_ATTN_GDR_SM120_KERNEL_SOURCES
         sm_120/entry.cu

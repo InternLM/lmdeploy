@@ -116,6 +116,8 @@ void LaunchSm90Recurrent(const core::Tensor&,
                          DataType,
                          cudaStream_t);
 void PrepareSm90RecurrentStateTmaDescriptors(const core::Tensor&, core::Tensor&, int, int, const Plan&, cudaStream_t);
+void PrepareSm90StateTmaDescriptors(
+    const core::Tensor&, core::Tensor&, int, int, int, const CUtensorMap&, cudaStream_t);
 void LaunchSm90KktSolve(const core::Tensor&,
                         const core::Tensor&,
                         const core::Tensor&,

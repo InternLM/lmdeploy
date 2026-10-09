@@ -15,7 +15,14 @@ import pybase64
 import torch
 
 from lmdeploy._guided_decoding import compile_response_format
-from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
+from lmdeploy.messages import (
+    EngineOutput,
+    GenerationConfig,
+    ResponseType,
+    ScheduleMetrics,
+    SpeculativeConfig,
+    TurbomindEngineConfig,
+)
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger, get_max_batch_size, get_model
@@ -125,9 +132,11 @@ class TurboMind:
                  chat_template_name: str = None,
                  engine_config: TurbomindEngineConfig = None,
                  trust_remote_code: bool = False,
+                 speculative_config: SpeculativeConfig | None = None,
                  **kwargs):
         self.model_name = model_name
         self.chat_template_name = chat_template_name
+        self.speculative_config = speculative_config
 
         _engine_config = copy.deepcopy(engine_config)
         if _engine_config is None:
@@ -158,7 +167,8 @@ class TurboMind:
         if not osp.exists(model_path):
             model_path = get_model(model_path, _engine_config.download_dir, _engine_config.revision)
         self.model_comm, model_loader = self._from_hf(model_path=model_path, engine_config=_engine_config,
-                                                      trust_remote_code=trust_remote_code)
+                                                      trust_remote_code=trust_remote_code,
+                                                      speculative_config=speculative_config)
         self.source_model = model_loader.model
         self.is_dummy = self.model_comm.is_dummy_node()
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
@@ -215,8 +225,11 @@ class TurboMind:
             for future in futures:
                 future.result()
 
-    def _from_hf(self, model_path: str, engine_config: TurbomindEngineConfig,
-                 trust_remote_code: bool = False):
+    def _from_hf(self,
+                 model_path: str,
+                 engine_config: TurbomindEngineConfig,
+                 trust_remote_code: bool = False,
+                 speculative_config: SpeculativeConfig | None = None):
         """Load model which is in hf format."""
         assert is_supported(model_path, trust_remote_code=trust_remote_code), (
             f'turbomind does not support {model_path}. '
@@ -224,9 +237,25 @@ class TurboMind:
 
         from .converter import get_tm_config
         from .model_loader import ModelLoader
+        from .spec_decode import build_draft_model, normalize_spec_method
 
         model, model_path, data_type = get_tm_config(model_path, engine_config,
                                                      trust_remote_code=trust_remote_code)
+
+        draft_model = None
+        draft_model_path = None
+        spec_method = ''
+        spec_num_draft_tokens = 0
+        spec_tap_layer_ids = []
+
+        if (speculative_config is not None
+                and speculative_config.num_speculative_tokens > 0):
+            draft_model, draft_model_path = build_draft_model(
+                speculative_config, model, model_path, data_type,
+                engine_config.download_dir)
+            spec_method = normalize_spec_method(speculative_config.method)
+            spec_num_draft_tokens = speculative_config.num_speculative_tokens
+            spec_tap_layer_ids = list(draft_model.tap_layer_ids)
 
         self._vocab_size = model._vocab_size
         self.engine_config = engine_config
@@ -267,6 +296,9 @@ class TurboMind:
         ec.node_rank = engine_config.node_rank
         ec.communicator = engine_config.communicator
         ec.moe_a2a_backend = engine_config.moe_a2a_backend
+        ec.spec_method = spec_method
+        ec.spec_num_draft_tokens = spec_num_draft_tokens
+        ec.spec_tap_layer_ids = spec_tap_layer_ids
 
         logger.info(f'turbomind engine config:\n\n'
                     f'dtype={engine_config.dtype}, state_dtype={state_dtype}, '
@@ -289,6 +321,8 @@ class TurboMind:
             model_path=model_path,
             data_type=data_type,
             engine_config=engine_config,
+            draft_model=draft_model,
+            draft_model_path=draft_model_path,
         )
 
         return model_comm, model_loader
@@ -361,6 +395,7 @@ class TurboMind:
                         chat_template_name: str = None,
                         engine_config: TurbomindEngineConfig = None,
                         trust_remote_code: bool = False,
+                        speculative_config: SpeculativeConfig | None = None,
                         **kwargs):
         """LMDeploy's turbomind inference engine.
 
@@ -385,6 +420,7 @@ class TurboMind:
                    chat_template_name=chat_template_name,
                    engine_config=engine_config,
                    trust_remote_code=trust_remote_code,
+                   speculative_config=speculative_config,
                    **kwargs)
 
     def close(self):
@@ -523,12 +559,29 @@ def _get_logprobs(outputs, output_logprobs: int):
 def _get_metrics(metrics):
     import time
 
-    from lmdeploy.messages import EngineEvent, EventType, RequestMetrics
+    from lmdeploy.messages import (
+        EngineEvent,
+        EventType,
+        RequestMetrics,
+    )
 
     is_first = True
+    previous_num_drafts = 0
+    previous_num_draft_tokens = 0
+    previous_num_accepted_tokens = 0
+    previous_num_accepted_tokens_per_pos = None
 
-    def _func(out: EngineOutput, step: int, **kwargs):
+    def _func(
+            out: EngineOutput,
+            step: int,
+            state=None,
+            **kwargs):
         nonlocal is_first
+        nonlocal previous_num_drafts
+        nonlocal previous_num_draft_tokens
+        nonlocal previous_num_accepted_tokens
+        nonlocal previous_num_accepted_tokens_per_pos
+
         cached_tokens = metrics.cached_tokens
         if not is_first:
             out.req_metrics = RequestMetrics(token_timestamp=time.time(), cached_tokens=cached_tokens)
@@ -540,6 +593,56 @@ def _get_metrics(metrics):
                                              engine_events=events,
                                              cached_tokens=cached_tokens)
             is_first = False
+
+        if state is None:
+            return
+
+        current_per_pos = list(
+            state.num_accepted_tokens_per_pos)
+        if not current_per_pos:
+            return
+
+        if previous_num_accepted_tokens_per_pos is None:
+            previous_num_accepted_tokens_per_pos = [
+                0 for _ in current_per_pos
+            ]
+
+        delta_num_drafts = (
+            state.num_drafts
+            - previous_num_drafts)
+        delta_num_draft_tokens = (
+            state.num_draft_tokens
+            - previous_num_draft_tokens)
+        delta_num_accepted_tokens = (
+            state.num_accepted_tokens
+            - previous_num_accepted_tokens)
+        delta_num_accepted_tokens_per_pos = [
+            current - previous
+            for current, previous in zip(
+                current_per_pos,
+                previous_num_accepted_tokens_per_pos)
+        ]
+
+        previous_num_drafts = state.num_drafts
+        previous_num_draft_tokens = (
+            state.num_draft_tokens)
+        previous_num_accepted_tokens = (
+            state.num_accepted_tokens)
+        previous_num_accepted_tokens_per_pos = (
+            current_per_pos)
+
+        if delta_num_drafts == 0:
+            return
+
+        out.req_metrics.spec_info = {
+            'num_drafts': delta_num_drafts,
+            'num_draft_tokens':
+                delta_num_draft_tokens,
+            'num_accepted_tokens':
+                delta_num_accepted_tokens,
+            'num_accepted_tokens_per_pos':
+                delta_num_accepted_tokens_per_pos,
+        }
 
     return _func
 
@@ -616,20 +719,32 @@ class TurboMindInstance:
         def _get_offset(type):
             return input_len - 1 if type == 'generation' else 0
 
-        fs = []
+        optional_output_fs = []
+
         if gen_config.output_logits:
             offset = _get_offset(gen_config.output_logits)
-            fs.append(_get_logits(outputs, offset))
+            optional_output_fs.append(
+                _get_logits(outputs, offset))
         if gen_config.return_ppl:
-            fs.append(_get_ce_loss(outputs))
+            optional_output_fs.append(
+                _get_ce_loss(outputs))
         if gen_config.output_last_hidden_state:
-            offset = _get_offset(gen_config.output_last_hidden_state)
-            fs.append(_get_last_hidden_state(outputs, offset))
+            offset = _get_offset(
+                gen_config.output_last_hidden_state)
+            optional_output_fs.append(
+                _get_last_hidden_state(outputs, offset))
         if gen_config.logprobs:
-            fs.append(_get_logprobs(outputs, gen_config.logprobs))
-        if self.tm_model.engine_config.enable_metrics:
-            fs.append(_get_metrics(metrics))
-        return fs
+            optional_output_fs.append(
+                _get_logprobs(
+                    outputs,
+                    gen_config.logprobs))
+
+        metrics_f = (
+            _get_metrics(metrics)
+            if self.tm_model.engine_config.enable_metrics
+            else None)
+
+        return optional_output_fs, metrics_f
 
     def prepare_embeddings(self, input_embeddings=None, input_embedding_ranges=None):
         """Convert embeddings."""
@@ -708,22 +823,30 @@ class TurboMindInstance:
             kwargs (dict): kwargs for backward compatibility
         """
         logger.info(f'[async_stream_infer] session {session_id} start')
-        gen_cfg = self._get_generation_config(gen_config)
+        local_gen_config = gen_config
+        if self.tm_model.speculative_config is not None:
+            local_gen_config = copy.copy(gen_config)
+            local_gen_config.output_logits = None
+            local_gen_config.output_last_hidden_state = None
+            local_gen_config.logprobs = None
+            local_gen_config.return_ppl = False
+
+        gen_cfg = self._get_generation_config(local_gen_config)
 
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
                                                 input_embeddings=input_embeddings,
                                                 input_embedding_ranges=input_embedding_ranges,
-                                                gen_config=gen_config)
+                                                gen_config=local_gen_config)
 
-        if gen_config.response_format is not None:
+        if local_gen_config.response_format is not None:
             try:
                 compiler = self.tm_model.grammar_compiler
-                grammar = compile_response_format(compiler, gen_config.response_format)
+                grammar = compile_response_format(compiler, local_gen_config.response_format)
                 self.model_inst.set_grammar(grammar)
             except (ValueError, KeyError) as e:
                 logger.warning(f'Failed to initialize guided decoding, '
                                f'disable guided decoding: {e}')
-                gen_config.response_format = None
+                local_gen_config.response_format = None
 
         session = _tm.SessionParam(id=session_id, step=0)
 
@@ -738,7 +861,12 @@ class TurboMindInstance:
 
         outputs = _tm_dict_to_torch_dict(outputs)
 
-        extra_fs = self._get_extra_output_processors(outputs, gen_config, input_len, metrics)
+        optional_output_fs, metrics_f = (
+            self._get_extra_output_processors(
+                outputs,
+                local_gen_config,
+                input_len,
+                metrics))
 
         output_ids_buf = outputs['output_ids']
 
@@ -760,7 +888,15 @@ class TurboMindInstance:
                     ret_status = ResponseType.FINISH if status == 7 else ResponseType.CANCEL
                 elif status:
                     logger.error(f'internal error. status_code {status}')
-                    yield self._get_error_output(status)
+                    output = self._get_error_output(status)
+                    if (metrics_f is not None
+                            and self.tm_model.speculative_config
+                            is not None):
+                        metrics_f(
+                            output,
+                            seq_len,
+                            state=state)
+                    yield output
                     break
 
                 if seq_len == prev_len and not finish:
@@ -769,8 +905,10 @@ class TurboMindInstance:
                 output_ids = output_ids_buf[prev_len:seq_len].tolist()
                 output = EngineOutput(ret_status, output_ids)
 
-                for f in extra_fs:
-                    f(output, seq_len)
+                for f in optional_output_fs:
+                    f(output, seq_len, state=state)
+                if metrics_f is not None:
+                    metrics_f(output, seq_len, state=state)
 
                 prev_len = seq_len
 
