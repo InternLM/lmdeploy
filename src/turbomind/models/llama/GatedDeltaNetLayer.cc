@@ -1,7 +1,6 @@
 #include "src/turbomind/models/llama/GatedDeltaNetLayer.h"
 
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
@@ -14,6 +13,7 @@
 #include "src/turbomind/core/scope.h"
 #include "src/turbomind/engine/block.h"
 #include "src/turbomind/models/llama/gated_delta_net_kernels.h"
+#include "src/turbomind/models/llama/object_cache_plan.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
 namespace turbomind {
@@ -39,21 +39,9 @@ ContextParallelLevel GetCPLevel()
 
 }  // namespace
 
-auto get_lc_state_size(const DeltaNetWeight& weights, int tp)
-{
-    int num_k_heads    = weights.num_k_heads / tp;
-    int num_v_heads    = weights.num_v_heads / tp;
-    int key_head_dim   = weights.key_head_dim;
-    int value_head_dim = weights.value_head_dim;
-    int d_conv         = weights.d_conv;
-    int key_dim        = num_k_heads * key_head_dim;
-    int value_dim      = num_v_heads * value_head_dim;
-    int conv_dim       = key_dim * 2 + value_dim;
-    return std::make_pair(num_v_heads * key_head_dim * value_head_dim, conv_dim * d_conv);
-}
-
 GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
                                        CacheRegistry&               registry,
+                                       const GdnCachePlan&          cache_plan,
                                        const EngineParam&           engine,
                                        const Context&               context,
                                        int                          phases):
@@ -69,21 +57,8 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
     arch_     = getSMVersion() * 10;
     sm_count_ = getSMCount();
 
-    TM_CHECK_EQ(first.num_k_heads % tp_size_, 0);
-    TM_CHECK_EQ(first.num_v_heads % tp_size_, 0);
     TM_CHECK_EQ(first.key_head_dim, 128);
     TM_CHECK_EQ(first.value_head_dim, 128);
-    for (const auto* weight_ptr : weights) {
-        const auto& weight = *TM_CHECK_NOTNULL(weight_ptr);
-        TM_CHECK_EQ(weight.num_k_heads, first.num_k_heads);
-        TM_CHECK_EQ(weight.num_v_heads, first.num_v_heads);
-        TM_CHECK_EQ(weight.key_head_dim, first.key_head_dim);
-        TM_CHECK_EQ(weight.value_head_dim, first.value_head_dim);
-        TM_CHECK_EQ(weight.d_conv, first.d_conv);
-        TM_CHECK_EQ(weight.data_type, first.data_type);
-        TM_CHECK_EQ(weight.num_k_heads % tp_size_, 0);
-        TM_CHECK_EQ(weight.num_v_heads % tp_size_, 0);
-    }
 
     input_dtype_ = first.data_type;
     num_k_heads_ = first.num_k_heads / tp_size_;
@@ -95,26 +70,16 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
         << "GDN recurrent state dtype must be float32 or match the input dtype, got state_dtype="
         << recurrent_state_dtype_ << " input_dtype=" << input_dtype_;
 
-    const auto [linear_state_size, conv_state_size] = get_lc_state_size(first, tp_size_);
-    const int cell_elements                         = first.key_head_dim * first.value_head_dim;
-    TM_CHECK_EQ(linear_state_size, num_v_heads_ * cell_elements);
+    TM_CHECK_EQ(weights.size(), cache_plan.conv_state_offsets.size());
+    TM_CHECK_EQ(weights.size(), cache_plan.recurrent_state_offsets.size());
 
-    int layers_per_block = 1;
-    int heads_per_block  = num_v_heads_;
-    if (const char* value = std::getenv("TM_GDN_BLOCK_CONFIG")) {
-        TM_CHECK_EQ(std::sscanf(value, "%d,%d", &layers_per_block, &heads_per_block), 2)
-            << "expected TM_GDN_BLOCK_CONFIG=l,h (e.g. 4,16)";
-    }
-    TM_CHECK_GT(layers_per_block, 0);
-    TM_CHECK_GT(heads_per_block, 0);
-
-    auto ceil_div     = [](int value, int divisor) { return (value + divisor - 1) / divisor; };
-    layers_per_block_ = layers_per_block;
-    heads_per_block_  = heads_per_block;
-    num_head_groups_  = ceil_div(num_v_heads_, heads_per_block_);
-    num_layer_groups_ = ceil_div(layer_num_, layers_per_block_);
-    num_blocks_       = num_layer_groups_ * num_head_groups_;
-    block_bytes_      = byte_size(recurrent_state_dtype_, size_t(layers_per_block_) * heads_per_block_ * cell_elements);
+    layers_per_block_ = cache_plan.layers_per_block;
+    heads_per_block_  = cache_plan.heads_per_block;
+    num_head_groups_  = cache_plan.num_head_groups;
+    num_layer_groups_ = cache_plan.num_layer_groups;
+    num_blocks_       = cache_plan.num_blocks;
+    block_bytes_      = cache_plan.recurrent_part_bytes;
+    conv_total_bytes_ = cache_plan.conv_part_bytes;
 
     auto require_mode = [&](linear_attn::delta_rule::GdrMode mode) {
         using namespace linear_attn::delta_rule;
@@ -147,14 +112,13 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
     require_mode(linear_attn::delta_rule::GdrMode::kChunked);
 
     rec_base_ = registry.checkpoint().Register({{block_bytes_, 1, static_cast<size_t>(num_blocks_)}});
-
-    size_t conv_offset = 0;
-    for (int layer = 0; layer < layer_num_; ++layer) {
-        weights[layer]->conv_state_offset = conv_offset;
-        conv_offset += conv_state_size;
-    }
-    conv_total_bytes_ = byte_size(input_dtype_, conv_offset);
     registry.checkpoint().Register(conv_total_bytes_, 1);
+
+    for (int layer = 0; layer < layer_num_; ++layer) {
+        weights[layer]->conv_state_offset   = cache_plan.conv_state_offsets[layer];
+        weights[layer]->linear_state_offset = cache_plan.recurrent_state_offsets[layer];
+        layer_index_[weights[layer]]        = layer;
+    }
 
     const size_t prefix_bytes = registry.prefix().accumulation_bytes();
     TM_LOG_INFO("[GDN] input_dtype={} state_dtype={} gdr_cp_level={} block config L_b={} H_b={} -> "
@@ -171,11 +135,6 @@ GatedDeltaNetLayer::GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
                 block_bytes_,
                 prefix_bytes,
                 (prefix_bytes != 0 && block_bytes_ == prefix_bytes) ? "slab-shared" : "separate-slab-class");
-
-    for (int layer = 0; layer < layer_num_; ++layer) {
-        weights[layer]->linear_state_offset = (layer % layers_per_block_) * heads_per_block_ * cell_elements;
-        layer_index_[weights[layer]]        = layer;
-    }
 
     conv_state_ptrs_buf_      = {engine.max_batch_size, kCPUpinned};
     recurrent_state_ptrs_buf_ = {core::ssize_t(num_layer_groups_) * engine.max_batch_size * num_head_groups_,

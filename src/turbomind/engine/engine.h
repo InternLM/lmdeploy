@@ -5,6 +5,7 @@
 
 #include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/gateway.h"
+#include "src/turbomind/engine/lmcache.h"
 
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context.h"
@@ -31,6 +32,7 @@ public:
     Engine(EngineParam                  param,
            ObjectAllocator              alloc,
            CacheRegistry                cache_registry,
+           LmCache                      lmcache,
            LanguageModel                model,
            std::unique_ptr<VisionModel> vision_model,  // null for text-only checkpoints
            Context&                     ctx,
