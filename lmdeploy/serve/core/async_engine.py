@@ -145,13 +145,12 @@ class AsyncEngine:
         self.session_len = (_get_and_verify_max_len(self.hf_cfg, None)
                             if backend_config.session_len is None else backend_config.session_len)
         backend_config.session_len = self.session_len
-        if speculative_config is not None and backend == 'turbomind':
-            logger.warning('speculative decoding is not supported by turbomind ')
         # build backend engine
         if backend == 'turbomind':
             self.engine = self._build_turbomind(model_path=model_path,
                                                 backend_config=backend_config,
                                                 trust_remote_code=trust_remote_code,
+                                                speculative_config=speculative_config,
                                                 **kwargs)
         elif backend == 'pytorch':
             self.engine = self._build_pytorch(model_path=model_path,
@@ -174,8 +173,9 @@ class AsyncEngine:
         self.backend = backend
         self.request_logger = RequestLogger(max_log_len)
 
-        self.num_spec_token = 0 if backend == 'turbomind' or speculative_config is None \
-            else speculative_config.num_speculative_tokens
+        self.num_spec_token = (0
+                               if speculative_config is None
+                               else speculative_config.num_speculative_tokens)
 
         self.session_mgr = SessionManager()
         self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)
@@ -201,6 +201,7 @@ class AsyncEngine:
     def _build_turbomind(self,
                          model_path: str,
                          backend_config: TurbomindEngineConfig | None = None,
+                         speculative_config: SpeculativeConfig | None = None,
                          trust_remote_code: bool = False,
                          **kwargs):
         """Inner build method for turbomind backend."""
@@ -210,7 +211,11 @@ class AsyncEngine:
                 'TurboMind was requested but its native module is unavailable.'
             ) from turbomind._import_error
         return turbomind.TurboMind.from_pretrained(
-            model_path, engine_config=backend_config, trust_remote_code=trust_remote_code, **kwargs
+            model_path,
+            engine_config=backend_config,
+            trust_remote_code=trust_remote_code,
+            speculative_config=speculative_config,
+            **kwargs
         )
 
     def _build_pytorch(self,

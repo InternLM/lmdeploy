@@ -469,6 +469,10 @@ __global__ void CollectHiddenStates_Kernel(const T* src, const int* idxs, T* dst
 
 void CollectHiddenStates(const Tensor& src, const Buffer_<int>& idxs, Ref<Tensor> dst, cudaStream_t st)
 {
+    if (idxs.size() == 0) {
+        return;
+    }
+
     const auto stride = byte_size(src.dtype(), src.stride(0));
 
     auto invoke = [&](auto t) {
@@ -493,9 +497,8 @@ void CollectHiddenStates(const Tensor& src, const Buffer_<int>& idxs, Ref<Tensor
         invoke(ushort{});
     }
     else {
-        TM_LOG_FATAL("unsupported byte stride: {}", stride);
+        __builtin_unreachable();
     }
-    TM_CUDA_CHECK(cudaGetLastError());
 }
 
 template<int BLOCK_DIM, int MAX_COUNT>
@@ -553,23 +556,32 @@ void BatchPrefixSum(const int** srcs, const int* ns, int** dsts, int count, cuda
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
-__global__ void AppendTokenIdsKernel(int** token_ids_ptrs, const int* output_ids, const int* positions, int batch_size)
+__global__ void AppendOneTokenAndAdvanceSequenceKernel(int* const* token_ids_ptrs,
+                                                       const int*  selected_tokens,
+                                                       int*        sequence_length,
+                                                       int         batch_size)
 {
-    int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if (i < batch_size) {
-        int* token_ids = token_ids_ptrs[i];
-        int  pos       = positions[i];
-        token_ids[pos] = output_ids[i];
+    const int b = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (b < batch_size) {
+        const int position          = sequence_length[b];
+        token_ids_ptrs[b][position] = selected_tokens[b];
+        sequence_length[b]          = position + 1;
     }
 }
 
-void AppendTokenIds(
-    int** token_ids_ptrs, const int* output_ids, const int* positions, int batch_size, cudaStream_t stream)
+void invokeAppendOneTokenAndAdvanceSequence(
+    int* const* token_ids_ptrs, const int* selected_tokens, int* sequence_length, int batch_size, cudaStream_t stream)
 {
-    constexpr int block = 128;
-    const int     grid  = cdiv(batch_size, block);
-    AppendTokenIdsKernel<<<grid, block, 0, stream>>>(token_ids_ptrs, output_ids, positions, batch_size);
-    TM_CUDA_CHECK(cudaGetLastError());
+    if (batch_size == 0) {
+        return;
+    }
+
+    constexpr int block_size = 128;
+    const int     grid_size  = cdiv(batch_size, block_size);
+
+    AppendOneTokenAndAdvanceSequenceKernel<<<grid_size, block_size, 0, stream>>>(
+        token_ids_ptrs, selected_tokens, sequence_length, batch_size);
 }
 
 template<typename T>

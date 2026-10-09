@@ -29,6 +29,9 @@ struct EngineConfig {
     X(int, cache_prompt_boundary_skip, 1)                                                                              \
     X(std::string, cache_generation, "auto")                                                                           \
     X(bool, enable_metrics, false)                                                                                     \
+    X(std::string, spec_method, "")                                                                                    \
+    X(int, spec_num_draft_tokens, 0)                                                                                   \
+    X(std::vector<int>, spec_tap_layer_ids)                                                                            \
     X(int, num_tokens_per_iter, 0)                                                                                     \
     X(int, max_prefill_iters, 1)                                                                                       \
     X(int, async_, 0)                                                                                                  \

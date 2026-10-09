@@ -73,11 +73,8 @@ inline void PrefixSum(const int* src, int n, int* dst, cudaStream_t st)
     return BatchPrefixSum(&src, &n, &dst, 1, st);
 }
 
-void AppendTokenIds(int**        token_ids_ptrs,  //
-                    const int*   output_ids,
-                    const int*   positions,
-                    int          batch_size,
-                    cudaStream_t stream);
+void invokeAppendOneTokenAndAdvanceSequence(
+    int* const* token_ids_ptrs, const int* selected_tokens, int* sequence_length, int batch_size, cudaStream_t stream);
 
 // Apply sigmoid gating: attn[i] *= sigmoid(gate[i])
 // attn:        [num_tokens, dim], contiguous

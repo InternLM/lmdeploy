@@ -24,15 +24,15 @@
 namespace turbomind {
 
 struct SamplingParams {
-    void*          logits;
+    const void*    probabilities;
     int            stride;
-    int*           indices;
-    int*           kept;
+    const int*     indices;
+    const int*     kept;
     curandState_t* curandstate;
     const int*     curandstate_indices;
+    const bool*    sample_mask;
     size_t         batch_size;
-    int*           output_ids;
-    int*           sequence_length;
+    int*           selected_tokens;
     void*          sampled_logprobs;
     int*           sampled_indexes;
     int*           sampled_nums;
