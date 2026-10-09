@@ -1,4 +1,5 @@
-"""Regression: Mooncake async migration must not hang on an unused Future (#4971)."""
+"""Regression: Mooncake async migration must not hang on an unused Future
+(#4971)."""
 
 from __future__ import annotations
 
@@ -6,17 +7,15 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 from lmdeploy.pytorch.disagg.backend.mooncake import MooncakeMigrationManagement
 
 
-@pytest.mark.asyncio
-async def test_p2p_migrate_async_awaits_executor_not_orphan_future(monkeypatch):
-    """With LMDEPLOY_USE_ASYNC_MIGRATION, p2p_migrate must complete when _migrate returns.
+def test_p2p_migrate_async_awaits_executor_not_orphan_future(monkeypatch):
+    """With LMDEPLOY_USE_ASYNC_MIGRATION, p2p_migrate must complete when
+    _migrate returns.
 
-    Previously an unresolved asyncio.Future was awaited after run_in_executor,
-    so Decode hung forever even though the RDMA transfer finished.
+    Previously an unresolved asyncio.Future was awaited after run_in_executor, so Decode hung forever even though the
+    RDMA transfer finished.
     """
     monkeypatch.setattr(
         'lmdeploy.pytorch.disagg.backend.mooncake.LMDEPLOY_USE_ASYNC_MIGRATION',
@@ -32,12 +31,15 @@ async def test_p2p_migrate_async_awaits_executor_not_orphan_future(monkeypatch):
     backend._migrate = fake_migrate  # type: ignore[method-assign]
     assignment = SimpleNamespace(batch=[])
 
-    await asyncio.wait_for(backend.p2p_migrate(assignment), timeout=2.0)
+    async def _run():
+        await asyncio.wait_for(backend.p2p_migrate(assignment), timeout=2.0)
+
+    asyncio.run(_run())
     assert called['n'] == 1
 
 
-@pytest.mark.asyncio
-async def test_p2p_migrate_sync_path_calls_migrate_directly(monkeypatch):
+def test_p2p_migrate_sync_path_calls_migrate_directly(monkeypatch):
+    """Sync path should call _migrate directly without an orphan Future."""
     monkeypatch.setattr(
         'lmdeploy.pytorch.disagg.backend.mooncake.LMDEPLOY_USE_ASYNC_MIGRATION',
         False,
@@ -47,5 +49,5 @@ async def test_p2p_migrate_sync_path_calls_migrate_directly(monkeypatch):
     backend._migrate = MagicMock()
     assignment = SimpleNamespace(batch=[])
 
-    await backend.p2p_migrate(assignment)
+    asyncio.run(backend.p2p_migrate(assignment))
     backend._migrate.assert_called_once_with(assignment)

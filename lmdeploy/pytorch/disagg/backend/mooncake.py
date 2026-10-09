@@ -146,7 +146,6 @@ class MooncakeMigrationManagement:
     @property
     def endpoint_info(self) -> dict:
         """Get endpoint information for this connection."""
-
         mr_info = {}
         for mr_key, buffer_info in self.local_kv_table.items():
             mr_info[mr_key] = {
