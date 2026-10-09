@@ -24,7 +24,7 @@ class _RecordingExecutor(ExecutorBase):
         super().__init__(
             model_path='',
             model_config=SimpleNamespace(sliding_window=None, states_shapes=None),
-            cache_config=SimpleNamespace(role=EngineRole.Hybrid),
+            cache_config=CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=16),
             backend_config=SimpleNamespace(),
             dist_config=SimpleNamespace(dp=1, world_size=1),
             misc_config=SimpleNamespace(empty_init=empty_init, memdecode_config=None),
@@ -168,6 +168,7 @@ def test_runtime_size_reserves_dsa_score_workspace(monkeypatch):
         cache_max_entry_count=1.0,
         max_prefill_token_num=16,
         max_batches=2,
+        dcp=1,
     )
     executor.specdecode_config = None
 
@@ -182,6 +183,43 @@ def test_runtime_size_reserves_dsa_score_workspace(monkeypatch):
 def test_get_min_num_gpu_blocks_rejects_worker_count_mismatch():
     with pytest.raises(ValueError, match='same worker ranks'):
         ExecutorBase._get_min_num_gpu_blocks([4096, 4096], [256])
+
+
+@pytest.mark.parametrize(('draft_tokens', 'topk', 'score_mb', 'dtype'), [
+    (0, None, 1, torch.bfloat16), (0, None, 1, torch.float32),
+    (0, 2048, 1, torch.bfloat16), (9, 2048, 1, torch.float16),
+    (0, 2048, 128, torch.bfloat16), (9, 2048, 128, torch.bfloat16),
+])
+def test_runtime_size_reserves_dcp_peak_phase(monkeypatch, draft_tokens, topk, score_mb, dtype):
+    monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', score_mb)
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = SimpleNamespace(mla_index_topk=topk, head_dim=576, v_head_dim=0,
+                                            num_attention_heads=64, dtype=dtype)
+    executor.specdecode_config = SimpleNamespace(num_speculative_tokens=draft_tokens) if draft_tokens else None
+    executor.dist_config = SimpleNamespace(attn_tp=8)
+    executor.cache_config = SimpleNamespace(cache_max_entry_count=1.0,
+                                            max_prefill_token_num=16,
+                                            max_batches=2,
+                                            dcp=4,
+                                            block_size=64)
+    runtime_size, num_tokens = executor._get_runtime_size([256 << 20], [_WorkerCachePlanSizes(target=1024)],
+                                                          vocab_size=100)
+    # Explicitly include MLA accumulators despite its empty standalone V cache.
+    decode_rows = 2 * (draft_tokens + 1)
+    output_bytes = 4 if dtype == torch.float32 else 2
+    # Sparse output slices keep the 64-head backing allocation, not just 8 heads.
+    workspace_heads = 64 if topk is not None else 8
+    attention_bytes = (64 << 20) + 16 * workspace_heads * (3 * 576 * output_bytes + 12)
+    workspace = attention_bytes
+    if topk is not None:
+        rows = max(16, decode_rows)
+        indexer_bytes = (score_mb << 20) + rows * topk * (16 + 8 * 4)
+        # Scores count once; phase-local buffers overlap in the reservation,
+        # while final indices remain live through attention.
+        workspace = rows * topk * 4 + max(indexer_bytes, attention_bytes)
+    expected = (16 + 4) * 100 * 2 + workspace
+    assert runtime_size == expected
+    assert num_tokens == 16
 
 
 def test_sync_spec_cache_block_size_updates_kernel_block_size():

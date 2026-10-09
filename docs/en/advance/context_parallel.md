@@ -1,5 +1,12 @@
 # Context Parallel
 
+LMDeploy exposes two backend-specific context-parallel features:
+
+- TurboMind context parallelism uses `--cp`.
+- PyTorch decode context parallelism (DCP) uses `--dcp`.
+
+## TurboMind context parallelism
+
 When the memory on a single GPU is insufficient to deploy a model, it is often deployed using tensor parallelism (TP), which generally requires `num_key_value_heads` to be divisible by `TP`. If you want to deploy with `TP > num_key_value_heads`, the kv-heads should be duplicated to meet the divisibility requirement. However, this has two disadvantages:
 
 1. The amount of available kv_cache is halved, which reducing the maximum supported session length.
@@ -15,7 +22,7 @@ kv_cache stored on cp_rank1: 1, 3, 5, 7
 
 Under context parallelism, `cache_block_seq_len` remains the physical number of tokens stored by one rank in a k/v cache block. The scheduler treats the corresponding logical block as `cache_block_seq_len * cp` global tokens. Therefore k/v block memory on each rank is unchanged, while full-block prefix reuse and read-only cache boundaries use the larger global span.
 
-## Usage
+### Usage
 
 Taking Intern-S1 / Qwen3-235B-A22B as an example, their `num_key_value_heads` is 4. If you want to deploy with `TP=8` and avoid duplication of kv_cache, you can deploy in the following way:
 
@@ -24,3 +31,30 @@ lmdeploy serve api_server internlm/Intern-S1 --tp 8 --cp 2
 
 lmdeploy serve api_server Qwen/Qwen3-235B-A22B --tp 8 --cp 2
 ```
+
+## PyTorch decode context parallelism
+
+PyTorch DCP distributes MLA KV cache across existing TP ranks, increasing
+effective cache capacity without additional GPUs. It supports FlashMLA-backed
+dense MLA and sparse DSA models.
+
+```bash
+lmdeploy serve api_server <mla-model> --backend pytorch --tp 4 --dcp 2
+```
+
+For Python, use `PytorchEngineConfig(tp=4, dcp=2)`. The default `dcp=1`
+disables DCP.
+
+### Requirements and supported features
+
+- Requires NVIDIA Hopper/SM90 GPUs, FlashMLA, and BF16 activations.
+  Sparse DSA also requires compatible DeepGEMM and TileLang top-k kernels
+  (top-k 512 or 2048).
+- `dcp` must divide the attention TP size and replicated KV-head count;
+  `dp=1` and `ep=1` are required.
+- Prefix caching and `deepseek_mtp` are supported for compatible MLA models,
+  including DeepSeek V3/V3.1, DeepSeek V3.2, and GLM DSA.
+- BF16 KV cache is supported. Sparse MLA also supports FP8 KV cache via
+  `--quant-policy fp8`.
+- Sliding-window attention, MemDecode, prefill/decode disaggregation,
+  external KV-cache connectors, and the TileLang attention backend are not supported.
