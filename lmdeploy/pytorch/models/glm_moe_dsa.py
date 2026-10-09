@@ -92,15 +92,18 @@ class GlmMoeDsaIndexer(nn.Module):
         self.k_norm = LayerNorm(self.head_dim, device=device)
         self.softmax_scale = self.head_dim**-0.5
         self.apply_rotary_pos_emb = ApplyRotaryEmb()
-        self.indexer_topk = IndexerTopKFP8(self.index_topk,
-                                           self.softmax_scale,
-                                           self.head_dim,
-                                           block_size=128,
-                                           fill=-1,
-                                           # MTP may reuse its first iteration's indices in later drafts.
-                                           allow_short_prefill_scoring_skip=(
-                                               layer_idx < config.num_hidden_layers
-                                               and _envs.sparse_mla_backend != 'tilelang'))
+        self.indexer_topk = IndexerTopKFP8(
+            self.index_topk,
+            self.softmax_scale,
+            self.head_dim,
+            block_size=128,
+            fill=-1,
+            # MTP, TileLang and forced sparse prefill all require indices.
+            allow_short_prefill_scoring_skip=(
+                layer_idx < config.num_hidden_layers
+                and _envs.sparse_mla_backend != 'tilelang'
+                and not _envs.mla_disable_dense_prefill),
+        )
 
     def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
                               freqs_cis: tuple[torch.Tensor, torch.Tensor]):

@@ -4,6 +4,7 @@ import functools
 
 import torch
 
+from lmdeploy.pytorch import envs
 from lmdeploy.utils import get_logger
 
 from .cp import gather_dcp_query, merge_dcp_attention
@@ -101,7 +102,8 @@ class FlashMLAIndexMapper:
 class FlashMLASparseImpl(FlashMLAImpl):
     """Sparse DSA attention using FlashMLA kernels.
 
-    Prefill: dense MLA when top-k covers the sequence; otherwise
+    Prefill: dense MLA when top-k covers the sequence (unless the dense-prefill
+    shortcut is disabled); otherwise
     ``flash_mla_sparse_fwd`` over flattened BF16 KV.
     Decode: ``flash_mla_sparse_fwd`` over a zero-copy BF16 cache view, or
     ``flash_mla_with_kvcache`` over the packed FP8 cache.
@@ -346,7 +348,7 @@ class FlashMLASparseImpl(FlashMLAImpl):
                          v_scales_zeros: torch.Tensor = None,
                          current_key: torch.Tensor = None) -> torch.Tensor:
         """Forward pass for sparse MLA prefill."""
-        if attn_metadata.max_kv_seqlen <= self.mla_index_topk:
+        if not envs.mla_disable_dense_prefill and attn_metadata.max_kv_seqlen <= self.mla_index_topk:
             # Top-k contains every valid key, so dense attention is equivalent
             # and avoids sparse index mapping and kernel overhead.
             return super()._forward_prefill(query,

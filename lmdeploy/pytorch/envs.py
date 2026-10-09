@@ -241,6 +241,9 @@ with set_envs():
     sparse_mla_backend = env_to_choice('LMDEPLOY_SPARSE_MLA_BACKEND', 'flashmla',
                                        {'flashmla', 'tilelang'})
 
+    # Disable dense prefill for GLM sparse MLA. Unsupported for DeepSeek; set before startup.
+    mla_disable_dense_prefill = env_to_bool('LMDEPLOY_MLA_DISABLE_DENSE_PREFILL', False)
+
     # cudagraph
     # fake capture flag for debug cudagraph padding behavior
     fake_capture = env_to_bool('LMDEPLOY_FAKE_CUDA_GRAPH_CAPTURE', False)
