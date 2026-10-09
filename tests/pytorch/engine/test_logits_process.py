@@ -189,6 +189,59 @@ def test_filter_minp_sorted():
     torch.testing.assert_close(out, gt)
 
 
+def test_filter_topp_bfloat16_boundary():
+    from lmdeploy.pytorch.engine.logits_process import _filter_topp_sorted_
+
+    scores = torch.tensor([[2.65625, 1.984375, 1.2578125, 1.171875,
+                            0.08349609375, -1.6015625, -2.328125, -2.421875]],
+                          dtype=torch.bfloat16)
+    # The first four tokens already cover 0.9504036 of the probability mass.
+    expected = TopPLogitsWarper(0.95)(None, scores.double()).to(scores.dtype)
+    actual = _filter_topp_sorted_(scores.clone(), torch.tensor([0.95]))
+
+    assert torch.isfinite(expected).sum() == 4
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_filter_minp_bfloat16_boundary():
+    from lmdeploy.pytorch.engine.logits_process import _filter_minp_sorted_
+
+    scores = torch.tensor([[1.5546875, 1.21875, -0.0966796875, -0.75,
+                            -1.0390625, -1.8828125, -2.53125, -4.84375]],
+                          dtype=torch.bfloat16)
+    expected = MinPLogitsWarper(0.1)(None, scores.double()).to(scores.dtype)
+    actual = _filter_minp_sorted_(scores.clone(), torch.tensor([0.1]))
+
+    assert torch.isfinite(expected).sum() == 3
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_sampling_probabilities_match_speculative_target(monkeypatch):
+    from lmdeploy.pytorch.engine import logits_process
+
+    logits = torch.tensor([[2.65625, 0.08349609375, 1.984375, -2.328125,
+                            1.2578125, -1.6015625, 1.171875, -2.421875]],
+                          dtype=torch.bfloat16)
+    processor = logits_process.FusedLogitsProcessor(logits_process.SamplingInputs(
+        batch_size=1, max_top_k=-1, top_p=torch.tensor([0.95])))
+    observed = []
+
+    def sample(probs, seeds, offsets, indices):
+        observed.append(torch.zeros_like(probs).scatter(1, indices, probs))
+        return indices[:, 0]
+
+    monkeypatch.setattr(logits_process, '_multinomial_sampling', sample)
+    processor.sampling(logits)
+    # Rejection sampling normalizes filtered target logits in FP32.
+    target_probs = processor.filter_logits(logits).softmax(-1, dtype=torch.float32)
+    reference = TopPLogitsWarper(0.95)(None, logits.double()).softmax(-1).float()
+
+    assert observed[0].dtype == torch.float32
+    torch.testing.assert_close(observed[0], target_probs, rtol=1e-6, atol=1e-7)
+    torch.testing.assert_close(observed[0], reference, rtol=1e-6, atol=1e-7)
+    torch.testing.assert_close(observed[0].sum(-1), torch.ones(1), rtol=0, atol=1e-7)
+
+
 def test_filter_ngram():
     from lmdeploy.pytorch.engine.logits_process import _filter_repetition_ngram_
     vocab_size = 100
