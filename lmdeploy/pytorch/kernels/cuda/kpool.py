@@ -509,38 +509,43 @@ def _score_pages(Q, W, Cache, Lengths, Table, Out,
                  HEADS: tl.constexpr, DIM: tl.constexpr, WIDTH: tl.constexpr,
                  H: tl.constexpr, D: tl.constexpr, TILE: tl.constexpr):
     row = tl.program_id(0)
-    groups = tl.program_id(1) * TILE + tl.arange(0, TILE)
     heads = tl.arange(0, H)
     ds = tl.arange(0, D)
-    length = tl.load(Lengths + row)
-    valid = (groups < length) & (groups < WIDTH)
-    pages = tl.load(Table + row * TS0 + groups // PAGE, valid, 0)
-    slots = groups % PAGE
-    ptr = Cache + pages[None, :] * PAGE_STRIDE + slots[None, :] * DIM + ds[:, None]
-    k = tl.load(ptr, valid[None, :] & (ds[:, None] < DIM), 0).to(tl.float8e4nv, bitcast=True)
-    q = tl.load(Q + row * QS0 + heads[:, None] * QS1 + ds[None, :],
-                (heads[:, None] < HEADS) & (ds[None, :] < DIM), 0.)
-    dot = tl.dot(q, k, max_num_imprecise_acc=0)
-    weight = tl.load(W + row * WS0 + heads, heads < HEADS, 0)
-    logits = tl.sum(tl.maximum(dot, 0.) * weight[:, None], axis=0)
-    scale_ptr = (Cache + pages * PAGE_STRIDE + PAGE * DIM + slots * 4).to(tl.pointer_type(tl.float32))
-    scale = tl.load(scale_ptr, valid, 0)
-    logits = tl.where(valid, logits * scale, -float('inf'))
-    tl.store(Out + row * WIDTH + groups, logits, groups < WIDTH)
+    length = tl.minimum(tl.load(Lengths + row), WIDTH)
+    for tile in range(tl.program_id(1), tl.cdiv(length, TILE), tl.num_programs(1)):
+        groups = tile * TILE + tl.arange(0, TILE)
+        valid = groups < length
+        pages = tl.load(Table + row * TS0 + groups // PAGE, valid, 0)
+        slots = groups % PAGE
+        ptr = Cache + pages[None, :] * PAGE_STRIDE + slots[None, :] * DIM + ds[:, None]
+        key = tl.load(ptr, valid[None, :] & (ds[:, None] < DIM), 0).to(tl.float8e4nv, bitcast=True)
+        query = tl.load(Q + row * QS0 + heads[:, None] * QS1 + ds[None, :],
+                        (heads[:, None] < HEADS) & (ds[None, :] < DIM), 0.)
+        dot = tl.dot(query, key, max_num_imprecise_acc=0)
+        weight = tl.load(W + row * WS0 + heads, heads < HEADS, 0)
+        logits = tl.sum(tl.maximum(dot, 0.) * weight[:, None], axis=0)
+        scale_ptr = (Cache + pages * PAGE_STRIDE + PAGE * DIM + slots * 4).to(tl.pointer_type(tl.float32))
+        scale = tl.load(scale_ptr, valid, 0)
+        tl.store(Out + row * WIDTH + groups, logits * scale, valid)
 
 
 def score_paged(query, weight, cache, lengths, table):
     """Gather four compact 16-entry pages into each 64-key compute tile.
 
-    No global repacking buffer or device-to-host length read. Query strides
-    and fragmented physical page IDs are independent of storage geometry.
+    A bounded worker grid iterates over device-side lengths, including on
+    graph replay. Query strides and fragmented physical page IDs are
+    independent of storage geometry. Only columns below each row's length
+    are initialized; consumers must mask padding, as for DeepGEMM's
+    clean_logits=False output. No device-to-host length read is required.
     """
     rows, heads, dim = query.shape
     width = table.size(1) * cache.size(1)
     result = torch.empty((rows, width), dtype=torch.float32, device=query.device)
     if not rows or not width:
         return result
-    _score_pages[(rows, triton.cdiv(width, 64))](
+    workers = min(triton.cdiv(width, 64),
+                  triton.cdiv(torch.cuda.get_device_properties(query.device).multi_processor_count * 2, rows))
+    _score_pages[(rows, workers)](
         query, weight, cache, lengths, table, result,
         query.stride(0), query.stride(1), weight.stride(0), table.stride(0),
         cache.stride(0), cache.size(1), heads, dim, width,

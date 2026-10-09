@@ -374,7 +374,11 @@ def kpool_score_paged_cuda(
     *,
     metadata: KPoolDecodeMetadata | None = None,
 ) -> Tensor:
-    """Score compact16 pages with Triton, or legacy page64 with DeepGEMM."""
+    """Score compact16 pages with Triton, or legacy page64 with DeepGEMM.
+
+    Only columns below group_lengths are defined in either path. Pass the
+    same lengths to the selector so graph padding is never consumed.
+    """
     _validate_query(query_fp8, query_weight)
     rows = query_fp8.size(0)
     if packed_cache.dtype != torch.uint8 or packed_cache.ndim != 4:
