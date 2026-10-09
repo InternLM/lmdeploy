@@ -14,13 +14,18 @@ class HCPrePostImpl(ABC):
     def pre(
         self,
         x: torch.Tensor,
-        mixes: torch.Tensor,
+        weight: torch.Tensor,
         hc_scale: torch.Tensor,
         hc_base: torch.Tensor,
+        norm_eps: float,
         out_dtype: torch.dtype,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Run sinkhorn and reduce HC states from ``[..., hc, dim]`` to ``[...,
-        dim]``."""
+        """Project with the fp32 hyper-connection weight, run sinkhorn and
+        reduce HC states from ``[..., hc, dim]`` to ``[..., dim]``.
+
+        ``x`` is ``[..., hc_mult, dim]`` low precision activations, ``weight``
+        is ``[N, hc_mult * dim]`` fp32 and ``norm_eps`` is the RMS epsilon.
+        """
         raise NotImplementedError
 
     @abstractmethod

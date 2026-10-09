@@ -48,3 +48,48 @@ def test_moe_gate_model_contract(hidden_size, num_tokens, n_group, topk_group, m
     # Pre-Hopper CUDA falls back to BF16 linear before casting GLM logits to FP32.
     atol = 2e-4 if router_dtype == torch.float32 else 5e-7
     torch.testing.assert_close(output_weights, reference_weights, atol=atol, rtol=0)
+
+
+@pytest.mark.parametrize('num_experts,num_tokens,hidden_size', [
+    (256, 1024, 4096),   # DeepSeek-V4 router
+    (192, 1024, 4096),   # Hy3 router
+])
+def test_router_gemm_fp32_weight_uses_split_bf16(num_experts, num_tokens, hidden_size):
+    """A BF16 activation against an FP32 gate goes through the split kernel.
+
+    The native path would degrade to an FP32 FFMA GEMM; the split kernel keeps the tensor cores busy while still
+    producing FP32 logits.
+    """
+    from lmdeploy.pytorch.backends.cuda.moe_router import CudaRouterGemmImpl
+
+    torch.manual_seed(num_experts)
+    impl = CudaRouterGemmImpl(out_dtype=torch.float32)
+    hidden_states = torch.randn(num_tokens, hidden_size, device='cuda', dtype=torch.bfloat16)
+    weight = torch.randn(num_experts, hidden_size, device='cuda', dtype=torch.float32)
+
+    logits = impl.forward(hidden_states, weight)
+    reference = (hidden_states.double() @ weight.double().t()).float()
+
+    assert logits.shape == (num_tokens, num_experts)
+    assert logits.dtype == torch.float32
+    # The weight is reconstructed from two BF16 halves, so the budget follows
+    # the ~2^-17 relative error of that split rather than an rtol on the value.
+    atol = 8 * 2**-17 * reference.pow(2).mean().sqrt().item()
+    torch.testing.assert_close(logits, reference, rtol=0.0, atol=atol)
+
+
+@pytest.mark.parametrize('weight_dtype', [torch.bfloat16, torch.float16])
+def test_router_gemm_keeps_existing_paths(weight_dtype):
+    """Non-FP32 gates keep their original dispatch."""
+    from lmdeploy.pytorch.backends.cuda.moe_router import CudaRouterGemmImpl
+
+    torch.manual_seed(0)
+    impl = CudaRouterGemmImpl(out_dtype=torch.float32)
+    hidden_states = torch.randn(64, 512, device='cuda', dtype=torch.bfloat16)
+    weight = torch.randn(32, 512, device='cuda', dtype=weight_dtype)
+
+    logits = impl.forward(hidden_states, weight)
+
+    assert logits.dtype == torch.float32
+    reference = F.linear(hidden_states.to(weight_dtype), weight).to(torch.float32)
+    torch.testing.assert_close(logits, reference, rtol=1e-2, atol=1e-2)

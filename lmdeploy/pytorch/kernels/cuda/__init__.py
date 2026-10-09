@@ -4,6 +4,7 @@ from .apply_rotary_pos_emb import apply_rotary_pos_emb
 from .fill_kv_cache import fill_kv_cache
 from .flashattention import flash_attn_varlen_func
 from .flatten_kv_cache import flatten_kv_cache
+from .linear_bf16xfp32 import linear_bf16xfp32
 from .moe.fused_moe import fused_moe
 from .moe.w8a8 import fused_moe_w8a8
 from .multinomial_sampling import multinomial_sampling
@@ -25,4 +26,5 @@ __all__ = [
     'flash_attn_varlen_func',
     'flatten_kv_cache',
     'fused_moe_w8a8',
+    'linear_bf16xfp32',
 ]
