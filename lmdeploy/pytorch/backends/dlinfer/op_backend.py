@@ -30,6 +30,7 @@ class DlinferOpsBackend(DefaultOpsBackend):
             FusedMoEW8A8BuildSpec,
             SoftmaxTopKBuildSpec,
         )
+        from ..moe_router import RouterNoauxTCBuildSpec
         from ..norm import RMSNormBuildSpec
         from ..nsa import NSAIndexFP8BuildSpec
         from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
@@ -49,6 +50,16 @@ class DlinferOpsBackend(DefaultOpsBackend):
         if isinstance(spec, SoftmaxTopKBuildSpec):
             from .moe import DlinferSoftmaxTopKImpl
             return cast(ImplT, DlinferSoftmaxTopKImpl(spec.top_k, spec.dim, spec.n_groups))
+        if isinstance(spec, RouterNoauxTCBuildSpec):
+            from .moe_router import DlinferRouterNoauxTCImpl
+            return cast(
+                ImplT,
+                DlinferRouterNoauxTCImpl(
+                    spec.scoring_func, spec.top_k, spec.n_group, spec.top_k_group,
+                    spec.n_routed_experts, spec.routed_scaling_factor,
+                    spec.renormalize, spec.router_n_groups,
+                ),
+            )
         if isinstance(spec, RotaryEmbeddingBuildSpec):
             from .rotary_embedding import _build_rotary_embedding
             return cast(ImplT, _build_rotary_embedding(spec))
