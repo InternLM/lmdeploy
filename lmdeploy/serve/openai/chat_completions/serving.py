@@ -303,6 +303,7 @@ def register(router: APIRouter, server_context) -> None:
                         routed_experts=chunk.routed_experts,
                         output_ids=stream_output_ids)
                     if chunk.cache_block_ids is not None and chunk.is_last_delta:
+                        response_json['cache_session_id'] = chat_runner.session.session_id
                         response_json['cache_block_ids'] = chunk.cache_block_ids
                         response_json['remote_token_ids'] = chunk.token_ids
                     yield f'data: {json.dumps(response_json)}\n\n'
@@ -383,6 +384,8 @@ def register(router: APIRouter, server_context) -> None:
         ).model_dump()
 
         if with_cache:
+            # Keep the OpenAI response ID independent of the engine's cache owner.
+            response['cache_session_id'] = chat_runner.session.session_id
             response['cache_block_ids'] = cache_block_ids
             response['remote_token_ids'] = remote_token_ids
 

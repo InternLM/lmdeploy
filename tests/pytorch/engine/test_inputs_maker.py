@@ -1479,6 +1479,38 @@ def test_waiting_long_context_admission_failure_falls_back_to_short_prefill():
     assert calls == [(True, True), (False, False)]
 
 
+@pytest.mark.parametrize('role', list(EngineRole))
+@pytest.mark.parametrize('length', [511, 512, 513, 1106])
+def test_chunk_history_advances_for_all_roles_without_decoding_on_prefill(role, length):
+    from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+    from lmdeploy.pytorch.messages import SequenceMeta
+    from lmdeploy.pytorch.paging import Scheduler
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+
+    scheduler = Scheduler(
+        SchedulerConfig(max_batches=4, max_session_len=4096, max_request_output_len=2048),
+        CacheConfig(max_batches=4, block_size=16, num_cpu_blocks=0, num_gpu_blocks=256),
+        SequenceMeta(16, strategy=ARSequenceStrategy()))
+    seq = scheduler.add_session(0).add_sequence(list(range(length)), preserve_cache=True)
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=role)
+    maker.running_seqs = []
+    maker.long_context_chunker = LongContextChunker(512)
+    chunker = maker.long_context_chunker
+    chunker.set_seq(seq)
+    for expected in range(512, length, 512):
+        assert not chunker.is_last_chunk()
+        size, _ = chunker.next_chunk_size()
+        maker.update_running_seqs([seq], SimpleNamespace(is_chunk=True, max_q_seqlen=size))
+        assert seq.num_history_ids == expected
+        assert maker.running_seqs == []
+    assert chunker.is_last_chunk()
+    # The input builder clears the chunker before submitting the final chunk.
+    chunker.clear()
+    maker.update_running_seqs([seq], SimpleNamespace(is_chunk=True))
+    assert maker.running_seqs == ([] if role == EngineRole.Prefill else [seq])
+
+
 def test_normal_prefill_can_update_running_while_long_chunker_is_active():
     long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
     short_seq = _DummySeq(history_ids=0, token_ids=16, all_multimodals={}, input_multimodals={})
