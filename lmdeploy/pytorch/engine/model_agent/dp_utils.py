@@ -39,6 +39,7 @@ class DPForwardMeta:
     batch_size: int
     draft_num_tokens: int | None = None
     enable_microbatch: bool | None = None
+    block_query_ready: bool = False
 
     BASE_FIELDS: ClassVar[tuple[str, ...]] = (
         'is_decoding',
@@ -50,19 +51,24 @@ class DPForwardMeta:
     SPEC_FIELDS: ClassVar[tuple[str, ...]] = (
         'draft_num_tokens',
     )
+    BLOCK_FIELDS: ClassVar[tuple[str, ...]] = ('block_query_ready',)
     MICRO_BATCH_FIELDS: ClassVar[tuple[str, ...]] = ('enable_microbatch', )
 
     @classmethod
-    def field_names(cls, *, is_spec_enabled: bool, is_microbatch_enabled: bool) -> tuple[str, ...]:
+    def field_names(cls, *, is_spec_enabled: bool, is_microbatch_enabled: bool,
+                    is_block_spec_enabled: bool = False) -> tuple[str, ...]:
         """Get the serialization schema for DP forward metadata."""
         field_names = cls.BASE_FIELDS
         if is_spec_enabled:
             field_names += cls.SPEC_FIELDS
+        if is_block_spec_enabled:
+            field_names += cls.BLOCK_FIELDS
         if is_microbatch_enabled:
             field_names += cls.MICRO_BATCH_FIELDS
         return field_names
 
-    def values(self, *, is_spec_enabled: bool, is_microbatch_enabled: bool) -> list[int]:
+    def values(self, *, is_spec_enabled: bool, is_microbatch_enabled: bool,
+               is_block_spec_enabled: bool = False) -> list[int]:
         """Serialize local metadata for scalar all-gather."""
         raw_values = {
             'is_decoding': int(self.is_decoding),
@@ -72,12 +78,14 @@ class DPForwardMeta:
             'batch_size': self.batch_size,
             'draft_num_tokens': self.draft_num_tokens if self.draft_num_tokens is not None else self.num_tokens,
             'enable_microbatch': int(self.enable_microbatch or False),
+            'block_query_ready': int(self.block_query_ready),
         }
         return [
             raw_values[name]
             for name in self.field_names(
                 is_spec_enabled=is_spec_enabled,
                 is_microbatch_enabled=is_microbatch_enabled,
+                is_block_spec_enabled=is_block_spec_enabled,
             )
         ]
 
@@ -93,13 +101,16 @@ class GatheredDPForwardMeta:
     batch_size: torch.Tensor
     draft_num_tokens: torch.Tensor | None = None
     enable_microbatch: torch.Tensor | None = None
+    block_query_ready: torch.Tensor | None = None
 
     @classmethod
-    def from_values(cls, values: torch.Tensor, *, is_spec_enabled: bool, is_microbatch_enabled: bool):
+    def from_values(cls, values: torch.Tensor, *, is_spec_enabled: bool, is_microbatch_enabled: bool,
+                    is_block_spec_enabled: bool = False):
         """Deserialize gathered scalar values into named tensors."""
         field_names = DPForwardMeta.field_names(
             is_spec_enabled=is_spec_enabled,
             is_microbatch_enabled=is_microbatch_enabled,
+            is_block_spec_enabled=is_block_spec_enabled,
         )
         columns = dict(zip(field_names, values.unbind(dim=1)))
         return cls(**columns)

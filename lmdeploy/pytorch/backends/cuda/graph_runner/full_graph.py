@@ -107,7 +107,11 @@ def _make_graph_meta(
         use_flash_mla=model_config.use_flash_mla,
         mla_index_topk=model_config.mla_index_topk,
         use_fa3_decoding=(model_config.model_paradigm == 'ar_spec' and not model_config.use_flash_mla),
-        is_ssm=bool(model_config.states_shapes),
+        # Both legacy SSM states and named state caches use state_offsets.
+        # V4 declares only state_cache_specs, so omitting this buffer would
+        # freeze the dummy warmup slot into every graph replay.
+        is_ssm=(bool(model_config.states_shapes)
+                or bool(model_config.state_cache_specs)),
         use_mrope=model_config.use_mrope,
         block_size=model_config.block_size,
         decode_query_len=decode_query_len,
@@ -158,6 +162,9 @@ class CUDASingleGraphRunner:
         padded_kwargs = self._bind_inputs(**kwargs)
         capture_stream = torch.cuda.current_stream() if self._use_graph else None
 
+        # Warmup is the first real invocation: its output is returned below.
+        # CUDA capture only records operations, so keep the matching state
+        # update instead of restoring pre-warmup caches.
         # warmup
         warmup_output = self._model_forward(**padded_kwargs)
         warmup_buffers = self.model.make_output_buffers(warmup_output)
@@ -166,6 +173,7 @@ class CUDASingleGraphRunner:
             assert capture_stream is not None
             output = self._capture_model(padded_kwargs, capture_stream)
         else:
+            # Fake capture must also advance state exactly once.
             output = warmup_output
 
         self.meta.output_buffers = self.model.make_output_buffers(output)

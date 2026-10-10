@@ -1,3 +1,5 @@
+import pytest
+
 from lmdeploy.pytorch.strategies.ar_spec.cudagraph import ARSpecCudagraphStrategy
 
 
@@ -11,6 +13,17 @@ def test_arspec_cudagraph_uses_same_allocation_for_full_spec_capture():
     strategy = ARSpecCudagraphStrategy(num_spec_tokens=4, method='qwen3_5_mtp')
 
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
+
+
+def test_dspark_cudagraph_keeps_target_and_draft_query_widths_distinct():
+    strategy = ARSpecCudagraphStrategy(num_spec_tokens=5, method='dspark')
+
+    # One live request padded to a four-request bucket. The target verifies
+    # N+1 rows while the sample-from-anchor draft queries only N rows.
+    assert strategy.get_max_tokens(batch_size=4, origin_batch_size=1,
+                                   num_tokens=6) == 24
+    assert strategy.get_max_tokens(batch_size=4, origin_batch_size=1,
+                                   num_tokens=5) == 20
 
 
 def test_arspec_cudagraph_keeps_full_spec_capture_for_eagle3():
@@ -181,3 +194,65 @@ def test_cuda_graph_key_separates_dsa_seed_and_reuse(monkeypatch):
     assert seed_key != reuse_key
     assert seed_key[-1] is False
     assert reuse_key[-1] is True
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+def test_graph_capture_advances_state_once_without_snapshot_sync(monkeypatch, device):
+    from types import SimpleNamespace
+
+    import torch
+
+    from lmdeploy.pytorch.backends.cuda.graph_runner.full_graph import CUDASingleGraphRunner
+
+    if device == 'cuda' and not torch.cuda.is_available():
+        pytest.skip('CUDA required')
+
+    # Slot 4 is larger than the layer dimension: using axis 1 for anonymous
+    # SSM state fails. Include duplicate ids and graph-padding sentinels.
+    ids = torch.tensor([4, 1, -1, 1], device=device)
+    caches = {'state_0': torch.arange(60).reshape(5, 2, 6).float(),
+              'v4': torch.arange(60, dtype=torch.uint8).reshape(2, 5, 6)}
+    caches = {name: cache.to(device) for name, cache in caches.items()}
+    before = {name: cache.clone() for name, cache in caches.items()}
+    context = SimpleNamespace(named_state_caches=caches, model_config=SimpleNamespace(
+        state_cache_specs=[SimpleNamespace(name='v4', layer_ids=(0, 1))]))
+    runner = CUDASingleGraphRunner.__new__(CUDASingleGraphRunner)
+    runner._use_graph = device == 'cuda'
+    runner._pool = torch.cuda.graph_pool_handle() if runner._use_graph else None
+    runner._ctx_mgr = SimpleNamespace(current_context=lambda: context)
+    runner.meta = SimpleNamespace(step_meta_plan=None)
+    runner.model = SimpleNamespace(
+        make_buffers_cudagraph=lambda *a, **kw: {'state_ids': ids},
+        make_output_buffers=lambda output: output,
+        get_outputs_cudagraph=lambda output, **kw: output)
+    runner._bind_inputs = lambda **kw: {}
+
+    def forward():
+        for name, cache in caches.items():
+            for slot in (1, 4):
+                cache.select(1 if name == 'v4' else 0, slot).add_(1)
+        return torch.ones(1, device=device)
+
+    def no_dynamic_selection(*args, **kwargs):
+        raise AssertionError('warmup snapshot must not synchronize for dynamic selection')
+
+    monkeypatch.setattr(torch, 'unique', no_dynamic_selection)
+    monkeypatch.setattr(torch, 'nonzero', no_dynamic_selection)
+    monkeypatch.setattr(torch.Tensor, '__getitem__', no_dynamic_selection)
+    runner._model_forward = forward
+    if runner._use_graph:
+        stream = torch.cuda.Stream()
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(stream):
+            runner.capture()
+        torch.cuda.current_stream().wait_stream(stream)
+    else:
+        runner.capture()
+    for invocation in (1, 2):
+        if invocation == 2:
+            runner.forward()
+        for name, cache in caches.items():
+            expected = before[name].clone()
+            for slot in (1, 4):
+                expected.select(1 if name == 'v4' else 0, slot).add_(invocation)
+            torch.testing.assert_close(cache, expected)

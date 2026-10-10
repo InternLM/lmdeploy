@@ -275,7 +275,8 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
                                          use_state_indices: bool = False,
                                          is_circular_buffer: bool = False,
                                          transpose_state_layout: bool = False,
-                                         num_warps: int = 1):
+                                         num_warps: int = 1,
+                                         v_tile_size: int | None = None):
     """Build the layout-specific recurrent GDR TileLang kernel.
 
     Common compile-time metadata is computed once here. The only structural branch is the returned T.prim_func body,
@@ -301,7 +302,7 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
         desired = T.ceildiv(V, num_warps)
         v_per_warp = T.ceildiv(min(desired, max_v_per_warp), min_v_per_warp) * min_v_per_warp
         v_per_warp = max(v_per_warp, min_v_per_warp)
-        target_v_per_cta = V
+        target_v_per_cta = V if v_tile_size is None else min(V, v_tile_size)
     else:
         target_v_per_cta = max(V, v_per_warp * num_warps * 2)
 
@@ -572,6 +573,13 @@ def fused_recurrent_gated_delta_rule_fwd(SEQLEN,
     return fused_recurrent_gated_delta_rule_default_main
 
 
+def _use_split_v_spec_decode(q, state_dtype, num_states, transpose_state_layout, cache_seqlens):
+    """Bounded SM90 FP32-ring specialization; no device-value inspection."""
+    return (transpose_state_layout and cache_seqlens is not None and state_dtype == torch.float32
+            and q.dtype == torch.bfloat16 and q.shape[1:] == (8, 32, 128) and num_states == 8
+            and torch.cuda.get_device_capability(q.device)[0] == 9)
+
+
 def fused_recurrent_gated_delta_rule(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -669,6 +677,13 @@ def fused_recurrent_gated_delta_rule(
         num_states = 1
 
     num_warps = 2 if transpose_state_layout and cache_seqlens is not None else 4
+    # One V tile per CTA avoids serial waves over the same token sequence and
+    # exposes more independent state IO. Keep FP32 arithmetic and every ring
+    # snapshot unchanged; use the original launch for unmeasured geometries.
+    v_tile_size = None
+    if V == 128 and HV == 32 and _use_split_v_spec_decode(
+            q, state_dtype, num_states, transpose_state_layout, cache_seqlens):
+        v_tile_size = 32
     kernel = fused_recurrent_gated_delta_rule_fwd(
         seqlen,
         H,
@@ -693,6 +708,7 @@ def fused_recurrent_gated_delta_rule(
         is_circular_buffer=cache_seqlens is not None,
         transpose_state_layout=transpose_state_layout,
         num_warps=num_warps,
+        v_tile_size=v_tile_size,
     )
 
     kernel(q, k, v, o, g, beta, final_state, state_indices, cache_seqlens)

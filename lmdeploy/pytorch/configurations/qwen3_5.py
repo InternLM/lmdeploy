@@ -85,7 +85,7 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
 
         # for spec
         if spec_method is not None:
-            assert spec_method in ['qwen3_5_mtp', 'dflash']
+            assert spec_method in ['qwen3_5_mtp', 'dflash', 'dspark']
             cfg.model_paradigm = 'ar_spec'
 
         # draft model cfg

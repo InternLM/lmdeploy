@@ -86,6 +86,39 @@ class TestRejectSample:
     Uses hand-crafted token ids so the expected output is obvious.
     """
 
+    @pytest.mark.parametrize('explicit_one_hot', [False, True])
+    def test_deterministic_draft_preserves_target_distribution(self, explicit_one_hot):
+        """Block drafts use delta distributions, including after partial
+        rejection.
+
+        Check conditional emitted-token marginals and accepted-prefix lengths. This tests the real CUDA sampler, not
+        arbitrary-batch model equivalence.
+        """
+        torch.manual_seed(3721)
+        batch, width, vocab = 32768, 3, 32
+        probs = torch.zeros(vocab, device=device)
+        probs[:5] = torch.tensor([.05, .45, .15, .25, .10], device=device)
+        logits = probs.log().expand(batch, width, vocab).contiguous()
+        draft = torch.ones((batch, width), dtype=torch.long, device=device)
+        draft_probs = None
+        if explicit_one_hot:
+            draft_probs = torch.zeros_like(logits)
+            draft_probs[:, :, 1] = 1
+        bonus = torch.zeros(batch, dtype=torch.long, device=device)
+        policy = SamplingInputs(max_top_k=vocab, has_greedy=False,
+                                top_k=torch.full((batch,), vocab, device=device))
+        output, rejected, _ = rejection_sample(logits, draft, bonus, policy, draft_probs)
+        for pos in range(width):
+            emitted = output[:, pos]
+            emitted = emitted[emitted != PLACEHOLDER_TOKEN_ID]
+            observed = torch.bincount(emitted, minlength=vocab) / emitted.numel()
+            tolerance = 6 * (probs * (1 - probs) / emitted.numel()).sqrt() + .001
+            assert torch.all((observed - probs).abs() <= tolerance)
+            expected_prefix = .45 ** (pos + 1)
+            observed_prefix = (width - rejected >= pos + 1).float().mean().item()
+            tolerance_prefix = 6 * (expected_prefix * (1 - expected_prefix) / batch) ** .5 + .001
+            assert abs(observed_prefix - expected_prefix) <= tolerance_prefix
+
     # ----- greedy: rejection_sample -----
 
     def test_greedy_all_match(self):

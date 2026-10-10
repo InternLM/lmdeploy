@@ -16,7 +16,7 @@ from lmdeploy.utils import get_logger
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
 from ..distributed import DistContext, get_dist_manager
-from ..engine.cache_engine import CacheEngine
+from ..engine.cache_engine import CacheEngine, StateCacheEngine
 from ..engine.cache_engine.collector import collect_block_cache_requests
 from ..engine.cache_engine.plan import build_block_cache_plan
 from ..engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
@@ -227,6 +227,13 @@ class SpecModelAgent(BaseSpecModelAgent):
                                                 tp_rank=self.draft_dist_ctx.attn_tp_group.rank,
                                                 cache_stream=cache_stream,
                                                 block_cache_plan=self.block_cache_plan)
+                self.state_cache_engine = StateCacheEngine(
+                    self.cache_config, self.model_config)
+                # ProposalContext intentionally stays small.  The paired state
+                # pool travels with its pageable cache engine so both normal
+                # draft forwards and DFlash-family context materialization see
+                # the same named-cache view.
+                self.cache_engine.state_cache_engine = self.state_cache_engine
 
     def _build_dp_meta_from_main(self, input_ids: torch.Tensor, dp_meta: DPMeta | None):
         """Build DP meta for draft inputs after MTP input shifting."""

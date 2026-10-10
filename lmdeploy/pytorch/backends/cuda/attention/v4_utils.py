@@ -15,18 +15,24 @@ class V4PrefillTokenMeta:
 
 
 def build_prefill_token_meta(q_seqlens: torch.Tensor,
-                             cu_q_seqlens: torch.Tensor | None = None):
+                             cu_q_seqlens: torch.Tensor | None = None,
+                             *, total_tokens: int):
     """Build per-token prefill sequence mapping without CUDA sync.
 
     Given q_seqlens [bsz], returns token_pos [total_q] where token_pos[i] is the position of token i within its
-    sequence, plus seq_id [total_q].
+    sequence, plus seq_id [total_q]. ``total_tokens`` must be the exact packed
+    query extent, known on the host (e.g. input_ids.numel()). Do not derive it
+    from a device scalar: torch.arange would implicitly synchronize with CUDA.
     """
+    if not isinstance(total_tokens, int):
+        raise TypeError('total_tokens must be a host int, not a tensor')
+    if total_tokens < 0:
+        raise ValueError('total_tokens must be non-negative')
     if cu_q_seqlens is None:
         cu_q_seqlens = torch.cat([
             q_seqlens.new_zeros(1, device=q_seqlens.device),
             q_seqlens.cumsum(0),
         ])
-    total_tokens = cu_q_seqlens[-1]
     token_id = torch.arange(total_tokens, dtype=cu_q_seqlens.dtype,
                             device=q_seqlens.device)
     seq_id = torch.searchsorted(cu_q_seqlens[1:], token_id, right=True)

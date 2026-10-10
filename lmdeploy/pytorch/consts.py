@@ -10,6 +10,10 @@ V4_FLASHMLA_D_NOPE = 448
 V4_FLASHMLA_D_ROPE = 64
 V4_FLASHMLA_TILE_SIZE = 64
 V4_FLASHMLA_NUM_TILES = 7
+# Each state-slot base must keep FlashMLA's split FP8 value/scale regions
+# naturally aligned. The minimum even extent satisfies that layout while
+# avoiding storage padding that would be mistaken for a wider logical window.
+V4_FLASHMLA_RING_STORAGE_ALIGNMENT = 2
 V4_INDEX_SCALE_BYTES = 4
 V4_PACKED_TOKEN_DIM = V4_FLASHMLA_D_NOPE + 2 * V4_FLASHMLA_D_ROPE + V4_FLASHMLA_NUM_TILES + 1
 V4_COMPRESSED_KV_R4_CACHE_NAME = 'v4_compressed_kv_r4_fp8'

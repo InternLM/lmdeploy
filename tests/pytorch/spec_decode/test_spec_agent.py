@@ -9,6 +9,7 @@ import torch
 
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
+from lmdeploy.pytorch.spec_decode.base import BaseSpecModelAgent
 from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
 from lmdeploy.pytorch.spec_decode.proposers.base import (
     ProposalContext,
@@ -21,6 +22,26 @@ from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
 from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
+@pytest.mark.parametrize('method,expected,owns_proposer', [
+    (None, None, False),
+    ('qwen3_5_mtp', ProposalMethod.AUTOREGRESSIVE, False),
+    ('dflash', ProposalMethod.DIFFUSION, False),
+    ('dspark', ProposalMethod.DIFFUSION, False),
+    ('test_block_proposer', ProposalMethod.DIFFUSION, False),
+    ('dspark', ProposalMethod.DIFFUSION, True),
+])
+def test_get_proposal_method_without_rank_local_dependency(monkeypatch, method, expected, owns_proposer):
+    from lmdeploy.pytorch.spec_decode.proposers.base import SPEC_PROPOSERS
+
+    # A new registered name inherits the protocol, without an algorithm allowlist.
+    monkeypatch.setitem(SPEC_PROPOSERS.module_dict, 'test_block_proposer', DFlash)
+    agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+    agent.method = method
+    agent.proposer = (SPEC_PROPOSERS.get(method).__new__(SPEC_PROPOSERS.get(method))
+                      if owns_proposer and method is not None else None)
+    assert agent.get_proposal_method() == expected
 
 
 def test_rejection_sampling_delegates_complete_logits(monkeypatch):
@@ -813,14 +834,14 @@ def test_dflash_diffusion_warmup_materializes_context_and_captures_only_block_qu
     agent.model_config = SimpleNamespace(vocab_size=11, dtype=torch.float32, hidden_size=4)
     agent.num_spec_tokens = 3
     agent.make_dummy_meta = None
-    dp_markers = []
+    dp_meta_calls = []
+    build_dp_meta = agent._build_warmup_dp_meta
 
-    def build_dp_meta(inputs):
-        marker = object()
-        inputs.dp_meta = marker
-        dp_markers.append(marker)
+    def record_build_dp_meta(inputs):
+        dp_meta_calls.append((inputs.seq_length.numel(), inputs.max_q_seqlen))
+        build_dp_meta(inputs)
 
-    agent._build_warmup_dp_meta = build_dp_meta
+    agent._build_warmup_dp_meta = record_build_dp_meta
     agent._forward_impl = lambda inputs: forward_graph_keys.append(
         (inputs.seq_length.numel(), inputs.max_q_seqlen, inputs.dp_meta)) or {}
 
@@ -833,7 +854,8 @@ def test_dflash_diffusion_warmup_materializes_context_and_captures_only_block_qu
         (False, 2, 4, (8, 8)),
     ]
     assert all(cache is agent.cache_engine for *_, cache in materialized)
-    assert forward_graph_keys == [(4, 4, dp_markers[1]), (2, 4, dp_markers[2])]
+    assert dp_meta_calls == [(1, 8), (4, 4), (2, 4)]
+    assert forward_graph_keys == [(4, 4, None), (2, 4, None)]
     assert len(sync_calls) == 3
     assert 'synchronize' not in inspect.getsource(DFlash.prepare_warmup_forward)
 

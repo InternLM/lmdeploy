@@ -103,7 +103,7 @@ def test_config_builder_qwen35_mtp_reuses_main_dist_config(monkeypatch):
         captured.update(kwargs)
         return expected
 
-    monkeypatch.setattr(config_builder_mod.SpecDecodeConfig, 'from_config', staticmethod(fake_from_config))
+    monkeypatch.setattr(SpecDecodeConfig, 'from_config', staticmethod(fake_from_config))
 
     result = config_builder_mod.ConfigBuilder.build_specdecode_config(
         target_model='target-model',
