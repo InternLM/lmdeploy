@@ -463,20 +463,29 @@ def get_group(group_type: str, device: str):
         raise RuntimeError(f'Unknown group type: {group_type}')
 
 
+def _try_optimized_all_reduce(tensor, op, group, async_op):
+    """Run an optimized synchronous CUDA SUM when eligible."""
+    if not (tensor.is_cuda and op == ReduceOp.SUM and not async_op and group is not None):
+        return False
+
+    context = get_dist_manager().current_context()
+    # The public API exposes raw process groups, so find the wrapper that owns this one.
+    for tp_group in (context.attn_tp_group, context.mlp_tp_group, context.moe_tp_group):
+        if tp_group is not None and tp_group.gpu_group is group:
+            if tp_group.communicator is not None:
+                tp_group.communicator.all_reduce_(tensor)
+                return True
+            break
+    return False
+
+
 def all_reduce(tensor, op=ReduceOp.SUM, group='tp', async_op=False):
     """All reduce."""
     if isinstance(group, str):
         group = get_group(group, 'gpu')
 
-    # Optimize synchronous CUDA SUM on explicit TP groups; keep other calls native.
-    if tensor.is_cuda and op == ReduceOp.SUM and not async_op and group is not None:
-        context = get_dist_manager().current_context()
-        # Resolve the raw ProcessGroup to its communicator.
-        for tp_group in (context.attn_tp_group, context.mlp_tp_group, context.moe_tp_group):
-            if tp_group is not None and tp_group.gpu_group is group:
-                if tp_group.communicator is not None:
-                    return tp_group.communicator.all_reduce_(tensor)
-                break
+    if _try_optimized_all_reduce(tensor, op, group, async_op):
+        return None
 
     return dist.all_reduce(tensor, op, group, async_op)
 
