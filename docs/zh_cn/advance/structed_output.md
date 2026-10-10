@@ -108,3 +108,13 @@ print(response)
 ```
 
 输出结果是一个 json 格式的回答。
+
+## 限制
+
+为保障服务的可用性，通过 `response_format` 提供的语法源在编译前会先做校验，超出以下限制的请求
+将以 HTTP 400 拒绝：
+
+- 序列化后的语法源（JSON schema、正则或 structural tag）不超过 16 KiB；
+- JSON schema 的原始 JSON 嵌套深度不超过 128 层（嵌套对象经由 `properties` 包装，每层占两级），
+  因为语法编译开销随深度呈指数增长；
+- 校验在事件循环之外的工作线程中执行，预算为 5 秒，超时的 schema 同样会被拒绝。
