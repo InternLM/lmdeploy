@@ -92,16 +92,14 @@ class ChatTemplateConfig:
     @classmethod
     def from_json(cls, file_or_string):
         """Construct a dataclass instance from a JSON file or JSON string."""
-        try:
-            # Try to open the input_data as a file path
+        if os.path.isfile(file_or_string):
             with open(file_or_string, encoding='utf-8') as file:
                 json_data = file.read()
-        except FileNotFoundError:
-            # If it's not a file path, assume it's a JSON string
+        else:
+            # If it's not a file path, assume it's a JSON string. Opening it
+            # as a path may fail with errors other than FileNotFoundError,
+            # e.g. a name longer than the OS limit, or quotes on Windows.
             json_data = file_or_string
-        except OSError:
-            # If it's not a file path and not a valid JSON string, raise error
-            raise ValueError('Invalid input. Must be a file path or a valid JSON string.')
         json_data = json.loads(json_data)
         if json_data.get('model_name', None) is None:
             json_data['model_name'] = random_uuid()
