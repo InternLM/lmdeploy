@@ -352,7 +352,9 @@ class DFlashDraftModel(nn.Module, CudaGraphMixin):
         if self.has_separate_mask_embedding and self.mask_token_id is not None:
             mask = (input_ids == int(self.mask_token_id)).unsqueeze(-1)
             embeds = torch.where(mask, self.mask_embedding.to(dtype=embeds.dtype), embeds)
-        return embeds
+        # the shared target embedding may run in a different dtype than the
+        # draft (e.g. float16 AWQ target with a bfloat16 draft checkpoint)
+        return embeds.to(self.dtype)
 
     def project_target_hidden(self, target_hidden: torch.Tensor) -> torch.Tensor:
         """Project concatenated target-layer hidden states into draft hidden
@@ -362,7 +364,8 @@ class DFlashDraftModel(nn.Module, CudaGraphMixin):
             raise ValueError('DFlash target hidden feature dim mismatch. '
                              f'Expected shape [N, {expected}] from {self.num_context_features} target layers, '
                              f'got {tuple(target_hidden.shape)}.')
-        return self.hidden_norm(self.fc(target_hidden))
+        # target aux states arrive in the target dtype; fuse in the draft dtype
+        return self.hidden_norm(self.fc(target_hidden.to(self.dtype)))
 
     def _rotary_pos_emb_for_context(
         self,
