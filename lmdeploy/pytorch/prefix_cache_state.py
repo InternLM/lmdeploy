@@ -13,12 +13,13 @@ import numpy as np
 
 
 class MultimodalSpan(NamedTuple):
-    """Multimodal span identity used by prefix-cache block keys.
+    """Non-token span identity used by prefix-cache block keys.
 
     Placeholder token ids alone are not enough for VLM prefix caching: two
     requests can contain the same image placeholder tokens backed by different
-    image/video content. The trie key therefore includes every overlapping
-    span's modality and stable content hash.
+    image/video content, or the same token ids with different input embeddings.
+    The trie key therefore includes every overlapping span's modality and
+    stable content hash.
     """
 
     start: int
@@ -159,7 +160,7 @@ class PrefixCacheState:
     """Per-sequence prefix-cache bookkeeping.
 
     ``multimodal_spans`` and ``block_extra_identity`` are persistent request metadata used
-    when constructing multimodal-aware trie keys. ``restore``,
+    when constructing multimodal- and embedding-aware trie keys. ``restore``,
     ``pending_save``, and ``producer_save_pin`` expose the three transient SSM
     checkpoint phases explicitly: a matched frozen state is pinned before
     forward, a save reservation is published after the model copies runtime
@@ -177,7 +178,7 @@ class PrefixCacheState:
     affect the public prefix-cache hit-rate metric.
     """
 
-    # Persistent request metadata used to build multimodal-aware trie keys.
+    # Persistent request metadata used to build multimodal- and embedding-aware trie keys.
     multimodal_spans: list[MultimodalSpan] = field(default_factory=list)
     block_extra_identity: PrefixCacheBlockExtraIdentity = field(default_factory=dict, repr=False)
     num_indexed_spans: int = 0

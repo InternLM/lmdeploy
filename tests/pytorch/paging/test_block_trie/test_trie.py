@@ -671,6 +671,67 @@ class TestBlockTrie(BlockTrieTestMixin):
         assert seq.prefix_cache.multimodal_spans == []
         assert not seq.history_multimodals.empty()
 
+    def test_match_embedding_same_content(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [99] * block_size + [2] * block_size + [3]
+
+        seq = sess.add_sequence(token_ids, input_embeddings=self._input_embeddings(block_size, block_size * 2, 1.0))
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        seq = sess.add_sequence(token_ids, input_embeddings=self._input_embeddings(block_size, block_size * 2, 1.0))
+        block_trie.match(seq)
+
+        assert len(seq.logical_blocks) == 3
+        assert seq.num_history_ids == block_size * 3
+        node = seq.prefix_cache.trie_cursor
+        assert node is not None
+        assert node.prefix_len == block_size * 3
+
+    def test_match_embedding_different_content(self, block_trie, block_mgr, scheduler):
+        sess = scheduler.add_session(0)
+        block_size = sess.seq_meta.block_size
+        token_ids = [1] * block_size + [99] * block_size + [2] * block_size + [3]
+
+        seq = sess.add_sequence(token_ids, input_embeddings=self._input_embeddings(block_size, block_size * 2, 1.0))
+        cached_identity = seq.get_prefix_cache_extra_identity(block_size, block_size * 2)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+
+        seq = sess.add_sequence(token_ids, input_embeddings=self._input_embeddings(block_size, block_size * 2, 2.0))
+        missed_identity = seq.get_prefix_cache_extra_identity(block_size, block_size * 2)
+        block_trie.match(seq)
+
+        assert len(cached_identity) == 1
+        assert len(missed_identity) == 1
+        assert cached_identity[0].start == missed_identity[0].start == block_size
+        assert cached_identity[0].end == missed_identity[0].end == block_size * 2
+        assert cached_identity[0].modality == missed_identity[0].modality == 'embedding'
+        assert cached_identity[0].content_hash != missed_identity[0].content_hash
+        assert len(seq.logical_blocks) == 1
+        assert seq.num_history_ids == block_size
+        node = seq.prefix_cache.trie_cursor
+        assert node is not None
+        assert node.prefix_len == block_size
+
+    def test_embedding_prefix_cache_skips_hash_when_prefix_cache_disabled(self, cache_config, scheduler_config,
+                                                                          seq_meta, monkeypatch):
+        cache_config.enable_prefix_caching = False
+        scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+        def _fail_hash(*args, **kwargs):
+            raise AssertionError('disabled prefix cache should not hash embedding payloads')
+
+        monkeypatch.setattr(messages_module, 'make_embedding_content_hash', _fail_hash)
+
+        sess = scheduler.add_session(0)
+        seq = sess.add_sequence([99] * sess.seq_meta.block_size,
+                                input_embeddings=self._input_embeddings(0, sess.seq_meta.block_size, 1.0))
+
+        assert seq.prefix_cache.multimodal_spans == []
+        assert len(seq.history_embeddings) == 1
+
     def test_match_multimodal_clamps_before_split_span(self, block_trie, block_mgr, scheduler):
         allocator = block_trie.allocator
         sess = scheduler.add_session(0)
