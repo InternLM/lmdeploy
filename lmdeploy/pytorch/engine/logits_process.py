@@ -88,7 +88,7 @@ def _filter_topp_sorted_(scores: torch.Tensor, topp: torch.Tensor, filter_value:
 
 def _filter_minp_sorted_(scores: torch.Tensor, minp: torch.Tensor, filter_value: float = -float('inf')):
     """Filter minp on sorted scores."""
-    softmax_scores = scores.softmax(-1, dtype=torch.float32)
+    softmax_scores = scores.softmax(-1)
     top_probs, _ = softmax_scores.max(dim=-1, keepdim=True)
     scaled_min_p = minp.unsqueeze(dim=1) * top_probs
     mask = softmax_scores < scaled_min_p

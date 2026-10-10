@@ -203,19 +203,6 @@ def test_filter_topp_bfloat16_boundary():
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
-def test_filter_minp_bfloat16_boundary():
-    from lmdeploy.pytorch.engine.logits_process import _filter_minp_sorted_
-
-    scores = torch.tensor([[1.5546875, 1.21875, -0.0966796875, -0.75,
-                            -1.0390625, -1.8828125, -2.53125, -4.84375]],
-                          dtype=torch.bfloat16)
-    expected = MinPLogitsWarper(0.1)(None, scores.double()).to(scores.dtype)
-    actual = _filter_minp_sorted_(scores.clone(), torch.tensor([0.1]))
-
-    assert torch.isfinite(expected).sum() == 3
-    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-
-
 def test_sampling_probabilities_match_speculative_target(monkeypatch):
     from lmdeploy.pytorch.engine import logits_process
 
@@ -230,7 +217,11 @@ def test_sampling_probabilities_match_speculative_target(monkeypatch):
         observed.append(torch.zeros_like(probs).scatter(1, indices, probs))
         return indices[:, 0]
 
+    def unexpected_minp(*args, **kwargs):
+        raise AssertionError('Disabled min-p must not affect top-p sampling.')
+
     monkeypatch.setattr(logits_process, '_multinomial_sampling', sample)
+    monkeypatch.setattr(logits_process, '_filter_minp_sorted_', unexpected_minp)
     processor.sampling(logits)
     # Rejection sampling normalizes filtered target logits in FP32.
     target_probs = processor.filter_logits(logits).softmax(-1, dtype=torch.float32)
