@@ -5,6 +5,18 @@ LMDeploy支持在线权重更新，方便RL训练等场景下的使用。以下�
 checkpoint-engine Broadcast 和 Mooncake P2P 的使用方法请参考
 [使用 checkpoint-engine 更新 PyTorch 权重](./checkpoint_engine.md)。
 
+## Mooncake Store 缓存身份
+
+使用 `MooncakeStoreConnector` 时，需要在 `kv_connector_extra_config` 中设置非空的
+`cache_prefix` 和 `weights_version`；未提供 `weights_version` 时使用引擎的模型 revision。
+权重标识必须随实际部署的权重变化，`main` 等可变分支名不能标识不可变权重。
+共享 KV 缓存的部署必须使用相同的租户前缀、权重标识、实际 KV 格式和在线更新代数。
+
+序列化、分布式或 checkpoint-engine IPC 权重更新成功完成后，会递增进程内的缓存代数。
+更新前应排空请求，并遵循下文的 sleep/wakeup 流程，确保没有旧的传输任务滞留。
+进程重启会重置代数计数器：使用不同权重重启时必须更换 `weights_version`，共享命名空间的部署
+也必须协调权重更新。该计数器不是权重内容哈希。旧版未隔离 key 格式写入的条目不会被复用。
+
 ## 步骤 1: 启动服务
 
 For pytorch backend you have to add `--distributed-executor-backend ray`.

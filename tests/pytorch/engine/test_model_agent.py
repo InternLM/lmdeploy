@@ -1418,6 +1418,9 @@ class TestResetGraphRunner:
         model = object()
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent._model_update_group = {'update': object()}
+        agent.cache_config = SimpleNamespace(kv_transfer_config=None)
+        agent.model_config = None
+        agent.kv_connector = None
         agent.patched_model = SimpleNamespace(
             get_model=lambda: model,
             get_prefill_warmup_token_sizes=lambda: prefill_token_sizes,
@@ -1734,6 +1737,9 @@ class TestCheckpointEngineWeightUpdate:
         agent.memdecode_agent = None
         agent._checkpoint_engine_zmq_ctx = None
         agent.state = SimpleNamespace(is_sleeping=True)
+        agent.cache_config = SimpleNamespace(kv_transfer_config=None)
+        agent.model_config = None
+        agent.kv_connector = None
 
         @contextmanager
         def _all_context():

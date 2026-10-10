@@ -30,7 +30,12 @@ from lmdeploy.pytorch.engine.cache_engine.plan import build_block_cache_plan
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs, _torch_topk
-from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVConnectorRole, build_kv_connector
+from lmdeploy.pytorch.kv_connector import (
+    KVConnectorOutput,
+    KVConnectorRole,
+    build_kv_connector,
+    prepare_kv_connector_model_identity,
+)
 from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
@@ -398,6 +403,7 @@ class BaseModelAgent:
 
         # disaggregated weight-update process groups, keyed by group_name
         self._model_update_group: dict[str, dist.ProcessGroup] = {}
+        self._weights_generation = 0
 
         # microbatch
         self.enable_microbatch = self.dist_config.enable_microbatch
@@ -1535,6 +1541,12 @@ class BaseModelAgent:
             self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
             self.spec_agent.build_cache_engine(self.cache_stream)
 
+            prepare_kv_connector_model_identity(
+                self.cache_config,
+                self.model_config,
+                weights_generation=getattr(self, '_weights_generation', 0),
+            )
+
             self.kv_connector = build_kv_connector(
                 KVConnectorRole.WORKER,
                 self.cache_config,
@@ -1549,6 +1561,19 @@ class BaseModelAgent:
             if self.memdecode_agent is not None:
                 self.memdecode_agent.set_cache_config(self.cache_config)
                 self.memdecode_agent.build_cache_engine(self.cache_stream)
+
+    def _advance_kv_connector_weights_generation(self) -> None:
+        """Move external KV operations past entries from the previous
+        weights."""
+        weights_generation = getattr(self, '_weights_generation', 0) + 1
+        self._weights_generation = weights_generation
+        prepare_kv_connector_model_identity(
+            self.cache_config,
+            self.model_config,
+            weights_generation=weights_generation,
+        )
+        if self.kv_connector is not None:
+            self.kv_connector.set_weights_generation(weights_generation)
 
     def _forward_impl(self, inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None = None):
         output = model_forward(
@@ -1632,6 +1657,7 @@ class BaseModelAgent:
         # warmed by KV-cache wakeup instead.
         if not self.state.is_sleeping and self.patched_model.get_prefill_warmup_token_sizes():
             self.warmup()
+        self._advance_kv_connector_weights_generation()
 
     def get_checkpoint_engine_status(self) -> dict[str, Any]:
         """Return local readiness for checkpoint-engine CUDA IPC updates."""
@@ -1803,6 +1829,8 @@ class BaseModelAgent:
                     torch.cuda.synchronize()
                     self._update_params_ipc_event = None
                     self._update_params_ipc_tensor = None
+
+                self._advance_kv_connector_weights_generation()
 
             torch.cuda.empty_cache()
 

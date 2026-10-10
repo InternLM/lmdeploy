@@ -9,7 +9,7 @@ import os
 import re
 import struct
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from typing import Any, Literal
 
@@ -23,6 +23,7 @@ MOONCAKE_CONFIG_PATH_ENV = 'MOONCAKE_CONFIG_PATH'
 MOONCAKE_BLOCK_HASH_BYTES = hashlib.sha256().digest_size
 
 _BLOCK_HASH_SCHEMA = b'lmdeploy-mooncake-prefix-block-v1\x00'
+_STORE_KEY_NAMESPACE_SCHEMA = b'lmdeploy-mooncake-store-namespace-v2\x00'
 
 MooncakeMode = Literal['embedded']
 
@@ -166,17 +167,56 @@ class MooncakeStoreKeyMetadata:
 
     model_name: str
     cache_prefix: str
+    kv_cache_format: str
+    weights_version: str
     tp_size: int
     block_size: int
     kv_head_replica_num: int = 1
+    weights_generation: int = 0
+    namespace_hash: str = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         validate_kv_head_replica_num(self.kv_head_replica_num, self.tp_size)
+        identity_fields = (
+            ('model_name', self.model_name),
+            ('cache_prefix', self.cache_prefix),
+            ('kv_cache_format', self.kv_cache_format),
+            ('weights_version', self.weights_version),
+        )
+        for field_name, value in identity_fields:
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f'{field_name} must be a non-empty string')
+        if (isinstance(self.weights_generation, bool)
+                or not isinstance(self.weights_generation, int)
+                or self.weights_generation < 0):
+            raise ValueError('weights_generation must be a non-negative integer')
+
+        namespace = json.dumps(
+            {
+                'cache_prefix': self.cache_prefix,
+                'kv_cache_format': self.kv_cache_format,
+                'model_name': self.model_name,
+                'weights_generation': self.weights_generation,
+                'weights_version': self.weights_version,
+            },
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode('utf-8')
+        namespace_hash = hashlib.sha256(
+            _STORE_KEY_NAMESPACE_SCHEMA + namespace).hexdigest()
+        object.__setattr__(self, 'namespace_hash', namespace_hash)
 
     @property
     def num_kv_head_shards(self) -> int:
         """Return the number of distinct KV-head namespaces."""
         return self.tp_size // self.kv_head_replica_num
+
+    def with_weights_generation(
+        self,
+        weights_generation: int,
+    ) -> MooncakeStoreKeyMetadata:
+        """Return metadata for a newer in-process weights generation."""
+        return replace(self, weights_generation=weights_generation)
 
 
 def build_store_key(
@@ -189,9 +229,8 @@ def build_store_key(
     if len(block_hash) != MOONCAKE_BLOCK_HASH_BYTES:
         raise ValueError(f'block_hash must contain {MOONCAKE_BLOCK_HASH_BYTES} bytes')
 
-    prefix = f'{metadata.cache_prefix}@' if metadata.cache_prefix else ''
     return (
-        f'{prefix}{metadata.model_name}'
+        f'lmdeploy@namespace:{metadata.namespace_hash}'
         f'@tp_rank:{kv_head_rank}'
         '@group:0'
         f'@{block_hash.hex()}'

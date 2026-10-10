@@ -154,6 +154,7 @@ class Engine(EngineBase):
             model_path=model_path,
             dist_config=dist_config,
             distributed_executor_backend=distributed_executor_backend,
+            model_revision=engine_config.revision,
         )
         memdecode_config = ConfigBuilder.build_memdecode_config(model_path,
                                                                 engine_config,

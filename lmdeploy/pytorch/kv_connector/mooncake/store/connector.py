@@ -138,6 +138,9 @@ class MooncakeStoreConnector(KVConnectorBase):
     def get_finished(self) -> KVConnectorOutput:
         return self._require_worker().get_finished()
 
+    def set_weights_generation(self, weights_generation: int) -> None:
+        return self._require_worker().set_weights_generation(weights_generation)
+
     def shutdown(self) -> None:
         if self.connector_scheduler is not None:
             return self.connector_scheduler.shutdown()

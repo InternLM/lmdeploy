@@ -5,6 +5,23 @@ LMDeploy supports update model weights online for scenes such as RL training. He
 For checkpoint-engine Broadcast and Mooncake P2P updates, see
 [Updating PyTorch weights with checkpoint-engine](./checkpoint_engine.md).
 
+## Mooncake Store cache identity
+
+When using `MooncakeStoreConnector`, set a non-empty `cache_prefix` and
+`weights_version` in `kv_connector_extra_config`. The engine's model revision is
+used when `weights_version` is omitted. Use a weights identifier that changes
+whenever the deployed weights change; a moving branch name such as `main` does
+not identify immutable weights. Deployments sharing cached KV must agree on the
+tenant prefix, weights identity, resolved KV format, and online update generation.
+
+A successful completed serialized, distributed, or checkpoint-engine IPC weight
+update advances the in-process cache generation. Drain requests and follow the
+sleep/wakeup procedure below so no old transfer work remains queued during the
+update. The generation counter resets on process restart: use a new
+`weights_version` when restarting with different weights, and coordinate weight
+updates across deployments sharing a namespace. The counter is not a content hash
+of the weights. Entries written with the old unscoped key format are not reused.
+
 ## Step 1: Launch server
 
 For pytorch backend you have to add `--distributed-executor-backend ray`.

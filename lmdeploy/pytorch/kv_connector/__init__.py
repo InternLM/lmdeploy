@@ -11,7 +11,11 @@ from .base import (
     KVOperationId,
     KVSaveBlockLease,
 )
-from .factory import build_kv_connector, prepare_kv_connector_config
+from .factory import (
+    build_kv_connector,
+    prepare_kv_connector_config,
+    prepare_kv_connector_model_identity,
+)
 
 __all__ = [
     'KVConnectorBase',
@@ -26,4 +30,5 @@ __all__ = [
     'KVSaveBlockLease',
     'build_kv_connector',
     'prepare_kv_connector_config',
+    'prepare_kv_connector_model_identity',
 ]
