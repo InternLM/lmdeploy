@@ -1,10 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
-import torch.distributed as dist
 from torch import nn
 
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.backends.cuda.comm.symm_mem_allgather import MultimemAllGatherer
 from lmdeploy.pytorch.backends.embedding import EmbeddingBuildSpec
 from lmdeploy.pytorch.backends.linear import LinearBuildSpec
 from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_tp_world_rank
@@ -154,21 +152,28 @@ class ParallelLMHead(ParallelEmbedding):
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
-        self._symm_mem_gatherer = (
-            MultimemAllGatherer(self.tp_group, self.tp_rank,
-                               self.tp * self.vocab_size_padded,
-                               self.weight.device, self.weight.dtype)
-            if self.all_reduce else None)
+        communicator = get_dist_group(layer_type=layer_type).communicator
+        self._logits_gather_workspace = None
+        if self.all_reduce:
+            if communicator is None:
+                from lmdeploy.pytorch.backends.communicator import DeviceCommunicator
+                communicator = DeviceCommunicator(self.tp_group)
+            self._logits_gather_workspace = communicator.create_all_gather_workspace(
+                self.tp * self.vocab_size_padded, device=self.weight.device, dtype=self.weight.dtype)
+
+        self._communicator = communicator
 
     def tie_weights(self, embedding: ParallelEmbedding):
         """Tie the local LM-head shard to a parallel embedding shard."""
         self.weight = embedding.weight
+        if self._logits_gather_workspace is not None:
+            self._logits_gather_workspace.reset(self.weight.device, self.weight.dtype)
 
     def _apply(self, fn, recurse=True):
-        """Notify the provider after coordinated model device/dtype moves."""
+        """Update the workspace after coordinated model device/dtype moves."""
         result = super()._apply(fn, recurse=recurse)
-        if self._symm_mem_gatherer is not None:
-            self._symm_mem_gatherer.reset_for_weight(self.weight)
+        if self._logits_gather_workspace is not None:
+            self._logits_gather_workspace.reset(self.weight.device, self.weight.dtype)
         return result
 
     def get_local_logits(self, hidden_states: torch.Tensor):
@@ -182,22 +187,10 @@ class ParallelLMHead(ParallelEmbedding):
         if not self.all_reduce:
             return local_logits[..., :self.vocab_size]
 
-        if self._symm_mem_gatherer is not None:
-            gathered = self._symm_mem_gatherer(local_logits.reshape(-1, local_logits.shape[-1]))
-            if gathered is not None:
-                output_shape = local_logits.shape[:-1] + (self.tp * local_logits.shape[-1], )
-                return gathered.reshape(output_shape)[..., :self.vocab_size]
-
-        input_size = local_logits.size()
-        output_size = (input_size[0] * self.tp, ) + input_size[1:]
-        logits = local_logits.new_empty(output_size)
-        dist.all_gather_into_tensor(logits, local_logits, group=self.tp_group)
-        # The collective concatenates dim 0. Move its rank dimension beside
-        # the vocabulary shard before reconstructing the full last dimension.
-        logits = logits.reshape((self.tp, ) + input_size)
-        logits = logits.movedim(0, local_logits.dim() - 1)
-        logits = logits.reshape(input_size[:-1] + (self.tp * input_size[-1], ))
-        return logits[..., :self.vocab_size]
+        gathered = self._communicator.all_gather(
+            local_logits.reshape(-1, local_logits.shape[-1]), workspace=self._logits_gather_workspace)
+        output_shape = local_logits.shape[:-1] + (self.tp * local_logits.shape[-1], )
+        return gathered.reshape(output_shape)[..., :self.vocab_size]
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """Compute TP-local logits and all-gather them on every rank."""

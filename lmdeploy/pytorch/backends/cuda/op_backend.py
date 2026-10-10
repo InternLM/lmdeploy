@@ -228,13 +228,14 @@ class CudaOpsBackend(DefaultOpsBackend):
         return CudaV4AttentionMetadata
 
     @classmethod
-    def build_communicator(cls, cpu_group, device_group, dist_config):
+    def build_communicator(cls, cpu_group, device_group, dist_config, *, group_name='tp'):
         """Build a CUDA communicator."""
         from .comm.communicator import build_cuda_communicator
         communicator = build_cuda_communicator(
             cpu_group=cpu_group,
             device_group=device_group,
             dist_config=dist_config,
+            group_name=group_name,
         )
         if communicator is not None:
             return communicator
@@ -242,6 +243,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             cpu_group=cpu_group,
             device_group=device_group,
             dist_config=dist_config,
+            group_name=group_name,
         )
 
     @staticmethod

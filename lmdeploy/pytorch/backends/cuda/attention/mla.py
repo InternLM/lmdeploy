@@ -14,7 +14,7 @@ from lmdeploy.pytorch.backends.cp_utils import (
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import CudaAttentionMetaBuilder
-from .cp import gather_dcp_query, merge_dcp_attention
+from .cp import get_dcp_manager
 from .default import TritonAttentionImpl, TritonAttentionMetadata
 
 logger = get_logger('lmdeploy')
@@ -253,6 +253,11 @@ class FlashMLAImpl(TritonAttentionImpl):
         self.flatten_kv_cache_mla_fp8 = flatten_kv_cache_mla_fp8
         assert num_kv_heads == 1, 'MLA requires num kv heads equal to 1'
         self.use_fa3 = use_fa3
+
+        if self.dcp_world_size > 1:
+            self.dcp_manager = get_dcp_manager()
+            self.dcp_manager.prepare_attention(num_heads, head_size)
+            self.dcp_manager.prepare_prefix_gather(head_size)
 
     def get_step_metadata_provider(self):
         """Describe metadata required by this selected implementation."""
@@ -518,23 +523,14 @@ class FlashMLAImpl(TritonAttentionImpl):
         v_scales_zeros: torch.Tensor = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Gather one globally ordered cached-prefix chunk."""
-        from lmdeploy.pytorch.distributed import all_gather_into_tensor
-        from lmdeploy.pytorch.kernels.cuda.dcp import reorder_dcp_prefill_kv
-
-        dcp_world_size = self.dcp_world_size
-        block_size = k_cache.size(1)
-        virtual_block_size = block_size * dcp_world_size
-        local_capacity = chunk.kv_seqlens.numel() * chunk.size // dcp_world_size
-        block_start = chunk.start // virtual_block_size
-        num_blocks = chunk.size // virtual_block_size
         local_meta = replace(
             attn_metadata,
-            block_offsets=attn_metadata.block_offsets[:, block_start:block_start + num_blocks],
+            block_offsets=attn_metadata.block_offsets[:, chunk.local_block_slice(k_cache.size(1))],
             kv_start_loc=chunk.local_cu_seqlens[:-1],
             kv_seqlens=chunk.local_kv_seqlens[self.dcp_rank],
             cu_seqlens_k=chunk.local_cu_seqlens,
-            kv_flatten_size=local_capacity,
-            max_kv_seqlen=chunk.size // dcp_world_size,
+            kv_flatten_size=chunk.local_capacity,
+            max_kv_seqlen=chunk.size // self.dcp_world_size,
         )
         local_k, _ = self._flatten_prefill_kv_cache(
             k_cache,
@@ -545,18 +541,7 @@ class FlashMLAImpl(TritonAttentionImpl):
             k_scales_zeros=k_scales_zeros,
             v_scales_zeros=v_scales_zeros,
         )
-        gathered = local_k.new_empty(dcp_world_size * local_capacity,
-                                     *local_k.shape[1:])
-        all_gather_into_tensor(gathered, local_k, group='dcp')
-
-        context_k = local_k.new_empty(chunk.kv_seqlens.numel() * chunk.size, *local_k.shape[1:])
-        reorder_dcp_prefill_kv(
-            gathered,
-            context_k,
-            chunk_kv_seqlens=chunk.kv_seqlens,
-            kv_start_loc=chunk.cu_seqlens[:-1],
-            local_lens=chunk.local_kv_seqlens,
-        )
+        context_k = self.dcp_manager.gather_prefix(local_k, chunk)
         return context_k, chunk.cu_seqlens
 
     def _prefill_dcp_context(
@@ -725,7 +710,7 @@ class FlashMLAImpl(TritonAttentionImpl):
         if self.dcp_world_size == 1:
             return self._decoding_paged(query, k_cache, attn_metadata)
 
-        query = gather_dcp_query(query, dcp_world_size=self.dcp_world_size)
+        query = self.dcp_manager.gather_query(query)
         query_len = query.size(0) // attn_metadata.q_seqlens.numel()
         if query_len > 1:
             # Consecutive global queries do not advance each interleaved
@@ -740,11 +725,10 @@ class FlashMLAImpl(TritonAttentionImpl):
             )
         local_output, local_lse = self._decoding_paged(
             query, k_cache, attn_metadata, causal=False, return_lse=True)
-        return merge_dcp_attention(
+        return self.dcp_manager.combine(
             local_output,
             local_lse,
-            valid_counts=attn_metadata.dcp_local_kv_seqlens,
-            dcp_world_rank=(self.dcp_world_size, self.dcp_rank))
+            valid_counts=attn_metadata.dcp_local_kv_seqlens)
 
     def _forward_prefill(
         self,

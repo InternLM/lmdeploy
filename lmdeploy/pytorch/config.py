@@ -3,7 +3,7 @@ import enum
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import torch
 
@@ -224,6 +224,9 @@ class DistConfig:
     mlp_tp_mode: TPMode = TPMode.DEFAULT
     moe_tp_mode: TPMode = TPMode.DEFAULT
 
+    # communication
+    communication_backend: Literal['nccl', 'auto'] = 'nccl'
+
     def __post_init__(self):
         """Post init."""
         assert self.dp_rank < self.dp
@@ -297,6 +300,7 @@ class DistConfig:
             dp_rank=engine_config.dp_rank,
             enable_microbatch=engine_config.enable_microbatch,
             enable_eplb=engine_config.enable_eplb,
+            communication_backend=engine_config.communication_backend,
             tp=engine_config.tp,
             dcp=engine_config.dcp,
             attn_tp=engine_config.attn_tp_size,
@@ -620,7 +624,11 @@ class ModelConfig:
         model_config.dist_config = dist_config
 
         if dist_config.dcp > 1:
-            assert model_config.use_flash_mla, 'DCP requires FlashMLA attention'
+            if not model_config.use_flash_mla:
+                replicas = model_config.num_replicate_key_value_heads
+                assert replicas % dist_config.dcp == 0, (
+                    'GQA DCP groups must share replicated KV heads: '
+                    f'KV replication factor {replicas} must be divisible by dcp {dist_config.dcp}')
             assert model_config.sliding_window < 0, 'DCP does not support sliding-window attention'
             if model_config.mla_index_topk is not None:
                 from lmdeploy.pytorch import envs
