@@ -77,8 +77,7 @@ def _filter_topk_sorted_(scores: torch.Tensor, topk: torch.LongTensor, filter_va
 
 def _filter_topp_sorted_(scores: torch.Tensor, topp: torch.Tensor, filter_value: float = -float('inf')):
     """Filter topp on sorted scores."""
-    # Keep probability thresholds accurate for BF16/FP16 model logits.
-    softmax_scores = scores.softmax(-1, dtype=torch.float32)
+    softmax_scores = scores.softmax(-1)
     cum_scores = softmax_scores.cumsum(1) - softmax_scores
     mask = cum_scores > topp[:, None]
     mask[:, 0] = False  # keep at least one
@@ -539,7 +538,7 @@ class FusedLogitsProcessor:
         if sampling_inputs.max_top_k == 1:
             return logits.argmax(-1)
         scores, indices = self._filter_sorted_logits(logits)
-        return _multinomial_sampling(scores.softmax(1, dtype=torch.float32), sampling_inputs.random_seeds,
+        return _multinomial_sampling(scores.softmax(1), sampling_inputs.random_seeds,
                                      sampling_inputs.random_offsets, indices)
 
     @torch.inference_mode()
