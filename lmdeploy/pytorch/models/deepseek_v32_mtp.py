@@ -23,6 +23,7 @@ class DeepseekV32MTPModel(DeepseekMTPModel):
                          dtype=dtype,
                          device=device,
                          decoder_layer_cls=DeepseekV32DecoderLayer)
+        self._load_buffers = dict()
 
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor,
                                params_dict: dict[str, nn.Parameter],

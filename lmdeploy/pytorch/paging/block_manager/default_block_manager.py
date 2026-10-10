@@ -22,15 +22,22 @@ class DefaultBlockManager(BaseBlockManager):
         num_cpu_blocks (int): number of cpu blocks.
     """
 
-    @classmethod
-    def num_required_blocks(cls, obj: SchedulerSequence, prealloc_size: int = 0):
+    def __init__(self, num_gpu_blocks: int, num_cpu_blocks: int,
+                 num_gpu_reserved: int = 0, dcp: int = 1) -> None:
+        super().__init__(num_gpu_blocks, num_cpu_blocks, num_gpu_reserved)
+        self.dcp = dcp
+
+    def num_required_blocks(self, obj: SchedulerSequence, prealloc_size: int = 0):
         """Get num required blocks."""
         num_tokens = obj.num_all_ids
         if obj.kv_token_limit is not None:
             num_tokens = min(num_tokens, obj.kv_token_limit)
         num_tokens += prealloc_size
 
-        num_all_blocks = _div_up(num_tokens, obj.block_size)
+        # DCP shards sequence tokens across ranks, so one scheduler block
+        # spans ``dcp`` physical cache blocks in the unsharded sequence.
+        scheduler_block_size = obj.block_size * self.dcp
+        num_all_blocks = _div_up(num_tokens, scheduler_block_size)
         return max(0, num_all_blocks - len(obj.logical_blocks))
 
     def can_allocate(self, msg: SchedulerSequence, prealloc_size: int = 0):
