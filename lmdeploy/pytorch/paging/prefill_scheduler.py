@@ -669,7 +669,13 @@ class _PrefillAdmissionAttempt:
         return self._apply_prefill_token_budget_gate()
 
     def _apply_nonfinal_long_prefill_gate(self):
-        """Reject non-final long prefills when this turn excludes them."""
+        """Keep non-final chunks exclusive, after resolving any prefix hit.
+
+        Input construction only supports single-request chunks. A checkpoint
+        cut can cost less than the token budget, but must not join an already
+        selected final prefill. Matching may turn it into a final prefill; if
+        resource admission later loses that match, retain this rejection.
+        """
         prefill = self.prefill_scheduler
         seq = self.seq
         if ((self.turn_policy.allows_nonfinal_long_prefill and not self.batch_has_prefill)

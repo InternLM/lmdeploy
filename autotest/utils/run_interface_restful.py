@@ -199,6 +199,14 @@ def _run_interface_suites(
                 '(Anthropic Messages API not available via proxy)',
                 flush=True,
             )
+        engine_suites = [c for c in ('sleep_wakeup', 'abort_request') if c in case_info]
+        if engine_suites:
+            case_info = [c for c in case_info if c not in ('sleep_wakeup', 'abort_request')]
+            print(
+                f'proxy: skipping {", ".join(engine_suites)} '
+                '(sleep/abort mutate engine state on api_server workers)',
+                flush=True,
+            )
 
     env = _scrub_outer_xdist_env(os.environ.copy())
     env['LMDEPLOY_PORT'] = str(port)
@@ -258,17 +266,29 @@ def _run_interface_suites(
             'autotest/interface/restful/reasoning_parser/',
             f'reasoning and not not_{backend}',
         ),
+        (
+            'sleep_wakeup',
+            'autotest/interface/restful/test_restful_sleep_wakeup.py',
+            f'not not_{backend}',
+        ),
+        (
+            'abort_request',
+            'autotest/interface/restful/test_restful_abort_request.py',
+            f'not not_{backend}',
+        ),
     ]
     for case_name, rel_path, marker in suite_map:
         if case_name not in case_info:
             continue
         log_path = os.path.join(log_dir, f'log_interface_{case_name}_{case_str}_{port}_{timestamp}.log')
+        # sleep/abort mutate the shared engine; do not fan out HTTP workers.
+        suite_n = 1 if case_name in ('sleep_wakeup', 'abort_request') else n_workers
         rc = _pytest_cmd(
             rel_path,
             k_expr=k_expr,
             m_expr=marker,
             env=env,
-            n_workers=n_workers,
+            n_workers=suite_n,
             log_path=log_path,
             reruns=5,
         )

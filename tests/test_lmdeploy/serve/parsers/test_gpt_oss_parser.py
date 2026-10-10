@@ -4,6 +4,7 @@ import pytest
 
 pytest.importorskip('openai_harmony')
 
+from lmdeploy._guided_decoding import ensure_response_format_compilable
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, JsonSchema, ResponseFormat
 from lmdeploy.serve.parsers import _openai_harmony as openai_harmony_mod
 from lmdeploy.serve.parsers import gpt_oss_response_parser as gpt_oss_mod
@@ -322,8 +323,8 @@ class TestGptOssResponseFormatGrammarConversion:
         rf = parser.request.response_format
         assert rf is not None
         assert rf['type'] == 'structural_tag'
-        assert rf['structural_tag'] is not None
-        st_json = json.dumps(rf['structural_tag'])
+        ensure_response_format_compilable(rf)
+        st_json = json.dumps(rf)
         # Harmony channel markers must be present
         assert '<|channel|>final<|message|>' in st_json
         assert '<|end|>' in st_json
@@ -352,7 +353,7 @@ class TestGptOssResponseFormatGrammarConversion:
         rf = parser.request.response_format
         assert rf is not None
         assert rf['type'] == 'structural_tag'
-        assert rf['structural_tag'] is not None
+        ensure_response_format_compilable(rf)
 
 
     def test_grammar_failure_falls_back_to_prompt_injection(self, monkeypatch):
@@ -412,8 +413,8 @@ class TestGptOssToolGrammarInjection:
         rf = parser.request.response_format
         assert rf is not None
         assert rf['type'] == 'structural_tag'
-        assert rf['structural_tag'] is not None
-        st_json = json.dumps(rf['structural_tag'])
+        ensure_response_format_compilable(rf)
+        st_json = json.dumps(rf)
         assert 'functions.get_weather' in st_json
         for marker in extra_markers:
             assert marker in st_json
@@ -450,7 +451,8 @@ class TestGptOssToolGrammarInjection:
         rf = parser.request.response_format
         assert rf is not None
         assert rf['type'] == 'structural_tag'
-        st_json = json.dumps(rf['structural_tag'])
+        ensure_response_format_compilable(rf)
+        st_json = json.dumps(rf)
         assert 'functions.get_weather' in st_json
         # The non-selected tool should NOT appear
         assert 'functions.get_time' not in st_json
@@ -523,11 +525,12 @@ class TestGptOssToolGrammarInjection:
         rf = parser.request.response_format
         assert rf is not None
         assert rf['type'] == 'structural_tag'
-        st_json = json.dumps(rf['structural_tag'])
+        st_json = json.dumps(rf)
         # Tool grammar wins — must contain tool call, not plain json_schema
         assert 'functions.get_weather' in st_json
 
-    def test_tool_grammar_failure_clears_response_format(self, monkeypatch):
+    @pytest.mark.parametrize('tool_choice', ['auto', 'required'])
+    def test_tool_grammar_failure_clears_response_format(self, monkeypatch, tool_choice):
         """Tool grammar failure must clear a non-text response_format so it
         cannot conflict with Harmony tool-call constraints downstream.
 
@@ -551,12 +554,16 @@ class TestGptOssToolGrammarInjection:
                     'parameters': {'type': 'object', 'properties': {}},
                 },
             }],
-            tool_choice='required',
+            tool_choice=tool_choice,
             response_format=ResponseFormat(
                 type='json_schema',
                 json_schema=JsonSchema(name='test', schema={'type': 'object'}),
             ),
         )
+        if tool_choice == 'required':
+            with pytest.raises(ValueError, match='required'):
+                gpt_oss_mod.GptOssResponseParser(request=request)
+            return
         parser = gpt_oss_mod.GptOssResponseParser(request=request)
 
         assert parser.request.response_format is None

@@ -166,6 +166,12 @@ class StateCheckpointLifecycle:
 
         if step is None:
             step = seq.num_valid_ids
+        lookahead = seq._seq_meta.prefix_cache_token_lookahead
+        if lookahead and (is_decode or step + lookahead > seq.input_end_pos or seq.logprob_start_pos >= 0):
+            return -1
+        alignment = seq._seq_meta.prefix_cache_checkpoint_block_size
+        if alignment and step % alignment:
+            return -1
         if step <= 0 or (is_decode and step % self._block_size != 0):
             return -1
         if step > seq.num_valid_ids:

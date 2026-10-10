@@ -86,12 +86,29 @@ def _iter_multimodal_chunk_spans(sorted_multimodals, input_shift: int):
         yield group_start, group_end
 
 
-def get_long_context_chunk_limit(seq: 'SchedulerSequence', max_prefill_token_num: int) -> int:
-    """Return the token budget for one long-context chunk."""
+def get_long_context_chunk_capacity(seq: 'SchedulerSequence', max_prefill_token_num: int) -> int:
+    """Return the static token capacity, including indivisible multimodal spans."""
     mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
     spans = _iter_multimodal_chunk_spans(_iter_sorted_multimodals(mm_for_chunk_limit), seq.prefill_input_shift)
     max_span = max((end - start for start, end in spans), default=0)
     return max(max_prefill_token_num, max_span)
+
+
+def limit_long_context_checkpoint(seq: 'SchedulerSequence', limit: int) -> int:
+    """Cut the final prefill suffix after a reusable aligned checkpoint."""
+    alignment = seq._seq_meta.prefix_cache_checkpoint_block_size
+    if alignment:
+        # Matching leaves at least one input for logits, so an identical prompt
+        # can reuse the preceding aligned state instead of its final state.
+        step = ((seq.input_end_pos - 1) // alignment) * alignment
+        if seq.num_history_ids < step and seq.is_prefix_cache_boundary_safe(step):
+            limit = min(limit, step - seq.num_history_ids)
+    return limit
+
+
+def get_long_context_chunk_limit(seq: 'SchedulerSequence', max_prefill_token_num: int) -> int:
+    """Apply the current checkpoint boundary to the static chunk capacity."""
+    return limit_long_context_checkpoint(seq, get_long_context_chunk_capacity(seq, max_prefill_token_num))
 
 
 def plan_long_context_chunk(seq: 'SchedulerSequence',

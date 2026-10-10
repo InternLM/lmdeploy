@@ -27,7 +27,12 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     MooncakeStoreStateSave,
 )
 from lmdeploy.pytorch.long_context import get_long_context_chunk_limit, plan_long_context_chunk
-from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore, StateCheckpointSaveReservation
+from lmdeploy.pytorch.messages import (
+    MessageStatus,
+    SequenceMeta,
+    StateCheckpointRestore,
+    StateCheckpointSaveReservation,
+)
 from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import CheckpointCopyPlan
 
 
@@ -86,6 +91,8 @@ class _DummySeq:
                  match_start_step: int = -1):
         self.num_history_ids = history_ids
         self.num_token_ids = token_ids
+        self._seq_meta = SequenceMeta(block_size=64)
+        self.kv_token_limit = None
         self.history_multimodals = SimpleNamespace(multimodals=all_multimodals)
         self.history_embeddings = []
         self._input_multimodals = input_multimodals

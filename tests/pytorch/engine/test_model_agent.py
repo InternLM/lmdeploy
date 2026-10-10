@@ -1058,14 +1058,18 @@ def test_record_forward_input_stream_defers_origin_stream_reuse():
     forward_stream.wait_event(h2d_event)
     _record_forward_input_stream({'delta': tensor}, forward_stream)
     with torch.cuda.stream(forward_stream):
+        observed = torch.empty_like(tensor)
         torch.cuda._sleep(10_000_000)
-        observed = tensor.clone()
+        observed.copy_(tensor)
 
     del tensor
     with torch.cuda.stream(h2d_stream):
         replacement = torch.zeros((numel, ), dtype=torch.uint8, device='cuda')
 
-    assert replacement.data_ptr() != original_ptr
+    # A delayed host may reach this check after the consumer has finished;
+    # reusing its storage is then safe. Only pending work must pin the input.
+    if not forward_stream.query():
+        assert replacement.data_ptr() != original_ptr
     forward_stream.synchronize()
     h2d_stream.synchronize()
     assert torch.all(observed == 7)

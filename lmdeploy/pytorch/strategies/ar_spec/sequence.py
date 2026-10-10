@@ -32,7 +32,10 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         super().__post_init__()
         self._num_valid_ids: int = len(self.history_cache)
         self._strategy: ARSpecSequenceStrategy = self._seq_meta.strategy
-        self.prefix_cache.recompute_overlap.recompute_blocks = self._strategy.recompute_blocks
+        # GLM's cache identity includes the next token used to complete the
+        # draft checkpoint. Other models retain the configured rewind policy.
+        self.prefix_cache.recompute_overlap.recompute_blocks = (
+            0 if self._seq_meta.prefix_cache_token_lookahead else self._strategy.recompute_blocks)
 
     @property
     def num_valid_ids(self):

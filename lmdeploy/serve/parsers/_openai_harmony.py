@@ -41,6 +41,7 @@ def get_encoding():
 class GptOssResponseParser(ResponseParser):
     """Harmony stream parser for GPT-OSS (assistant role)."""
     tool_parser_cls = object()  # API server checks `is not None` for tool support.
+    supports_required_tool_choice = True
 
     def __init__(self, request: ChatCompletionRequest):
         if hasattr(request, 'tools') and hasattr(request, 'tool_choice'):
@@ -92,9 +93,10 @@ class GptOssResponseParser(ResponseParser):
           the Harmony final channel (``<|channel|>final<|message|> ...
           <|end|>``), optionally preceded by an analysis block.
 
-        If grammar construction fails the ``response_format`` is injected
-        into the system prompt as a ``# Response Formats`` section and
-        cleared, matching the Harmony-native fallback.
+        Required tool calls reject the request if grammar construction fails.
+        For other modes, a failed grammar construction injects the
+        ``response_format`` into the system prompt as a ``# Response Formats``
+        section and clears it, matching the Harmony-native fallback.
         """
         fmt = getattr(self.request, 'response_format', None)
         tools = getattr(self.request, 'tools', None)
@@ -107,6 +109,8 @@ class GptOssResponseParser(ResponseParser):
             if grammar is not None:
                 self._set_response_format(grammar)
                 return
+            if tool_choice == 'required':
+                raise ValueError('Failed to build the grammar for `tool_choice="required"` in GPT-OSS.')
             # tool grammar failed — fall back to prompt injection so the
             # original response_format (if any) is not left intact to
             # conflict with Harmony tool-call constraints downstream.
@@ -155,10 +159,7 @@ class GptOssResponseParser(ResponseParser):
                 tool_choice=xg_tool_choice,
                 reasoning=True,
             )
-            return {
-                'type': 'structural_tag',
-                'structural_tag': json.loads(st.model_dump_json()),
-            }
+            return st.model_dump(mode='json')
         except Exception as e:  # xgrammar may raise ValueError/ValidationError
             logger.warning(f'Failed to build harmony structural tag for tool '
                            f'calling: {e}; falling back to prompt-only.')
@@ -217,10 +218,7 @@ class GptOssResponseParser(ResponseParser):
             ]))
         final_tag = TagFormat(begin=final_begin, content=content, end=final_end)
         st = StructuralTag(format=SequenceFormat(elements=[analysis_tag, final_tag]))
-        return {
-            'type': 'structural_tag',
-            'structural_tag': json.loads(st.model_dump_json()),
-        }
+        return st.model_dump(mode='json')
 
     def _convert_response_format_to_harmony(self) -> None:
         """Fall back to Harmony-native prompt injection when grammar

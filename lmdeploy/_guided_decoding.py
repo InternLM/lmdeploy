@@ -7,6 +7,28 @@ from functools import lru_cache
 from typing import Any
 
 
+def get_interns1_encoded_vocab(tokenizer, vocab_size: int) -> list[bytes]:
+    """Decode InternS1/S2's mixed vocabulary to bytes for grammar matching.
+
+    The slow tokenizer combines byte-level BPE with domain-specific pieces.
+    ``get_vocab`` uses synthetic names for those pieces, whereas ID lookup
+    returns their actual text. Preserve incomplete UTF-8 bytes rather than
+    decoding individual tokens to strings with replacement characters.
+    """
+    encoded_vocab = [b''] * vocab_size
+    added_ids = set(tokenizer.get_added_vocab().values())
+    for token_id in tokenizer.get_vocab().values():
+        if token_id >= vocab_size:
+            continue
+        token = tokenizer.convert_ids_to_tokens(token_id)
+        if token_id in added_ids:
+            encoded_vocab[token_id] = token.encode('utf-8')
+        else:
+            token = token.replace('▁', 'Ġ').replace('\n', 'Ċ')
+            encoded_vocab[token_id] = bytes(tokenizer.byte_decoder[char] for char in token)
+    return encoded_vocab
+
+
 def _json_schema_from_response_format(response_format: dict[str, Any]) -> str:
     schema: Any = response_format['json_schema']
     if isinstance(schema, dict):
