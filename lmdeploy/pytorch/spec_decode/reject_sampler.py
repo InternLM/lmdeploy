@@ -5,6 +5,7 @@ from torch.profiler import record_function
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.rejection_sampling import RejectionSamplingBuildSpec
 from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+from lmdeploy.pytorch.nn.multinomial_sampling import multinomial_sampling
 
 
 class RejectionSampler(nn.Module):
@@ -43,10 +44,20 @@ class RejectionSampler(nn.Module):
 
         bonus_sampling_inputs = expanded_sampling_inputs.select_sampling_rows(
             slice(num_tokens - 1, None, num_tokens))
-        bonus_logits = target_logits[:, -1]
-        bonus_token_ids = FusedLogitsProcessor(
-            bonus_sampling_inputs).sampling(bonus_logits)
-        target_draft_logits = target_logits[:, :-1].contiguous()
+        if (expanded_sampling_inputs.max_top_k <= 0 and expanded_sampling_inputs.top_k is None
+                and expanded_sampling_inputs.top_p is None and expanded_sampling_inputs.min_p is None):
+            # Unfiltered verification needs no full-vocabulary sort or scatter.
+            target_probs = target_logits[:, :-1].softmax(dim=-1)
+            bonus_token_ids = FusedLogitsProcessor(bonus_sampling_inputs).sampling(target_logits[:, -1])
+        else:
+            probs, indices = FusedLogitsProcessor(expanded_sampling_inputs).sampling_probs(target_logits.flatten(0, 1))
+            probs = probs.unflatten(0, (batch_size, num_tokens))
+            indices = indices.unflatten(0, (batch_size, num_tokens))
+            bonus_token_ids = multinomial_sampling(
+                probs[:, -1], bonus_sampling_inputs.random_seeds, bonus_sampling_inputs.random_offsets, indices[:, -1])
+            target_probs = probs.new_zeros(batch_size, num_tokens - 1, target_logits.size(-1))
+            target_probs.scatter_(-1, indices[:, :-1], probs[:, :-1])
+        request_sampling_inputs = expanded_sampling_inputs.select_sampling_rows(slice(0, None, num_tokens))
 
         is_greedy = None
         if bonus_sampling_inputs.has_greedy:
@@ -58,9 +69,11 @@ class RejectionSampler(nn.Module):
                 'rejection sampling requires one greedy-policy value per request')
 
         return self._impl.forward(
-            target_draft_logits,
+            target_probs,
             draft_token_ids,
             bonus_token_ids,
+            random_seeds=request_sampling_inputs.random_seeds,
+            random_offsets=request_sampling_inputs.random_offsets,
             is_greedy=is_greedy,
             draft_probs=draft_probs,
         )

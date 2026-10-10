@@ -4,10 +4,11 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.backends.default.rejection_sampling import (
+    DefaultRejectionSamplingImpl,
     torch_greedy_rejection_sample,
 )
 from lmdeploy.pytorch.backends.rejection_sampling import PLACEHOLDER_TOKEN_ID
-from lmdeploy.pytorch.engine.logits_process import SamplingInputs
+from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
 from lmdeploy.pytorch.spec_decode.reject_sampler import RejectionSampler
 from lmdeploy.pytorch.spec_decode.spec_agent import _expand_sampling_inputs
 
@@ -289,3 +290,95 @@ class TestRejectSample:
         valid = _extract_valid(out)
         for i in range(2):
             assert len(valid[i]) == 1, f'row {i}: expected 1 token, got {valid[i]}'
+
+
+@pytest.mark.parametrize('backend', ['cuda', 'default'])
+@pytest.mark.parametrize('top_k,top_p,min_p,use_draft_probs,kept',
+                         [(2, 1., 0., False, 2), (0, .65, 0., False, 2), (0, 1., .6, True, 2),
+                          (0, 1., 0., False, 4)])
+def test_filtered_target_distribution(backend, top_k, top_p, min_p, use_draft_probs, kept):
+    """Both accepted drafts and recovered tokens must follow the filtered target."""
+    batch_size = 8192
+    probs = torch.tensor([.4, .3, .2, .1], device=device)
+    logits = probs.log().expand(batch_size, 3, 4).contiguous()
+    draft = torch.arange(batch_size, device=device).remainder(4)[:, None].expand(-1, 2).contiguous()
+    policy = SamplingInputs(batch_size=batch_size, max_top_k=top_k,
+                            top_p=torch.full((batch_size,), top_p, device=device) if top_p < 1 else None,
+                            min_p=torch.full((batch_size,), min_p, device=device) if min_p > 0 else None,
+                            random_seeds=torch.arange(batch_size, device=device),
+                            random_offsets=torch.full((batch_size,), 100, device=device))
+    sampler = RejectionSampler('cuda')
+    if backend == 'default':
+        sampler._impl = DefaultRejectionSamplingImpl()
+    draft_probs = torch.full_like(logits[:, :-1], .25) if use_draft_probs else None
+    output, _, _ = sampler(logits, draft, _expand_sampling_inputs(policy, 3), draft_probs=draft_probs)
+    valid = output[output >= 0]
+    assert (valid < kept).all()
+    expected = probs.clone()
+    expected[kept:] = 0
+    expected /= expected.sum()
+    actual = torch.bincount(output[:, 0], minlength=4) / batch_size
+    torch.testing.assert_close(actual, expected, atol=.025, rtol=0)
+
+
+@pytest.mark.parametrize('backend', ['cuda', 'default'])
+def test_request_randomness_isolated(backend):
+    """Request RNG is independent of global draws, row order, and batch size."""
+    batch_size = 128
+    logits = torch.tensor([.55, .25, .15, .05], device=device).log().expand(batch_size, 5, 4).contiguous()
+    draft = torch.zeros(batch_size, 4, dtype=torch.long, device=device)
+    top_k = torch.tensor([1, 4], device=device).repeat(batch_size // 2)
+    policy = SamplingInputs(batch_size=batch_size, max_top_k=4, has_greedy=True, top_k=top_k,
+                            random_seeds=torch.arange(batch_size, device=device) + 42,
+                            random_offsets=torch.full((batch_size,), 100, device=device))
+    sampler = RejectionSampler('cuda')
+    if backend == 'default':
+        sampler._impl = DefaultRejectionSamplingImpl()
+
+    def sample(inputs, rows=slice(None)):
+        return sampler(logits[rows], draft[rows], _expand_sampling_inputs(inputs, 5))
+
+    expected = sample(policy)
+    assert (expected[0][::2] == 0).all()
+    torch.rand(4096, device=device)
+    for actual, reference in zip(sample(policy), expected):
+        torch.testing.assert_close(actual, reference, atol=0, rtol=0)
+    rows = torch.arange(batch_size - 1, 0, -2, device=device)
+    subset = replace(policy, batch_size=len(rows), top_k=top_k[rows], random_seeds=policy.random_seeds[rows],
+                     random_offsets=policy.random_offsets[rows])
+    for actual, reference in zip(sample(subset, rows), expected):
+        torch.testing.assert_close(actual, reference[rows], atol=0, rtol=0)
+    for changed in (replace(policy, random_seeds=policy.random_seeds + 1000),
+                    replace(policy, random_offsets=policy.random_offsets + 1)):
+        assert (sample(changed)[0][:, 0] != expected[0][:, 0]).any()
+
+
+def test_bonus_filter_applied_once():
+    """Reapplying top-p to an already filtered bonus would remove token 1."""
+    batch_size = 1024
+    policy = SamplingInputs(batch_size=batch_size, max_top_k=3,
+                            top_p=torch.full((batch_size,), .7, device=device),
+                            random_seeds=torch.arange(batch_size, device=device),
+                            random_offsets=torch.zeros(batch_size, dtype=torch.long, device=device))
+    logits = torch.tensor([[0., -torch.inf, -torch.inf], [.6, .25, .15]], device=device)
+    logits[1] = logits[1].log()
+    logits = logits.expand(batch_size, -1, -1).contiguous()
+    expanded = _expand_sampling_inputs(policy, 2)
+    output, rejected, _ = _rejection_sampler(logits, torch.zeros(batch_size, 1, dtype=torch.long, device=device),
+                                           expanded)
+    expected = FusedLogitsProcessor(replace(policy, random_offsets=policy.random_offsets + 1)).sampling(logits[:, -1])
+    assert (rejected == 0).all()
+    assert (expected == 1).any()
+    torch.testing.assert_close(output[:, -1], expected, atol=0, rtol=0)
+
+
+def test_request_random_streams_match_cpu_reference():
+    from lmdeploy.pytorch.backends.default.rejection_sampling import rejection_sampling_random as reference
+    from lmdeploy.pytorch.kernels.cuda.rejection_sampling import rejection_sampling_random
+
+    seeds = torch.arange(16, device=device)[::2]
+    offsets = torch.arange(16, device=device)[::2] + (1 << 28)
+    actual = rejection_sampling_random(seeds, offsets, 4, 257)
+    expected = reference(seeds.cpu(), offsets.cpu(), 4, 257)
+    for cuda_value, cpu_value in zip(actual, expected):
+        torch.testing.assert_close(cuda_value.cpu(), cpu_value)

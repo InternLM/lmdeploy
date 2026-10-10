@@ -8,6 +8,40 @@ from lmdeploy.pytorch.backends.rejection_sampling import PLACEHOLDER_TOKEN_ID
 _PLACEHOLDER_TOKEN_ID = tl.constexpr(PLACEHOLDER_TOKEN_ID)
 
 
+@triton.jit
+def _rejection_sampling_random_kernel(
+    seeds_ptr, offsets_ptr, uniform_ptr, inv_q_ptr,
+    seed_stride, offset_stride, num_spec_tokens: tl.constexpr, vocab_size: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Philox streams keyed by request, decoding step, and sampling purpose."""
+    req_idx = tl.program_id(0)
+    block_idx = tl.program_id(1)
+    seed = tl.load(seeds_ptr + req_idx * seed_stride).to(tl.uint64)
+    step = tl.load(offsets_ptr + req_idx * offset_stride).to(tl.uint64)
+    vocab = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    counter = (step << 32) | vocab.to(tl.uint64)
+    bits = tl.randint4x(seed ^ (2 << 32), counter)[0]
+    uniform = ((bits >> 9).to(tl.float32) + .5) * (1. / (1 << 23))
+    tl.store(inv_q_ptr + req_idx * vocab_size + vocab, -1. / tl.log(uniform), vocab < vocab_size)
+    if block_idx == 0:
+        pos = tl.arange(0, triton.next_power_of_2(num_spec_tokens))
+        accept_counter = (step << 32) | pos.to(tl.uint64)
+        accept_bits = tl.randint4x(seed ^ (1 << 32), accept_counter)[0]
+        accept_uniform = ((accept_bits >> 9).to(tl.float32) + .5) * (1. / (1 << 23))
+        tl.store(uniform_ptr + req_idx * num_spec_tokens + pos, accept_uniform, pos < num_spec_tokens)
+
+
+def rejection_sampling_random(seeds, offsets, num_spec_tokens, vocab_size):
+    """Generate acceptance uniforms and recovery noise without global RNG state."""
+    batch_size = seeds.numel()
+    uniform = torch.empty((batch_size, num_spec_tokens), device=seeds.device, dtype=torch.float32)
+    inv_q = torch.empty((batch_size, vocab_size), device=seeds.device, dtype=torch.float32)
+    _rejection_sampling_random_kernel[(batch_size, triton.cdiv(vocab_size, 1024))](
+        seeds, offsets, uniform, inv_q, seeds.stride(0), offsets.stride(0), num_spec_tokens, vocab_size, 1024)
+    return uniform, inv_q
+
+
 @triton.jit(do_not_specialize=['num_spec_tokens'])
 def _rejection_greedy_sample_kernel(
     output_token_ids_ptr,

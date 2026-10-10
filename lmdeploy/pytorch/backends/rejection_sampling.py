@@ -29,17 +29,21 @@ class RejectionSamplingImpl(ABC):
     @abstractmethod
     def forward(
         self,
-        target_logits: torch.Tensor,
+        target_probs: torch.Tensor,
         draft_token_ids: torch.LongTensor,
         bonus_token_ids: torch.LongTensor,
         *,
+        random_seeds: torch.LongTensor,
+        random_offsets: torch.LongTensor,
         is_greedy: torch.Tensor | None,
         draft_probs: torch.Tensor | None = None,
     ) -> tuple[torch.LongTensor, torch.LongTensor, torch.LongTensor]:
-        """Verify processed target logits against draft tokens.
+        """Verify filtered target probabilities against draft tokens.
 
         ``is_greedy`` is a per-request mask for a mixed batch and ``None``
         for an all-random batch. All-greedy batches use ``forward_greedy``.
+        Request seeds and step offsets own acceptance and recovery randomness;
+        neither global RNG state nor batch row indices may affect the result.
         """
         raise NotImplementedError
 
