@@ -99,7 +99,10 @@ def fused_noaux_tc_routing(
     bias = bias.float().contiguous()
     topk_weight = torch.empty(batch_size, top_k, device=logits.device, dtype=torch.float32)
     topk_idx = torch.empty(batch_size, top_k, device=logits.device, dtype=torch.int64)
-    block_size = num_experts
+    # Triton requires every ``tl.arange`` extent to be a power of two.  The
+    # ungrouped GLM case has 288 experts, so pad its masked expert axis.
+    block_size = (triton.next_power_of_2(num_experts)
+                  if n_group == 1 else num_experts)
     assert block_size % 32 == 0, 'num_experts must be a multiple of 32 for optimal performance'
     grid = (batch_size, )
     _fused_noaux_tc_kernel[grid](

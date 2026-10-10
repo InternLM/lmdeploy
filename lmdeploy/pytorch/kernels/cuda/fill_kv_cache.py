@@ -20,6 +20,75 @@ Q_POLICY_TURBO = tl.constexpr(42)
 
 
 @triton.jit
+def _fill_indexed_key_cache_kernel(
+    Keys, Scales, GroupIds, Valid, RequestIds, BlockOffsets, KeyCache, ScaleCache,
+    BATCH: tl.constexpr, COLUMNS: tl.constexpr, PAGE: tl.constexpr,
+    PAGE_STEP: tl.constexpr, WIDTH: tl.constexpr,
+    stride_kr: tl.constexpr, stride_kd: tl.constexpr,
+    stride_sr: tl.constexpr, stride_br: tl.constexpr, stride_bc: tl.constexpr,
+    stride_kcb: tl.constexpr, stride_kcs: tl.constexpr, stride_kcd: tl.constexpr,
+    stride_scb: tl.constexpr, stride_scs: tl.constexpr,
+    BLOCK_D: tl.constexpr, HAS_REQUEST_IDS: tl.constexpr,
+):
+    row = tl.program_id(0)
+    if tl.load(Valid + row):
+        group = tl.load(GroupIds + row).to(tl.int64)
+        column = tl.minimum(tl.maximum(group // PAGE * PAGE_STEP, 0), COLUMNS - 1)
+        request = tl.load(RequestIds + row) if HAS_REQUEST_IDS else row % BATCH
+        page = tl.load(BlockOffsets + request * stride_br + column * stride_bc).to(tl.int64)
+        slot = group % PAGE
+        d = tl.arange(0, BLOCK_D)
+        key = tl.load(Keys + row * stride_kr + d * stride_kd, d < WIDTH, other=0.0)
+        scale = tl.load(Scales + row * stride_sr)
+        tl.store(KeyCache + page * stride_kcb + slot * stride_kcs + d * stride_kcd, key, d < WIDTH)
+        tl.store(ScaleCache + page * stride_scb + slot * stride_scs, scale)
+
+
+def fill_indexed_key_cache(keys: Tensor, scales: Tensor, group_ids: Tensor,
+                           valid: Tensor, block_offsets: Tensor,
+                           key_cache: Tensor, scale_cache: Tensor,
+                           page_step: int = 1, request_ids: Tensor | None = None) -> None:
+    """Scatter prequantized index keys and scales without reading the arena.
+
+    Rows are step-major [steps * batch] unless request_ids is provided.
+    Each valid destination must be unique;
+    inactive rows perform no load/store on the cache. ``page_step`` maps a
+    compressed page to its column in the uncompressed token page table.
+    Cache views retain their actual strides (including packed DSA storage).
+    """
+    rows, width = keys.shape
+    batch, columns = block_offsets.shape
+    if batch == 0 or columns == 0 or (request_ids is None and rows % batch) or page_step < 1:
+        raise ValueError('Invalid indexed-cache batch/page geometry.')
+    if group_ids.shape != (rows,) or valid.shape != (rows,):
+        raise ValueError('One group id and valid flag are required per key.')
+    if request_ids is not None and request_ids.shape != (rows,):
+        raise ValueError('One request id is required per key.')
+    if scales.shape not in ((rows,), (rows, 1)):
+        raise ValueError('One scale is required per key.')
+    if keys.dtype != key_cache.dtype or scales.dtype != scale_cache.dtype:
+        raise TypeError('Prequantized keys/scales must match cache dtypes.')
+    if key_cache.ndim != 3 or key_cache.size(-1) != width:
+        raise ValueError('Expected [pages, entries, width] key cache.')
+    if scale_cache.shape != (*key_cache.shape[:2], 1):
+        raise ValueError('Expected one scale per cache entry.')
+    if rows == 0:
+        return
+    if keys.dtype == torch.float8_e4m3fn:
+        # Copy the quantized representation even on devices without native FP8.
+        keys = keys.view(torch.uint8)
+        key_cache = key_cache.view(torch.uint8)
+    _fill_indexed_key_cache_kernel[(rows,)](
+        keys, scales, group_ids.contiguous(), valid.contiguous(),
+        request_ids.contiguous() if request_ids is not None else None,
+        block_offsets, key_cache, scale_cache,
+        batch, columns, key_cache.size(1), page_step, width,
+        *keys.stride(), scales.stride(0), *block_offsets.stride(),
+        *key_cache.stride(), *scale_cache.stride()[:2],
+        triton.next_power_of_2(width), request_ids is not None, num_warps=4)
+
+
+@triton.jit
 def _quant_int8(val):
     val_min = tl.min(val, 1)
     val_max = tl.max(val, 1)

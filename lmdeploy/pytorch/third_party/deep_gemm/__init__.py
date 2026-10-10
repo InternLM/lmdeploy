@@ -76,7 +76,9 @@ except Exception:
 
 
 try:
-    from deep_gemm import m_grouped_fp8_gemm_nt_masked
+    m_grouped_fp8_gemm_nt_masked = getattr(deep_gemm, 'm_grouped_fp8_gemm_nt_masked', None)
+    if m_grouped_fp8_gemm_nt_masked is None:
+        m_grouped_fp8_gemm_nt_masked = deep_gemm.fp8_m_grouped_gemm_nt_masked
 except Exception:
     from deep_gemm import m_grouped_gemm_fp8_fp8_bf16_nt_masked
 

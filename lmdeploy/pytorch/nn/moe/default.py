@@ -130,7 +130,9 @@ class FusedMoE(FusedMoEBase):
                  device: torch.device | None = None,
                  all_reduce: bool = True,
                  layer_idx: int = 0,
-                 act_func: Callable = None):
+                 act_func: Callable = None,
+                 output_scale: float = 1.0,
+                 fp32_acc: bool = False):
 
         device = device or torch.device('cpu')
         dtype = dtype or torch.float16
@@ -158,6 +160,8 @@ class FusedMoE(FusedMoEBase):
                 layer_idx=layer_idx,
                 output_dtype=torch.bfloat16,
                 num_max_dispatch_tokens_per_rank=build_ctx.deep_ep_max_tokens_per_rank,
+                output_scale=output_scale,
+                fp32_acc=fp32_acc,
             ),
             enable_deterministic=build_ctx.enable_deterministic,
         )

@@ -44,6 +44,7 @@ class GlmMoeDsaMultiTokenPredictorLayer(nn.Module):
         layer_idx: int,
         dtype: torch.dtype = None,
         device: torch.device = None,
+        decoder_layer_cls=GlmMoeDsaDecoderLayer,
     ) -> None:
         super().__init__()
         self.enorm = RMSNorm(config.hidden_size,
@@ -67,11 +68,12 @@ class GlmMoeDsaMultiTokenPredictorLayer(nn.Module):
         self.shared_head = GlmMoeDsaSharedHead(config,
                                                dtype=dtype,
                                                device=device)
-        self.mtp_block = GlmMoeDsaDecoderLayer(config,
+        self.mtp_block = decoder_layer_cls(config,
                                                layer_idx=layer_idx,
                                                dtype=dtype,
                                                device=device)
-        self.rotary_emb = build_deepseek_rotary_embedding(config)
+        self.rotary_emb = (build_deepseek_rotary_embedding(config)
+                           if config.qk_rope_head_dim else None)
 
     def forward(
         self,
@@ -89,10 +91,13 @@ class GlmMoeDsaMultiTokenPredictorLayer(nn.Module):
         hidden_states = self.eh_proj(
             torch.cat([inputs_embeds, previous_hidden_states], dim=-1))
 
-        cos, sin = self.rotary_emb(hidden_states, position_ids)
+        rotary_pos_emb = None
+        if self.rotary_emb is not None:
+            cos, sin = self.rotary_emb(hidden_states, position_ids)
+            rotary_pos_emb = (cos[0], sin[0])
         hidden_states, residual = self.mtp_block(
             hidden_states,
-            (cos[0], sin[0]),
+            rotary_pos_emb,
             past_key_value,
             attn_metadata=attn_metadata,
             topk_indices_buffer=topk_indices_buffer,
@@ -107,7 +112,8 @@ class GlmMoeDsaMultiTokenPredictor(nn.Module):
     def __init__(self,
                  config: PretrainedConfig,
                  dtype: torch.dtype = None,
-                 device: torch.device = None):
+                 device: torch.device = None,
+                 decoder_layer_cls=GlmMoeDsaDecoderLayer):
         super().__init__()
         self.config = config
         self.mtp_start_layer_idx = config.num_hidden_layers
@@ -118,7 +124,8 @@ class GlmMoeDsaMultiTokenPredictor(nn.Module):
             GlmMoeDsaMultiTokenPredictorLayer(config,
                                               idx,
                                               dtype=dtype,
-                                              device=device)
+                                              device=device,
+                                              decoder_layer_cls=decoder_layer_cls)
             for idx in range(self.mtp_start_layer_idx,
                              self.mtp_start_layer_idx + self.num_mtp_layers)
         })
@@ -232,8 +239,14 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
         )
 
     def get_cudagraph_extra_key(self, skip_topk: bool = False, **kwargs) -> tuple:
-        """Separate graphs that compute and reuse DSA top-k indices."""
-        return (skip_topk, )
+        """Separate seed/reuse graphs and invalidate captured grown buffers."""
+        buffer = getattr(self, 'topk_indices_buffer', None)
+        # The final shifted MTP chunk can exceed max_prefill_token_num by one;
+        # large multimodal spans can grow it further. A captured graph retains
+        # the old allocation, so do not replay it after the buffer grows.
+        capacity = (0 if buffer is None or buffer.indices is None
+                    else buffer.indices.size(0))
+        return (capacity, skip_topk)
 
     def prepare_inputs_for_generation(
         self,

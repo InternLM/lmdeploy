@@ -150,6 +150,8 @@ def _state_select_kernel(
     stride_o0,
     INNER_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
+    NUM_STATES: tl.constexpr,
+    NUM_SLOTS: tl.constexpr,
 ):
     """Fused state select: out[b] = state[state_indices[b],
     spec_offsets[b]]."""
@@ -165,7 +167,8 @@ def _state_select_kernel(
     src_ptr = state_ptr + state_idx * stride_s0 + spec_off * stride_s1 + offs
     dst_ptr = out_ptr + batch_id * stride_o0 + offs
 
-    data = tl.load(src_ptr, mask=mask)
+    valid = (state_idx >= 0) & (state_idx < NUM_STATES) & (spec_off >= 0) & (spec_off < NUM_SLOTS)
+    data = tl.load(src_ptr, mask=mask & valid, other=0)
     tl.store(dst_ptr, data, mask=mask)
 
 
@@ -180,6 +183,8 @@ def _state_scatter_kernel(
     stride_i0,
     INNER_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
+    NUM_STATES: tl.constexpr,
+    NUM_SLOTS: tl.constexpr,
 ):
     """Fused state scatter: state[si[b], so[b]] = src[b]."""
     batch_id = tl.program_id(0).to(tl.int64)
@@ -189,7 +194,8 @@ def _state_scatter_kernel(
     spec_off = tl.load(spec_offsets_ptr + batch_id)
 
     offs = block_id * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offs < INNER_SIZE
+    mask = (offs < INNER_SIZE) & (state_idx >= 0) & (state_idx < NUM_STATES)
+    mask = mask & (spec_off >= 0) & (spec_off < NUM_SLOTS)
 
     in_ptr = src_ptr + batch_id * stride_i0 + offs
     dst_ptr = state_ptr + state_idx * stride_s0 + spec_off * stride_s1 + offs
@@ -201,7 +207,8 @@ def _state_scatter_kernel(
 def _state_select(state, state_indices, spec_offsets):
     """Fused state select: out = state[state_indices, spec_offsets].
 
-    Requires inner dims [2:] to be contiguous.
+    Requires inner dims [2:] to be contiguous. Invalid state/slot ids yield
+    zeros, allowing callers to clear initial or padded requests in this load.
     """
     B = state_indices.shape[0]
     inner_shape = state.shape[2:]
@@ -225,6 +232,8 @@ def _state_select(state, state_indices, spec_offsets):
         out.stride(0),
         INNER_SIZE=inner_size,
         BLOCK_SIZE=BLOCK_SIZE,
+        NUM_STATES=state.shape[0],
+        NUM_SLOTS=state.shape[1],
     )
     return out
 
@@ -233,7 +242,8 @@ def _state_scatter(state, state_indices, spec_offsets, src):
     """Fused state scatter: state[state_indices, spec_offsets] =
     src.to(state.dtype).
 
-    Requires inner dims [2:] to be contiguous.
+    Requires inner dims [2:] to be contiguous. Invalid state/slot ids are
+    ignored so padded requests cannot overwrite a live cache row.
     """
     if src.dtype != state.dtype:
         src = src.to(state.dtype)
@@ -257,6 +267,8 @@ def _state_scatter(state, state_indices, spec_offsets, src):
         src.stride(0),
         INNER_SIZE=inner_size,
         BLOCK_SIZE=BLOCK_SIZE,
+        NUM_STATES=state.shape[0],
+        NUM_SLOTS=state.shape[1],
     )
 
 

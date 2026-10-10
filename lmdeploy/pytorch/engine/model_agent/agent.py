@@ -748,7 +748,7 @@ class BaseModelAgent:
         draft_num_tokens = None
         if is_spec_enabled:
             draft_num_tokens = num_tokens
-            if inputs.is_chunk:
+            if inputs.is_chunk and not inputs.draft_full_prefill:
                 if inputs.is_first_chunk:
                     draft_num_tokens -= batch_size
                 elif inputs.is_last_chunk:

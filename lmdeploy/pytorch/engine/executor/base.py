@@ -62,6 +62,12 @@ class ExecutorBase:
         """Disable prefix caching for unsupported executor/cache modes."""
         if not getattr(self.cache_config, 'enable_prefix_caching', False):
             return
+        unsupported_reason = getattr(
+            self.model_config, 'prefix_caching_unsupported_reason', None)
+        if unsupported_reason:
+            raise ValueError(
+                'Prefix caching is not supported for this model: '
+                f'{unsupported_reason} Set enable_prefix_caching=False.')
         if check_window and self.cache_config.window_size is not None and self.cache_config.window_size > 0:
             # do not support generic sliding window prefix caching
             logger.warning('Sliding window prefix caching is not supported.')
@@ -212,7 +218,8 @@ class ExecutorBase:
 
     def _get_dsa_score_workspace_size(self) -> int:
         """Return the bounded sparse-indexer score workspace in bytes."""
-        if getattr(self.model_config, 'mla_index_topk', None) is None:
+        if (getattr(self.model_config, 'mla_index_topk', None) is None
+                and not getattr(self.model_config, 'reserve_dsa_score_workspace', False)):
             return 0
         return _envs.dsa_indexer_max_logits_mb * (1 << 20)
 

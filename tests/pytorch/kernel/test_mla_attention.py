@@ -137,6 +137,51 @@ def test_bf16_sparse_decode_uses_strided_cache_view(monkeypatch):
     assert torch.equal(global_indices, expected)
 
 
+@pytest.mark.parametrize('num_heads', [8, 64])
+@pytest.mark.parametrize(('num_indices', 'return_lse', 'lse_ndim', 'use_topk_length'), [
+    (128, False, 2, False),
+    (129, False, 2, False),
+    (129, True, 2, True),
+    (129, True, 3, True),
+])
+def test_sparse_flash_mla_preserves_tail_indices_and_dcp_results(
+        num_heads, num_indices, return_lse, lse_ndim, use_topk_length):
+    impl = object.__new__(FlashMLASparseImpl)
+    impl.scale = 0.125
+    query = torch.ones(2, num_heads, 576, dtype=torch.bfloat16)
+    indexed_kv = torch.empty(256, 1, 576, dtype=torch.bfloat16)
+    indices = torch.arange(num_indices, dtype=torch.int32).expand(2, 1, -1).clone()
+    indices[1, 0, 0] = -1
+    topk_length = torch.tensor([num_indices, num_indices - 1], dtype=torch.int32) if use_topk_length else None
+    kernel_output = torch.arange(2 * 64 * 512).reshape(2, 64, 512).to(torch.bfloat16)
+    kernel_lse = torch.arange(2 * 64, dtype=torch.float32).reshape(2, 64)
+    returned_lse = kernel_lse.unsqueeze(-1) if lse_ndim == 3 else kernel_lse
+    impl.flash_mla_sparse_fwd = Mock(return_value=(kernel_output, None, returned_lse))
+
+    result = impl._flash_mla_sparse_forward(
+        query, indexed_kv, indices, return_lse=return_lse, topk_length=topk_length)
+
+    impl.flash_mla_sparse_fwd.assert_called_once()
+    kernel_query, kernel_kv, kernel_indices = impl.flash_mla_sparse_fwd.call_args.args
+    assert kernel_kv is indexed_kv
+    assert kernel_query.shape == (2, 64, 576)
+    torch.testing.assert_close(kernel_query[:, :num_heads], query)
+    assert torch.count_nonzero(kernel_query[:, num_heads:]) == 0
+    assert kernel_indices.size(-1) % 128 == 0
+    torch.testing.assert_close(kernel_indices[..., :num_indices], indices)
+    assert torch.all(kernel_indices[..., num_indices:] == -1)
+    kwargs = impl.flash_mla_sparse_fwd.call_args.kwargs
+    assert kwargs['sm_scale'] == impl.scale
+    if use_topk_length:
+        assert kwargs['topk_length'] is topk_length
+    else:
+        assert 'topk_length' not in kwargs
+    if return_lse:
+        result, lse = result
+        torch.testing.assert_close(lse, kernel_lse[:, :num_heads])
+    torch.testing.assert_close(result, kernel_output[:, :num_heads])
+
+
 @pytest.mark.parametrize(('device', 'dcp_size', 'num_tokens', 'strided'), [
     ('cpu', 1, 1, False), ('cpu', 2, 6, True),
     ('cuda', 2, 1, False), ('cuda', 2, 6, True),

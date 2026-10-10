@@ -446,7 +446,7 @@ def flatten_kv_cache(k_caches: Tensor,
     BLOCK_DK = triton.next_power_of_2(k_head_dim)
     BLOCK_DV = triton.next_power_of_2(v_head_dim)
     BLOCK_BS = k_caches.size(s_dim)
-    shared_kv = k_caches.data_ptr() == v_caches.data_ptr() and v_head_dim < k_head_dim
+    shared_kv = k_caches.data_ptr() == v_caches.data_ptr() and v_head_dim <= k_head_dim
     if flatten_kv_layout == 'hsd':
         k_states = k_caches.new_empty(num_heads, out_size, k_head_dim, dtype=out_dtype)
         if quant_policy == QuantPolicy.NONE and shared_kv:

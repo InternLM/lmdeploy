@@ -245,12 +245,13 @@ def build_rotary_embedding_from_config(config: PretrainedConfig, device: torch.d
 
 
 class ApplyRotaryEmb(nn.Module):
-    """Apply rotary embedding."""
+    """Apply rotary embedding, optionally computing in FP32 before the output
+    cast."""
 
-    def __init__(self):
+    def __init__(self, enable_fp32_compute: bool = False):
         super().__init__()
         self.impl = get_backend().build_op(
-            ApplyRotaryEmbBuildSpec(),
+            ApplyRotaryEmbBuildSpec(enable_fp32_compute=enable_fp32_compute),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 

@@ -8,11 +8,18 @@ from lmdeploy.pytorch.backends.hc_prepost import HCPrePostBuildSpec
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
+@torch.compile(dynamic=True)
+def _cast_fp32(x: torch.Tensor) -> torch.Tensor:
+    """Vectorize the large HC input conversion without changing reductions."""
+    return x.float()
+
+
 class HcPrePost(nn.Module):
     """DeepSeek-V4 hyper-connection pre/post reduction wrapper."""
 
-    def __init__(self, hc_mult: int, sinkhorn_iters: int = 20, eps: float = 1e-6):
+    def __init__(self, hc_mult: int, sinkhorn_iters: int = 20, eps: float = 1e-6, *, avoid_gemv: bool = False):
         super().__init__()
+        self.avoid_gemv = avoid_gemv
         self.impl = get_backend().build_op(
             HCPrePostBuildSpec(hc_mult=hc_mult, sinkhorn_iters=sinkhorn_iters, eps=eps),
             enable_deterministic=get_build_model_context().enable_deterministic,
@@ -25,12 +32,28 @@ class HcPrePost(nn.Module):
         hc_scale: torch.Tensor,
         hc_base: torch.Tensor,
         norm_eps: float,
+        norm_weight: torch.Tensor | None = None,
+        x_fp32: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         from lmdeploy.pytorch.nn.norm import rms_scale
-        shape, dtype = x.size(), x.dtype
-        x = x.flatten(2).float()
-        mixes = rms_scale(F.linear(x, hc_fn), x, eps=norm_eps)
-        return self.impl.pre(x.view(shape), mixes, hc_scale, hc_base, dtype)
+        hidden_states, dtype = x, x.dtype
+        if x_fp32 is not None:
+            assert x_fp32.shape == x.shape and x_fp32.dtype == torch.float32
+        x = x.flatten(2)
+        # Long prefills amortize the additional compiled-call overhead.
+        if x_fp32 is not None:
+            x = x_fp32.flatten(2)
+        else:
+            x = _cast_fp32(x) if x.is_contiguous() and x.size(0) * x.size(1) >= 8192 else x.float()
+        if self.avoid_gemv and x.size(0) == 1 and x.size(1) == 1:
+            # Single-token decode otherwise selects GEMV, whose reduction
+            # order can differ from multi-token speculative verification.
+            mixes = F.linear(F.pad(x, (0, 0, 0, 1)), hc_fn)[:, :1].contiguous()
+        else:
+            mixes = F.linear(x, hc_fn)
+        mixes = rms_scale(mixes, x, eps=norm_eps)
+        return self.impl.pre(hidden_states, mixes, hc_scale, hc_base, dtype,
+                             norm_weight=norm_weight, norm_eps=norm_eps)
 
     def pre_reduce(self, x: torch.Tensor, pre: torch.Tensor, out_dtype: torch.dtype) -> torch.Tensor:
         return self.impl.pre_reduce(x, pre, out_dtype)
@@ -38,3 +61,7 @@ class HcPrePost(nn.Module):
     def post_expand(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
                     comb: torch.Tensor) -> torch.Tensor:
         return self.impl.post_expand(x, residual, post, comb)
+
+    def post_expand_with_fp32(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
+                              comb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.impl.post_expand_with_fp32(x, residual, post, comb)

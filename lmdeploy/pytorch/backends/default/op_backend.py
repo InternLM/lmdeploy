@@ -38,7 +38,7 @@ class DefaultOpsBackend(OpsBackend):
             return cast(ImplT, _build_rotary_embedding(spec))
         if isinstance(spec, ApplyRotaryEmbBuildSpec):
             from .apply_rotary_emb import DefaultApplyRotaryEmbImpl
-            return cast(ImplT, DefaultApplyRotaryEmbImpl())
+            return cast(ImplT, DefaultApplyRotaryEmbImpl(enable_fp32_compute=spec.enable_fp32_compute))
         if isinstance(spec, RMSNormBuildSpec):
             from .norm import DefaultRMSNormImpl
             return cast(ImplT, DefaultRMSNormImpl(spec.hidden_size, spec.eps))

@@ -81,6 +81,11 @@ class Scheduler:
         self.kv_connector = kv_connector
         seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
         seq_meta.enable_prefix_caching = self.cache_config.enable_prefix_caching
+        seq_meta.prefix_cache_checkpoint_block_size = (
+            cache_config.block_size
+            if cache_config.enable_prefix_caching and cache_config.prefix_cache_block_aligned else 0)
+        seq_meta.prefix_cache_token_lookahead = (cache_config.prefix_cache_token_lookahead
+                                               if cache_config.enable_prefix_caching else 0)
         self.seq_meta = seq_meta
         self.seq_manager = SequenceManager(seq_meta)
 
