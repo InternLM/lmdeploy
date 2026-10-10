@@ -11,8 +11,8 @@ from http import HTTPStatus
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
+from lmdeploy.serve.openai.distserve_fields import pop_distserve_request_fields
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
 from lmdeploy.serve.openai.errors import (
     create_error_response,
@@ -127,12 +127,13 @@ def register(router: APIRouter, server_context) -> None:
         if error_check_ret is not None:
             return error_check_ret
         json_request = await raw_request.json()
-        migration_request = json_request.pop('migration_request', None)
-        with_cache = json_request.pop('with_cache', False)
-        preserve_cache = json_request.pop('preserve_cache', False)
-        if migration_request:
-            migration_request = MigrationRequest.model_validate(
-                migration_request)
+        distserve_fields, distserve_error = pop_distserve_request_fields(
+            json_request, raw_request, server_context.engine_config)
+        if distserve_error is not None:
+            return distserve_error
+        migration_request = distserve_fields.migration_request
+        with_cache = distserve_fields.with_cache
+        preserve_cache = distserve_fields.preserve_cache
 
         model_name = request.model
         adapter_name = None
