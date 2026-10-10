@@ -19,7 +19,11 @@ from utils.config_utils import (
     resolve_extra_params,
 )
 from utils.constant import DEFAULT_PORT, DEFAULT_SERVER, MM_DEMO_TOMB_USER_PROMPT
-from utils.restful_return_check import assert_chat_completions_batch_return, get_client_and_model
+from utils.restful_return_check import (
+    assert_chat_completions_batch_return,
+    assert_prefix_cache_hit,
+    get_client_and_model,
+)
 from utils.rule_condition_assert import assert_result
 
 from lmdeploy.serve.parsers.response_parser import _parse_tool_call_arguments_dict
@@ -156,6 +160,9 @@ def run_all_step(log_path, case_name, cases_info, port: int = DEFAULT_PORT):
 
     if model is None:
         assert False, 'server not start correctly'
+    if 'prefix-cache' in case_name:
+        with allure.step('prefix cache cached_tokens'):
+            assert_prefix_cache_hit(http_url)
     for case in cases_info.keys():
         if case != 'code_testcase' and 'code' in model.lower():
             continue
@@ -498,7 +505,7 @@ def _consume_chat_completion_stream(stream_iter) -> tuple[str | None, str]:
 def _is_video_mixed_whitelist_model(model_name: str) -> bool:
     """Gate video/mixed VL tests to approved model families."""
     m = model_name.lower()
-    return ('qwen3.5' in m or 'qwen3' in m or 'interns2-preview' in m)
+    return ('qwen3.5' in m or 'qwen3' in m or 'intern-s2-preview' in m)
 
 
 def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
@@ -536,10 +543,10 @@ def run_vl_testcase(log_path, resource_path, port: int = DEFAULT_PORT):
     enable_video_mixed = _is_video_mixed_whitelist_model(model_name)
     if not enable_video_mixed:
         file.writelines(
-            f'[video testcase skipped] only enabled for qwen3/qwen3.5/interns2-preview, current model: {model_name}\n')
+            f'[video testcase skipped] only enabled for qwen3/qwen3.5/intern-s2-preview, current model: {model_name}\n')
         file.writelines(
             f'[mixed image+text+video skipped] only enabled for '
-            f'qwen3/qwen3.5/interns2-preview, current model: {model_name}\n')
+            f'qwen3/qwen3.5/intern-s2-preview, current model: {model_name}\n')
         file.close()
         allure.attach.file(restful_log, name=restful_log, attachment_type=allure.attachment_type.TEXT)
         with assume:
@@ -1299,9 +1306,14 @@ def run_mllm_test(config, run_config, worker_id):
     pid, content = start_openai_service(config, run_config, worker_id)
     try:
         if pid > 0:
-            run_vl_testcase(config.get('log_path'),
-                            config.get('resource_path'),
-                            port=DEFAULT_PORT + get_workerid(worker_id))
+            port = DEFAULT_PORT + get_workerid(worker_id)
+            case_name = get_case_str_by_config(run_config)
+            if 'prefix-cache' in case_name:
+                http_url = ':'.join([BASE_HTTP_URL, str(port)])
+                image_url = f'{config.get("resource_path")}/{PIC}'
+                with allure.step('prefix cache cached_tokens (image)'):
+                    assert_prefix_cache_hit(http_url, image_url=image_url)
+            run_vl_testcase(config.get('log_path'), config.get('resource_path'), port=port)
         else:
             assert False, f'Failed to start RESTful API server: {_sanitize_server_log(content)}'
     finally:

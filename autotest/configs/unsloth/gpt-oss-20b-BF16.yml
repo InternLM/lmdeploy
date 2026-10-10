@@ -16,12 +16,10 @@ h:
   - func
   interface:
     pytorch:
-      suites:
+    - suites:
       - reasoning
-      extra:
-        reasoning-parser: gpt-oss
+      - toolcall
     turbomind:
-      suites:
+    - suites:
       - reasoning
-      extra:
-        reasoning-parser: gpt-oss
+      - toolcall

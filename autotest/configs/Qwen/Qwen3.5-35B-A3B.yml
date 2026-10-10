@@ -23,6 +23,7 @@ a100:
       - logprob
       - experts
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -45,6 +46,7 @@ a100:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -58,6 +60,9 @@ a100:
       - abort
       extra:
         enable-abort-handling: true
+  gen_config:
+    chat-template-kwargs:
+      enable_thinking: true
   quantization:
     turbomind:
     - kvint8
@@ -116,6 +121,7 @@ h:
       - logprob
       - experts
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -138,6 +144,7 @@ h:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -156,6 +163,20 @@ h:
     - awq
     pytorch:
     - fp8
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 2
+    extra:
+      prefix-cache-state-budget: 256
+      max-prefill-token-num: 64
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - prefix_cache
 - model_type:
   - chat
   - vl
@@ -204,8 +225,6 @@ ascend:
   - evaluate
   - func
   - longtext_benchmark
-  - mllm_evaluate
-  - prefix_cache
   - mllm_evaluate
 - model_type:
   - chat

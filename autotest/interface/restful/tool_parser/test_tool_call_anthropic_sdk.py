@@ -19,6 +19,7 @@ from utils.anthropic_messages import (
     SEARCH_TOOL_ANTHROPIC,
     USER_ASK_WEATHER_DALLAS,
     USER_ASK_WEATHER_DALLAS_VLM,
+    USER_HELLO,
     WEATHER_TOOL_ANTHROPIC,
     WEATHER_TOOL_SINGLE_LOCATION_ANTHROPIC,
     assert_parallel_weather_tool_inputs,
@@ -730,9 +731,8 @@ async def _async_tool_choice_any(log_file: str):
         model=model_name,
         max_tokens=_TOOL_MAX_TOKENS,
         extra_body={'temperature': 0},
-        system=ANTHROPIC_SYSTEM_WEATHER,
-        messages=ANTHROPIC_MESSAGES_ASKING_FOR_WEATHER,
-        tools=[WEATHER_TOOL_ANTHROPIC, SEARCH_TOOL_ANTHROPIC],
+        messages=[{'role': 'user', 'content': USER_HELLO}],
+        tools=[SEARCH_TOOL_ANTHROPIC],
         tool_choice={'type': 'any'},
     )
     try:
@@ -1136,10 +1136,10 @@ class TestAnthropicSdkToolCall(_ToolCallTestBase):
 
     def test_tool_non_stream_tool_choice_any(self, backend, model_case):
         msg = asyncio.run(_async_tool_choice_any(self._log_file))
-        assert msg.stop_reason == 'tool_use'
+        assert msg.stop_reason == 'tool_use', msg.content
         tool_blocks = _sdk_tool_use_blocks(msg)
-        names = {b.name for b in tool_blocks}
-        assert WEATHER_TOOL_ANTHROPIC['name'] in names, names
+        assert tool_blocks[0].name == SEARCH_TOOL_ANTHROPIC['name']
+        assert tool_blocks[0].input.get('query'), tool_blocks[0].input
 
     def test_tool_non_stream_weather_with_user_image_url(self, backend, model_case):
         model_name = deployed_model_name()

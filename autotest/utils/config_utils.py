@@ -26,11 +26,11 @@ ENGINE_CONFIG_KEY = 'engine_config'
 TEST_COVERAGE_KEY = 'test_coverage'
 INTERFACE_KEY = 'interface'
 INTERFACE_SUITES = frozenset({
-    'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort',
+    'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort', 'hard_schema'
 })
 GENERATE_SUITES = frozenset({'base', 'logprob', 'experts'})
 INTERFACE_SUITE_ORDER = (
-    'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort',
+    'base', 'logprob', 'experts', 'anthropic', 'toolcall', 'reasoning', 'sleep', 'abort', 'hard_schema'
 )
 INTERFACE_BACKENDS_ENV = 'INTERFACE_BACKENDS'
 
@@ -73,16 +73,6 @@ def _entry_engine_config(entry: dict[str, Any]) -> dict[str, Any]:
     return entry.get(ENGINE_CONFIG_KEY) or entry.get('parallel') or {}
 
 
-def _entry_has_prefix_cache_accuracy_tuning(entry: dict[str, Any]) -> bool:
-    """True for yaml slices with explicit prefix-cache tuning knobs
-    (evaluate)."""
-    engine_extra = (_entry_engine_config(entry).get('extra') or {})
-    return (
-        'prefix-cache-decode-state-interval' in engine_extra
-        and 'prefix-cache-state-budget' in engine_extra
-    )
-
-
 PROFILE_TO_MODEL_TYPE_KEY = {
     'chat': 'chat_model',
     'vl': 'vl_model',
@@ -94,8 +84,8 @@ PROFILE_TO_MODEL_TYPE_KEY = {
 # ``all``: disable filtering (tests / debug).
 DEPS_PROFILE_ENV = 'DEPS_PROFILE'
 EMPTY_DEPS_SELECTOR = '__empty__'
-# Autotest-only keys in engine_config.extra (not forwarded to lmdeploy CLI).
-CLI_SKIP_EXTRA_KEYS = frozenset()
+
+CLI_SKIP_EXTRA_KEYS = frozenset({'enable-thinking', 'chat-template-kwargs'})
 
 
 def get_model_path_from_config(config: dict[str, Any], model_id: str) -> str:
@@ -406,16 +396,12 @@ def _entry_matches_deps_profile(entry: dict[str, Any], env_key: str, selector: D
 
 
 def _entry_matches_func(entry: dict[str, Any], func_type: str, extra: dict[str, Any] | None) -> bool:
-    funcs = set(entry.get(TEST_COVERAGE_KEY) or [])
-    extra = extra or {}
-    if extra.get('enable-prefix-caching') is not None:
-        if 'prefix_cache' not in funcs:
-            return False
-        # evaluate/infer accuracy: only dedicated yaml rows with tuned prefix-cache params
-        if func_type == 'evaluate':
-            return _entry_has_prefix_cache_accuracy_tuning(entry)
-        return True
-    if func_type == 'benchmark' and funcs == {'prefix_cache'}:
+    funcs = set(entry[TEST_COVERAGE_KEY])
+    if extra and 'enable-prefix-caching' in extra:
+        if func_type == 'prefix_cache_evaluate':
+            return 'prefix_cache_evaluate' in funcs
+        return 'prefix_cache' in funcs
+    if func_type == 'benchmark' and funcs <= {'prefix_cache', 'prefix_cache_evaluate'}:
         return False
     if func_type == 'func':
         return 'func' in funcs
@@ -911,7 +897,7 @@ def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]
     """Derive REST case groups from model profiles + interface suites.
 
     Directory-based suites (toolcall / reasoning) and anthropic protocol files are selected by path in CI; generate
-    logprob/experts stay in one file and are filtered by pytest marks.
+    logprob/experts stay in one file and are filtered by pytest marks. Chat models also run ``responses_v1``.
     """
     suite_set = set(suites)
     case_info: list[str] = []
@@ -922,12 +908,15 @@ def derive_interface_case_info(profiles: list[str], suites: list[str] | set[str]
     else:
         if suite_set & GENERATE_SUITES:
             case_info.append('chat_completions_v1')
+            case_info.append('responses_v1')
             case_info.append('generate')
     if 'anthropic' in suite_set:
         case_info.append('anthropic_v1')
         case_info.append('anthropic_sdk')
     if 'toolcall' in suite_set:
         case_info.append('toolcall')
+    if 'hard_schema' in suite_set:
+        case_info.append('hard_schema')
     if 'reasoning' in suite_set:
         case_info.append('reasoning')
     if 'sleep' in suite_set:
@@ -1199,8 +1188,7 @@ def _build_run_config_entry(
     merged_extra = copy.deepcopy(launch_extra)
     if extra:
         merged_extra.update(extra)
-    if extra and extra.get('enable-prefix-caching') is not None:
-        if 'prefix_cache' in (entry.get(TEST_COVERAGE_KEY) or []):
+        if 'enable-prefix-caching' in extra:
             merged_extra['enable-prefix-caching'] = None
 
     device = config.get('device', 'cuda')
@@ -1393,8 +1381,8 @@ def get_parallel_config(config: dict[str, Any], model_name: str) -> list[dict[st
     for mid, entry in _iter_per_model_entries(env_key, deps_profile):
         if _base_model_name(mid) != base_model:
             continue
-        funcs = entry.get(TEST_COVERAGE_KEY) or []
-        if funcs == ['prefix_cache']:
+        funcs = set(entry[TEST_COVERAGE_KEY])
+        if funcs <= {'prefix_cache', 'prefix_cache_evaluate'}:
             continue
         layout = _parallel_layout(_entry_engine_config(entry))
         key = tuple(sorted(layout.items()))
@@ -1457,7 +1445,7 @@ def get_model_list(config: dict[str, Any],
     Rows with entry-level ``deps`` are never included (regardless of ``DEPS_PROFILE``).
     """
     parallel_config = parallel_config or {'tp': 1}
-    if extra and extra.get('enable-prefix-caching') is not None:
+    if extra and 'enable-prefix-caching' in extra:
         return _model_ids_for_entries(config, backend, parallel_config, model_type, func_type, extra)
     if func_type == 'func':
         return _model_ids_for_entries(config, backend, parallel_config, model_type, 'func', extra)

@@ -306,17 +306,20 @@ _PREFIX_CACHE_LOCAL_PARAMS = (
     build_eval_stage_params(
         'pytorch',
         PYTORCH_LOCAL_LAYOUTS[:2],
+        func_type='prefix_cache_evaluate',
         extra=_PREFIX_CACHE_EXTRA,
     )
     + build_eval_stage_params(
         'pytorch',
         DISTRIBUTED_TP_DP_EP_LAYOUTS,
         test_types=('eval',),
+        func_type='prefix_cache_evaluate',
         extra=_PREFIX_CACHE_EXTRA,
     )
     + build_eval_stage_params(
         'turbomind',
         DISTRIBUTED_TP_DP_EP_LAYOUTS,
+        func_type='prefix_cache_evaluate',
         extra=_PREFIX_CACHE_EXTRA,
     )
 )
@@ -325,6 +328,7 @@ _PREFIX_CACHE_PROXY_INFER_PARAMS = build_eval_stage_params(
     'pytorch',
     DISTRIBUTED_TP_DP_EP_LAYOUTS,
     test_types=('infer',),
+    func_type='prefix_cache_evaluate',
     extra=_PREFIX_CACHE_EXTRA,
 )
 
