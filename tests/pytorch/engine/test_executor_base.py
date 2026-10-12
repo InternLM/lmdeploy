@@ -103,17 +103,23 @@ def test_mooncake_rejects_unsupported_hybrid_configuration():
             PytorchEngineConfig(**{option: 0})
 
 
-@pytest.mark.parametrize(('method', 'no_drop', 'draft_states', 'draft_layers', 'error'), [
-    ('qwen3_5_mtp', True, [], 1, None),
-    ('qwen3_5_mtp', False, [], 1, None),
-    ('eagle3', True, [], 1, 'Qwen3.5 GDN target'),
-    ('qwen3_5_mtp', True, [((2,), torch.float32)], 1, 'full-attention MTP layer'),
-    ('qwen3_5_mtp', True, [], 2, 'full-attention MTP layer'),
+@pytest.mark.parametrize(('model_type', 'method', 'no_drop', 'draft_states', 'draft_layers', 'error'), [
+    ('qwen3_5', 'qwen3_5_mtp', True, [], 1, None),
+    ('qwen3_5', 'qwen3_5_mtp', False, [], 1, None),
+    ('glm5_next', 'deepseek_mtp', True, [], 1, None),
+    ('glm5_next', 'deepseek_mtp', False, [], 1, None),
+    ('qwen3_5', 'eagle3', True, [], 1, 'Qwen3.5 with qwen3_5_mtp'),
+    ('qwen3_5', 'deepseek_mtp', True, [], 1, 'GLM-5.3 with deepseek_mtp'),
+    ('qwen3_5', 'qwen3_5_mtp', True, [((2,), torch.float32)], 1, 'one MTP layer without state caches'),
+    ('qwen3_5', 'qwen3_5_mtp', True, [], 2, 'one MTP layer without state caches'),
+    ('glm5_next', 'deepseek_mtp', True, [((2,), torch.float32)], 1, 'one MTP layer without state caches'),
+    ('glm5_next', 'deepseek_mtp', True, [], 2, 'one MTP layer without state caches'),
 ])
-def test_hybrid_mooncake_mtp_validates_model_layout(method, no_drop, draft_states, draft_layers, error):
+def test_hybrid_mooncake_mtp_validates_model_layout(model_type, method, no_drop, draft_states, draft_layers, error):
     config = ConfigBuilder.build_cache_config(PytorchEngineConfig(max_batch_size=1, kv_transfer_config=KVTransferConfig(
         kv_connector='MooncakeStoreConnector', kv_role='kv_producer')))
-    model = SimpleNamespace(sliding_window=-1, states_shapes=[((2,), torch.float32)], is_gated_delta=True)
+    model = SimpleNamespace(sliding_window=-1, states_shapes=[((2,), torch.float32)], is_gated_delta=True,
+                            hf_config=SimpleNamespace(model_type=model_type))
     spec = SpecDecodeConfig(model='draft', method=method, disable_prefix_cache_block_drop=no_drop,
                             model_config=SimpleNamespace(states_shapes=draft_states, num_layers=draft_layers))
     args = ('', model, config, SimpleNamespace(), SimpleNamespace(dp=1, world_size=1), SimpleNamespace())

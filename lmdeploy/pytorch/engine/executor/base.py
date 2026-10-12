@@ -53,10 +53,14 @@ class ExecutorBase:
         self.device_type = device_type
         self.specdecode_config = specdecode_config
         if cache_config.use_mooncake_store and model_config.states_shapes and specdecode_config is not None:
-            if (specdecode_config.method != 'qwen3_5_mtp' or not model_config.is_gated_delta
+            supported_mtp = (specdecode_config.method == 'qwen3_5_mtp'
+                             or (specdecode_config.method == 'deepseek_mtp'
+                                 and model_config.hf_config.model_type == 'glm5_next'))
+            if (not supported_mtp or not model_config.is_gated_delta
                     or specdecode_config.model_config.states_shapes or specdecode_config.model_config.num_layers != 1):
-                raise ValueError('Hybrid Mooncake Store speculative decoding requires a Qwen3.5 GDN target '
-                                 'and one full-attention MTP layer')
+                raise ValueError('Hybrid Mooncake Store speculative decoding requires Qwen3.5 with qwen3_5_mtp '
+                                 'or GLM-5.3 with deepseek_mtp, a gated-delta target, '
+                                 'and one MTP layer without state caches')
         if (cache_config.use_mooncake_store and model_config.states_shapes
                 and model_config.is_gated_delta and device_type == 'cuda'):
             from lmdeploy.pytorch.backends.cuda.utils import has_tilelang
