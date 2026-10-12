@@ -360,6 +360,7 @@ class MooncakeStoreStateRegistration:
     size: int
     slot_count: int
     slot_size: int
+    transfer_ranges: tuple[tuple[int, int], ...] | None = None
 
 
 @dataclass(frozen=True)

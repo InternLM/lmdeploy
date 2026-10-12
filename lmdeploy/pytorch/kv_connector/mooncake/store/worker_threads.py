@@ -71,20 +71,35 @@ def _scatter_block(
 
 def _state_row_layout(
     registrations: tuple[MooncakeStoreStateRegistration, ...],
-) -> tuple[tuple[MooncakeStoreRegistration, ...], tuple[int, ...]]:
-    """Expand owning pools in the same payload order for save and load.
+) -> tuple[tuple[int, int, int], ...]:
+    """Resolve state fragments as (base address, slot stride, payload size).
 
-    Packed pools have one row of slots; layer-major pools have one per layer. Each row remains inside the already
-    registered owning storage.
+    Packed pools have one row of slots; layer-major pools have one per layer.
+    Persisted ranges remain inside the registered storage, but need not fill
+    the physical slot stride. Save and load use the same fragment order.
     """
     rows = []
-    slot_sizes = []
     for region in registrations:
         row_size = region.slot_count * region.slot_size
+        ranges = region.transfer_ranges
+        if ranges is None:
+            ranges = ((0, region.slot_size),)
         for row in range(region.size // row_size):
-            rows.append(MooncakeStoreRegistration(region.name, region.address + row * row_size, row_size))
-            slot_sizes.append(region.slot_size)
-    return tuple(rows), tuple(slot_sizes)
+            base = region.address + row * row_size
+            rows.extend((base + offset, region.slot_size, size) for offset, size in ranges)
+    return tuple(rows)
+
+
+def _scatter_state(
+    rows: tuple[tuple[int, int, int], ...],
+    num_slots: int,
+    slot: int,
+) -> tuple[list[int], list[int]]:
+    """Resolve the persisted fragments of one physical state slot."""
+    if slot < 0 or slot >= num_slots:
+        raise ValueError(f'state slot {slot} is outside [0, {num_slots})')
+    addresses = [base + slot * stride for base, stride, _ in rows]
+    return addresses, [size for _, _, size in rows]
 
 
 def _new_replicate_config() -> Any:
@@ -138,7 +153,7 @@ class KVCacheStoreSendingThread(threading.Thread):
         self.replica_rank = tp_rank % key_metadata.kv_head_replica_num
         self.completion_callback = completion_callback
         self.replicate_config = replicate_config
-        self.state_rows, self.state_slot_sizes = _state_row_layout(state_registrations)
+        self.state_rows = _state_row_layout(state_registrations)
         self.num_state_slots = state_registrations[0].slot_count if state_registrations else 0
         self.request_queue: queue.Queue[_SaveTask | object] = queue.Queue()
         self._state_lock = threading.Lock()
@@ -169,7 +184,7 @@ class KVCacheStoreSendingThread(threading.Thread):
             request.request_id,
             len(request.block_ids),
             request.state.boundary_tokens if request.state is not None else None,
-            sum(self.state_slot_sizes) if request.state is not None else 0,
+            sum(size for _, _, size in self.state_rows) if request.state is not None else 0,
         )
 
     def _owned_entries(
@@ -269,8 +284,8 @@ class KVCacheStoreSendingThread(threading.Thread):
                 block_addresses, block_sizes = _scatter_block(
                     self.registrations, self.row_block_sizes, self.num_gpu_blocks, entry.source_index)
             else:
-                block_addresses, block_sizes = _scatter_block(
-                    self.state_rows, self.state_slot_sizes, self.num_state_slots, entry.source_index)
+                block_addresses, block_sizes = _scatter_state(
+                    self.state_rows, self.num_state_slots, entry.source_index)
             addresses.append(block_addresses)
             sizes.append(block_sizes)
 
@@ -455,7 +470,7 @@ class KVCacheStoreRecvingThread(threading.Thread):
         self.tp_size = tp_size
         self.key_rank = tp_rank // key_metadata.kv_head_replica_num
         self.completion_callback = completion_callback
-        self.state_rows, self.state_slot_sizes = _state_row_layout(state_registrations)
+        self.state_rows = _state_row_layout(state_registrations)
         self.num_state_slots = state_registrations[0].slot_count if state_registrations else 0
         self.request_queue: queue.Queue[_LoadTask | object] = queue.Queue()
         self._state_lock = threading.Lock()
@@ -502,8 +517,8 @@ class KVCacheStoreRecvingThread(threading.Thread):
         if request.state_slot is not None:
             if request.state_slot <= 0:
                 raise ValueError('Mooncake load cannot write the reserved state slot')
-            state_addresses, state_sizes = _scatter_block(
-                self.state_rows, self.state_slot_sizes, self.num_state_slots, request.state_slot)
+            state_addresses, state_sizes = _scatter_state(
+                self.state_rows, self.num_state_slots, request.state_slot)
             keys.append(build_store_key(self.key_metadata, self.tp_rank, request.block_hashes[-1], group_id=1))
             addresses.append(state_addresses)
             sizes.append(state_sizes)

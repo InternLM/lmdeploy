@@ -314,6 +314,8 @@ class MooncakeStoreWorker:
         registrations = []
         backing_storages = set()
         for index, pool in enumerate(state_cache_pools):
+            if pool.transfer_ranges == ():
+                continue
             tensor = pool.tensor
             if not torch.is_tensor(tensor):
                 raise TypeError(f'state cache pool {index} must be a tensor')
@@ -341,6 +343,7 @@ class MooncakeStoreWorker:
                     size=int(storage.nbytes()),
                     slot_count=slot_count,
                     slot_size=slot_size,
+                    transfer_ranges=pool.transfer_ranges,
                 ))
             backing_storages.add(storage_address)
         return tuple(registrations), len(backing_storages)

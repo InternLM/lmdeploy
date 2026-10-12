@@ -266,7 +266,8 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         config.reserve_dsa_score_workspace = True
         config.k_head_dim = text_config.kv_lora_rank
         # Reuse Qwen3.5's token ring for convolution; recurrent/KPool states
-        # keep a complete checkpoint after each verified token.
+        # keep a complete checkpoint after each verified token. Store resumes
+        # on 64-token boundaries, where the unfinished KPool tail is empty.
         ring_shape = (num_spec_tokens + 1,) if num_spec_tokens else ()
         config.state_cache_specs = [
             StateCacheSpec(
@@ -284,12 +285,14 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
                 (num_full_layers, text_config.index_kpool + 1 + num_spec_tokens,
                  text_config.index_head_dim),
                 torch.bfloat16,
+                store_cacheable=False,
             ),
             StateCacheSpec(
                 GLM5_KPOOL_TAIL_SCORE_STATE,
                 (num_full_layers, text_config.index_kpool + 1 + num_spec_tokens,
                  text_config.index_head_dim),
                 torch.bfloat16,
+                store_cacheable=False,
             ),
         ]
         # Scheduler compatibility: named specs own allocation, while this

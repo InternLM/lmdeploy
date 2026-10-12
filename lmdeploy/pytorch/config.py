@@ -445,6 +445,7 @@ class StateCacheSpec:
     dtype: torch.dtype
     layer_ids: list[int] | None = None
     alignment: int = 256
+    store_cacheable: bool = True
 
 
 @dataclass

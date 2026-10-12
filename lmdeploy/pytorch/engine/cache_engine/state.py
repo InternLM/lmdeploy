@@ -65,8 +65,9 @@ class StateCacheEngine:
 
     @property
     def connector_state_cache_pools(self) -> tuple[KVCachePool, ...]:
-        """Return owning state pools for external cache registration."""
-        return tuple(KVCachePool(pool.tensor, pool.entry_axis) for pool in self.allocation.pools)
+        """Return owning pools and the slot bytes persisted by the Store."""
+        return tuple(KVCachePool(pool.tensor, pool.entry_axis, pool.transfer_ranges)
+                     for pool in self.allocation.pools)
 
     def zero_slots(self, slot_ids: torch.Tensor | None, zero_mask: torch.Tensor) -> None:
         """Zero the selected state slots in every physical tensor."""

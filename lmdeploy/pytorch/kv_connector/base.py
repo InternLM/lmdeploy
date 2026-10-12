@@ -26,10 +26,15 @@ KVCacheValue = torch.Tensor | Sequence[torch.Tensor]
 
 @dataclass(frozen=True)
 class KVCachePool:
-    """One owning cache pool and the axis that indexes its entries."""
+    """One owning pool and its transferable byte ranges within each entry.
+
+    ``transfer_ranges`` contains (offset, size) pairs within the trailing
+    payload. None transfers the whole entry; an empty tuple transfers nothing.
+    """
 
     tensor: torch.Tensor
     entry_axis: int
+    transfer_ranges: tuple[tuple[int, int], ...] | None = None
 
 
 class KVConnectorRole(enum.Enum):

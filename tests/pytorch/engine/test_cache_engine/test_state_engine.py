@@ -8,7 +8,7 @@ import torch
 import lmdeploy.pytorch.engine.cache_engine.state as state_module
 from lmdeploy.pytorch.config import CacheConfig, StateCacheSpec
 from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
-from lmdeploy.pytorch.engine.cache_engine.layout import CacheAllocation, CachePool
+from lmdeploy.pytorch.engine.cache_engine.layout import CacheAllocation, CachePool, PackedStateCacheLayout
 from lmdeploy.pytorch.engine.cache_engine.schema import build_state_cache_tensor_specs
 
 
@@ -113,6 +113,33 @@ def test_connector_state_cache_pools_expose_owning_pools_and_axes():
     assert [pool.entry_axis for pool in pools] == [0, 1]
     assert all(pool.tensor is allocation_pool.tensor
                for pool, allocation_pool in zip(pools, cache_engine.allocation.pools))
+
+
+def test_glm_store_projection_preserves_local_state_copies(monkeypatch):
+    from lmdeploy.hf_configs.configuration_glm5_next import Glm5NextConfig
+    from lmdeploy.pytorch.configurations.glm5_next import Glm5NextModelConfigBuilder
+
+    monkeypatch.setattr('lmdeploy.pytorch.configurations.deepseek_v2.flash_mla_available', lambda: True)
+    monkeypatch.setattr(state_module, '_allocate_state_caches',
+                        lambda specs, num_caches, device: PackedStateCacheLayout(tuple(specs)).allocate(
+                            num_caches, device='cpu'))
+    hf_config = Glm5NextConfig(text_config=dict(
+        num_hidden_layers=2, layer_types=['linear_attention', 'full_attention'],
+        linear_num_heads=2, linear_head_dim=8, index_head_dim=8))
+    model_config = Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=3)
+    cache_config = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0,
+                               num_gpu_blocks=0, num_state_caches=4, states_shapes=model_config.states_shapes)
+    engine = StateCacheEngine(cache_config, model_config)
+
+    assert [spec.store_cacheable for spec in model_config.state_cache_specs] == [True, True, False, False]
+    pool, = engine.connector_state_cache_pools
+    tail_offset = engine.state_caches[2][0].data_ptr() - pool.tensor.data_ptr()
+    assert pool.transfer_ranges == ((0, tail_offset),)
+    for value, cache in enumerate(engine.state_caches, start=1):
+        cache[1].fill_(value)
+    engine.copy_slots(1, 3)
+    for value, cache in enumerate(engine.state_caches, start=1):
+        assert (cache[3] == value).all()
 
 
 def test_state_cache_engine_zero_slots_uses_each_pool_entry_axis():

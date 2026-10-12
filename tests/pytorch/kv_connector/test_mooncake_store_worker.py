@@ -733,6 +733,7 @@ def test_registers_state_pools_as_whole_storages_without_block_alignment(tmp_pat
     state_pool = KVCachePool(
         FakeTensor(0x2000, size=7, storage_address=0x3000, storage_size=11),
         entry_axis=0,
+        transfer_ranges=((0, 1),),
     )
     duplicate_state_pool = KVCachePool(
         FakeTensor(0x2100, size=5, storage_address=0x3000, storage_size=11),
@@ -741,7 +742,8 @@ def test_registers_state_pools_as_whole_storages_without_block_alignment(tmp_pat
 
     worker.register_kv_caches(
         {'row': FakeTensor(0x1000, size=8)},
-        state_cache_pools=(state_pool, duplicate_state_pool),
+        state_cache_pools=(state_pool, duplicate_state_pool,
+                           KVCachePool(FakeTensor(0x4000), entry_axis=0, transfer_ranges=())),
     )
 
     assert store.register_calls == [(0x1000, 8), (0x3000, 11)]
@@ -752,6 +754,7 @@ def test_registers_state_pools_as_whole_storages_without_block_alignment(tmp_pat
             size=11,
             slot_count=7,
             slot_size=1,
+            transfer_ranges=((0, 1),),
         ), )
     worker.shutdown()
 
@@ -1082,7 +1085,7 @@ def test_shutdown_is_idempotent_and_propagates_close_error(tmp_path):
     assert worker.store is None
 
 
-@pytest.mark.parametrize('layout', ['packed', 'layer_major'])
+@pytest.mark.parametrize('layout', ['packed', 'layer_major', 'projected'])
 def test_hybrid_save_load_roundtrip_restores_all_rank_local_bytes(layout):
     class BytesStore(FakeStore):
 
@@ -1112,23 +1115,25 @@ def test_hybrid_save_load_roundtrip_restores_all_rank_local_bytes(layout):
         # speculative conv/recurrent ring entry (num_spec_tokens=3).
         fa = [torch.arange(6 * width, dtype=torch.uint8).reshape(6, width) + rank // 2
               for width in (5, 7, 3)]
-        if layout == 'packed':
-            pool = torch.zeros((4, 92), dtype=torch.uint8)
+        if layout in ('packed', 'projected'):
+            recurrent_offset = 48 if layout == 'projected' else 28
+            pool = torch.zeros((4, recurrent_offset + 64), dtype=torch.uint8)
             conv = pool[:, :28].view(torch.float16).reshape(4, 2, 7)
-            recurrent = pool[:, 28:].view(torch.float32).reshape(4, 4, 2, 2)
-            state_pools = [(pool, 92)]
+            recurrent = pool[:, recurrent_offset:].view(torch.float32).reshape(4, 4, 2, 2)
+            ranges = ((0, 28), (recurrent_offset, 64)) if layout == 'projected' else None
+            state_pools = [(pool, recurrent_offset + 64, ranges)]
         else:
             conv_pool = torch.zeros((2, 4, 2, 7), dtype=torch.float16)
             recurrent_pool = torch.zeros((2, 4, 4, 2, 2), dtype=torch.float32)
             conv, recurrent = conv_pool.transpose(0, 1), recurrent_pool.transpose(0, 1)
-            state_pools = [(conv_pool, 28), (recurrent_pool, 64)]
+            state_pools = [(conv_pool, 28, None), (recurrent_pool, 64, None)]
         for state in (conv, recurrent):
             state[3].copy_(torch.arange(state[3].numel()).reshape(state[3].shape) + rank * 100)
         registrations = tuple(MooncakeStoreRegistration(name, t.data_ptr(), t.numel())
                               for name, t in zip(('target.k', 'target.v', 'mtp.kv'), fa))
         state_registrations = tuple(
-            MooncakeStoreStateRegistration(str(i), t.data_ptr(), t.numel() * t.element_size(), 4, size)
-            for i, (t, size) in enumerate(state_pools))
+            MooncakeStoreStateRegistration(str(i), t.data_ptr(), t.numel() * t.element_size(), 4, size, ranges)
+            for i, (t, size, ranges) in enumerate(state_pools))
         kwargs = dict(store=store, registrations=registrations, row_block_sizes=(5, 7, 3), num_gpu_blocks=6,
                       key_metadata=metadata, global_rank=rank, tp_rank=rank, tp_size=4,
                       state_registrations=state_registrations)
@@ -1144,6 +1149,10 @@ def test_hybrid_save_load_roundtrip_restores_all_rank_local_bytes(layout):
         rank_caches.append((fa, conv, recurrent, state_pools, kwargs))
 
     for rank, (fa, conv, recurrent, state_pools, kwargs) in enumerate(rank_caches):
+        if layout == 'projected':
+            # Omitted bytes differ from the saved pool. Loading must leave
+            # them intact while restoring conv/recurrent into another slot.
+            state_pools[0][0][:, 28:48].fill_(255)
         expected_fa = [t[:4].clone() for t in fa]
         for t in fa:
             t.fill_(255)
@@ -1163,6 +1172,9 @@ def test_hybrid_save_load_roundtrip_restores_all_rank_local_bytes(layout):
         for actual, before in zip((conv, recurrent), untouched):
             torch.testing.assert_close(actual[2], before[3])
             torch.testing.assert_close(actual[[0, 1, 3]], before[[0, 1, 3]])
+        if layout == 'projected':
+            assert (state_pools[0][0][:, 28:48] == 255).all()
+            assert store.get_calls[-1][2][-1] == [28, 64]
         assert store.get_calls[-1][0] == [build_store_key(metadata, rank // 2, h) for h in hashes] + [
             build_store_key(metadata, rank, hashes[-1], group_id=1)]
     assert len(store.get_calls) == 4
@@ -1183,8 +1195,10 @@ def test_hybrid_load_prepares_before_fence_and_reports_request_failure(tmp_path,
     event = BlockingEvent()
     monkeypatch.setattr(worker_module.torch.cuda, 'Event', lambda: event)
     scatter = Mock(wraps=worker_threads_module._scatter_block)
+    scatter_state = Mock(wraps=worker_threads_module._scatter_state)
     make_key = Mock(wraps=worker_threads_module.build_store_key)
     monkeypatch.setattr(worker_threads_module, '_scatter_block', scatter)
+    monkeypatch.setattr(worker_threads_module, '_scatter_state', scatter_state)
     monkeypatch.setattr(worker_threads_module, 'build_store_key', make_key)
     store = FakeStore(get_error=results) if isinstance(results, Exception) else FakeStore(get_results=results)
     worker, _ = make_worker(tmp_path, store=store)
@@ -1199,7 +1213,8 @@ def test_hybrid_load_prepares_before_fence_and_reports_request_failure(tmp_path,
         assert event.record_calls == 1
         # Both FA and state descriptors are ready while the GPU fence is
         # still pending, but no destination bytes may be written yet.
-        assert scatter.call_count == make_key.call_count == 2
+        assert scatter.call_count == scatter_state.call_count == 1
+        assert make_key.call_count == 2
         assert store.get_calls == []
         assert worker.get_finished() == KVConnectorOutput()
     finally:
