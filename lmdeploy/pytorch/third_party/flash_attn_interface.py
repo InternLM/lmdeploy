@@ -2,7 +2,6 @@
 import functools
 
 import torch
-
 from flash_attn_interface import flash_attn_varlen_func as _flash_attn_varlen_func
 from flash_attn_interface import flash_attn_with_kvcache as _flash_attn_with_kvcache
 

@@ -14,7 +14,6 @@ def _run_auto_all_gather(rank, rendezvous):
 
     from torch import distributed as dist
 
-    from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
     from lmdeploy.pytorch.config import DistConfig
 
     torch.cuda.set_device(rank)
