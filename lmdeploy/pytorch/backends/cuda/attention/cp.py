@@ -158,6 +158,7 @@ class DCPAttentionImpl(TritonAttentionImpl):
     def __init__(self, num_heads: int, head_size: int, *, use_fa3: bool = False, **kwargs):
         super().__init__(num_heads=num_heads, head_size=head_size, **kwargs)
         self.use_fa3 = use_fa3
+        assert not self.alibi, 'GQA DCP does not support ALiBi'
         if use_fa3:
             from lmdeploy.pytorch.third_party.flash_attn_interface import flash_attn_varlen_func
             self._fa3_prefill = flash_attn_varlen_func
