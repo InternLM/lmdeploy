@@ -1085,27 +1085,28 @@ def test_shutdown_is_idempotent_and_propagates_close_error(tmp_path):
     assert worker.store is None
 
 
+class BytesStore(FakeStore):
+
+    def __init__(self):
+        super().__init__()
+        self.values = {}
+
+    def batch_put_from_multi_buffers(self, keys, addresses, sizes, replicate_config):
+        for key, parts, lengths in zip(keys, addresses, sizes):
+            self.values[key] = [ctypes.string_at(p, n) for p, n in zip(parts, lengths)]
+        return super().batch_put_from_multi_buffers(keys, addresses, sizes, replicate_config)
+
+    def batch_get_into_multi_buffers(self, keys, addresses, sizes):
+        for key, parts, lengths in zip(keys, addresses, sizes):
+            values = self.values[key]
+            assert list(map(len, values)) == lengths
+            for address, value in zip(parts, values):
+                ctypes.memmove(address, value, len(value))
+        return super().batch_get_into_multi_buffers(keys, addresses, sizes)
+
+
 @pytest.mark.parametrize('layout', ['packed', 'layer_major', 'projected'])
 def test_hybrid_save_load_roundtrip_restores_all_rank_local_bytes(layout):
-    class BytesStore(FakeStore):
-
-        def __init__(self):
-            super().__init__()
-            self.values = {}
-
-        def batch_put_from_multi_buffers(self, keys, addresses, sizes, replicate_config):
-            for key, parts, lengths in zip(keys, addresses, sizes):
-                self.values[key] = [ctypes.string_at(p, n) for p, n in zip(parts, lengths)]
-            return super().batch_put_from_multi_buffers(keys, addresses, sizes, replicate_config)
-
-        def batch_get_into_multi_buffers(self, keys, addresses, sizes):
-            for key, parts, lengths in zip(keys, addresses, sizes):
-                values = self.values[key]
-                assert list(map(len, values)) == lengths
-                for address, value in zip(parts, values):
-                    ctypes.memmove(address, value, len(value))
-            return super().batch_get_into_multi_buffers(keys, addresses, sizes)
-
     store = BytesStore()
     metadata = MooncakeStoreKeyMetadata('model', 'prefix', 4, 4, kv_head_replica_num=2)
     hashes = build_prefix_block_hashes(range(16), 4)
@@ -1178,6 +1179,97 @@ def test_hybrid_save_load_roundtrip_restores_all_rank_local_bytes(layout):
         assert store.get_calls[-1][0] == [build_store_key(metadata, rank // 2, h) for h in hashes] + [
             build_store_key(metadata, rank, hashes[-1], group_id=1)]
     assert len(store.get_calls) == 4
+
+
+def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path, monkeypatch):
+    import lmdeploy.pytorch.engine.cache_engine.state as state_module
+    from lmdeploy.hf_configs.configuration_glm5_next import Glm5NextConfig
+    from lmdeploy.pytorch.backends.default.cache import DefaultCacheBackend
+    from lmdeploy.pytorch.configurations.glm5_next import Glm5NextModelConfigBuilder
+    from lmdeploy.pytorch.engine.cache_engine import CacheEngine
+    from lmdeploy.pytorch.engine.cache_engine.layout import PackedStateCacheLayout
+    from lmdeploy.pytorch.engine.cache_engine.schema import (
+        BlockCacheGeometry,
+        BlockCacheRequestContext,
+        build_model_block_cache_tensor_specs,
+    )
+    from lmdeploy.pytorch.models.glm5_next import Glm5NextMTPAttention
+    from lmdeploy.pytorch.nn.kpool import KPoolIndexer
+
+    class HostCacheTensor(torch.Tensor):
+        # BytesStore copies host memory; keep the real tensor layout while
+        # exposing it through the worker's CUDA-only registration interface.
+        @property
+        def is_cuda(self):
+            return True
+
+    monkeypatch.setattr('lmdeploy.pytorch.configurations.deepseek_v2.flash_mla_available', lambda: True)
+    monkeypatch.setattr(state_module, '_allocate_state_caches',
+                        lambda specs, num_caches, device: PackedStateCacheLayout(tuple(specs)).allocate(
+                            num_caches, device='cpu'))
+    monkeypatch.setattr(worker_module.torch.cuda, 'Event', FakeCudaEvent)
+    monkeypatch.setattr(MooncakeStoreWorker, '_start_lookup_server', lambda self: None)
+    hf_config = Glm5NextConfig(text_config=dict(
+        num_hidden_layers=2, layer_types=['linear_attention', 'full_attention'],
+        linear_num_heads=2, linear_head_dim=8, index_head_dim=8))
+    model_config = Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=3)
+    config = replace(make_cache_config(write_store_config(tmp_path), num_gpu_blocks=3),
+                     states_shapes=model_config.states_shapes, num_state_caches=4,
+                     mooncake_state_save_slots=1, mooncake_prefill_save_alignment=64)
+    states = StateCacheEngine(config, model_config)
+    indexer = SimpleNamespace(index_kpool=4, head_dim=8)
+    draft = SimpleNamespace(_TOKEN_CACHE=Glm5NextMTPAttention._TOKEN_CACHE, indexer=indexer)
+    context = BlockCacheRequestContext(BlockCacheGeometry(64, 64))
+    requests = (KPoolIndexer.get_block_cache_requests(indexer, context) * 2
+                + Glm5NextMTPAttention.get_block_cache_requests(draft, context))
+    specs = build_model_block_cache_tensor_specs(model_config, config, world_size=1, block_requests=requests)
+    # One target DSA layer and one MTP layer share the allocator's block IDs.
+    cache = CacheEngine.__new__(CacheEngine)
+    cache.gpu_allocation = DefaultCacheBackend.build_block_layout(specs, num_layers=2).allocate(3, device='cpu')
+    raw_tokens = cache.gpu_allocation.tensor_views[-1]
+    for index, tensor in enumerate(cache.gpu_allocation.tensor_views):
+        tensor.copy_((torch.arange(tensor.numel()).reshape(tensor.shape) % 97 + index).to(tensor.dtype))
+    for index, tensor in enumerate(states.state_caches):
+        tensor[1].copy_(torch.arange(tensor[1].numel()).reshape(tensor[1].shape) + index)
+    states.copy_slots(1, 3)
+    expected_kv = [tensor[:, :2].clone() for tensor in cache.gpu_allocation.tensor_views[:-1]]
+    expected_state = [tensor[1].clone() for tensor in states.state_caches[:2]]
+    store = BytesStore()
+    store.existing_keys = store.values
+    worker = MooncakeStoreWorker(config, store_factory=lambda: store, replicate_config=object())
+    worker.register_kv_caches(
+        {name: tensor.as_subclass(HostCacheTensor) for name, tensor in cache.connector_kv_caches.items()},
+        state_cache_pools=tuple(replace(pool, tensor=pool.tensor.as_subclass(HostCacheTensor))
+                               for pool in states.connector_state_cache_pools))
+    hashes = build_prefix_block_hashes(range(128), 64)
+    save = MooncakeStoreSaveRequest(1, 0, 0, (0, 1), (0, 1), hashes,
+                                    state=MooncakeStoreStateSave(1, 3, 128))
+    worker.start_save_kv(MooncakeStoreConnectorMetadata(save_requests=(save,)))
+    worker.kv_send_thread.request_queue.join()
+    assert worker.get_finished() == KVConnectorOutput(completed_save_ids={1})
+    assert worker.lookup(128, hashes) == 128
+    state_key = build_store_key(worker.key_metadata, 0, hashes[-1], group_id=1)
+    state_value = store.values.pop(state_key)
+    assert worker.lookup(128, hashes) == 0
+    store.values[state_key] = state_value
+
+    for tensor in cache.gpu_allocation.tensor_views:
+        tensor.zero_()
+    raw_tokens.fill_(float('nan'))
+    for tensor in states.state_caches:
+        tensor[2].fill_(float('nan'))
+    load = MooncakeStoreLoadRequest(2, (2, 0), hashes, 2, state_slot=2)
+    worker.start_load_kv(MooncakeStoreConnectorMetadata(load_requests=(load,)))
+    worker.kv_recv_thread.request_queue.join()
+    assert worker.get_finished() == KVConnectorOutput(finished_receiving={2})
+    for tensor, expected in zip(cache.gpu_allocation.tensor_views[:-1], expected_kv):
+        torch.testing.assert_close(tensor[:, [2, 0]], expected)
+        assert (tensor[:, 1] == 0).all()
+    for tensor, expected in zip(states.state_caches[:2], expected_state):
+        torch.testing.assert_close(tensor[2], expected)
+    assert torch.isnan(raw_tokens).all()
+    assert all(torch.isnan(tensor[2]).all() for tensor in states.state_caches[2:])
+    worker.shutdown()
 
 
 @pytest.mark.parametrize('results', [[0, 0], [-1, 0], [0, -1], [0], [0, True], RuntimeError('get failed')])
