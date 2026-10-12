@@ -898,10 +898,10 @@ class SchedulerSequence:
 
     def get_prefix_cache_extra_identity(self, start: int, end: int) -> PrefixCacheExtraIdentity:
         count = self._seq_meta.prefix_cache_token_lookahead
-        return (self._get_prefix_cache_multimodal_identity(start, end + count)
+        return (self.get_prefix_cache_multimodal_identity(start, end + count)
                 + self.get_prefix_cache_token_dependency(end))
 
-    def _get_prefix_cache_multimodal_identity(self, start: int, end: int) -> PrefixCacheExtraIdentity:
+    def get_prefix_cache_multimodal_identity(self, start: int, end: int) -> tuple[MultimodalSpan, ...]:
         """Get canonical multimodal identity entries for a token range.
 
         The common caller asks for a full block, but partial ranges are used when verifying sparse SSM checkpoint

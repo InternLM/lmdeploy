@@ -216,9 +216,10 @@ class MooncakeStoreScheduler:
 
         block_extras = {}
         if not request.history_multimodals.empty():
+            # Store keys omit MTP lookahead, including media beyond this block.
             for block_index in range(len(tracker.block_hashes), num_blocks):
                 start = block_index * block_size
-                spans = request.get_prefix_cache_extra_identity(start, start + block_size)
+                spans = request.get_prefix_cache_multimodal_identity(start, start + block_size)
                 if spans:
                     identity = [(span.modality, span.content_hash, span.start - start, span.end - start)
                                 for span in spans]

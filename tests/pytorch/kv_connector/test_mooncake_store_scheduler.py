@@ -297,19 +297,25 @@ def test_hybrid_lookup_rejects_invalid_state_boundary_without_clamping(remote_hi
 
 
 @pytest.mark.parametrize('modality', [Modality.IMAGE, Modality.VIDEO])
-def test_fa_multimodal_save_hashes_work_without_local_prefix_cache(modality):
-    cache_config = _cache_config('kv_producer')
+@pytest.mark.parametrize('lookahead', [0, 1])
+def test_fa_multimodal_save_hashes_ignore_mtp_lookahead(modality, lookahead):
+    cache_config = replace(_cache_config('kv_producer'), enable_prefix_caching=bool(lookahead),
+                           prefix_cache_block_aligned=True, prefix_cache_token_lookahead=lookahead)
     paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache_config,
-                       seq_meta=SequenceMeta(4, strategy=ARSequenceStrategy()))
+                       seq_meta=SequenceMeta(4, strategy=ARSpecSequenceStrategy()))
     store = MooncakeStoreScheduler(cache_config)
     assert cache_config.needs_prefix_cache_identity
-    assert not paging.block_trie.enabled
+    assert paging.block_trie.enabled == bool(lookahead)
     assert cache_config.num_store_state_caches == 0
     hashes = []
-    for request_id, content in enumerate((1, 2, 1)):
-        media = MultiModalData(torch.tensor([content]), start=6, end=13, modality=modality)
-        request = paging.add_session(request_id).add_sequence(range(17), multimodals={modality.value: [media]})
+    local_identities = []
+    for request_id, (content, next_token) in enumerate(((1, 16), (2, 16), (1, 99))):
+        # The image/video starts at the previous block's lookahead token.
+        media = MultiModalData(torch.tensor([content]), start=4, end=13, modality=modality)
+        request = paging.add_session(request_id).add_sequence(
+            [*range(16), next_token], multimodals={modality.value: [media]})
         assert request.prefix_cache.multimodal_spans
+        local_identities.append(request.get_prefix_cache_extra_identity(12, 16))
         prefix = store._get_request_block_hashes(request, request.seq_id, 8, 4)
         metadata = store.build_connector_meta(_connector_step(
             (request,), (17,), ((0, 1, 2, 3, 4),), ((10, 11, 12, 13, 14),)))
@@ -325,6 +331,7 @@ def test_fa_multimodal_save_hashes_work_without_local_prefix_cache(modality):
     assert hashes[0] == hashes[2]
     assert hashes[0][0] == hashes[1][0]
     assert all(a != b for a, b in zip(hashes[0][1:], hashes[1][1:]))
+    assert (local_identities[0] != local_identities[2]) == bool(lookahead)
     store.shutdown()
     paging.shutdown()
 
