@@ -110,6 +110,8 @@ def test_zero_token_finish_records_request_reason():
     assert req_stats.decode_time_interval == 0
     assert iteration_stats.prompt_tokens == 4
     assert iteration_stats.ttft is None
+
+
 def test_evicted_blocks_counter_increments_by_delta():
     """The eviction counter must track the cumulative eviction total by its
     delta, not by re-adding the cumulative value on every poll."""
