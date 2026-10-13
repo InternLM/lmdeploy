@@ -128,3 +128,57 @@ def test_sparse_index_topk_cuda_graph_capture():
     graph.replay()
     torch.cuda.synchronize()
     _assert_topk_ids(scores, out, seqlens, k)
+
+
+@pytest.mark.parametrize('k', [512, 2048])
+@pytest.mark.parametrize('deterministic', [False, True])
+def test_sparse_index_topk_graph_updates(k, deterministic):
+    """Keep exact selection and deterministic tie order as graph inputs change."""
+    from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import sparse_index_topk
+
+    rows, width = 12, 8192
+    generator = torch.Generator().manual_seed(1024)
+    cpu_scores = torch.randn(rows, width, generator=generator)
+    # Exercise row padding as well as partial tiles and graph-padding rows.
+    storage = torch.empty(rows, width + 128, device='cuda')
+    scores = storage[:, :width]
+    scores.copy_(cpu_scores)
+    q_seqlens = torch.ones(rows, device='cuda', dtype=torch.int32)
+    lengths = torch.full((rows,), width, device='cuda', dtype=torch.int32)
+    sparse_index_topk(scores, q_seqlens, lengths, k, deterministic=deterministic)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        out = sparse_index_topk(scores, q_seqlens, lengths, k, deterministic=deterministic)
+
+    for pattern in ('normal', 'ties', 'signed_zero', 'coarse_bin', 'infinities'):
+        cpu_scores.normal_(generator=generator)
+        if pattern == 'ties':
+            cpu_scores.round_()
+        elif pattern == 'signed_zero':
+            cpu_scores.zero_()
+            cpu_scores[:, 1::2] = -0.0
+        elif pattern == 'coarse_bin':
+            cpu_scores.abs_().mul_(1e-6).add_(1.0).neg_()
+        elif pattern == 'infinities':
+            cpu_scores[:, ::7] = float('inf')
+            cpu_scores[:, 1::7] = -float('inf')
+
+        seqlens = [-1, 0, 1, k - 1, k, k + 1, width - 1, width, width + 7, 4097, 513, width]
+        scores.copy_(cpu_scores)
+        lengths.copy_(torch.tensor(seqlens, device='cuda', dtype=torch.int32))
+        graph.replay()
+        actual = out.cpu()
+        for row, length in enumerate(seqlens):
+            length = max(0, min(length, width))
+            expected = torch.full((k,), -1, dtype=torch.int32)
+            selected = torch.argsort(cpu_scores[row, :length], descending=True, stable=True)[:k]
+            expected[:selected.numel()] = selected.sort().values.to(torch.int32)
+            if deterministic or length <= k:
+                torch.testing.assert_close(actual[row], expected, rtol=0, atol=0)
+            else:
+                ids = actual[row].long()
+                assert ids.min() >= 0 and ids.max() < length
+                assert ids.unique().numel() == k
+                actual_values = cpu_scores[row, ids].sort().values
+                expected_values = cpu_scores[row, selected].sort().values
+                torch.testing.assert_close(actual_values, expected_values, rtol=0, atol=0)
