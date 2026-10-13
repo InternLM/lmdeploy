@@ -501,6 +501,10 @@ class PytorchEngineConfig:
             but use more checkpoint memory and copy work; larger values reduce
             overhead but make decode-prefix hits less likely. Positive values
             must be multiples of the cache block size.
+        enable_replayssm: Enable ReplaySSM for supported PyTorch CUDA Gated
+            DeltaNet models. Default False.
+        replayssm_buffer_len: ReplaySSM ring length. Supported values are 8,
+            16, and 32. Default 16.
         device_type: The inference device type, options ['cuda']
         eager_mode: Enable "eager" mode or not
         custom_module_map: nn module map customized by users. Once
@@ -568,6 +572,8 @@ class PytorchEngineConfig:
     enable_prefix_caching: bool = False
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
+    enable_replayssm: bool = False
+    replayssm_buffer_len: int = 16
     device_type: str = 'cuda'
     eager_mode: bool = False
     custom_module_map: dict[str, str] = None
@@ -623,6 +629,10 @@ class PytorchEngineConfig:
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
+        assert self.replayssm_buffer_len in (8, 16, 32), \
+            'replayssm_buffer_len must be one of 8, 16, or 32'
+        if self.enable_replayssm:
+            assert self.device_type == 'cuda', 'ReplaySSM is supported only on CUDA'
         try:
             self.quant_policy = QuantPolicy(self.quant_policy)
         except ValueError as e:

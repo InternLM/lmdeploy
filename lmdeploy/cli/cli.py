@@ -56,6 +56,8 @@ class CLI:
         ArgumentHelper.dllm_block_length(pt_group)
         ArgumentHelper.prefix_cache_state_budget(pt_group)
         ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
+        ArgumentHelper.enable_replayssm(pt_group)
+        ArgumentHelper.replayssm_buffer_len(pt_group)
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)

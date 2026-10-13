@@ -117,6 +117,7 @@ Documentation
    advance/pytorch_profiling.md
    advance/metrics.md
    advance/context_parallel.md
+   advance/replayssm.md
    advance/spec_decoding.md
    advance/update_weights.md
    advance/checkpoint_engine.md

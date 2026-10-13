@@ -397,6 +397,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         use_qk_l2norm_in_kernel: bool = False,
         is_decoding: bool = False,
         init_token_mask: torch.Tensor | None = None,
+        repeat_kv: bool = True,
     ):
         """Prepare q/k/g/beta for gated delta rule."""
         if use_qk_l2norm_in_kernel:
@@ -413,6 +414,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
                 kv_ratio,
                 init_token_mask=init_token_mask,
                 apply_qk_l2norm=apply_qk_l2norm,
+                repeat_kv=repeat_kv,
             )
             return q, k, g, beta, apply_qk_l2norm
         return super().prepare_inputs(
@@ -426,7 +428,164 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
             is_decoding=is_decoding,
             init_token_mask=init_token_mask,
+            repeat_kv=repeat_kv,
         )
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        b: torch.Tensor,
+        a: torch.Tensor,
+        dt_bias: torch.Tensor,
+        a_log_exp: torch.Tensor,
+        recurrent_state: torch.Tensor,
+        gated_delta_meta: GatedDeltaMeta,
+        kv_ratio: int,
+        use_qk_l2norm_in_kernel: bool,
+    ) -> torch.Tensor:
+        """Dispatch the legacy or ReplaySSM CUDA implementation."""
+        # Keep the generic backend API independent of the ReplaySSM state
+        # schema. The lazy import also avoids an import cycle with nn.gated_delta.
+        from lmdeploy.pytorch.nn.gated_delta import GatedDeltaReplayState
+
+        if not isinstance(recurrent_state, GatedDeltaReplayState):
+            return super().forward(
+                query,
+                key,
+                value,
+                b,
+                a,
+                dt_bias,
+                a_log_exp,
+                recurrent_state,
+                gated_delta_meta,
+                kv_ratio,
+                use_qk_l2norm_in_kernel,
+            )
+
+        replay_state = recurrent_state
+        meta = gated_delta_meta
+        is_decoding = meta.is_decoding
+        query, key, g, beta, qk_l2norm_done = self.prepare_inputs(
+            query,
+            key,
+            b,
+            a,
+            dt_bias,
+            a_log_exp,
+            kv_ratio,
+            use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
+            is_decoding=is_decoding,
+            init_token_mask=meta.is_init_token,
+            # Prefill retains the value-head-expanded FLA layout. Replay
+            # decode kernels consume compact key heads directly.
+            repeat_kv=not is_decoding,
+        )
+
+        if not is_decoding:
+            if replay_state.mode == 'standard':
+                from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
+                    fold_gdn_replayssm_standard_history,
+                )
+                fold_gdn_replayssm_standard_history(
+                    replay_state.checkpoint,
+                    replay_state.d_ring,
+                    replay_state.k_ring,
+                    replay_state.g_ring,
+                    replay_state.cursor.packed_cursor,
+                    meta.origin_state_ids,
+                )
+            elif replay_state.mode == 'mtp':
+                from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import (
+                    fold_gdn_replayssm_mtp_history,
+                )
+                fold_gdn_replayssm_mtp_history(replay_state, meta.origin_state_ids)
+            else:
+                raise RuntimeError(f'unknown ReplaySSM mode: {replay_state.mode}')
+
+            core_attn_out, _ = self.chunk_gated_delta_rule(
+                query,
+                key,
+                value,
+                g=g,
+                beta=beta,
+                initial_state=replay_state.checkpoint,
+                state_indices=meta.state_ids,
+                output_final_state=True,
+                use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel and not qk_l2norm_done,
+                cu_seqlens=meta.cu_seqlens,
+                # ReplaySSM owns one checkpoint; tentative MTP state offsets
+                # are represented by the transition rings instead.
+                spec_state_offsets=None,
+                transpose_state_layout=True,
+            )
+            return core_attn_out
+
+        batch_size = meta.state_ids.size(0)
+        query = query[0].unflatten(0, (batch_size, -1)).contiguous()
+        key = key[0].unflatten(0, (batch_size, -1)).contiguous()
+        value = value[0].unflatten(0, (batch_size, -1)).contiguous()
+        g = g[0].unflatten(0, (batch_size, -1)).contiguous()
+        beta = beta[0].unflatten(0, (batch_size, -1)).contiguous()
+
+        if replay_state.mode == 'standard':
+            from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
+                fused_recurrent_gdn_replayssm_decode,
+            )
+            core_attn_out, _ = fused_recurrent_gdn_replayssm_decode(
+                query,
+                key,
+                value,
+                g,
+                beta,
+                checkpoint=replay_state.checkpoint,
+                d_ring=replay_state.d_ring,
+                k_ring=replay_state.k_ring,
+                g_ring=replay_state.g_ring,
+                packed_cursor=replay_state.cursor.packed_cursor,
+                state_indices=meta.origin_state_ids,
+                force_flush=replay_state.force_flush,
+            )
+        elif replay_state.mode == 'mtp':
+            from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import (
+                fused_recurrent_gdn_replayssm_spec,
+                make_gdn_replayssm_spec_workspace,
+            )
+            # Keep every graph bucket's addresses alive until model release.
+            # A resize-and-replace buffer could leave an older graph pointing
+            # at freed storage. The slot capacity normally covers every graph
+            # bucket, so eager batch changes do not grow the workspace cache.
+            # Scratch is not session state and is overwritten before use.
+            if not hasattr(self, '_replayssm_workspaces'):
+                self._replayssm_workspaces = {}
+            capacity = replay_state.checkpoint.shape[0]
+            if query.shape[0] > capacity:
+                capacity = 1 << (query.shape[0] - 1).bit_length()
+            workspace_key = (query.device, capacity, replay_state.raw_v_ring.shape[1:],
+                             replay_state.raw_k_ring.shape[1:], replay_state.raw_v_ring.dtype,
+                             replay_state.raw_k_ring.dtype, replay_state.g_ring.dtype, replay_state.beta_ring.dtype)
+            workspace = self._replayssm_workspaces.get(workspace_key)
+            if workspace is None:
+                workspace = make_gdn_replayssm_spec_workspace(replay_state, capacity)
+                self._replayssm_workspaces[workspace_key] = workspace
+            core_attn_out, _ = fused_recurrent_gdn_replayssm_spec(
+                query,
+                key,
+                value,
+                g,
+                beta,
+                state=replay_state,
+                state_indices=meta.origin_state_ids,
+                q_seqlens=meta.q_seqlens,
+                workspace=workspace,
+            )
+        else:
+            raise RuntimeError(f'unknown ReplaySSM mode: {replay_state.mode}')
+
+        # out (batch, seqlen, ...) -> (1, batch * seqlen, ...)
+        return core_attn_out.flatten(0, 1).unsqueeze(0)
 
     def chunk_gated_delta_rule(
         self,

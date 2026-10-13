@@ -120,6 +120,8 @@ class SubCliServe:
         ArgumentHelper.kernel_block_size(pt_group)
         ArgumentHelper.prefix_cache_state_budget(pt_group)
         ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
+        ArgumentHelper.enable_replayssm(pt_group)
+        ArgumentHelper.replayssm_buffer_len(pt_group)
 
         # common engine args
         language_model_only = ArgumentHelper.language_model_only(pt_group)
@@ -264,6 +266,8 @@ class SubCliServe:
                 enable_prefix_caching=args.enable_prefix_caching,
                 prefix_cache_state_budget=args.prefix_cache_state_budget,
                 prefix_cache_decode_state_interval=args.prefix_cache_decode_state_interval,
+                enable_replayssm=args.enable_replayssm,
+                replayssm_buffer_len=args.replayssm_buffer_len,
                 device_type=args.device,
                 quant_policy=args.quant_policy,
                 eager_mode=args.eager_mode,
