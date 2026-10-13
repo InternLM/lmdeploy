@@ -37,6 +37,7 @@ from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 
 from .exceptions import ErrorCode, RequestError, SafeRunException
+from .model_name import split_model_name
 
 logger = get_logger('lmdeploy')
 
@@ -134,7 +135,7 @@ class AsyncEngine:
         logger.info(f'speculative_config={speculative_config}')
         backend_config = backend_config or (TurbomindEngineConfig()
                                             if backend == 'turbomind' else PytorchEngineConfig())
-        self.model_name = model_name if model_name else model_path
+        self.model_name, self.model_aliases = split_model_name(model_name if model_name else model_path)
         self.chat_template = get_chat_template(model_path, chat_template_config, trust_remote_code=trust_remote_code)
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         self.prompt_processor = MultimodalProcessor(self.tokenizer,
