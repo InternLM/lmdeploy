@@ -83,6 +83,10 @@ def test_prefill_conv_short_chunks_keep_their_own_history(monkeypatch, history_l
     torch.testing.assert_close(output, torch.cat(expected_outputs, dim=-1).transpose(1, 2))
 
 
+async def _async_value(value):
+    return value
+
+
 def _input_logprob_model_inputs(input_ids, indices):
     size = len(input_ids)
     return ModelInputs(input_ids=torch.tensor([input_ids]),
@@ -345,6 +349,116 @@ def test_mtp_sampling_still_delegates_generated_rows():
     assert result[0] is generated.next_token_ids
     assert result[1] == 'spec-generated'
     assert result[2] is generated.output_token_ids
+
+
+def test_mtp_replayssm_commit_uses_rejection_count_not_stop_position(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+    from lmdeploy.pytorch.kernels.cuda import gated_delta_replayssm_spec
+
+    calls = []
+
+    def commit(cursor, state_offsets, seq_length, rejected, buffer_len, tmax):
+        calls.append((cursor, state_offsets, seq_length, rejected, buffer_len,
+                      tmax))
+
+    monkeypatch.setattr(gated_delta_replayssm_spec,
+                        'commit_gdn_replayssm_spec_cursor', commit)
+    cursor = object()
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.model_config = SimpleNamespace(replayssm_mode='mtp',
+                                         replayssm_buffer_len=8)
+    agent.state_cache_engine = SimpleNamespace(
+        named_state_caches={'gdn_replay_cursor': cursor})
+    agent.spec_agent = SimpleNamespace(num_spec_tokens=3)
+    inputs = SimpleNamespace(is_decoding=True,
+                             is_dummy=False,
+                             state_offsets=torch.tensor([2, 4]),
+                             seq_length=torch.tensor([4, 4]))
+    rejected = torch.tensor([0, 3])
+
+    for stop_pos in (torch.tensor([-1, -1]), torch.tensor([0, 2])):
+        extra_inputs = SimpleNamespace(num_rejected_tokens=rejected,
+                                       stop_pos=stop_pos)
+        agent._commit_mtp_replayssm(inputs, extra_inputs)
+
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert calls[0][-2:] == (8, 4)
+
+
+def test_mtp_replayssm_commit_precedes_stop_processing_with_output():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    events = []
+    next_token_ids = torch.tensor([5])
+    output_token_ids = torch.tensor([[5, 6]])
+    extra_inputs = SimpleNamespace(num_rejected_tokens=torch.tensor([1]))
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.rank = 0
+    agent.dist_ctx = object()
+    agent.async_sampling_logits = lambda *_args, **_kwargs: _async_value(
+        (next_token_ids, None, output_token_ids, extra_inputs))
+    agent._broadcast_next_token = lambda *_args, **_kwargs: nullcontext()
+    agent._commit_mtp_replayssm = lambda *_args: events.append('commit')
+    agent.agent_strategy = SimpleNamespace(
+        make_extra_outputs=lambda _extra: None)
+    agent.spec_agent = SimpleNamespace(
+        async_model_forward=lambda *_args: _async_value(extra_inputs),
+        post_broadcast=lambda *_args: nullcontext(),
+        is_enabled=lambda: True)
+
+    class _Stopping:
+
+        def step(self, *_args, **_kwargs):
+            events.append('stop')
+            return torch.tensor([True]), torch.tensor([0]), self
+
+    asyncio.run(
+        agent._step_postprocess_with_output(
+            last_logits=torch.zeros((1, 8)),
+            logits=torch.zeros((1, 8)),
+            inputs=SimpleNamespace(is_dummy=False,
+                                   is_decoding=True,
+                                   is_chunk=False),
+            sampling_inputs=SimpleNamespace(stop_words=None),
+            stopping_criteria=_Stopping(),
+            model_metas=None,
+            need_broadcast_next=False,
+            extra_inputs=extra_inputs))
+
+    assert events == ['commit', 'stop']
+
+
+def test_mtp_replayssm_commit_runs_on_no_output_follower():
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    events = []
+    next_token_ids = torch.tensor([5])
+    extra_inputs = SimpleNamespace(num_rejected_tokens=torch.tensor([1]),
+                                   next_token_ids=next_token_ids)
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.rank = 1
+    agent.dist_ctx = object()
+    agent._broadcast_next_token = lambda *_args, **_kwargs: nullcontext()
+    agent._commit_mtp_replayssm = lambda *_args: events.append('commit')
+    agent.agent_strategy = SimpleNamespace(
+        make_dummy_next_token=lambda *_args: (next_token_ids, extra_inputs),
+        make_extra_outputs=lambda _extra: None)
+    agent.spec_agent = SimpleNamespace(
+        async_model_forward=lambda *_args: _async_value(extra_inputs),
+        post_broadcast=lambda *_args: nullcontext(),
+        is_enabled=lambda: True)
+
+    result = asyncio.run(
+        agent._step_postprocess_without_output(
+            inputs=SimpleNamespace(is_dummy=False),
+            last_logits=torch.zeros((1, 8)),
+            extra_inputs=extra_inputs,
+            sampling_inputs=SimpleNamespace(),
+            need_broadcast_next=True))
+
+    assert events == ['commit']
+    assert result[1] is next_token_ids
 
 
 def test_ordinary_non_final_chunk_keeps_upstream_generated_logprob_row(monkeypatch):
@@ -699,6 +813,9 @@ def _make_minimal_build_agent(target_layer_ids, mask_token_id=99):
         quant_config=None,
         fp32_lm_head=False,
         tie_word_embeddings=False,
+        enable_replayssm=False,
+        replayssm_buffer_len=16,
+        replayssm_mode=None,
     )
     agent.misc_config = SimpleNamespace(
         enable_return_routed_experts=False,
@@ -865,6 +982,342 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
         assert copy_calls[2][0] == 'kv'
         assert copy_calls[2][1] is save_plan
         assert copy_calls[3] == ('state', (7, ), (8, ))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required')
+def test_model_forward_cudagraph_checkpoint_publish_restore_and_continue():
+    """Exercise the production graph/model-agent/save ordering as one path."""
+    from lmdeploy.pytorch.backends.cuda.graph_runner.full_graph import CUDASingleGraphRunner
+    from lmdeploy.pytorch.consts import (
+        GDN_CONV_STATE_CACHE_NAME,
+        GDN_REPLAY_CHECKPOINT_CACHE_NAME,
+        GDN_REPLAY_CURSOR_CACHE_NAME,
+        GDN_REPLAY_D_CACHE_NAME,
+        GDN_REPLAY_G_CACHE_NAME,
+        GDN_REPLAY_K_CACHE_NAME,
+    )
+    from lmdeploy.pytorch.disagg.config import EngineRole
+    from lmdeploy.pytorch.engine.cache_engine.state import StateCacheEngine
+    from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
+    from lmdeploy.pytorch.engine.inputs_maker import InputsMakerAsync, InputsMakerConfig
+    from lmdeploy.pytorch.engine.model_agent.agent import model_forward
+    from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
+        fused_recurrent_gdn_replayssm_decode,
+    )
+    from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
+    from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMixin
+    from lmdeploy.pytorch.nn.gated_delta import build_gated_delta_replay_state
+    from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import CheckpointCopyPlan
+
+    batch, slots, h, hv, kdim, vdim, length = 1, 4, 1, 2, 32, 48, 8
+    device = torch.device('cuda')
+    named_caches = {
+        GDN_CONV_STATE_CACHE_NAME:
+        torch.empty(1, slots, 0, device=device),
+        GDN_REPLAY_CHECKPOINT_CACHE_NAME:
+        torch.zeros(1, slots, hv, vdim, kdim,
+                    dtype=torch.bfloat16, device=device),
+        GDN_REPLAY_D_CACHE_NAME:
+        torch.zeros(1, slots, hv, length, vdim,
+                    dtype=torch.bfloat16, device=device),
+        GDN_REPLAY_K_CACHE_NAME:
+        torch.zeros(1, slots, h, length, kdim,
+                    dtype=torch.bfloat16, device=device),
+        GDN_REPLAY_G_CACHE_NAME:
+        torch.zeros(1, slots, hv, length,
+                    dtype=torch.float32, device=device),
+        GDN_REPLAY_CURSOR_CACHE_NAME:
+        torch.zeros(slots, 3, dtype=torch.int32, device=device),
+    }
+
+    class _ContextManager:
+
+        def __init__(self):
+            self._context = None
+            self.backend_step_meta_plan = None
+
+        def current_context(self):
+            return self._context
+
+        @contextmanager
+        def context(self, context):
+            previous = self._context
+            self._context = context
+            try:
+                yield self
+            finally:
+                self._context = previous
+
+        def build_context(self, inputs, **kwargs):
+            q_seqlens = inputs.seq_length
+            kv_seqlens = inputs.seq_length + inputs.history_lengths
+            context = SimpleNamespace(
+                input_ids=inputs.input_ids,
+                q_seqlens=q_seqlens,
+                kv_seqlens=kv_seqlens,
+                q_start_loc=torch.zeros(batch, dtype=torch.long, device=device),
+                block_offsets=inputs.block_offsets,
+                position_ids=inputs.history_lengths[None],
+                state_offsets=inputs.state_offsets,
+                is_decoding=True,
+                is_model_meta_updated=False,
+                local_adapter_ids=None,
+                enable_microbatch=False,
+            )
+            context.attn_metadata = SimpleNamespace(
+                block_offsets=context.block_offsets,
+                q_start_loc=context.q_start_loc,
+                q_seqlens=q_seqlens,
+                kv_seqlens=kv_seqlens,
+            )
+            context.global_is_decoding = lambda: True
+            return context
+
+    q_buf = torch.empty(batch, 1, h, kdim,
+                        dtype=torch.bfloat16, device=device)
+    k_buf = torch.empty_like(q_buf)
+    v_buf = torch.empty(batch, 1, hv, vdim,
+                        dtype=torch.bfloat16, device=device)
+    g_buf = torch.empty(batch, 1, hv, dtype=torch.float32, device=device)
+    beta_buf = torch.empty(batch, 1, hv,
+                           dtype=torch.bfloat16, device=device)
+
+    class _ToyReplayModel(torch.nn.Module, CudaGraphMixin):
+
+        def __init__(self, ctx_mgr):
+            super().__init__()
+            self.ctx_mgr = ctx_mgr
+
+        def prepare_inputs_for_generation(self, past_key_values, context, **kwargs):
+            replay_state = build_gated_delta_replay_state(
+                context.named_state_caches, 0, 'standard', length, 1,
+                context.replayssm_force_flush)
+            return dict(input_ids=context.input_ids,
+                        position_ids=context.position_ids,
+                        past_key_values=[replay_state],
+                        attn_metadata=context.attn_metadata,
+                        state_ids=context.state_offsets,
+                        inputs_embeds=None)
+
+        def update_model_metas(self, **kwargs):
+            return []
+
+        def forward(self, input_ids, position_ids, past_key_values,
+                    attn_metadata, **kwargs):
+            del input_ids, position_ids, attn_metadata, kwargs
+            replay_state = past_key_values[0]
+            output, _ = fused_recurrent_gdn_replayssm_decode(
+                q_buf, k_buf, v_buf, g_buf, beta_buf,
+                replay_state.checkpoint, replay_state.d_ring,
+                replay_state.k_ring, replay_state.g_ring,
+                replay_state.cursor.packed_cursor,
+                self.ctx_mgr.current_context().state_offsets,
+                force_flush=replay_state.force_flush)
+            return {'hidden_states': output}
+
+    model_config = SimpleNamespace(
+        vocab_size=32,
+        use_mla_fp8_cache=False,
+        use_flash_mla=False,
+        mla_index_topk=None,
+        model_paradigm='ar',
+        states_shapes=[((1, ), torch.float32)],
+        use_mrope=False,
+        replayssm_mode='standard',
+        replayssm_buffer_len=length,
+        block_size=16,
+    )
+    ctx_mgr = _ContextManager()
+    toy_model = _ToyReplayModel(ctx_mgr)
+
+    class _GraphModel:
+
+        def __init__(self):
+            self.ctx_mgr = ctx_mgr
+            self.runner = None
+
+        def update_model_metas(self, **kwargs):
+            return toy_model.update_model_metas(**kwargs)
+
+        def prepare_inputs_for_generation(self, **kwargs):
+            return toy_model.prepare_inputs_for_generation(**kwargs)
+
+        def __call__(self, **kwargs):
+            if self.runner is None:
+                self.runner = CUDASingleGraphRunner(
+                    toy_model,
+                    max_batches=batch,
+                    max_tokens=batch,
+                    num_blocks=1,
+                    is_decoding=True,
+                    decode_query_len=1,
+                    pool=torch.cuda.graph_pool_handle(),
+                    model_config=model_config,
+                    device=device,
+                    model_forward=toy_model)
+                return self.runner.capture(**kwargs)
+            return self.runner.forward(**kwargs)
+
+    class _CacheEngine:
+        cache_config = SimpleNamespace(quant_policy=0)
+        gpu_cache = []
+        block_caches = {}
+
+        def copy_logical_blocks(self, plan):
+            raise AssertionError('KV copies are not used in this regression')
+
+    copy_events = []
+
+    class _RecordingStateCacheEngine(StateCacheEngine):
+        def copy_slots(self, sources, destinations):
+            super().copy_slots(sources, destinations)
+            for source, destination in zip(sources, destinations):
+                copy_events.append((source, destination,
+                                    named_caches[GDN_REPLAY_CURSOR_CACHE_NAME]
+                                    [source, 0].item()))
+
+    graph_model = _GraphModel()
+    cache_engine = _CacheEngine()
+    state_cache_engine = _RecordingStateCacheEngine.__new__(
+        _RecordingStateCacheEngine)
+    state_cache_engine.cache_config = SimpleNamespace(num_state_caches=slots)
+    state_cache_engine._cache_tensors = list(named_caches.values())
+    state_cache_engine._slot_tensors = tuple(
+        (cache, 0 if name == GDN_REPLAY_CURSOR_CACHE_NAME else 1)
+        for name, cache in named_caches.items())
+    state_cache_engine._named_state_caches = named_caches
+    forward_stream = torch.cuda.Stream()
+    reference = torch.zeros(batch, hv, vdim, kdim,
+                            dtype=torch.bfloat16, device=device)
+
+    input_maker_cache_config = SimpleNamespace(
+        max_batches=batch,
+        max_prefill_token_num=512,
+        role=EngineRole.Hybrid,
+        block_size=16,
+        kernel_block_size=16,
+        window_size=-1,
+        states_shapes=model_config.states_shapes,
+        enable_prefix_caching=True,
+        prefix_cache_decode_state_interval=16,
+    )
+    input_maker_engine = SimpleNamespace(
+        cache_config=input_maker_cache_config,
+        model_config=model_config,
+        engine_config=SimpleNamespace(prefill_interval=None),
+        specdecode_config=None,
+        dist_config=SimpleNamespace(dp=1),
+        misc_config=SimpleNamespace(enable_chunked_prefill=False),
+    )
+    inputs_maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    inputs_maker.config = InputsMakerConfig.from_engine(input_maker_engine)
+    inputs_maker.cache_config = input_maker_cache_config
+    inputs_maker.spec_decoding = False
+
+    def make_save_inputs(source: int, destination: int):
+
+        class _StateCheckpoints:
+
+            def reserve_decode_save_batch(self, seqs, interval):
+                assert len(seqs) == 1
+                assert seqs[0].logical_state == source
+                assert interval == 16
+                return CheckpointCopyPlan(
+                    state_pairs=((source, destination), ))
+
+        inputs_maker.state_checkpoints = _StateCheckpoints()
+        cache_inputs = inputs_maker._make_decode_cache_inputs(
+            [SimpleNamespace(logical_state=source)],
+            SimpleNamespace(max_q_seqlen=1))
+        assert cache_inputs.state_save_plan == ((source, ), (destination, ))
+        assert cache_inputs.replayssm_force_flush.tolist() == [True]
+        return cache_inputs.to_device(device)
+
+    def make_inputs(state_id: int, *, dummy: bool = False):
+        return ModelInputs(
+            input_ids=torch.zeros((1, 1), dtype=torch.long, device=device),
+            seq_length=torch.ones(batch, dtype=torch.long, device=device),
+            history_lengths=torch.zeros(batch, dtype=torch.long, device=device),
+            block_offsets=torch.zeros((batch, 1), dtype=torch.int32, device=device),
+            is_decoding=True,
+            num_ignored_history=torch.zeros(batch, dtype=torch.long, device=device),
+            max_q_seqlen=1,
+            max_kv_seqlen=1,
+            sum_kv_seqlen=1,
+            is_dummy=dummy,
+            state_offsets=torch.tensor([state_id], dtype=torch.long, device=device),
+        )
+
+    # Production captures decode graphs during dummy warmup with no save plan.
+    model_forward(graph_model, make_inputs(-1, dummy=True), model_config,
+                  cache_engine, state_cache_engine, stream=forward_stream)
+    forward_stream.synchronize()
+
+    def run_step(seed: int, state_id: int,
+                 cache_inputs: CacheCheckpointInputs | None = None):
+        generator = torch.Generator(device=device).manual_seed(seed)
+        q = torch.randn(q_buf.shape, generator=generator,
+                        dtype=q_buf.dtype, device=device)
+        k = torch.randn(k_buf.shape, generator=generator,
+                        dtype=k_buf.dtype, device=device)
+        v = torch.randn(v_buf.shape, generator=generator,
+                        dtype=v_buf.dtype, device=device)
+        g = -torch.rand(g_buf.shape, generator=generator,
+                        dtype=g_buf.dtype, device=device) * 0.2
+        beta = torch.sigmoid(torch.randn(beta_buf.shape, generator=generator,
+                                         dtype=beta_buf.dtype, device=device))
+        q_buf.copy_(q)
+        k_buf.copy_(k)
+        v_buf.copy_(v)
+        g_buf.copy_(g)
+        beta_buf.copy_(beta)
+        expected, _ = fused_recurrent_gated_delta_rule(
+            q.repeat_interleave(hv // h, dim=2),
+            k.repeat_interleave(hv // h, dim=2),
+            v,
+            g=g,
+            beta=beta,
+            initial_state=reference,
+            output_final_state=True,
+            use_qk_l2norm_in_kernel=True,
+            state_indices=torch.zeros(batch, dtype=torch.long, device=device),
+            transpose_state_layout=True)
+        forward_stream.wait_stream(torch.cuda.current_stream())
+        output = model_forward(graph_model, make_inputs(state_id), model_config,
+                               cache_engine, state_cache_engine,
+                               stream=forward_stream,
+                               cache_inputs=cache_inputs)
+        forward_stream.synchronize()
+        torch.testing.assert_close(output['hidden_states'], expected,
+                                   atol=3e-2, rtol=3e-2)
+
+    for step in range(3):
+        run_step(2100 + step, 0)
+    run_step(
+        2103,
+        0,
+        make_save_inputs(0, 1))
+
+    assert copy_events[-1] == (0, 1, 0)
+    torch.testing.assert_close(
+        named_caches[GDN_REPLAY_CHECKPOINT_CACHE_NAME][0, 1], reference[0],
+        atol=5e-2, rtol=5e-2)
+
+    # Restore the published tuple into a new runtime slot, then continue and
+    # publish once more. The graph is reused; no recapture occurs.
+    run_step(2104, 2,
+             CacheCheckpointInputs(state_restore_plan=((1, ), (2, ))))
+    run_step(
+        2105,
+        2,
+        make_save_inputs(2, 3))
+
+    assert copy_events[-2] == (1, 2, 0)
+    assert copy_events[-1] == (2, 3, 0)
+    assert len(graph_model.runner.meta.output_buffers) > 0
+    torch.testing.assert_close(
+        named_caches[GDN_REPLAY_CHECKPOINT_CACHE_NAME][0, 3], reference[0],
+        atol=5e-2, rtol=5e-2)
 
 
 def test_inputs_preprocess_transfers_cache_inputs_and_keeps_host_ref(monkeypatch, event_loop):

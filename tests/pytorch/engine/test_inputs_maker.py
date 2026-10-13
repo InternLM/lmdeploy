@@ -1813,7 +1813,7 @@ def test_prepare_prefill_cache_inputs_rejects_mismatched_save_steps():
         maker._prepare_prefill_cache_inputs([_state_seq(4, 11)], save_steps=())
 
 
-def test_make_decode_cache_inputs_compacts_valid_state_saves():
+def test_from_engine_decode_cache_inputs_compacts_valid_replayssm_saves():
     valid_seqs = [_state_seq(4), _state_seq(5)]
 
     class _StateCheckpoints:
@@ -1822,10 +1822,31 @@ def test_make_decode_cache_inputs_compacts_valid_state_saves():
             assert interval == 16
             return CheckpointCopyPlan(state_pairs=((4, 31), ))
 
+    cache_config = SimpleNamespace(
+        max_batches=8,
+        max_prefill_token_num=512,
+        role=EngineRole.Hybrid,
+        block_size=64,
+        kernel_block_size=64,
+        window_size=-1,
+        states_shapes=[((1, ), torch.float32)],
+        enable_prefix_caching=True,
+        prefix_cache_decode_state_interval=16,
+    )
+    engine = SimpleNamespace(
+        cache_config=cache_config,
+        model_config=SimpleNamespace(use_mrope=False,
+                                     replayssm_mode='standard'),
+        engine_config=SimpleNamespace(prefill_interval=None),
+        specdecode_config=None,
+        dist_config=SimpleNamespace(dp=1),
+        misc_config=SimpleNamespace(enable_chunked_prefill=False),
+    )
+    config = InputsMakerConfig.from_engine(engine)
+    assert config.replayssm_mode == 'standard'
+
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    maker.config = SimpleNamespace(is_ssm=True,
-                                   enable_prefix_caching=True,
-                                   prefix_cache_decode_state_interval=16)
+    maker.config = config
     maker.state_checkpoints = _StateCheckpoints()
     maker.spec_decoding = False
     delta = SimpleNamespace(max_q_seqlen=1)
@@ -1834,6 +1855,7 @@ def test_make_decode_cache_inputs_compacts_valid_state_saves():
 
     assert cache_inputs.state_restore_plan is None
     assert cache_inputs.state_save_plan == ((4, ), (31, ))
+    assert cache_inputs.replayssm_force_flush.tolist() == [True, False]
 
 
 @pytest.mark.parametrize(

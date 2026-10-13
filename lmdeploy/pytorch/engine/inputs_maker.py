@@ -135,6 +135,7 @@ class InputsMakerConfig:
     enable_chunked_prefill: bool = False
     use_mrope: bool = False
     prefill_interval: int = 16
+    replayssm_mode: str | None = None
 
     @staticmethod
     def from_engine(engine: 'Engine'):
@@ -161,6 +162,7 @@ class InputsMakerConfig:
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
             use_mrope=model_config.use_mrope,
+            replayssm_mode=model_config.replayssm_mode,
             **kwargs,
         )
 
@@ -1031,7 +1033,17 @@ class InputsMakerAsync:
         state_save_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs)
         if state_save_plan is None:
             return None
-        return CacheCheckpointInputs(state_save_plan=state_save_plan)
+        force_flush = None
+        if getattr(self.config, 'replayssm_mode', None) == 'standard':
+            # Keep checkpoint-boundary preparation on the host. The ordinary
+            # forward-payload transfer moves this row mask to CUDA before
+            # ModelAgent consumes it.
+            save_sources = {source for source, _ in copy_plan.state_pairs}
+            force_flush = torch.tensor(
+                [seq.logical_state in save_sources for seq in valid_seqs],
+                dtype=torch.bool)
+        return CacheCheckpointInputs(state_save_plan=state_save_plan,
+                                     replayssm_force_flush=force_flush)
 
     @torch.inference_mode()
     @record_function('create_model_inputs')

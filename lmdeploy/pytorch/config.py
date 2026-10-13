@@ -176,6 +176,8 @@ class CacheConfig:
     # Model-owned checkpoint validity constraint, independent of prefill chunking.
     prefix_cache_block_aligned: bool = False
     prefix_cache_token_lookahead: int = 0
+    enable_replayssm: bool = False
+    replayssm_buffer_len: int = 16
     states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.
@@ -496,6 +498,10 @@ class ModelConfig:
     # flag to indicate that the model uses gated delta rule layers
     # and requires prepare_chunk_indices during prefill
     is_gated_delta: bool = False
+    enable_replayssm: bool = False
+    replayssm_buffer_len: int = 16
+    replayssm_mode: str | None = None
+    replayssm_baseline_state_shapes: list[tuple[tuple[int, ...], torch.dtype]] = field(default_factory=list)
 
     # Named state-cache specs for models that need layered sequence state.
     state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
@@ -559,6 +565,8 @@ class ModelConfig:
         is_draft_model: bool = False,
         spec_method: str = None,
         num_spec_tokens: int = 0,
+        enable_replayssm: bool = False,
+        replayssm_buffer_len: int = 16,
         model_format: str = None,
         device_type: str = 'auto',
         block_size: int = 64,
@@ -594,6 +602,8 @@ class ModelConfig:
             is_draft_model=is_draft_model,
             spec_method=spec_method,
             num_spec_tokens=num_spec_tokens,
+            enable_replayssm=enable_replayssm,
+            replayssm_buffer_len=replayssm_buffer_len,
             device_type=device_type,
         )
         fp32_lm_head = False
@@ -625,6 +635,8 @@ class ModelConfig:
         spec_method: str = None,
         device_type: str = 'auto',
         num_spec_tokens: int = 0,
+        enable_replayssm: bool = False,
+        replayssm_buffer_len: int = 16,
     ):
         """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
@@ -639,6 +651,8 @@ class ModelConfig:
             is_draft_model=is_draft_model,
             spec_method=spec_method,
             num_spec_tokens=num_spec_tokens,
+            enable_replayssm=enable_replayssm,
+            replayssm_buffer_len=replayssm_buffer_len,
             device_type=device_type,
         )
 

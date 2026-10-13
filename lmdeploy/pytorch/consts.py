@@ -26,6 +26,17 @@ GLM5_KDA_CONV_STATE = 'glm5_kda_conv'
 GLM5_KDA_RECURRENT_STATE = 'glm5_kda_recurrent'
 GLM5_KPOOL_TAIL_K_STATE = 'glm5_kpool_tail_k'
 GLM5_KPOOL_TAIL_SCORE_STATE = 'glm5_kpool_tail_score'
+# Gated DeltaNet ReplaySSM sequence-state cache names.  These names are part
+# of the model/cache-engine contract; keep them stable across implementations.
+GDN_CONV_STATE_CACHE_NAME = 'gdn_conv_state'
+GDN_REPLAY_CHECKPOINT_CACHE_NAME = 'gdn_replay_checkpoint'
+GDN_REPLAY_D_CACHE_NAME = 'gdn_replay_d'
+GDN_REPLAY_K_CACHE_NAME = 'gdn_replay_k'
+GDN_REPLAY_G_CACHE_NAME = 'gdn_replay_g'
+GDN_REPLAY_RAW_V_CACHE_NAME = 'gdn_replay_raw_v'
+GDN_REPLAY_RAW_K_CACHE_NAME = 'gdn_replay_raw_k'
+GDN_REPLAY_BETA_CACHE_NAME = 'gdn_replay_beta'
+GDN_REPLAY_CURSOR_CACHE_NAME = 'gdn_replay_cursor'
 
 
 def v4_packed_index_cache_shape(entries_per_block: int, head_dim: int) -> tuple[int, int, int]:

@@ -2,12 +2,41 @@
 from collections.abc import Sequence
 from logging import Logger
 
+import torch
+
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
+
+
+def _validate_replayssm_preallocation(cache_config: CacheConfig,
+                                      specdecode_config: SpecDecodeConfig = None) -> None:
+    """Reject unsupported ReplaySSM geometry before model/cache allocation."""
+    if not cache_config.enable_replayssm:
+        return
+    if cache_config.device_type != 'cuda':
+        raise ValueError('ReplaySSM requires the PyTorch CUDA backend.')
+    if cache_config.role != EngineRole.Hybrid:
+        raise ValueError('ReplaySSM does not support P/D-disaggregated engine roles.')
+    buffer_len = cache_config.replayssm_buffer_len
+    if buffer_len not in (8, 16, 32):
+        raise ValueError('replayssm_buffer_len must be one of 8, 16, or 32.')
+    if specdecode_config is None:
+        return
+    if specdecode_config.method != 'qwen3_5_mtp':
+        raise ValueError(
+            'ReplaySSM speculative decoding supports only qwen3_5_mtp, got '
+            f'{specdecode_config.method!r}.')
+    tmax = specdecode_config.num_speculative_tokens + 1
+    if buffer_len < 2 * tmax:
+        raise ValueError(
+            'MTP ReplaySSM requires replayssm_buffer_len >= '
+            '2 * (num_speculative_tokens + 1), got '
+            f'L={buffer_len}, Tmax={tmax}.')
 
 
 def _finalize_sparse_mla_cache_policy(model_configs: Sequence[ModelConfig], cache_config: CacheConfig) -> None:
@@ -90,6 +119,7 @@ def build_executor(
     logger = get_logger('lmdeploy')
     dp = dist_config.dp
     world_size = dist_config.world_size
+    _validate_replayssm_preallocation(cache_config, specdecode_config)
 
     model_config = ModelConfig.from_pretrained(
         model_path,
@@ -103,8 +133,18 @@ def build_executor(
         model_format=misc_config.model_format,
         device_type=device_type,
         block_size=cache_config.block_size,
+        enable_replayssm=cache_config.enable_replayssm,
+        replayssm_buffer_len=cache_config.replayssm_buffer_len,
     )
 
+    if cache_config.enable_replayssm:
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] != 9:
+            capability = torch.cuda.get_device_capability()
+            raise ValueError(
+                'ReplaySSM is currently qualified only for SM90 CUDA GPUs, '
+                f'got SM{capability[0]}{capability[1]}.')
+        if not model_config.is_gated_delta:
+            raise ValueError('ReplaySSM is supported only for Gated DeltaNet models.')
     # Finalize cache policy before any executor copies configs to workers or
     # builds backend operators. Target and memory models share CacheConfig.
     shared_cache_models = [model_config]

@@ -343,6 +343,38 @@ class ExecutorBase:
             model_config = getattr(self, 'model_config', None)
         state_specs = getattr(model_config, 'state_cache_specs', None)
         mems = StateCacheEngine.get_state_slot_nbytes(states_shapes, state_specs=state_specs)
+        if (getattr(model_config, 'enable_replayssm', False)
+                and not getattr(self, '_replayssm_memory_logged', False)):
+            from lmdeploy.pytorch.consts import (
+                GDN_CONV_STATE_CACHE_NAME,
+                GDN_REPLAY_CHECKPOINT_CACHE_NAME,
+            )
+            base_names = {GDN_CONV_STATE_CACHE_NAME, GDN_REPLAY_CHECKPOINT_CACHE_NAME}
+            base_specs = [spec for spec in state_specs if spec.name in base_names]
+            base_slot = StateCacheEngine.get_state_slot_nbytes(
+                [(spec.shape, spec.dtype) for spec in base_specs], state_specs=base_specs)
+            extra_slot = mems - base_slot
+            baseline_shapes = model_config.replayssm_baseline_state_shapes
+            baseline_slot = StateCacheEngine.get_state_slot_nbytes(baseline_shapes)
+            baseline_budget_capacity = (num_state_caches * baseline_slot // mems) if mems else num_state_caches
+            logger.info(
+                'ReplaySSM state cache: mode=%s L=%d aligned_bytes_per_slot=%d '
+                'baseline_bytes_per_slot=%d delta_bytes_per_slot=%d '
+                'base_conv_checkpoint_bytes_per_slot=%d ring_bytes_per_slot=%d '
+                'num_state_caches=%d total_bytes=%d baseline-budget slot estimate=%d '
+                '(attention TP shards GDN state; EP does not).',
+                model_config.replayssm_mode,
+                model_config.replayssm_buffer_len,
+                mems,
+                baseline_slot,
+                mems - baseline_slot,
+                base_slot,
+                extra_slot,
+                num_state_caches,
+                mems * num_state_caches,
+                baseline_budget_capacity,
+            )
+            self._replayssm_memory_logged = True
         mems *= num_state_caches
 
         return mems

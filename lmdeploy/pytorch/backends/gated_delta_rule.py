@@ -17,6 +17,7 @@ class GatedDeltaMeta:
     def __init__(self, num_tokens: int, conv_kernel_size: int, state_ids: torch.Tensor, attn_metadata: Any):
         self.is_decoding = attn_metadata.is_decoding
         self.cu_seqlens = attn_metadata.cu_seqlens_q
+        self.q_seqlens = attn_metadata.q_seqlens
         self.cache_seqlens = None
         self.num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
         self.spec_conv_offsets = None
@@ -96,6 +97,7 @@ class GatedDeltaRuleImpl(ABC):
         use_qk_l2norm_in_kernel: bool = False,
         is_decoding: bool = False,
         init_token_mask: torch.Tensor | None = None,
+        repeat_kv: bool = True,
     ):
         """Prepare q/k/g/beta for gated delta rule."""
         if b.dim() == 4:
@@ -107,7 +109,7 @@ class GatedDeltaRuleImpl(ABC):
         g = a_log_exp * F.softplus(a + dt_bias)
         if not is_decoding and init_token_mask is not None:
             g = g.masked_fill(init_token_mask[None, :, None], -1.0e6)
-        if kv_ratio > 1:
+        if repeat_kv and kv_ratio > 1:
             q = q.repeat_interleave(kv_ratio, dim=-2)
             k = k.repeat_interleave(kv_ratio, dim=-2)
         return q, k, g, beta, False

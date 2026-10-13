@@ -661,6 +661,23 @@ class ArgumentHelper:
                                    'Only used by the PyTorch engine.')
 
     @staticmethod
+    def enable_replayssm(parser):
+        """Add the opt-in ReplaySSM switch."""
+        return parser.add_argument('--enable-replayssm',
+                                   action='store_true',
+                                   default=False,
+                                   help='Enable ReplaySSM for supported PyTorch CUDA Gated DeltaNet models.')
+
+    @staticmethod
+    def replayssm_buffer_len(parser):
+        """Add the ReplaySSM ring length."""
+        return parser.add_argument('--replayssm-buffer-len',
+                                   type=int,
+                                   choices=(8, 16, 32),
+                                   default=16,
+                                   help='ReplaySSM ring length. Only used by the PyTorch engine.')
+
+    @staticmethod
     def num_tokens_per_iter(parser):
         return parser.add_argument('--num-tokens-per-iter',
                                    type=int,

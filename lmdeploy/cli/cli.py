@@ -58,6 +58,8 @@ class CLI:
         ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
         ArgumentHelper.prefill_save_alignment(pt_group)
         ArgumentHelper.mooncake_state_save_slots(pt_group)
+        ArgumentHelper.enable_replayssm(pt_group)
+        ArgumentHelper.replayssm_buffer_len(pt_group)
         # common engine args
         dtype_act = ArgumentHelper.dtype(pt_group)
         tp_act = ArgumentHelper.tp(pt_group)
