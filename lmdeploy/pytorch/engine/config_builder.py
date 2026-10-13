@@ -85,6 +85,8 @@ class ConfigBuilder:
             enable_prefix_caching=engine_config.enable_prefix_caching,
             prefix_cache_state_budget=engine_config.prefix_cache_state_budget,
             prefix_cache_decode_state_interval=engine_config.prefix_cache_decode_state_interval,
+            enable_replayssm=engine_config.enable_replayssm,
+            replayssm_buffer_len=engine_config.replayssm_buffer_len,
             quant_policy=engine_config.quant_policy,
             device_type=engine_config.device_type,
             migration_backend=engine_config.migration_backend,

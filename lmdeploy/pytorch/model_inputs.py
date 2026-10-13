@@ -353,6 +353,9 @@ class StepContext:
     # named views for operator-owned block caches and configured state caches
     block_caches: Mapping[str, torch.Tensor] | None = None
     named_state_caches: Mapping[str, torch.Tensor] | None = None
+    # Per-row standard ReplaySSM checkpoint publication request. CUDA graphs
+    # replace this runtime tensor with a fixed-address padded input buffer.
+    replayssm_force_flush: torch.BoolTensor | None = None
 
     # mrope
     mrope_position_ids: torch.Tensor | None = None
@@ -533,6 +536,9 @@ class BuildModelContext:
     num_spec_tokens: int = 0
     max_batch_size: int = 0
     spec_model_ctx: SpecModelBuildContext = field(default_factory=SpecModelBuildContext)
+    enable_replayssm: bool = False
+    replayssm_buffer_len: int = 16
+    replayssm_mode: str | None = None
 
     @property
     def deep_ep_max_tokens_per_rank(self) -> int:
