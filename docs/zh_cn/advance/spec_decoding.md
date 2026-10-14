@@ -176,6 +176,10 @@ if __name__ == '__main__':
 ### 配置限制
 
 - 缓存块大小为 64 tokens。手动设置 `num_gpu_blocks` 时按此计数，而不是按 KPool 条目计数。
+- `prefill_save_alignment`（CLI 参数 `--prefill-save-alignment`，默认 8192）统一控制
+  本地 prefix caching 和 Mooncake Store 的 prefill 状态快照分块边界，取值必须是缓存块大小的正整数倍。设置为 512、
+  token 预算为 8192 时，首次处理 800-token 纯文本输入会切成 512 和 288 两段，
+  同时开启两种缓存也一样。仅含 full attention 的模型忽略此参数；对齐不代表每到一个倍数都保存快照。
 - `prefix_cache_state_budget` 为 checkpoint 预留额外状态槽，会增加显存占用。
   设为零表示不额外预留，仍可复用空闲的运行时状态槽。
 - MTP 下保持 `prefix_cache_decode_state_interval=0`；非 MTP 的正值必须是 64 的倍数。

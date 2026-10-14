@@ -70,11 +70,11 @@ def test_mooncake_state_budget_is_deployable_and_excluded_from_runtime(slots):
 
     from lmdeploy.cli.utils import ArgumentHelper
     parser = ArgumentParser()
-    ArgumentHelper.mooncake_prefill_save_alignment(parser)
+    ArgumentHelper.prefill_save_alignment(parser)
     ArgumentHelper.mooncake_state_save_slots(parser)
     defaults = parser.parse_args([])
-    assert (defaults.mooncake_prefill_save_alignment, defaults.mooncake_state_save_slots) == (8192, 8)
-    args = parser.parse_args(['--mooncake-state-save-slots', str(slots), '--mooncake-prefill-save-alignment', '4096'])
+    assert (defaults.prefill_save_alignment, defaults.mooncake_state_save_slots) == (8192, 8)
+    args = parser.parse_args(['--mooncake-state-save-slots', str(slots), '--prefill-save-alignment', '4096'])
     config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
         max_batch_size=2, prefix_cache_state_budget=1,
         kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_producer'),
@@ -83,7 +83,7 @@ def test_mooncake_state_budget_is_deployable_and_excluded_from_runtime(slots):
     executor = object.__new__(ExecutorBase)
     executor.cache_config = config
     size = executor._get_state_cache_mem()
-    assert config.mooncake_prefill_save_alignment == 4096
+    assert config.prefill_save_alignment == 4096
     assert config.num_state_caches == 5 + slots
     assert size == config.num_state_caches * StateCacheEngine.get_state_slot_nbytes(config.states_shapes)
     manager = build_state_manager(config)
@@ -98,7 +98,7 @@ def test_mooncake_rejects_unsupported_hybrid_configuration():
     with pytest.raises(ValueError, match='prefix_cache_decode_state_interval'):
         ConfigBuilder.build_cache_config(PytorchEngineConfig(
             max_batch_size=1, kv_transfer_config=transfer, prefix_cache_decode_state_interval=64))
-    for option in ('mooncake_state_save_slots', 'mooncake_prefill_save_alignment'):
+    for option in ('mooncake_state_save_slots', 'prefill_save_alignment'):
         with pytest.raises(AssertionError, match=option):
             PytorchEngineConfig(**{option: 0})
 

@@ -170,10 +170,9 @@ class CacheConfig:
     num_state_caches: int = None
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
-    mooncake_prefill_save_alignment: int = 8192
+    prefill_save_alignment: int = 8192
     mooncake_state_save_slots: int = 8
-    # Model-owned policy: only save complete owners and materialize a reusable
-    # aligned checkpoint before the final prefill suffix. Not a public option.
+    # Model-owned checkpoint validity constraint, independent of prefill chunking.
     prefix_cache_block_aligned: bool = False
     prefix_cache_token_lookahead: int = 0
     states_shapes: list[tuple] = field(default_factory=list)
@@ -190,7 +189,7 @@ class CacheConfig:
         """Post init."""
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
-        assert self.mooncake_prefill_save_alignment > 0, 'invalid mooncake_prefill_save_alignment'
+        assert self.prefill_save_alignment > 0, 'invalid prefill_save_alignment'
         assert self.mooncake_state_save_slots > 0, 'invalid mooncake_state_save_slots'
         if self.use_mooncake_store and self.prefix_cache_decode_state_interval > 0:
             raise ValueError('Mooncake Store and prefix_cache_decode_state_interval cannot be enabled together')

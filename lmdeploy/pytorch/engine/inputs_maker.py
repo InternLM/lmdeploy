@@ -135,7 +135,6 @@ class InputsMakerConfig:
     enable_chunked_prefill: bool = False
     use_mrope: bool = False
     prefill_interval: int = 16
-    mooncake_prefill_save_alignment: int = 0
 
     @staticmethod
     def from_engine(engine: 'Engine'):
@@ -158,8 +157,6 @@ class InputsMakerConfig:
             window_size=cache_config.window_size,
             enable_prefix_caching=cache_config.enable_prefix_caching,
             prefix_cache_decode_state_interval=cache_config.prefix_cache_decode_state_interval,
-            mooncake_prefill_save_alignment=(cache_config.mooncake_prefill_save_alignment
-                                             if cache_config.num_store_state_caches else 0),
             is_ssm=len(cache_config.states_shapes) > 0,
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
@@ -179,9 +176,8 @@ class LongContextChunker:
     chunked the same way as the no-cache path.
     """
 
-    def __init__(self, max_prefill_token_num: int, save_alignment: int = 0):
+    def __init__(self, max_prefill_token_num: int):
         self.max_prefill_token_num = max_prefill_token_num
-        self.save_alignment = save_alignment
 
         # long prefill seq
         self.clear()
@@ -193,9 +189,8 @@ class LongContextChunker:
     def is_long_context(self, seq: 'SchedulerSequence'):
         """Is long context."""
         limit = get_long_context_chunk_limit(seq, self.max_prefill_token_num)
-        if self.save_alignment:
-            plan = plan_long_context_chunk(seq, limit,
-                                           include_multimodals=False, save_alignment=self.save_alignment)
+        if seq._seq_meta.prefill_save_alignment:
+            plan = plan_long_context_chunk(seq, limit, include_multimodals=False)
             return not plan.is_last_chunk
         return seq.num_token_ids > min(self.max_prefill_token_num, limit)
 
@@ -219,8 +214,7 @@ class LongContextChunker:
             return 0, None
 
         limit = limit_long_context_checkpoint(seq, self.max_prefill_num)
-        plan = plan_long_context_chunk(seq, limit, self.multimodals,
-                                       save_alignment=self.save_alignment)
+        plan = plan_long_context_chunk(seq, limit, self.multimodals)
         return plan.chunk_size, plan.multimodals
 
     def is_last_chunk(self):
@@ -228,10 +222,9 @@ class LongContextChunker:
         if self.seq is None:
             return True
         limit = limit_long_context_checkpoint(self.seq, self.max_prefill_num)
-        if self.save_alignment:
+        if self.seq._seq_meta.prefill_save_alignment:
             return plan_long_context_chunk(self.seq, limit, self.multimodals,
-                                           include_multimodals=False,
-                                           save_alignment=self.save_alignment).is_last_chunk
+                                           include_multimodals=False).is_last_chunk
         return self.seq.num_token_ids <= limit
 
     def clear(self):
@@ -803,8 +796,7 @@ class InputsMakerAsync:
         self.forward_inputs = None
         self.running_seqs: list[SchedulerSequence] = []
         self.to_evict_seqs: list[SchedulerSequence] = []
-        self.long_context_chunker = LongContextChunker(self.config.max_prefill_token_num,
-                                                     self.config.mooncake_prefill_save_alignment)
+        self.long_context_chunker = LongContextChunker(self.config.max_prefill_token_num)
 
     def reset_runtime_state(self):
         """Discard request-local scheduling state after sleep cancels

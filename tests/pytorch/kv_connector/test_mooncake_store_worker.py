@@ -574,7 +574,7 @@ def test_lookup_requires_all_namespaces_and_a_contiguous_prefix(tmp_path, recomp
 ])
 def test_hybrid_lookup_finds_joint_boundary(tmp_path, state_boundaries, missing_key, expected):
     config = replace(make_cache_config(write_store_config(tmp_path)),
-                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=128)
+                     states_shapes=[((2,), torch.float32)], prefill_save_alignment=128)
     store = FakeStore(existing_keys=set())
     worker = MooncakeStoreWorker(config, tp_size=8, kv_head_replica_num=4, store_factory=lambda: store)
     hashes = build_prefix_block_hashes(range(320), 64)
@@ -605,7 +605,7 @@ def test_hybrid_lookup_finds_joint_boundary(tmp_path, state_boundaries, missing_
 ])
 def test_hybrid_lookup_limits_candidates_by_tokens_and_hashes(tmp_path, token_len, hash_count, expected):
     config = replace(make_cache_config(write_store_config(tmp_path)),
-                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=128)
+                     states_shapes=[((2,), torch.float32)], prefill_save_alignment=128)
     store = FakeStore(lookup_results=[1, 1, 1])  # Two FA blocks and one state at 128.
     worker = MooncakeStoreWorker(config, store_factory=lambda: store)
     hashes = build_prefix_block_hashes(range(320), 64)
@@ -627,7 +627,7 @@ def test_hybrid_lookup_limits_candidates_by_tokens_and_hashes(tmp_path, token_le
 def test_hybrid_lookup_rewinds_fa_before_selecting_an_existing_state(
         tmp_path, fa_tokens, state_boundaries, expected_hits, save_alignment):
     config = replace(make_cache_config(write_store_config(tmp_path)),
-                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=save_alignment)
+                     states_shapes=[((2,), torch.float32)], prefill_save_alignment=save_alignment)
     store = FakeStore(existing_keys=set())
     worker = MooncakeStoreWorker(config, tp_size=8, kv_head_replica_num=4, store_factory=lambda: store)
     hashes = build_prefix_block_hashes(range(384), 64)
@@ -661,7 +661,7 @@ def test_lookup_external_errors_fail_closed(tmp_path, store, hybrid):
     )
     if hybrid:
         worker._cache_config.states_shapes = [((2,), torch.float32)]
-        worker._cache_config.mooncake_prefill_save_alignment = 128
+        worker._cache_config.prefill_save_alignment = 128
 
     assert worker.lookup(128, build_prefix_block_hashes(range(128), 64)) == 0
     worker.shutdown()
@@ -916,7 +916,7 @@ def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(tmp_pat
     existing_keys = set(written) | {
         build_store_key(metadata, rank, h) for h in hashes for rank in range(2)}
     config = replace(make_cache_config(write_store_config(tmp_path)),
-                     states_shapes=[((2,), torch.float32)], mooncake_prefill_save_alignment=512)
+                     states_shapes=[((2,), torch.float32)], prefill_save_alignment=512)
     config.kv_transfer_config.kv_connector_extra_config.update(model_name='model', cache_prefix='prefix')
     worker = MooncakeStoreWorker(config, tp_size=8, kv_head_replica_num=4,
                                 store_factory=lambda: FakeStore(existing_keys=existing_keys))
@@ -1215,7 +1215,7 @@ def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path
     model_config = Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=3)
     config = replace(make_cache_config(write_store_config(tmp_path), num_gpu_blocks=3),
                      states_shapes=model_config.states_shapes, num_state_caches=4,
-                     mooncake_state_save_slots=1, mooncake_prefill_save_alignment=64)
+                     mooncake_state_save_slots=1, prefill_save_alignment=64)
     states = StateCacheEngine(config, model_config)
     indexer = SimpleNamespace(index_kpool=4, head_dim=8)
     draft = SimpleNamespace(_TOKEN_CACHE=Glm5NextMTPAttention._TOKEN_CACHE, indexer=indexer)

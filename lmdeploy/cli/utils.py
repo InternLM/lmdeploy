@@ -628,13 +628,15 @@ class ArgumentHelper:
                                    'but use more checkpoint memory and copy work. Only used by the PyTorch engine.')
 
     @staticmethod
-    def mooncake_prefill_save_alignment(parser):
-        """Add the hybrid Mooncake prefill save alignment."""
-        return parser.add_argument('--mooncake-prefill-save-alignment',
+    def prefill_save_alignment(parser):
+        """Add the shared prefill state-checkpoint alignment."""
+        return parser.add_argument('--prefill-save-alignment',
                                    type=int,
                                    default=8192,
-                                   help='Token alignment for hybrid Mooncake prefill saves. Must be a positive '
-                                   'multiple of cache block size; intermediate aligned positions may be skipped. '
+                                   help='Token alignment for linear-attention prefill state checkpoints, shared by '
+                                   'local prefix caching and Mooncake Store. Must be a positive multiple of cache '
+                                   'block size; intermediate aligned positions may be skipped. '
+                                   'Ignored by full-attention-only models. '
                                    'Only used by the PyTorch engine.')
 
     @staticmethod

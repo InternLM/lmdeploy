@@ -436,9 +436,9 @@ class ExecutorBase:
         self._sync_spec_cache_block_size()
         self._validate_memdecode_configs()
         self.cache_config.states_shapes = self.model_config.states_shapes
-        if (self.cache_config.num_store_state_caches
-                and self.cache_config.mooncake_prefill_save_alignment % self.cache_config.block_size != 0):
-            raise ValueError('mooncake_prefill_save_alignment must be a multiple of block_size')
+        if (self.cache_config.states_shapes and self.cache_config.needs_prefix_cache_identity
+                and self.cache_config.prefill_save_alignment % self.cache_config.block_size != 0):
+            raise ValueError('prefill_save_alignment must be a multiple of block_size')
 
         spec_cache_config, spec_model_config = self._get_spec_configs()
         cache_block_sizes = self._prepare_worker_cache_plans(self.cache_config, spec_cache_config)

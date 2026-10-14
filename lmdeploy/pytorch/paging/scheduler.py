@@ -79,9 +79,13 @@ class Scheduler:
         self.cache_config = cache_config
         self.sessions: dict[int, SchedulerSession] = OrderedDict()
         self.kv_connector = kv_connector
+        self.is_ssm = bool(cache_config.states_shapes)
         seq_meta = seq_meta or SequenceMeta(self.cache_config.block_size)
         seq_meta.enable_prefix_caching = self.cache_config.enable_prefix_caching
         seq_meta.enable_mooncake_store = cache_config.use_mooncake_store
+        seq_meta.prefill_save_alignment = (
+            cache_config.prefill_save_alignment
+            if self.is_ssm and (cache_config.enable_prefix_caching or cache_config.num_store_state_caches) else 0)
         seq_meta.prefix_cache_checkpoint_block_size = (
             cache_config.block_size
             if cache_config.enable_prefix_caching and cache_config.prefix_cache_block_aligned else 0)
@@ -92,7 +96,6 @@ class Scheduler:
 
         self.state_manager = build_state_manager(self.cache_config)
         self.block_manager = build_block_manager(cache_config)
-        self.is_ssm = len(self.cache_config.states_shapes) > 0
         transfer_config = cache_config.kv_transfer_config
         # A producer-only connector still needs the save path below, but must
         # not issue lookups. Hybrid loads also acquire a runtime state slot

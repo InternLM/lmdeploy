@@ -94,13 +94,18 @@ class TestScheduler:
 
         assert scheduler.schedule_metrics.cache_usage == 0.0
 
-    @pytest.mark.parametrize('save_alignment', [0, 32])
+    @pytest.mark.parametrize(('save_alignment', 'chunks'), [
+        (16, [(32, False), (16, False), (1, True)]),
+        (32, [(32, False), (17, True)]),
+    ])
     def test_aligned_mtp_prefix_keeps_next_token_identity_and_final_suffix(
-            self, cache_config, scheduler_config, seq_meta, save_alignment):
+            self, cache_config, scheduler_config, seq_meta, save_alignment, chunks):
         from lmdeploy.pytorch.engine.inputs_maker import LongContextChunker
         from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
 
         cache_config.enable_prefix_caching = True
+        cache_config.states_shapes = [((1,), torch.float32)]
+        cache_config.prefill_save_alignment = save_alignment
         cache_config.prefix_cache_block_aligned = True
         cache_config.prefix_cache_token_lookahead = 1
         seq_meta.strategy = ARSpecSequenceStrategy()
@@ -109,9 +114,9 @@ class TestScheduler:
         seq = scheduler.add_session(0).add_sequence(tokens)
         assert seq.prefix_cache.recompute_overlap.recompute_blocks == 0
 
-        chunker = LongContextChunker(max_prefill_token_num=32, save_alignment=save_alignment)
+        chunker = LongContextChunker(max_prefill_token_num=32)
         chunker.set_seq(seq)
-        for size, is_last in [(32, False), (16, False), (1, True)]:
+        for size, is_last in chunks:
             assert chunker.next_chunk_size()[0] == size
             assert chunker.is_last_chunk() == is_last
             if not is_last:

@@ -494,7 +494,7 @@ class MooncakeStoreWorker:
         full_blocks = min(token_len // block_size, len(block_hashes))
         is_hybrid = bool(self._cache_config.states_shapes)
         if is_hybrid:
-            state_interval_blocks = self._cache_config.mooncake_prefill_save_alignment // block_size
+            state_interval_blocks = self._cache_config.prefill_save_alignment // block_size
             # Probe eligible state boundaries and the FA margin needed to reuse them.
             full_blocks = (max(0, full_blocks - recompute_blocks) // state_interval_blocks * state_interval_blocks
                            + recompute_blocks)

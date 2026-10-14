@@ -99,7 +99,7 @@ _scheduler_output = _connector_step
 
 def _hybrid_cache_config(role='kv_producer'):
     return replace(_cache_config(role), states_shapes=[((2,), torch.float32)],
-                   num_state_caches=5, mooncake_state_save_slots=2, mooncake_prefill_save_alignment=8)
+                   num_state_caches=5, mooncake_state_save_slots=2, prefill_save_alignment=8)
 
 
 def test_hybrid_save_slots_survive_request_finish_until_job_completion():
@@ -164,7 +164,7 @@ def test_hybrid_multimodal_save_lookup_and_load_without_local_prefix_cache(looku
         stored_keys.update(build_store_key(metadata, 0, h) for h in save.block_hashes)
         stored_keys.add(build_store_key(metadata, 0, save.block_hashes[-1], group_id=1))
 
-    config = replace(_hybrid_cache_config('kv_consumer'), mooncake_prefill_save_alignment=lookup_alignment)
+    config = replace(_hybrid_cache_config('kv_consumer'), prefill_save_alignment=lookup_alignment)
     consumer = MooncakeStoreScheduler(config)
     # Exercise the real lookup algorithm over saved keys without CUDA or IPC.
     worker = MooncakeStoreWorker.__new__(MooncakeStoreWorker)
@@ -225,7 +225,7 @@ def test_hybrid_load_binding_rejects_non_runtime_slots_without_consuming_lookup(
 @pytest.mark.parametrize('role', ['kv_producer', 'kv_consumer', 'kv_both'])
 def test_hybrid_save_alignment_must_be_a_multiple_of_block_size(role):
     with pytest.raises(ValueError, match='multiple of block_size'):
-        MooncakeStoreScheduler(replace(_hybrid_cache_config(role), mooncake_prefill_save_alignment=6))
+        MooncakeStoreScheduler(replace(_hybrid_cache_config(role), prefill_save_alignment=6))
 
 
 @pytest.mark.parametrize(('prompt_len', 'logprob_start', 'expected'), [

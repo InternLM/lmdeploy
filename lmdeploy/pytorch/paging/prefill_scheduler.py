@@ -154,18 +154,17 @@ class _PrefillReorderer:
         end = seq.num_history_ids + seq.num_token_ids
         remaining = end - first_chunk_end
         ordinary_chunks = 1 + (remaining + chunk_limit - 1) // chunk_limit
-        cache = self.prefill_scheduler.cache_config
-        if not cache.num_store_state_caches or len(seq.history_embeddings) > 0:
+        alignment = seq._seq_meta.prefill_save_alignment
+        if not alignment or len(seq.history_embeddings) > 0:
             return ordinary_chunks
 
-        alignment = cache.mooncake_prefill_save_alignment
         if chunk_limit >= alignment:
             # A forward can skip alignment points. After the next aligned end,
             # full chunks advance by the largest alignment multiple that fits.
-            next_end = min(end, first_chunk_end + chunk_limit) // alignment * alignment
+            aligned_end = (end - int(seq._seq_meta.enable_prefix_caching)) // alignment * alignment
+            next_end = min(aligned_end, first_chunk_end + chunk_limit) // alignment * alignment
             if next_end <= first_chunk_end:
                 return 2  # Only the unaligned final tail remains.
-            aligned_end = end // alignment * alignment
             aligned_chunk_size = chunk_limit // alignment * alignment
             full_chunks = (aligned_end - next_end + aligned_chunk_size - 1) // aligned_chunk_size
             return 2 + full_chunks + int(aligned_end < end)
@@ -671,10 +670,9 @@ class _PrefillAdmissionAttempt:
     def _apply_nonfinal_long_prefill_gate(self):
         """Keep non-final chunks exclusive, after resolving any prefix hit.
 
-        Input construction only supports single-request chunks. A checkpoint
-        cut can cost less than the token budget, but must not join an already
-        selected final prefill. Matching may turn it into a final prefill; if
-        resource admission later loses that match, retain this rejection.
+        Input construction only supports single-request chunks. A checkpoint cut can cost less than the token budget,
+        but must not join an already selected final prefill. Matching may turn it into a final prefill; if resource
+        admission later loses that match, retain this rejection.
         """
         prefill = self.prefill_scheduler
         seq = self.seq
@@ -822,15 +820,13 @@ class _PrefillScheduler:
             seq,
             max_prefill_num,
             include_multimodals=False,
-            save_alignment=(self.cache_config.mooncake_prefill_save_alignment
-                            if self.cache_config.num_store_state_caches else 0),
         )
         return plan.chunk_end
 
     def _prefill_kv_token_limit(self, seq: SchedulerSequence):
         """Limit KV allocation for a non-final long-context prefill chunk."""
         max_prefill_num = self._long_context_chunk_limit(seq)
-        if seq.num_token_ids <= max_prefill_num and not self.cache_config.num_store_state_caches:
+        if seq.num_token_ids <= max_prefill_num and not seq._seq_meta.prefill_save_alignment:
             return None
         end = self._next_long_context_chunk_end(seq, max_prefill_num)
         return end if end < seq.num_history_ids + seq.num_token_ids else None

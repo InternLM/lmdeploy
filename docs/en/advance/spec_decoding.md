@@ -181,14 +181,20 @@ if __name__ == '__main__':
 
 - Cache blocks contain 64 tokens. If setting `num_gpu_blocks` manually, count
   these blocks rather than KPool entries.
+- `prefill_save_alignment` (`--prefill-save-alignment`, default 8192) controls
+  prefill state-checkpoint boundaries for both local prefix caching and Mooncake
+  Store. It must be a positive multiple of the cache block size.
+  With alignment 512 and a token budget of 8192,
+  an uncached 800-token text prompt uses two chunks: 512 and 288 tokens,
+  including when both caches are enabled. Full-attention-only models ignore this
+  option. Alignment does not require a checkpoint at every multiple.
 - `prefix_cache_state_budget` reserves extra checkpoint slots and uses additional
   memory. Zero adds no reserved slots; idle runtime slots may still be reused.
 - With MTP, keep `prefix_cache_decode_state_interval=0`. Without MTP, positive
   values must be multiples of 64.
 - PD migration is not supported.
 
-The native FP8 CUDA path also supports DP/EP serving, for example `--tp 2 --dp 2
---ep 4`. Enable text-prefill PCG with `--piecewise-cudagraph-max-tokens 512`
+The native FP8 CUDA path also supports DP/EP serving, for example `--tp 2 --dp 2 --ep 4`. Enable text-prefill PCG with `--piecewise-cudagraph-max-tokens 512`
 and `--max-prefill-token-num 512`. Startup warmup prepares these plans; skipping
 warmup leaves unprepared prefills eager. Vision-bearing chunks also fall back to
 eager execution. MTP draft prefill remains eager, while supported decode steps

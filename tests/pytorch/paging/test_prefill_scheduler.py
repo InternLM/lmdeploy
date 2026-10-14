@@ -468,13 +468,50 @@ def test_multimodal_chunk_reservation_obeys_the_draft_input_shift(method):
     scheduler.shutdown()
 
 
+@pytest.mark.parametrize(('hybrid', 'prefix_caching', 'store', 'ends'), [
+    (True, True, True, [512, 800]),
+    (True, True, False, [512, 800]),
+    (True, False, True, [512, 800]),
+    (True, False, False, [800]),
+    (False, True, True, [800]),
+    (True, True, True, [8192, 15872, 16384]),
+])
+def test_prefill_state_save_alignment_is_shared(hybrid, prefix_caching, store, ends):
+    from lmdeploy.pytorch.engine.inputs_maker import LongContextChunker
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+
+    cache = CacheConfig(
+        max_batches=2, block_size=64, num_cpu_blocks=0, num_gpu_blocks=256,
+        max_prefill_token_num=8192, prefill_save_alignment=512,
+        enable_prefix_caching=prefix_caching, prefix_cache_block_aligned=hybrid,
+        states_shapes=[((2,), torch.float32)] if hybrid else [], num_state_caches=16,
+        kv_transfer_config=(KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_both')
+                            if store else None))
+    scheduler = Scheduler(SchedulerConfig(max_batches=2, max_session_len=32768), cache,
+                          seq_meta=SequenceMeta(64, strategy=ARSequenceStrategy()))
+    seq = scheduler.add_session(0).add_sequence(range(ends[-1]))
+    prefill = scheduler._prefill_scheduler
+    info = prefill_scheduler_module._PrefillReorderer(prefill)._get_reorder_info(seq)
+    assert info.estimated_long_chunks == len(ends)
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert seq.kv_token_limit == (ends[0] if len(ends) > 1 else None)
+    chunker = LongContextChunker(cache.max_prefill_token_num)
+    chunker.set_seq(seq)
+    for end in ends:
+        assert prefill._next_long_context_chunk_end(seq) == end
+        assert chunker.next_chunk_size()[0] == end - seq.num_history_ids
+        assert chunker.is_last_chunk() == (end == ends[-1])
+        seq.set_step(end)
+    scheduler.shutdown()
+
+
 def _make_mooncake_prefill_scheduler(budget: int = 32, hybrid: bool = True):
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
 
     cache = CacheConfig(max_batches=2, block_size=4, num_cpu_blocks=0, num_gpu_blocks=16,
                         max_prefill_token_num=budget, states_shapes=[((2,), torch.float32)] if hybrid else [],
                         num_state_caches=6,
-                        mooncake_prefill_save_alignment=8, mooncake_state_save_slots=2,
+                        prefill_save_alignment=8, mooncake_state_save_slots=2,
                         kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector',
                                                            kv_role='kv_producer'))
     return Scheduler(SchedulerConfig(max_batches=2, max_session_len=64), cache,
@@ -493,13 +530,13 @@ def test_mooncake_aligned_prefill_runs_alone_and_reserves_only_its_chunk():
     assert aligned.num_blocks == 0
     scheduler.end_session(0)
     assert scheduler.schedule(is_prefill=True).running == [aligned]
-    plan = plan_long_context_chunk(aligned, cache.max_prefill_token_num, save_alignment=8)
+    plan = plan_long_context_chunk(aligned, cache.max_prefill_token_num)
     assert plan.chunk_end == aligned.kv_token_limit == 16
     assert aligned.num_blocks == 4
 
     scheduler.activate_seqs([aligned])
     aligned.set_step(16)
-    tail = plan_long_context_chunk(aligned, cache.max_prefill_token_num, save_alignment=8)
+    tail = plan_long_context_chunk(aligned, cache.max_prefill_token_num)
     assert tail.is_last_chunk
     assert tail.chunk_size == 4
     assert scheduler.reserve_long_context_chunk(aligned, tail.chunk_size, is_last_chunk=tail.is_last_chunk)
@@ -537,7 +574,7 @@ def test_mooncake_chunk_estimate_matches_prefill_boundaries(history, budget, spa
     assert seq.num_blocks == 0
     assert seq.kv_token_limit is None
     for end in ends:
-        plan = plan_long_context_chunk(seq, chunk_limit, save_alignment=8)
+        plan = plan_long_context_chunk(seq, chunk_limit)
         assert plan.chunk_end == end
         assert plan.is_last_chunk == (end == ends[-1])
         seq.set_step(end)

@@ -274,8 +274,9 @@ def _make_inputs_maker_config():
 def test_mooncake_prefill_uses_last_safe_aligned_boundary(history, end, budget, span, expected):
     multimodals = {'image': [_DummyMultiModal(*span)]} if span else {}
     seq = _DummySeq(history, end - history, multimodals, multimodals)
-    chunker = LongContextChunker(budget, save_alignment=8192)
-    plan = plan_long_context_chunk(seq, get_long_context_chunk_limit(seq, budget), save_alignment=8192)
+    seq._seq_meta.prefill_save_alignment = 8192
+    chunker = LongContextChunker(budget)
+    plan = plan_long_context_chunk(seq, get_long_context_chunk_limit(seq, budget))
 
     assert plan.chunk_end == expected
     assert plan.is_last_chunk == (expected == end)
@@ -302,11 +303,12 @@ def test_shifted_prefill_keeps_multimodal_embeddings_in_their_chunk(spans, budge
     multimodals = {'image': [_DummyMultiModal(*span) for span in spans]}
     seq = _DummySeq(0, ends[-1], multimodals, multimodals)
     seq.prefill_input_shift = 1
-    chunker = LongContextChunker(budget, save_alignment=alignment)
+    seq._seq_meta.prefill_save_alignment = alignment
+    chunker = LongContextChunker(budget)
     chunker.set_seq(seq)
 
     for expected_end in ends:
-        plan = plan_long_context_chunk(seq, chunker.max_prefill_num, save_alignment=alignment)
+        plan = plan_long_context_chunk(seq, chunker.max_prefill_num)
         assert seq.num_history_ids < plan.chunk_end == expected_end
         assert plan.is_last_chunk == (expected_end == ends[-1])
         assert chunker.is_last_chunk() == plan.is_last_chunk

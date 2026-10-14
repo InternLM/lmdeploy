@@ -32,7 +32,7 @@ def make_scheduler():
             states_shapes=[((2,), torch.float32)],
             num_state_caches=1 + max_batches + state_budget + save_slots,
             prefix_cache_state_budget=state_budget, mooncake_state_save_slots=2,
-            mooncake_prefill_save_alignment=8,
+            prefill_save_alignment=8,
             kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role=role))
         connector = MooncakeStoreScheduler(config)
         if connector.client is not None:
@@ -298,6 +298,11 @@ def test_concurrent_hybrid_loads_isolate_mixed_rank_results_at_runtime_capacity(
 
     output = scheduler.schedule(is_prefill=True)
     assert successful in output.running
+    if apc:
+        # The failed load recomputes a non-final state-checkpoint chunk on its own.
+        assert output.running == [successful]
+        scheduler.activate_seqs(output.running)
+        output = scheduler.schedule(is_prefill=True)
     assert failed in output.running
     assert failed.logical_state != successful.logical_state
     assert successful.logical_state == successful_load.state_slot

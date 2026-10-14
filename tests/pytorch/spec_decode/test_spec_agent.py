@@ -1107,7 +1107,7 @@ def test_multimodal_mtp_chunks_match_full_prefill_kv_and_outputs(store_enabled, 
     cache = CacheConfig(max_batches=1, block_size=4, num_cpu_blocks=0, num_gpu_blocks=16,
                         max_prefill_token_num=5, num_state_caches=4, mooncake_state_save_slots=1,
                         states_shapes=[((2,), torch.float32)] if store_enabled else [],
-                        mooncake_prefill_save_alignment=4,
+                        prefill_save_alignment=4,
                         kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector',
                                                            kv_role='kv_producer') if store_enabled else None)
     scheduler = Scheduler(SchedulerConfig(max_batches=1, max_session_len=32), cache,
@@ -1117,7 +1117,7 @@ def test_multimodal_mtp_chunks_match_full_prefill_kv_and_outputs(store_enabled, 
     seq.prefix_cache.match_start_step = 0
     assert scheduler.schedule(is_prefill=True).running == [seq]
     scheduler.activate_seqs([seq])
-    chunker = LongContextChunker(5, save_alignment=4 if store_enabled else 0)
+    chunker = LongContextChunker(5)
     chunker.set_seq(seq)
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = SimpleNamespace(is_ssm=store_enabled, use_mrope=False)

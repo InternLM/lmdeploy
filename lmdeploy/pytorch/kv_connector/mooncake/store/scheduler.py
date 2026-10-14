@@ -74,8 +74,8 @@ class MooncakeStoreScheduler:
         self._cache_config = cache_config
         self._kv_transfer_config = kv_transfer_config
         self._is_hybrid = bool(cache_config.states_shapes)
-        if self._is_hybrid and cache_config.mooncake_prefill_save_alignment % cache_config.block_size != 0:
-            raise ValueError('mooncake_prefill_save_alignment must be a multiple of block_size')
+        if self._is_hybrid and cache_config.prefill_save_alignment % cache_config.block_size != 0:
+            raise ValueError('prefill_save_alignment must be a multiple of block_size')
         num_snapshots = cache_config.num_store_state_caches
         self._state_slots: StateAllocator | None = None
         if num_snapshots:
@@ -127,7 +127,7 @@ class MooncakeStoreScheduler:
             request.get_prefix_cache_max_candidate_step())
         recompute_blocks = max(0, request.prefix_cache.recompute_overlap.recompute_blocks)
         recompute_tokens = recompute_blocks * block_size
-        lookup_alignment = self._cache_config.mooncake_prefill_save_alignment if self._is_hybrid else block_size
+        lookup_alignment = self._cache_config.prefill_save_alignment if self._is_hybrid else block_size
         max_hit_tokens = max(0, token_len - recompute_tokens) // lookup_alignment * lookup_alignment
         if max_hit_tokens == 0 or num_computed_tokens >= max_hit_tokens:
             return 0, False
@@ -311,7 +311,7 @@ class MooncakeStoreScheduler:
             if full_blocks <= first_block:
                 continue
             if self._is_hybrid:
-                if (token_len % self._cache_config.mooncake_prefill_save_alignment != 0
+                if (token_len % self._cache_config.prefill_save_alignment != 0
                         or not request.is_prefix_cache_boundary_safe(token_len)):
                     continue
                 if step_input.connector_state_ids[index] <= 0:

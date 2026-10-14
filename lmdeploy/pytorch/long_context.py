@@ -87,7 +87,8 @@ def _iter_multimodal_chunk_spans(sorted_multimodals, input_shift: int):
 
 
 def get_long_context_chunk_capacity(seq: 'SchedulerSequence', max_prefill_token_num: int) -> int:
-    """Return the static token capacity, including indivisible multimodal spans."""
+    """Return the static token capacity, including indivisible multimodal
+    spans."""
     mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
     spans = _iter_multimodal_chunk_spans(_iter_sorted_multimodals(mm_for_chunk_limit), seq.prefill_input_shift)
     max_span = max((end - start for start, end in spans), default=0)
@@ -96,8 +97,8 @@ def get_long_context_chunk_capacity(seq: 'SchedulerSequence', max_prefill_token_
 
 def limit_long_context_checkpoint(seq: 'SchedulerSequence', limit: int) -> int:
     """Cut the final prefill suffix after a reusable aligned checkpoint."""
-    alignment = seq._seq_meta.prefix_cache_checkpoint_block_size
-    if alignment:
+    alignment = seq._seq_meta.prefill_save_alignment
+    if alignment and seq._seq_meta.enable_prefix_caching:
         # Matching leaves at least one input for logits, so an identical prompt
         # can reuse the preceding aligned state instead of its final state.
         step = ((seq.input_end_pos - 1) // alignment) * alignment
@@ -114,8 +115,7 @@ def get_long_context_chunk_limit(seq: 'SchedulerSequence', max_prefill_token_num
 def plan_long_context_chunk(seq: 'SchedulerSequence',
                             chunk_limit: int,
                             multimodals: 'MultiModalInputs|None' = None,
-                            include_multimodals: bool = True,
-                            save_alignment: int = 0) -> LongContextChunkPlan:
+                            include_multimodals: bool = True) -> LongContextChunkPlan:
     """Plan a model-safe chunk, optionally stopping at its last save boundary.
 
     Alignment is a constraint, not a sampling interval: earlier aligned positions in this chunk are skipped. If no safe
@@ -139,6 +139,7 @@ def plan_long_context_chunk(seq: 'SchedulerSequence',
             end = span_start
             break
 
+    save_alignment = seq._seq_meta.prefill_save_alignment
     # Embedding-only inputs do not yet have a Store content identity.
     if save_alignment and len(seq.history_embeddings) == 0:
         save_end = end // save_alignment * save_alignment

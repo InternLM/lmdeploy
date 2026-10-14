@@ -213,6 +213,8 @@ class SequenceMeta:
     use_mrope: bool = False
     enable_prefix_caching: bool = False
     enable_mooncake_store: bool = False
+    # Zero disables state-checkpoint chunking, including for full-attention-only models.
+    prefill_save_alignment: int = 0
     prefix_cache_checkpoint_block_size: int = 0
     prefix_cache_token_lookahead: int = 0
 

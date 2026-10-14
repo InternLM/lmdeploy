@@ -74,9 +74,8 @@ def _state_row_layout(
 ) -> tuple[tuple[int, int, int], ...]:
     """Resolve state fragments as (base address, slot stride, payload size).
 
-    Packed pools have one row of slots; layer-major pools have one per layer.
-    Persisted ranges remain inside the registered storage, but need not fill
-    the physical slot stride. Save and load use the same fragment order.
+    Packed pools have one row of slots; layer-major pools have one per layer. Persisted ranges remain inside the
+    registered storage, but need not fill the physical slot stride. Save and load use the same fragment order.
     """
     rows = []
     for region in registrations:
