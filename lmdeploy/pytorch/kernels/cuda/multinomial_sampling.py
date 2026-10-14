@@ -6,14 +6,14 @@ import triton.language as tl
 
 @triton.jit
 def _multinomial_sampling_kernel(Scores, Seeds, Offsets, Indices, Outputs, stride_sb, stride_st, stride_ib, stride_it,
-                                 stride_seed, stride_offset, num_tokens, BLOCK_N: tl.constexpr):
+                                 num_tokens, BLOCK_N: tl.constexpr):
     """Kernel."""
     batch_id = tl.program_id(0)
     n_off = tl.arange(0, BLOCK_N)
 
     # sampling random seed
-    seed = tl.load(Seeds + batch_id * stride_seed)
-    offset = tl.load(Offsets + batch_id * stride_offset).to(tl.int32)
+    seed = tl.load(Seeds + batch_id)
+    offset = tl.load(Offsets + batch_id).to(tl.int32)
     samp = tl.rand(seed, offset)
 
     # initialize
@@ -88,8 +88,6 @@ def multinomial_sampling(scores: torch.Tensor,
                                        stride_st=scores.stride(1),
                                        stride_ib=indices.stride(0),
                                        stride_it=indices.stride(1),
-                                       stride_seed=seeds.stride(0),
-                                       stride_offset=offsets.stride(0),
                                        num_tokens=num_tokens,
                                        BLOCK_N=BLOCK_N,
                                        num_warps=1)

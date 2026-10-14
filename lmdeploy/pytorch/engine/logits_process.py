@@ -499,39 +499,48 @@ class FusedLogitsProcessor:
         return scores, logprobs
 
     @torch.inference_mode()
-    def sampling_probs(self, logits: torch.Tensor):
-        """Return filtered probabilities and their vocabulary indices.
-
-        Ordinary and speculative sampling must use the same target distribution.
-        Keep the top-k representation compact until the consumer needs full
-        vocabulary probabilities.
-        """
-        sampling_inputs = self.sampling_inputs
-        max_topk = sampling_inputs.max_top_k
-        if max_topk <= 0:
-            scores, indices = logits.sort(1, descending=True)
-        else:
-            scores, indices = _torch_topk(logits, max_topk, dim=1)
-
-        top_k = sampling_inputs.top_k
-        if top_k is not None:
-            if max_topk <= 0:
-                top_k = torch.masked_fill(top_k, top_k <= 0, scores.size(1))
-            scores = _filter_topk_sorted_(scores, top_k)
-        if sampling_inputs.top_p is not None:
-            scores = _filter_topp_sorted_(scores, sampling_inputs.top_p)
-        if sampling_inputs.min_p is not None:
-            scores = _filter_minp_sorted_(scores, sampling_inputs.min_p)
-        return scores.softmax(1), indices
-
-    @torch.inference_mode()
     def sampling(self, logits: torch.Tensor):
-        """Sample once from the configured target distribution."""
+        """sampling."""
         sampling_inputs = self.sampling_inputs
+
+        def __random_sampling(scores: torch.Tensor, indices: torch.LongTensor):
+            """Random sampling."""
+            max_topk = sampling_inputs.max_top_k
+            top_k = sampling_inputs.top_k
+            if max_topk <= 0:
+                max_topk = scores.size(1)
+                if top_k is not None:
+                    top_k = torch.masked_fill(top_k, top_k <= 0, max_topk)
+
+            if top_k is not None:
+                scores = _filter_topk_sorted_(scores, top_k)
+
+            top_p = sampling_inputs.top_p
+            if top_p is not None:
+                scores = _filter_topp_sorted_(scores, top_p)
+
+            min_p = sampling_inputs.min_p
+            if min_p is not None:
+                scores = _filter_minp_sorted_(scores, min_p)
+
+            softmax_scores = scores.softmax(1)
+
+            seeds = sampling_inputs.random_seeds
+            offsets = sampling_inputs.random_offsets
+            return _multinomial_sampling(softmax_scores, seeds, offsets, indices)
+
         if sampling_inputs.max_top_k == 1:
-            return logits.argmax(-1)
-        probs, indices = self.sampling_probs(logits)
-        return _multinomial_sampling(probs, sampling_inputs.random_seeds, sampling_inputs.random_offsets, indices)
+            result = logits.argmax(-1)
+        else:
+            # sort logits is too slow. and we only need topk logits
+            max_topk = sampling_inputs.max_top_k
+            if max_topk <= 0:
+                scores, indices = logits.sort(1, descending=True)
+            else:
+                scores, indices = _torch_topk(logits, max_topk, dim=1)
+            result = __random_sampling(scores, indices)
+
+        return result
 
     @torch.inference_mode()
     def compute_logprobs(self, raw_logprobs: torch.Tensor, token_ids: torch.LongTensor):

@@ -4,7 +4,6 @@ import torch
 from lmdeploy.pytorch.kernels.cuda.rejection_sampling import (
     greedy_rejection_sample,
     random_rejection_sample,
-    rejection_sampling_random,
     sample_recovered_tokens,
 )
 
@@ -43,12 +42,10 @@ class CudaRejectionSamplingImpl(RejectionSamplingImpl):
 
     def forward(
         self,
-        target_probs: torch.Tensor,
+        target_logits: torch.Tensor,
         draft_token_ids: torch.LongTensor,
         bonus_token_ids: torch.LongTensor,
         *,
-        random_seeds: torch.LongTensor,
-        random_offsets: torch.LongTensor,
         is_greedy: torch.Tensor | None,
         draft_probs: torch.Tensor | None = None,
     ):
@@ -60,7 +57,7 @@ class CudaRejectionSamplingImpl(RejectionSamplingImpl):
         output_token_ids, num_rejected_tokens, last_token_ids = (
             _allocate_outputs(draft_token_ids))
         if is_greedy is not None:
-            target_token_ids = target_probs.argmax(dim=-1)
+            target_token_ids = target_logits.argmax(dim=-1)
             greedy_rejection_sample(
                 output_token_ids,
                 num_rejected_tokens,
@@ -71,9 +68,21 @@ class CudaRejectionSamplingImpl(RejectionSamplingImpl):
                 is_greedy,
             )
 
+        target_probs = target_logits.softmax(dim=-1, dtype=torch.float32)
         batch_size, num_spec_tokens = draft_token_ids.shape
-        vocab_size = target_probs.shape[-1]
-        uniform_probs, inv_q = rejection_sampling_random(random_seeds, random_offsets, num_spec_tokens, vocab_size)
+        vocab_size = target_logits.shape[-1]
+        uniform_probs = torch.rand(
+            (batch_size, num_spec_tokens),
+            dtype=torch.float64,
+            device=target_logits.device,
+        )
+        q = torch.empty(
+            (batch_size, vocab_size),
+            dtype=torch.float32,
+            device=target_logits.device,
+        )
+        q.exponential_()
+        inv_q = q.reciprocal()
         recovered_token_ids = draft_token_ids.new_empty(
             (batch_size, num_spec_tokens))
         sample_recovered_tokens(
