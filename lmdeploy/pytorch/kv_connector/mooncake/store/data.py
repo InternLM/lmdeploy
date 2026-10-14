@@ -271,8 +271,10 @@ class MooncakeStoreConfig:
         for field_name, value in required_addresses:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f'{field_name} must be a non-empty string')
-        if not isinstance(self.protocol, str) or self.protocol not in ('rdma', 'tcp'):
-            raise ValueError("protocol must be either 'rdma' or 'tcp'")
+        # 'ascend' selects the Ascend unified-memory transport used by the
+        # AscendTransferBackend; 'rdma'/'tcp' are the CUDA paths.
+        if not isinstance(self.protocol, str) or self.protocol not in ('rdma', 'tcp', 'ascend'):
+            raise ValueError("protocol must be one of 'rdma', 'tcp', or 'ascend'")
         if not isinstance(self.device_name, str):
             raise TypeError('device_name must be a string')
         if self.mode != 'embedded':

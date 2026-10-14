@@ -22,6 +22,7 @@ from .data import (
     build_store_key,
 )
 from .lookup import LookupKeyServer
+from .transfer_backend import TransferBackend, build_transfer_backend
 from .worker_threads import KVCacheStoreRecvingThread, KVCacheStoreSendingThread
 
 if TYPE_CHECKING:
@@ -58,6 +59,28 @@ def _get_local_hostname() -> str:
         except OSError:
             continue
     raise RuntimeError('cannot determine the local hostname for Mooncake Store')
+
+
+def _resolve_device_backend(extra_config: Mapping[str, Any]) -> str:
+    """Resolve the Mooncake transfer backend, defaulting to the engine device.
+
+    ``device_backend`` may be set explicitly in ``kv_connector_extra_config`` to
+    ``'cuda'`` or ``'ascend'``. The default ``'auto'`` inspects the active device
+    context so the same configuration works on both H200 and A3 without changes.
+    """
+    backend = extra_config.get('device_backend', 'auto')
+    if backend not in ('auto', 'cuda', 'ascend'):
+        raise ValueError(
+            "device_backend must be one of 'auto', 'cuda', 'ascend', "
+            f'got {backend!r}')
+    if backend != 'auto':
+        return backend
+    try:
+        from lmdeploy.pytorch.devices import get_device_manager
+        device_type = get_device_manager().current_context().device_type
+    except Exception:
+        device_type = 'cuda'
+    return 'ascend' if device_type == 'ascend' else 'cuda'
 
 
 class MooncakeStoreWorker:
@@ -114,6 +137,13 @@ class MooncakeStoreWorker:
 
         config_path = extra_config.get('mooncake_config_path')
         self.store_config = MooncakeStoreConfig.load_from_config(config_path)
+        self._transfer_backend: TransferBackend = build_transfer_backend(
+            _resolve_device_backend(extra_config))
+        if self._transfer_backend.device_type == 'cuda' and self.store_config.protocol == 'ascend':
+            raise ValueError(
+                "device_backend='cuda' is incompatible with protocol='ascend'; "
+                "use device_backend='ascend' or an 'rdma'/'tcp' protocol in the "
+                'Mooncake config')
         local_hostname = _get_local_hostname()
         factory = store_factory if store_factory is not None else _load_mooncake_store_factory()
         self.store: Any | None = self._create_store(factory)
@@ -244,15 +274,7 @@ class MooncakeStoreWorker:
             config.master_server_address,
         )
         start = time.perf_counter()
-        ret = store.setup(
-            local_hostname,
-            config.metadata_server,
-            config.global_segment_size,
-            config.local_buffer_size,
-            config.protocol,
-            config.device_name,
-            config.master_server_address,
-        )
+        ret = self._transfer_backend.setup_store(store, config, local_hostname)
 
         status = 'ok' if ret == 0 else 'error'
         log = logger.debug if ret == 0 else logger.error
@@ -292,8 +314,14 @@ class MooncakeStoreWorker:
         registrations = []
         backing_storages = set()
         for name, row in cls._iter_cache_rows(kv_caches):
-            if not row.is_cuda:
-                raise ValueError(f'KV cache row {name!r} must be a CUDA tensor')
+            # Accept both real tensors (``row.device`` is a ``torch.device``) and
+            # the string-device fakes used in tests; normalize to a bare type
+            # such as 'cuda' or 'npu' before validating.
+            device_type = str(row.device).split(':')[0]
+            if device_type not in ('cuda', 'npu'):
+                raise ValueError(
+                    f'KV cache row {name!r} must be a CUDA tensor or NPU tensor, '
+                    f'got device {device_type!r}')
             if not row.is_contiguous():
                 raise ValueError(f'KV cache row {name!r} must be contiguous')
             registrations.append(
@@ -322,7 +350,7 @@ class MooncakeStoreWorker:
             registration.size,
         )
         start = time.perf_counter()
-        ret = self.store.register_buffer(registration.address, registration.size)
+        ret = self._transfer_backend.register_buffer(self.store, registration)
 
         status = 'ok' if ret == 0 else 'error'
         log = logger.debug if ret == 0 else logger.error
@@ -389,7 +417,7 @@ class MooncakeStoreWorker:
         if sender is None:
             raise RuntimeError('Mooncake KV-cache sender is not initialized')
 
-        ready_event = torch.cuda.Event()
+        ready_event = self._transfer_backend.make_ready_event()
         ready_event.record()
         for request in requests:
             save_id = request.save_id
@@ -509,6 +537,7 @@ class MooncakeStoreWorker:
         self.store = None
         if store is not None:
             self._close_store(store)
+        self._transfer_backend.close()
 
     def _close_store(self, store: Any) -> None:
         logger.debug(
