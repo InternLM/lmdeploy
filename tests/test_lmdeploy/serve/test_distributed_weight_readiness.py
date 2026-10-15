@@ -1,4 +1,5 @@
-"""Distributed weight completion must unblock empty-init inference after KV wakeup."""
+"""Distributed weight completion must unblock empty-init inference after KV
+wakeup."""
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
