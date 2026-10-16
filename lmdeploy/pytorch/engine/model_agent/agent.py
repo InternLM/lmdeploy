@@ -1597,29 +1597,7 @@ class BaseModelAgent:
 
     def _split_updated_weights(self, weights: list[tuple[str, torch.Tensor]]):
         """Route HF-named update tensors before model-specific renaming."""
-        if not self.spec_agent.is_enabled():
-            return weights, []
-
-        method = self.spec_agent.method
-        if method == 'qwen3_5_mtp':
-            draft_prefixes = ('mtp.', )
-        elif method == 'deepseek_mtp':
-            # DeepSeek/GLM store physical MTP layers after the main stack, not
-            # under mtp.*. Use the draft HF config: ModelConfig.num_layers is
-            # only the number of draft layers. This config also exists on
-            # follower ranks that have no local proposer/model.
-            config = self.spec_agent.model_config.hf_config
-            start = config.num_hidden_layers
-            count = getattr(config, 'num_nextn_predict_layers', 1)
-            draft_prefixes = tuple(f'model.layers.{idx}.' for idx in range(start, start + count))
-        else:
-            return weights, []
-
-        main, draft = [], []
-        for name, weight in weights:
-            destination = draft if name.startswith(draft_prefixes) else main
-            destination.append((name, weight))
-        return main, draft
+        return self.spec_agent.split_updated_weights(weights)
 
     def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):
         """Load one externally supplied bucket into the target and draft

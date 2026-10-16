@@ -13,6 +13,7 @@ import torch
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.spec_decode.base import BaseSpecModelAgent
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.utils import FlattenedTensorBucket
 
@@ -1427,10 +1428,8 @@ class TestResetGraphRunner:
             get_model=lambda: model,
             get_prefill_warmup_token_sizes=lambda: prefill_token_sizes,
         )
-        agent.spec_agent = SimpleNamespace(
-            get_model=lambda: None,
-            is_enabled=lambda: False,
-        )
+        agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+        agent.spec_agent._enabled = False
         agent.state = SimpleNamespace(is_sleeping=is_sleeping)
         agent.all_context = nullcontext
         agent.reset_graph_runner = lambda: events.append('reset')
@@ -1724,18 +1723,10 @@ class TestCheckpointEngineWeightUpdate:
             def get_model(self):
                 return self.model
 
-        class _SpecAgent:
-            method = None
-
-            def is_enabled(self):
-                return False
-
-            def get_model(self):
-                return None
-
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.patched_model = _PatchedModel()
-        agent.spec_agent = _SpecAgent()
+        agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+        agent.spec_agent._enabled = False
         agent.memdecode_agent = None
         agent._checkpoint_engine_zmq_ctx = None
         agent.state = SimpleNamespace(is_sleeping=True)
@@ -2035,8 +2026,11 @@ def weight_update_agent():
     agent = BaseModelAgent.__new__(BaseModelAgent)
     config = SimpleNamespace(num_hidden_layers=5, num_nextn_predict_layers=2)
     # Follower ranks have the draft config but no local proposer.
-    agent.spec_agent = SimpleNamespace(is_enabled=lambda: True, method='deepseek_mtp', proposer=None,
-                                       model_config=SimpleNamespace(hf_config=config, num_layers=2))
+    agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+    agent.spec_agent._enabled = True
+    agent.spec_agent.method = 'deepseek_mtp'
+    agent.spec_agent.proposer = None
+    agent.spec_agent.model_config = SimpleNamespace(hf_config=config, num_layers=2)
     return agent
 
 
@@ -2047,7 +2041,7 @@ def weight_update_agent():
 def test_split_updated_weights(weight_update_agent, method, enabled, indices):
     agent = weight_update_agent
     agent.spec_agent.method = method
-    agent.spec_agent.is_enabled = lambda: enabled
+    agent.spec_agent._enabled = enabled
     names = ['model.embed_tokens.weight', 'model.layers.4.input_layernorm.weight',
              'model.layers.5.eh_proj.weight', 'model.layers.6.shared_head.norm.weight',
              'model.layers.50.eh_proj.weight', 'model.layers.7.eh_proj.weight', 'mtp.fc.weight', 'lm_head.weight']
