@@ -1379,12 +1379,30 @@ class Glm5NextDecoderLayer(nn.Module):
                                                      dtype=torch.float32,
                                                      device=device),
                                          requires_grad=False)
+        self.register_buffer('hc_attn_projection', None, persistent=False)
+        self.register_buffer('hc_ffn_projection', None, persistent=False)
+
+    def update_weights(self):
+        # Keep these derived layouts out of checkpoints. Updating them in place
+        # preserves pointers already referenced by captured CUDA graphs.
+        for kind in ('attn', 'ffn'):
+            name = f'hc_{kind}_projection'
+            prepared = self.hc_prepost.prepare_projection_weight(getattr(self, f'hc_{kind}_fn'))
+            current = getattr(self, name)
+            if (current is not None and prepared is not None
+                    and current.shape == prepared.shape and current.dtype == prepared.dtype
+                    and current.device == prepared.device):
+                current.copy_(prepared)
+            else:
+                setattr(self, name, prepared)
 
     def _hc_pre(self, hidden_states: torch.Tensor, fn: torch.Tensor,
                 scale: torch.Tensor, base: torch.Tensor, norm: RMSNorm,
-                x_fp32: torch.Tensor | None = None):
+                x_fp32: torch.Tensor | None = None,
+                projection_weight: torch.Tensor | None = None):
         return self.hc_prepost.pre(
-            hidden_states, fn, scale, base, norm.eps, norm_weight=norm.weight, x_fp32=x_fp32)
+            hidden_states, fn, scale, base, norm.eps, norm_weight=norm.weight, x_fp32=x_fp32,
+            projection_weight=projection_weight)
 
     def _hc_post(self, hidden_states: torch.Tensor, residual: torch.Tensor,
                  post: torch.Tensor, comb: torch.Tensor, prepare_fp32: bool):
@@ -1408,6 +1426,7 @@ class Glm5NextDecoderLayer(nn.Module):
             self.hc_attn_base,
             self.input_layernorm,
             x_fp32=hc_input_fp32,
+            projection_weight=self.hc_attn_projection,
         )
         if self.is_linear_attention:
             hidden_states = self.self_attn(hidden_states,
@@ -1431,6 +1450,7 @@ class Glm5NextDecoderLayer(nn.Module):
             self.hc_ffn_base,
             self.post_attention_layernorm,
             x_fp32=hc_input_fp32,
+            projection_weight=self.hc_ffn_projection,
         )
         hidden_states = self.mlp(hidden_states)
         return self._hc_post(hidden_states, residual, post, comb, prepare_hc_fp32)
