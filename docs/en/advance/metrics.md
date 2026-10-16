@@ -8,6 +8,36 @@ excluded. This default is useful for comparing request load when routing across 
 `LMDEPLOY_ENABLE_REQUEST_CACHE_USAGE_METRIC=0` before starting the server to report total logical GPU-block occupancy
 instead, including blocks retained for prefix reuse.
 
+The PyTorch backend reports local prefix caching and Mooncake Store separately, using cumulative counts per engine:
+
+- `Prefix cache hit rate` / `lmdeploy:prefix_cache_hit_rate` is the ratio of local hit tokens to locally queried tokens.
+- With Mooncake Store enabled, logs also show `External prefix cache hit rate`, including when it is `0.0%`.
+  External queries count the tokens remaining after the adopted local prefix; external hits count the additional
+  tokens matched by the connector. For a 21-token input with 4 locally adopted tokens and a remote prefix ending at
+  token 16, the local rate is `4/21 = 19.0%` and the external rate is `(16-4)/(21-4) = 70.6%`.
+  A partial local block overwritten by a remote load is attributed to the external hit.
+
+Hits and misses are counted at request admission. Pending asynchronous lookups
+and rejected resource allocations do not count, and reuse after recompute eviction is excluded. These are lookup
+statistics: subsequent transfer failures or cancellations do not undo admitted queries or hits. External statistics
+remain available when local prefix caching is disabled. The local and external percentages cannot be added together.
+
+The following Prometheus metrics carry `model_name` and `engine` labels:
+
+| Metric                                         | Type    | Meaning                                                                |
+| ---------------------------------------------- | ------- | ---------------------------------------------------------------------- |
+| `lmdeploy:external_prefix_cache_hit_rate`      | Gauge   | Cumulative external hit rate for this engine, from 0 to 1              |
+| `lmdeploy:external_prefix_cache_queries_total` | Counter | Cumulative externally queried tokens, excluding adopted local prefixes |
+| `lmdeploy:external_prefix_cache_hits_total`    | Counter | Cumulative externally matched tokens                                   |
+
+For example, this PromQL expression computes the external token hit rate over five minutes, combining DP engines per model:
+
+```promql
+sum by (model_name) (rate(lmdeploy:external_prefix_cache_hits_total[5m]))
+/
+sum by (model_name) (rate(lmdeploy:external_prefix_cache_queries_total[5m]))
+```
+
 For the Turbomind backend, `lmdeploy:gpu_cache_usage_perc` is the number of bytes held by live prefix-cache and
 checkpoint objects divided by the configured cache-region size. Prefix-cache hit metrics count prompt tokens that
 the engine actually skips when a request is first scheduled. Turbomind currently reports scheduler metrics for DP 1;

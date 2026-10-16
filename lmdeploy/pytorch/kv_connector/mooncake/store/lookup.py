@@ -153,17 +153,19 @@ class LookupKeyServer:
             os.close(lock_fd)
 
     def _handle_lookup(self, frames: list[zmq.Frame]) -> bytes:
-        if len(frames) != 4:
-            raise ValueError(f'lookup request must have 4 frames, got {len(frames)}')
+        if len(frames) != 5:
+            raise ValueError(f'lookup request must have 5 frames, got {len(frames)}')
         token_frame = bytes(frames[1])
         hash_len_frame = bytes(frames[2])
-        if len(token_frame) != 4 or len(hash_len_frame) != 2:
+        recompute_frame = bytes(frames[4])
+        if len(token_frame) != 4 or len(hash_len_frame) != 2 or len(recompute_frame) != 4:
             raise ValueError('lookup request has an invalid integer frame width')
 
         token_len = int.from_bytes(token_frame, byteorder='big')
         hash_len = int.from_bytes(hash_len_frame, byteorder='big')
         block_hashes = BlobBlockHashes(frames[3].buffer, hash_len)
-        result = self.store_worker.lookup(token_len, block_hashes)
+        recompute_blocks = int.from_bytes(recompute_frame, byteorder='big')
+        result = self.store_worker.lookup(token_len, block_hashes, recompute_blocks=recompute_blocks)
         if (isinstance(result, bool) or not isinstance(result, int) or result < 0 or result > token_len
                 or result >= 2**32):
             raise ValueError(f'lookup result must be a u32 integer, got {result!r}')
@@ -274,7 +276,8 @@ class LookupKeyClient:
             self.context = None
 
     @staticmethod
-    def _encode_lookup(token_len: int, block_hashes: Sequence[bytes]) -> tuple[bytes, bytes, bytes, bytes]:
+    def _encode_lookup(token_len: int, block_hashes: Sequence[bytes],
+                       recompute_blocks: int) -> tuple[bytes, bytes, bytes, bytes, bytes]:
         if isinstance(token_len, bool) or not isinstance(token_len, int) or token_len < 0 or token_len >= 2**32:
             raise ValueError('token_len must be a u32 integer')
 
@@ -296,10 +299,11 @@ class LookupKeyClient:
             token_len.to_bytes(4, byteorder='big'),
             hash_len.to_bytes(2, byteorder='big'),
             b''.join(hashes),
+            recompute_blocks.to_bytes(4, byteorder='big'),
         )
 
-    def _lookup(self, token_len: int, block_hashes: Sequence[bytes]) -> int:
-        frames = self._encode_lookup(token_len, block_hashes)
+    def _lookup(self, token_len: int, block_hashes: Sequence[bytes], recompute_blocks: int) -> int:
+        frames = self._encode_lookup(token_len, block_hashes, recompute_blocks)
         rpc_socket = self._ensure_socket()
         try:
             rpc_socket.send_multipart(frames, copy=False)
@@ -320,13 +324,15 @@ class LookupKeyClient:
         token_len: int,
         block_hashes: Sequence[bytes],
         non_block: bool = True,
+        *,
+        recompute_blocks: int = 0,
     ) -> int | None:
         """Submit once per request and poll without blocking by default."""
         if self._closed:
             raise RuntimeError('LookupKeyClient is closed')
         future = self.futures.get(req_id)
         if future is None:
-            future = self.executor.submit(self._lookup, token_len, tuple(block_hashes))
+            future = self.executor.submit(self._lookup, token_len, tuple(block_hashes), recompute_blocks)
             self.futures[req_id] = future
         if non_block and not future.done():
             return None

@@ -58,6 +58,9 @@ class TestScheduler:
     def test_schedule_base(self, scheduler, block_size, num_gpu_blocks):
         block_manager = scheduler.block_manager
         assert scheduler.schedule_metrics.cache_usage == 0.0
+        assert scheduler.schedule_metrics.external_prefix_cache_hit_rate is None
+        assert scheduler.schedule_metrics.external_prefix_cache_queries == 0
+        assert scheduler.schedule_metrics.external_prefix_cache_hits == 0
 
         session_id = 0
         session = scheduler.add_session(session_id)
@@ -90,6 +93,40 @@ class TestScheduler:
         scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
 
         assert scheduler.schedule_metrics.cache_usage == 0.0
+
+    @pytest.mark.parametrize(('save_alignment', 'chunks'), [
+        (16, [(32, False), (16, False), (1, True)]),
+        (32, [(32, False), (17, True)]),
+    ])
+    def test_aligned_mtp_prefix_keeps_next_token_identity_and_final_suffix(
+            self, cache_config, scheduler_config, seq_meta, save_alignment, chunks):
+        from lmdeploy.pytorch.engine.inputs_maker import LongContextChunker
+        from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
+
+        cache_config.enable_prefix_caching = True
+        cache_config.states_shapes = [((1,), torch.float32)]
+        cache_config.prefill_save_alignment = save_alignment
+        cache_config.prefix_cache_block_aligned = True
+        cache_config.prefix_cache_token_lookahead = 1
+        seq_meta.strategy = ARSpecSequenceStrategy()
+        scheduler = Scheduler(scheduler_config, cache_config, seq_meta)
+        tokens = torch.arange(49)
+        seq = scheduler.add_session(0).add_sequence(tokens)
+        assert seq.prefix_cache.recompute_overlap.recompute_blocks == 0
+
+        chunker = LongContextChunker(max_prefill_token_num=32)
+        chunker.set_seq(seq)
+        for size, is_last in chunks:
+            assert chunker.next_chunk_size()[0] == size
+            assert chunker.is_last_chunk() == is_last
+            if not is_last:
+                seq.set_step(seq.num_history_ids + size)
+
+        # Equal cached tokens with different next tokens cannot share draft KV.
+        changed = tokens.clone()
+        changed[32] = 99
+        other = scheduler.add_session(1).add_sequence(changed)
+        assert seq.get_prefix_cache_extra_identity(16, 32) != other.get_prefix_cache_extra_identity(16, 32)
 
     def test_request_only_cache_usage_disabled_skips_scan(self, cache_config, scheduler_config, seq_meta, monkeypatch):
         monkeypatch.setattr(scheduler_module._envs, 'enable_request_cache_usage_metric', False)

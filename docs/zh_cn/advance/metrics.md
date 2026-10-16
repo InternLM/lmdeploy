@@ -7,6 +7,34 @@ LMDeploy 通过 Prometheus 暴露监控指标，并通过 Grafana 提供可视�
 启动服务前设置 `LMDEPLOY_ENABLE_REQUEST_CACHE_USAGE_METRIC=0` 后，同一指标将改为 GPU 逻辑块总占用率，
 其中包括为前缀复用保留的逻辑块。
 
+PyTorch 后端分别统计本地前缀缓存和 Mooncake Store，均沿用当前引擎的累计统计方式：
+
+- `Prefix cache hit rate` / `lmdeploy:prefix_cache_hit_rate` 统计本地命中 token 数与本地查询 token 数之比。
+- 开启 Mooncake Store 后，日志额外打印 `External prefix cache hit rate`，包括命中率为 `0.0%` 的情况。
+  外部查询 token 数为扣除本地已采用前缀后的剩余 token 数，外部命中 token 数为 connector 新增的命中 token 数。
+  例如输入 21 个 token，本地采用 4 个，远端前缀到第 16 个，则本地命中率为 `4/21 = 19.0%`，
+  外部命中率为 `(16-4)/(21-4) = 70.6%`。远端加载覆盖的本地不完整块归入外部命中。
+
+外部查询在请求获准调度时计数，包括命中和未命中；等待异步查询或资源分配被拒绝时不计数，
+重计算驱逐也不重复计数。它衡量查询命中率：后续加载失败或取消不会撤销已计入的查询和命中。
+关闭本地前缀缓存时仍统计外部缓存。日志中的两项命中率不能直接相加。
+
+新增 Prometheus 指标均带有 `model_name` 和 `engine` 标签：
+
+| 指标                                           | 类型    | 含义                                      |
+| ---------------------------------------------- | ------- | ----------------------------------------- |
+| `lmdeploy:external_prefix_cache_hit_rate`      | Gauge   | 当前引擎累计外部命中率，范围为 0–1        |
+| `lmdeploy:external_prefix_cache_queries_total` | Counter | 累计外部查询 token 数，排除本地采用的前缀 |
+| `lmdeploy:external_prefix_cache_hits_total`    | Counter | 累计外部命中 token 数                     |
+
+例如，下列 PromQL 按模型汇总各 DP 引擎最近 5 分钟的外部 token 命中率：
+
+```promql
+sum by (model_name) (rate(lmdeploy:external_prefix_cache_hits_total[5m]))
+/
+sum by (model_name) (rate(lmdeploy:external_prefix_cache_queries_total[5m]))
+```
+
 对于 Turbomind 后端，`lmdeploy:gpu_cache_usage_perc` 表示存活的前缀缓存和检查点对象所占字节数与已配置缓存区域大小的比值。
 前缀缓存命中指标统计请求首次被调度时实际跳过的 prompt token。Turbomind 目前仅在 DP 1 时报告调度指标，
 尚不支持 DP 大于 1 时的逐 rank Turbomind 指标。

@@ -85,6 +85,8 @@ class ConfigBuilder:
             enable_prefix_caching=engine_config.enable_prefix_caching,
             prefix_cache_state_budget=engine_config.prefix_cache_state_budget,
             prefix_cache_decode_state_interval=engine_config.prefix_cache_decode_state_interval,
+            prefill_save_alignment=engine_config.prefill_save_alignment,
+            mooncake_state_save_slots=engine_config.mooncake_state_save_slots,
             quant_policy=engine_config.quant_policy,
             device_type=engine_config.device_type,
             migration_backend=engine_config.migration_backend,
@@ -263,5 +265,6 @@ class ConfigBuilder:
                 model_format=draft_model_format,
                 hf_overrides=engine_config.hf_overrides,
                 dist_config=draft_dist_config,
+                disable_prefix_cache_block_drop=speculative_config.disable_prefix_cache_block_drop,
             )
         return specdecode_config

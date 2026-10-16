@@ -170,8 +170,12 @@ def register(router: APIRouter, server_context) -> None:
         err = _check_pytorch_backend_for_disagg_weight_update()
         if err is not None:
             return err
-        success, message = await server_context.async_engine.engine.update_weights_from_distributed(
-            request)
+        async_engine = server_context.async_engine
+        success, message = await async_engine.engine.update_weights_from_distributed(request)
+        if success and request.finished:
+            # Receiving every bucket initializes weights but must not wake KV cache.
+            # Keep the same lifecycle contract as checkpoint-engine IPC updates.
+            async_engine.complete_weights_update()
         content = {'success': success, 'message': message}
         return JSONResponse(
             content=content,

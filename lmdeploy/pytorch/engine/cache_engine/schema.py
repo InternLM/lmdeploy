@@ -202,6 +202,7 @@ class BlockCacheRequest:
     dtype: torch.dtype
     alignment: int = 256
     per_row_contiguous: bool = False
+    store_cacheable: bool = True
 
     def __post_init__(self):
         if not isinstance(self.name, str) or not self.name:
@@ -263,6 +264,7 @@ class CacheTensorSpec:
     layer_rows: LayerRowMap | None = None
     consumer_rows: tuple[int, ...] | None = None
     per_row_contiguous: bool = False
+    store_cacheable: bool = True
 
     def __post_init__(self):
         if self.consumer_rows is None:
@@ -308,7 +310,8 @@ def build_block_cache_tensor_specs_from_requests(
             CacheTensorSpec(name=request.name,
                             desc=desc,
                             consumer_rows=tuple(consumer_rows),
-                            per_row_contiguous=request.per_row_contiguous))
+                            per_row_contiguous=request.per_row_contiguous,
+                            store_cacheable=request.store_cacheable))
     return tuple(tensor_specs)
 
 
@@ -326,7 +329,8 @@ def build_state_cache_tensor_specs(
                 layer_rows = LayerRowMap.build(spec.name, spec.layer_ids)
                 shape = (layer_rows.num_rows, *shape)
             desc = CacheDesc(shape=shape, dtype=spec.dtype, alignment=spec.alignment)
-            tensor_specs.append(CacheTensorSpec(name=spec.name, desc=desc, layer_rows=layer_rows))
+            tensor_specs.append(CacheTensorSpec(name=spec.name, desc=desc, layer_rows=layer_rows,
+                                               store_cacheable=spec.store_cacheable))
         return tuple(tensor_specs)
 
     return tuple(

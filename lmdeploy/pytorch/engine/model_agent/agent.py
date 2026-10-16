@@ -747,14 +747,7 @@ class BaseModelAgent:
         # gather dp forward metadata
         batch_size = inputs.seq_length.numel()
         is_sleeping = self.state.is_sleeping
-        draft_num_tokens = None
-        if is_spec_enabled:
-            draft_num_tokens = num_tokens
-            if inputs.is_chunk and not inputs.draft_full_prefill:
-                if inputs.is_first_chunk:
-                    draft_num_tokens -= batch_size
-                elif inputs.is_last_chunk:
-                    draft_num_tokens += batch_size
+        draft_num_tokens = num_tokens if is_spec_enabled else None
 
         dp_forward_meta = DPForwardMeta(is_decoding=is_decoding,
                                         is_dummy=is_dummy,
@@ -1057,6 +1050,11 @@ class BaseModelAgent:
                      f'dp_meta={inputs.dp_meta} '
                      f'is_decoding={inputs.is_decoding}')
         prefill_input_logprobs = self._is_prefill_input_logprobs(inputs)
+        mtp_cache_engine = None
+        if cache_inputs is not None and not inputs.is_dummy:
+            mtp_cache_engine = self.spec_agent.cache_engine
+            if mtp_cache_engine is not None and cache_inputs.kv_restore_plan is not None:
+                mtp_cache_engine.copy_logical_blocks(cache_inputs.kv_restore_plan)
         output = await self._async_model_forward(
             inputs,
             return_logits=return_logits or return_ce_loss,
@@ -1146,6 +1144,11 @@ class BaseModelAgent:
                     sampling_inputs,
                     need_broadcast_next,
                 ))
+
+        # Partial checkpoints share logical block IDs across target and MTP.
+        # Copy the MTP rows only after its prefill writes have completed.
+        if mtp_cache_engine is not None and cache_inputs.kv_save_plan is not None:
+            mtp_cache_engine.copy_logical_blocks(cache_inputs.kv_save_plan)
 
         # The speculative model writes the MTP cache during postprocess.  The
         # readiness event must be recorded only after that work has been
@@ -1560,7 +1563,10 @@ class BaseModelAgent:
                 cache_generation=self._kv_cache_generation,
             )
             if self.kv_connector is not None:
-                self.kv_connector.register_kv_caches(self._get_connector_kv_caches())
+                self.kv_connector.register_kv_caches(
+                    self._get_connector_kv_caches(),
+                    state_cache_pools=self.state_cache_engine.connector_state_cache_pools,
+                )
 
             if self.memdecode_agent is not None:
                 self.memdecode_agent.set_cache_config(self.cache_config)
@@ -1612,12 +1618,8 @@ class BaseModelAgent:
                 self.memdecode_agent.reset_graph_runner()
 
     def _split_updated_weights(self, weights: list[tuple[str, torch.Tensor]]):
-        """Split target and draft weights using the existing MTP contract."""
-        if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
-            return weights, []
-        main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
-        draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
-        return main, draft
+        """Route HF-named update tensors before model-specific renaming."""
+        return self.spec_agent.split_updated_weights(weights)
 
     def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):
         """Load one externally supplied bucket into the target and draft
@@ -1777,14 +1779,6 @@ class BaseModelAgent:
                 return list(bucket.reconstruct_tensors())
             return [(k, _construct(v)) for k, v in weights]
 
-        def _split_main_and_draft(weights):
-            # TODO, zhouxinyu, support split and update weights for other mtp methods
-            if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
-                return weights, []
-            main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
-            draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
-            return main, draft
-
         with self.all_context():
             # After deserialization, weights is a dict with following keys:
             # - metadata: List[FlattenedTensorMetadata]
@@ -1799,7 +1793,7 @@ class BaseModelAgent:
             spec_model = self.spec_agent.get_model()
 
             weights = _deserialize_weights(serialized_data)
-            main_weights, draft_weights = _split_main_and_draft(weights)
+            main_weights, draft_weights = self._split_updated_weights(weights)
 
             for m, w, tag in [(model, main_weights, 'main'), (spec_model, draft_weights, 'draft')]:
                 if m is None or not w:

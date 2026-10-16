@@ -1946,11 +1946,14 @@ class Glm5NextMTPAttention(Glm5NextSparseAttention):
     _TOKEN_CACHE = 'glm5_mtp_kpool_tokens'
 
     def get_block_cache_requests(self, context):
+        # Store resumes at a full 64-token owner. Its first draft forward
+        # needs no earlier raw tail and rebuilds this cache from new tokens.
         return (BlockCacheRequest(
             name=self._TOKEN_CACHE,
             shape=(context.geometry.kernel_block_size, 2, self.indexer.head_dim),
             dtype=torch.bfloat16,
-            per_row_contiguous=True),)
+            per_row_contiguous=True,
+            store_cacheable=False),)
 
     def bind_block_cache(self, binding):
         if binding.cache_name != self._TOKEN_CACHE:

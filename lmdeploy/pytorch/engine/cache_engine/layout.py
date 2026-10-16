@@ -26,6 +26,10 @@ class CachePool:
     # block-cache pools or state slots for state-cache pools. Every other axis
     # forms the payload moved with one entry.
     entry_axis: int
+    # Byte (offset, size) ranges within each entry's trailing payload.
+    # None transfers the whole payload; () keeps the pool local. Outer rows
+    # repeat these ranges. Allocation and local copies always own all bytes.
+    transfer_ranges: tuple[tuple[int, int], ...] | None = None
 
     def __post_init__(self):
         if self.entry_axis < 0 or self.entry_axis >= self.tensor.dim():
@@ -50,6 +54,25 @@ class CacheAllocation:
         return sum(pool.nbytes for pool in self.pools)
 
 
+def _packed_transfer_ranges(tensor_specs: tuple[CacheTensorSpec, ...]) -> tuple[tuple[int, int], ...] | None:
+    """Coalesce adjacent Store payloads without changing the packed layout."""
+    if all(spec.store_cacheable for spec in tensor_specs):
+        return None
+
+    ranges = []
+    offset = 0
+    for spec in tensor_specs:
+        size = spec.desc.aligned_size
+        if spec.store_cacheable and size:
+            if ranges and ranges[-1][0] + ranges[-1][1] == offset:
+                start, length = ranges[-1]
+                ranges[-1] = (start, length + size)
+            else:
+                ranges.append((offset, size))
+        offset += size
+    return tuple(ranges)
+
+
 @dataclass(frozen=True)
 class PackedBlockCacheLayout:
     """Pack uniform-layer block-cache tensors into one owning pool."""
@@ -71,7 +94,8 @@ class PackedBlockCacheLayout:
             tensor_views.append(cache)
             offset += desc.aligned_size
 
-        return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=1), ),
+        return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=1,
+                                               transfer_ranges=_packed_transfer_ranges(self.tensor_specs)), ),
                                tensor_views=tuple(tensor_views))
 
 
@@ -96,7 +120,8 @@ class RowBlockCacheLayout:
                                       device=device)
             cache = pool_tensor[:, :, :desc.size].view(desc.dtype)
             cache = cache.view((spec.num_rows, num_blocks, *desc.shape))
-            pools.append(CachePool(pool_tensor, entry_axis=1))
+            pools.append(CachePool(pool_tensor, entry_axis=1,
+                                   transfer_ranges=None if spec.store_cacheable else ()))
             tensor_views.append(cache)
 
         return CacheAllocation(pools=tuple(pools), tensor_views=tuple(tensor_views))
@@ -122,7 +147,8 @@ class ContiguousBlockCacheLayout:
             cache = torch.zeros((num_rows, num_blocks, *spec.desc.shape),
                                 dtype=spec.desc.dtype,
                                 device=device)
-            pools.append(CachePool(cache, entry_axis=1))
+            pools.append(CachePool(cache, entry_axis=1,
+                                   transfer_ranges=None if spec.store_cacheable else ()))
             tensor_views.append(cache)
 
         return CacheAllocation(pools=tuple(pools), tensor_views=tuple(tensor_views))
@@ -168,7 +194,8 @@ class PackedStateCacheLayout:
             tensor_views.append(cache)
             offset += desc.aligned_size
 
-        return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=0), ),
+        return CacheAllocation(pools=(CachePool(pool_tensor, entry_axis=0,
+                                               transfer_ranges=_packed_transfer_ranges(self.tensor_specs)), ),
                                tensor_views=tuple(tensor_views))
 
 
@@ -194,6 +221,7 @@ class ContiguousStateCacheLayout:
                 cache_shape = (spec.num_rows, num_caches, *spec.desc.shape[1:])
                 entry_axis = 1
             cache = torch.zeros(cache_shape, dtype=spec.desc.dtype, device=device)
-            pools.append(CachePool(cache, entry_axis=entry_axis))
+            pools.append(CachePool(cache, entry_axis=entry_axis,
+                                   transfer_ranges=None if spec.store_cacheable else ()))
             tensor_views.append(cache)
         return CacheAllocation(pools=tuple(pools), tensor_views=tuple(tensor_views))
