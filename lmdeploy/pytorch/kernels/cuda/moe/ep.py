@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from dlblas: https://github.com/DeepLink-org/DLBlas
 
+from collections.abc import Callable
+
 import torch
 import triton
 import triton.language as tl
@@ -226,6 +228,9 @@ def fused_moe_v3(
     w13_weight: torch.Tensor,
     w2_weight: torch.Tensor,
     num_recv_tokens_per_expert: list[int] | None,
+    act_func: Callable = None,
+    fp32_acc: bool = False,
+    output_scale: float = 1.0,
 ):
     if num_recv_tokens_per_expert is None:
         return hidden_states
@@ -257,11 +262,11 @@ def fused_moe_v3(
     del hidden_states
     gateup_output = gather_out.new_empty((all_tokens, N))
     _deepgemm_grouped_bf16_nt_contiguous(input_tensor, w13_weight, gateup_output, m_indices)
-    down_input = gateup_output.new_empty((
-        all_tokens,
-        N // 2,
-    ))
-    down_input = silu_and_mul(gateup_output.view(-1, N), down_input)
+    if act_func is None:
+        down_input = gateup_output.new_empty((all_tokens, N // 2))
+        down_input = silu_and_mul(gateup_output.view(-1, N), down_input)
+    else:
+        down_input = act_func(gateup_output)
     down_output = gather_out.new_empty((all_tokens, K))
     _deepgemm_grouped_bf16_nt_contiguous(
         down_input,
@@ -269,5 +274,6 @@ def fused_moe_v3(
         down_output,
         m_indices,
     )
-    ep_gather(down_output, topk_idx, topk_weights, output_index, gather_out)
+    ep_gather(down_output, topk_idx, topk_weights, output_index, gather_out,
+              fp32_acc=fp32_acc, output_scale=output_scale)
     return gather_out
