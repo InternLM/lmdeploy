@@ -92,6 +92,8 @@ class FusedMoENormal:
         top_k: int = 8,
         out_dtype: torch.dtype = torch.bfloat16,
         num_max_dispatch_tokens_per_rank: int = 128,
+        fp32_acc: bool = False,
+        output_scale: float = 1.0,
     ):
         from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherNormal
         self.layer_index = layer_index
@@ -99,6 +101,8 @@ class FusedMoENormal:
         self.num_experts = num_experts
         self.num_local_experts = num_experts // ep_size
         self.out_dtype = out_dtype
+        self.fp32_acc = fp32_acc
+        self.output_scale = output_scale
         self.token_dispatcher = DeepEPTokenDispatcherNormal(
             group=ep_group,
             num_experts=num_experts,
@@ -116,6 +120,7 @@ class FusedMoENormal:
         up_weights: torch.Tensor,
         down_weights: torch.Tensor,
         expert_list: list[int] = None,
+        act_func: Callable = None,
     ):
         """forward."""
         from lmdeploy.pytorch.kernels.cuda.moe.ep import fused_moe_v3
@@ -126,7 +131,8 @@ class FusedMoENormal:
             expert_list,
         )
         topk_ids, topk_weights = None, None
-        out_states = fused_moe_v3(x, recv_topk_ids, recv_topk_weights, up_weights, down_weights, recv_tokens_per_expert)
+        out_states = fused_moe_v3(x, recv_topk_ids, recv_topk_weights, up_weights, down_weights, recv_tokens_per_expert,
+                                  act_func=act_func, fp32_acc=self.fp32_acc, output_scale=self.output_scale)
         out_states = self.token_dispatcher.combine(out_states)
         return out_states
 
@@ -153,10 +159,11 @@ class FusedMoENormal:
     def release(self):
         return self.token_dispatcher.release()
 
-    def fusedmoe_forward(self, state, up_weight, down_weight):
+    def fusedmoe_forward(self, state, up_weight, down_weight, act_func=None):
         from lmdeploy.pytorch.kernels.cuda.moe.ep import fused_moe_v3
         return fused_moe_v3(state['recv_hidden_states'], state['recv_topk_idx'], state['recv_topk_weights'], up_weight,
-                            down_weight, state['recv_tokens_per_expert'])
+                            down_weight, state['recv_tokens_per_expert'], act_func=act_func,
+                            fp32_acc=self.fp32_acc, output_scale=self.output_scale)
 
 
 def _disposible_tensor(tensor):
@@ -250,11 +257,13 @@ class FusedMoELowLatency:
         layer_index: int,
         out_dtype: torch.dtype = torch.bfloat16,
         num_max_dispatch_tokens_per_rank: int = 128,
+        output_scale: float = 1.0,
     ):
         from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency
         self.num_experts = num_experts
         self.layer_index = layer_index
         self.out_dtype = out_dtype
+        self.output_scale = output_scale
         self.token_dispatcher = DeepEPTokenDispatcherLowLatency(
             group=ep_group,
             num_experts=num_experts,
@@ -271,6 +280,7 @@ class FusedMoELowLatency:
         gate_down_weight: torch.Tensor,
         masked_m: torch.Tensor,
         expected_m: int,
+        act_func: Callable = None,
     ):
         from lmdeploy.pytorch.backends.cuda.token_dispatcher import DisposibleTensor
         from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_moe_ep
@@ -282,7 +292,11 @@ class FusedMoELowLatency:
         m_grouped_bf16_gemm_nt_masked(DisposibleTensor.maybe_unwrap(hidden_states), gate_up_weight, gateup_output,
                                       masked_m, expected_m)
         DisposibleTensor.maybe_dispose(hidden_states)
-        down_input = silu_and_mul_moe_ep(gateup_output, masked_m)
+        if act_func is None:
+            down_input = silu_and_mul_moe_ep(gateup_output, masked_m)
+        else:
+            # Only masked_m valid rows are consumed by the next GEMM.
+            down_input = act_func(gateup_output.flatten(0, 1)).view(num_groups, m, n // 2)
         del gateup_output
         n = gate_down_weight.size(1)
         down_output = down_input.new_empty((num_groups, m, n))
@@ -295,7 +309,8 @@ class FusedMoELowLatency:
                 topk_ids: torch.LongTensor,
                 up_weights: torch.Tensor,
                 down_weights: torch.Tensor,
-                expert_list: list[int] = None):
+                expert_list: list[int] = None,
+                act_func: Callable = None):
         """forward."""
         recv_hidden_states, topk_idx, topk_weights, masked_m, expected_m = dispatch_ll(
             self.token_dispatcher,
@@ -306,7 +321,12 @@ class FusedMoELowLatency:
             use_fp8=False,
         )
         hidden_states = None
-        out_states = self.experts(recv_hidden_states, up_weights, down_weights, masked_m, expected_m)
+        out_states = self.experts(recv_hidden_states, up_weights, down_weights, masked_m, expected_m,
+                                  act_func=act_func)
+        # DeepEP LL accumulates in FP32 and stores BF16. Scale the FP32
+        # combine weights, not the already-rounded BF16 result.
+        if self.output_scale != 1.0:
+            topk_weights = topk_weights.float() * self.output_scale
         out_states = self.token_dispatcher.combine(out_states, topk_idx, topk_weights)
         return out_states
 
@@ -331,16 +351,18 @@ class FusedMoELowLatency:
         handle: tuple,
         async_finish: bool,
     ):
+        if self.output_scale != 1.0:
+            topk_weights = topk_weights.float() * self.output_scale
         return self.token_dispatcher.combine_async(hidden_states, topk_idx, topk_weights, handle, async_finish)
 
-    def fusedmoe_forward(self, state, up_weight, down_weight):
+    def fusedmoe_forward(self, state, up_weight, down_weight, act_func=None):
         recv_hidden_states = state['recv_hidden_states']
         masked_m = state['recv_expert_count']
         hidden_shape = state['raw_hidden_shape']
         topk_idx = state['topk_idx']
         expected_m = (hidden_shape[0] * self.token_dispatcher.buffer_low_latency.group_size * topk_idx.shape[1] +
                       self.token_dispatcher.num_experts) // self.token_dispatcher.num_experts
-        return self.experts(recv_hidden_states, up_weight, down_weight, masked_m, expected_m)
+        return self.experts(recv_hidden_states, up_weight, down_weight, masked_m, expected_m, act_func=act_func)
 
 
 def _build_deepep_moe(
@@ -353,6 +375,8 @@ def _build_deepep_moe(
     layer_idx: int = 0,
     out_dtype: torch.dtype = torch.bfloat16,
     num_max_dispatch_tokens_per_rank: int = 128,
+    fp32_acc: bool = False,
+    output_scale: float = 1.0,
 ):
     if low_latency_mode:
         return FusedMoELowLatency(ep_size=ep_size,
@@ -361,7 +385,8 @@ def _build_deepep_moe(
                                   hidden_dim=hidden_dim,
                                   layer_index=layer_idx,
                                   out_dtype=out_dtype,
-                                  num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank)
+                                  num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
+                                  output_scale=output_scale)
     else:
         return FusedMoENormal(ep_size=ep_size,
                               ep_group=ep_group,
@@ -370,7 +395,9 @@ def _build_deepep_moe(
                               layer_index=layer_idx,
                               top_k=top_k,
                               out_dtype=out_dtype,
-                              num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank)
+                              num_max_dispatch_tokens_per_rank=num_max_dispatch_tokens_per_rank,
+                              fp32_acc=fp32_acc,
+                              output_scale=output_scale)
 
 
 class FusedMoEEPImpl(TritonFusedMoEImpl):
@@ -391,8 +418,6 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         fp32_acc: bool = False,
     ):
         super().__init__(top_k, num_experts, renormalize, output_scale, fp32_acc)
-        if fp32_acc or output_scale != 1.0:
-            raise NotImplementedError('DeepEP BF16 MoE does not support fp32_acc or output_scale.')
         self.num_experts = num_experts
         self.ep_size = ep_size
         self.ep_group = ep_group
@@ -435,7 +460,6 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
                      expert_list: list[int] = None,
                      act_func: Callable = None):
         """forward."""
-        assert act_func is None, 'Activation function is not supported in DeepEP MoE.'
         hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
                                                                                     topk_ids)
 
@@ -443,7 +467,8 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
         step_ctx = get_step_ctx_manager().current_context()
         low_latency_mode = step_ctx.global_is_decoding()
         moe = self.fusedmoe_build(low_latency_mode)
-        out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights, expert_list)
+        out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights, expert_list,
+                                 act_func=act_func)
 
         out_states = gather_outputs_by_attn_tp(out_states, split_size)
         return out_states
@@ -539,7 +564,9 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
                                        self.top_k,
                                        layer_idx=self.layer_idx,
                                        out_dtype=self.out_dtype,
-                                       num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank)
+                                       num_max_dispatch_tokens_per_rank=self.num_max_dispatch_tokens_per_rank,
+                                       fp32_acc=self.fp32_acc,
+                                       output_scale=self.output_scale)
         return deepep_moe
 
 
