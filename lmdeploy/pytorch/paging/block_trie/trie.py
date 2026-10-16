@@ -673,6 +673,31 @@ class BlockTrie:
         self._extend_trie_path(seq, node, num_complete_blocks)
         recompute_overlap.clear_fresh_block_range()
 
+    def clear(self) -> None:
+        """Release all local prefix ownership after requests and workers drain.
+
+        Unlike pressure eviction, this also releases root-backed partial
+        checkpoints and unpublished reservations. Refuse live references/pins
+        before mutating anything: clearing identity cannot make in-flight
+        cache copies safe.
+        """
+        nodes = list(self._roots.values())
+        for node in nodes:
+            nodes.extend(node.children.values())
+        if any(self._state_checkpoints.is_pinned(node) for node in nodes):
+            raise RuntimeError('Cannot clear pinned prefix-cache checkpoints.')
+        blocks = np.array([node.block_id for node in nodes if node.block_id >= 0], dtype=np.int64)
+        if len(blocks) and np.any(self.allocator.get_ref_count(blocks) != 1):
+            raise RuntimeError('Cannot clear referenced prefix-cache blocks.')
+
+        for node in reversed(nodes):
+            self._state_checkpoints.release_checkpoint(node)
+            node.detach_leaf()
+        if len(blocks):
+            self.allocator.free(blocks)
+        self._roots.clear()
+        self._kv_lifecycle.leaves.clear()
+
     def evict(self, max_num_blocks: int):
         """Evict checkpoint-frozen and trie-owned KV blocks.
 

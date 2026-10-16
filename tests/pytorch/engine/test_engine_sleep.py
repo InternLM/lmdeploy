@@ -3,12 +3,17 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 from lmdeploy.messages import EngineOutput, ResponseType
+from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.engine.engine import Engine
 from lmdeploy.pytorch.engine.engine_instance import EngineInstance
 from lmdeploy.pytorch.engine.executor.mp_executor import MPExecutor
 from lmdeploy.pytorch.engine.request import RequestManager, RequestType, Response
+from lmdeploy.pytorch.messages import SequenceMeta
+from lmdeploy.pytorch.paging import Scheduler
+from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
 
 
 class _FakeSequence:
@@ -26,9 +31,10 @@ class _FakeSession:
 
 class _FakeScheduler:
 
-    def __init__(self, session):
+    def __init__(self, session, events):
         self.sessions = {1: session}
         self.ended_sessions = []
+        self.events = events
 
     def end_session(self, session_id):
         self.ended_sessions.append(session_id)
@@ -40,8 +46,9 @@ class _FakeScheduler:
     def get_sessions(self):
         return list(self.sessions.values())
 
-    def finish_kv_transfers_after_worker_drain(self):
-        pass
+    def reset_cache_after_worker_drain(self):
+        assert self.events[-1] == 'sleep'
+        self.events.append('reset_cache')
 
 
 class _FakeEngineLoop:
@@ -112,9 +119,9 @@ def _build_sleeping_test_engine(event_loop):
     resp = Response(type=ResponseType.INTERNAL_ENGINE_ERROR, sender_id=0, event=asyncio.Event())
     seq = _FakeSequence(resp)
     session = _FakeSession(1, seq)
-    engine.scheduler = _FakeScheduler(session)
-    engine._sleeping_tags = set()
     engine.events = []
+    engine.scheduler = _FakeScheduler(session, engine.events)
+    engine._sleeping_tags = set()
     engine._engine_loop = _FakeEngineLoop(engine)
     engine.executor = _FakeExecutor(engine)
     return engine, resp
@@ -133,7 +140,7 @@ def test_engine_sleep_blocks_inputs_cancels_sessions_then_sleeps(event_loop):
     assert resp.event.is_set()
     assert engine.scheduler.ended_sessions == [1]
     assert engine.executor.sleep_calls == [1]
-    assert engine.events == ['drain', 'sleep', 'reset_engine_loop']
+    assert engine.events == ['drain', 'sleep', 'reset_cache', 'reset_engine_loop']
 
 
 def test_engine_wakeup_reenables_inputs_only_after_all_tags(event_loop):
@@ -173,6 +180,57 @@ def test_engine_wakeup_all_delegates_warmup_to_executor_wakeup(event_loop):
     assert engine._engine_loop.resumed
     assert engine.executor.wakeup_calls == [None]
     assert engine.events == [('wakeup', None), 'resume']
+
+
+@pytest.mark.parametrize('level', [1, 2])
+@pytest.mark.parametrize('staged', [False, True])
+@pytest.mark.parametrize('state_step', [None, 8, 32, 35])
+@pytest.mark.parametrize('prefix_caching', [False, True])
+def test_sleep_invalidates_completed_prefix_cache(event_loop, level, staged, state_step, prefix_caching):
+    cache = CacheConfig(max_batches=4,
+                        block_size=16,
+                        num_cpu_blocks=4,
+                        num_gpu_blocks=16,
+                        enable_prefix_caching=prefix_caching,
+                        num_state_caches=13,
+                        prefix_cache_state_budget=8,
+                        states_shapes=[] if state_step is None else [((1, ), torch.float32)])
+    scheduler = Scheduler(SchedulerConfig(max_batches=4, max_session_len=128, max_request_output_len=64),
+                          cache, seq_meta=SequenceMeta(16, strategy=ARSequenceStrategy()))
+    engine, _ = _build_sleeping_test_engine(event_loop)
+    engine.scheduler = scheduler
+    step = 32 if state_step is None else state_step
+    tokens = [1] * step
+    for _ in range(3):
+        seq = scheduler.add_session(0).add_sequence(tokens)
+        scheduler.block_manager.allocate(seq)
+        scheduler.block_trie.allocate(seq)
+        if state_step is not None and prefix_caching:
+            assert scheduler.state_checkpoints.reserve_save(seq) >= 0
+            assert scheduler.state_checkpoints.publish_save(seq)
+        scheduler.end_session(0)
+        repeat = scheduler.add_session(1).add_sequence(tokens + [2])
+        scheduler.block_trie.match(repeat)
+        assert repeat.num_history_ids == (step if prefix_caching else 0)
+        # Leave a matched request alive, including its restore pin, for sleep
+        # to cancel in addition to the already completed producer.
+        scheduler.state_checkpoints.pin_restore(repeat)
+        event_loop.run_until_complete(engine.sleep(level))
+        assert scheduler.block_manager.get_num_free_gpu_blocks() == cache.num_gpu_blocks
+        assert scheduler.state_manager.get_num_free() == cache.num_state_caches - 1
+        if staged:
+            engine.wakeup(['weights'])
+            assert engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
+            engine.wakeup(['kv_cache'])
+        else:
+            engine.wakeup()
+        assert not engine.req_manager.is_request_blocked(RequestType.ADD_MESSAGE)
+        new = scheduler.add_session(2).add_sequence(tokens + [2])
+        scheduler.block_trie.match(new)
+        assert new.num_history_ids == 0
+        assert new.cached_tokens == 0
+        assert not new.prefix_cache.restore.is_selected
+        scheduler.end_session(2)
 
 
 def test_complete_weights_update_keeps_kv_cache_sleeping(event_loop):
