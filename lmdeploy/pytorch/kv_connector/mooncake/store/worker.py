@@ -72,6 +72,7 @@ class MooncakeStoreWorker:
         tp_rank: int = 0,
         tp_size: int = 1,
         kv_head_replica_num: int = 1,
+        cache_generation: str = '',
         store_factory: StoreFactory | None = None,
         replicate_config: Any = None,
     ) -> None:
@@ -110,6 +111,7 @@ class MooncakeStoreWorker:
             tp_size=tp_size,
             block_size=cache_config.block_size,
             kv_head_replica_num=kv_head_replica_num,
+            cache_generation=cache_generation,
         )
 
         config_path = extra_config.get('mooncake_config_path')

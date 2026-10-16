@@ -74,6 +74,7 @@ def test_connector_constructs_only_worker_delegate(cache_config):
         global_rank=7,
         tp_rank=3,
         tp_size=8,
+        cache_generation='after-sleep',
     )
 
     assert connector.connector_scheduler is None
@@ -83,6 +84,7 @@ def test_connector_constructs_only_worker_delegate(cache_config):
     assert connector.connector_worker.tp_rank == 3
     assert connector.connector_worker.tp_size == 8
     assert connector.kv_role == 'kv_both'
+    assert connector.connector_worker.key_metadata.cache_generation == 'after-sleep'
 
 
 def test_connector_requires_enabled_kv_transfer_config():

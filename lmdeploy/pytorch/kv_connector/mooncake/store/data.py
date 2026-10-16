@@ -177,6 +177,7 @@ class MooncakeStoreKeyMetadata:
     tp_size: int
     block_size: int
     kv_head_replica_num: int = 1
+    cache_generation: str = ''
 
     def __post_init__(self) -> None:
         validate_kv_head_replica_num(self.kv_head_replica_num, self.tp_size)
@@ -200,8 +201,11 @@ def build_store_key(
         raise ValueError(f'block_hash must contain {MOONCAKE_BLOCK_HASH_BYTES} bytes')
 
     prefix = f'{metadata.cache_prefix}@' if metadata.cache_prefix else ''
+    # Preserve the initial shared namespace, but never reuse pre-sleep KV after
+    # wakeup. Lookup, load and save all construct keys through this function.
+    generation = f'@generation:{metadata.cache_generation}' if metadata.cache_generation else ''
     return (
-        f'{prefix}{metadata.model_name}'
+        f'{prefix}{metadata.model_name}{generation}'
         f'@tp_rank:{kv_head_rank}'
         f'@group:{group_id}'
         f'@{block_hash.hex()}'
