@@ -142,6 +142,55 @@ Qwen/Qwen3.5-35B-A3B \
 设置 DFlash block size 后，它会覆盖 `--speculative-num-draft-tokens`，
 并将新提出的 token 数设置为 `block_size - 1`。
 
+## GLM-5.3-Flash 前缀缓存
+
+GLM-5.3-Flash 的普通自回归解码和 `deepseek_mtp` 都可以启用
+`PytorchEngineConfig.enable_prefix_caching`。下面是 TP4 的纯文本示例，
+请根据硬件选择 TP 和缓存预算。将 `speculative_config` 设为 `None` 即可关闭
+MTP，同时保留 prefix caching。
+
+```python
+from lmdeploy import GenerationConfig, PytorchEngineConfig, pipeline
+from lmdeploy.messages import SpeculativeConfig
+
+if __name__ == '__main__':
+    engine = PytorchEngineConfig(
+        tp=4,
+        max_batch_size=4,
+        enable_prefix_caching=True,
+        prefix_cache_state_budget=8,
+        max_prefill_token_num=512,
+        language_model_only=True,
+    )
+    spec = SpeculativeConfig(method='deepseek_mtp', num_speculative_tokens=3)
+    with pipeline('/path/to/GLM-5.3-Flash', backend_config=engine,
+                  speculative_config=spec) as pipe:
+        notes = 'A rectangle has four sides and four right angles. ' * 80
+        prompt = notes + '\nHow many sides does a rectangle have?'
+        generation = GenerationConfig(max_new_tokens=128, do_sample=False)
+        cold = pipe(prompt, gen_config=generation)
+        warm = pipe(prompt, gen_config=generation)
+        print(cold.cached_tokens, warm.cached_tokens)
+```
+
+### 配置限制
+
+- 缓存块大小为 64 tokens。手动设置 `num_gpu_blocks` 时按此计数，而不是按 KPool 条目计数。
+- `prefix_cache_state_budget` 为 checkpoint 预留额外状态槽，会增加显存占用。
+  设为零表示不额外预留，仍可复用空闲的运行时状态槽。
+- MTP 下保持 `prefix_cache_decode_state_interval=0`；非 MTP 的正值必须是 64 的倍数。
+- 暂不支持 PD 迁移。
+
+原生 FP8 CUDA 路径也支持 DP/EP 服务，例如 `--tp 2 --dp 2 --ep 4`。
+使用 `--piecewise-cudagraph-max-tokens 512 --max-prefill-token-num 512`
+启用文本 prefill PCG。启动 warmup 负责准备 plan；禁用 warmup 时未准备的
+prefill 走 eager，包含视觉输入的 chunk 也回退到 eager。MTP draft prefill
+仍走 eager，受支持的 decode 使用普通 CUDA graph。这些选项与 prefix caching 独立。
+
+用 `Response.cached_tokens` 检查实际命中。Prefill 分块、PCG padding、batch 形状或并行拓扑变化可能
+改变 FP8 的生成轨迹；应同时检查任务 accuracy、MTP accept rate 和缓存命中，
+不能默认逐 token 完全相同或一定获得性能收益。
+
 ## 投机解码与结构化输出
 
 投机解码（MTP）可以与[结构化输出](./structed_output.md)结合使用，使草稿模型提出的 token 也遵循语法约束（如 JSON Schema、正则表达式），从而显著提高接受率。

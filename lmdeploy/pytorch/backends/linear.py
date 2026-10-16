@@ -11,6 +11,13 @@ from .base import BuildSpec
 class LinearImpl(ABC):
     """Linear implementation api."""
 
+    supports_batched = False
+
+    def forward_batched(self, x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        """Apply independent local projections with weights [batch, out,
+        in]."""
+        raise NotImplementedError
+
     def update_weights(self, weight: torch.Tensor, bias: torch.Tensor | None = None):
         """Update weights."""
         return weight, bias

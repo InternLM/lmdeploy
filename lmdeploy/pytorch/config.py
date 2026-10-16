@@ -171,6 +171,10 @@ class CacheConfig:
     num_state_caches: int = None
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
+    # Model-owned policy: only save complete owners and materialize a reusable
+    # aligned checkpoint before the final prefill suffix. Not a public option.
+    prefix_cache_block_aligned: bool = False
+    prefix_cache_token_lookahead: int = 0
     states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.
@@ -452,6 +456,8 @@ class ModelConfig:
     use_flash_mla: bool = False
     mla_kv_cache_dtype: str | None = None
     mla_index_topk: int | None = None
+    # Custom sparse indexers also need score memory without selecting NSA.
+    reserve_dsa_score_workspace: bool = False
 
     # dllm
     model_paradigm: str = 'ar'
@@ -468,6 +474,12 @@ class ModelConfig:
     # Named state-cache specs for models that need layered sequence state.
     state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
     use_standard_kv_cache: bool = True
+
+    # A model can reject generic prefix-cache reuse when its auxiliary state
+    # cannot be restored at scheduler block boundaries.  ``None`` keeps the
+    # default supported behavior; a non-empty reason is surfaced before model
+    # weights are built.
+    prefix_caching_unsupported_reason: str | None = None
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env

@@ -10,7 +10,7 @@ from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from .awq import AwqLinear, MergedAwqLinear, QKVAwqLinear
 from .blocked_fp8 import BlockedF8Linear, MergedBlockedF8Linear, QKVBlockedF8Linear
-from .default import BaseLinear, MergedBaseLinear, QKVBaseLinear
+from .default import BaseLinear, BatchedLinear, MergedBaseLinear, QKVBaseLinear
 from .lora import LoRA  # noqa: F401
 from .static_fp8 import (
     MergedStaticF8Linear,
@@ -18,6 +18,13 @@ from .static_fp8 import (
     StaticF8Linear,
 )
 from .w8a8 import MergedW8A8Linear, QKVW8A8Linear, StaticW8A8Linear, W8A8Linear
+
+
+def build_batched_linear(*projections: nn.Module) -> nn.Module:
+    """Batch projections already registered by their parent module."""
+    if not projections:
+        raise ValueError('At least one projection is required.')
+    return BatchedLinear(projections)
 
 
 def _is_static_per_tensor_fp8(quant_config):
