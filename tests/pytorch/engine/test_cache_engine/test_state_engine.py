@@ -8,7 +8,12 @@ import torch
 import lmdeploy.pytorch.engine.cache_engine.state as state_module
 from lmdeploy.pytorch.config import CacheConfig, StateCacheSpec
 from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
-from lmdeploy.pytorch.engine.cache_engine.layout import CacheAllocation, CachePool, PackedStateCacheLayout
+from lmdeploy.pytorch.engine.cache_engine.layout import (
+    CacheAllocation,
+    CachePool,
+    ContiguousStateCacheLayout,
+    PackedStateCacheLayout,
+)
 from lmdeploy.pytorch.engine.cache_engine.schema import build_state_cache_tensor_specs
 
 
@@ -132,9 +137,11 @@ def test_glm_store_projection_preserves_local_state_copies(monkeypatch):
     engine = StateCacheEngine(cache_config, model_config)
 
     assert [spec.store_cacheable for spec in model_config.state_cache_specs] == [True, True, False, False]
-    pool, = engine.connector_state_cache_pools
-    tail_offset = engine.state_caches[2][0].data_ptr() - pool.tensor.data_ptr()
-    assert pool.transfer_ranges == ((0, tail_offset),)
+    checkpoint_pool, runtime_pool = engine.connector_state_cache_pools
+    assert checkpoint_pool.transfer_ranges is None
+    assert runtime_pool.transfer_ranges == ()
+    assert checkpoint_pool.tensor is engine.allocation.pools[0].tensor
+    assert runtime_pool.tensor is engine.allocation.pools[1].tensor
     for value, cache in enumerate(engine.state_caches, start=1):
         cache[1].fill_(value)
     engine.copy_slots(1, 3)
@@ -265,3 +272,43 @@ def test_state_cache_engine_copy_slots_rejects_duplicate_destinations():
 
     with pytest.raises(ValueError, match='duplicate'):
         cache_engine.copy_slots([0, 1], [2, 2])
+
+
+@pytest.mark.parametrize('layout_cls', [PackedStateCacheLayout, ContiguousStateCacheLayout])
+@pytest.mark.parametrize('flags', [(True, True, True), (False, True, False), (False, False, False)])
+def test_state_cache_engine_checkpoint_policy_preserves_runtime_state(monkeypatch, layout_cls, flags):
+    specs = [StateCacheSpec(f'state_{i}', (2, 3), torch.float32,
+                            layer_ids=[1, 3] if i == 1 else None, prefix_checkpoint=flag)
+             for i, flag in enumerate(flags)]
+    shapes = [(spec.shape, spec.dtype) for spec in specs]
+    config = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0,
+                         num_gpu_blocks=0, num_state_caches=4, states_shapes=shapes)
+
+    def allocate(tensor_specs, num_caches, device):
+        return layout_cls(tuple(tensor_specs)).allocate(num_caches, 'cpu' if device == 'cuda' else device)
+
+    monkeypatch.setattr(state_module, '_allocate_state_caches', allocate)
+    engine = StateCacheEngine(config, SimpleNamespace(state_cache_specs=specs))
+    assert engine.allocation.nbytes == 4 * engine.get_state_slot_nbytes(shapes, specs)
+    # The middle declaration is layered; its model-facing slot axis is 1.
+    views = [view.movedim(1, 0) if i == 1 else view for i, view in enumerate(engine.state_caches)]
+    for i, view in enumerate(views):
+        assert view.shape == ((4, 2, 2, 3) if i == 1 else (4, 2, 3))
+        view.fill_(-11)
+        view[0].fill_(i + 1)
+
+    engine.copy_slots(0, 2, checkpoint_only=True)
+    for i, (flag, view) in enumerate(zip(flags, views)):
+        assert torch.all(view[2] == (i + 1 if flag else -11))
+        view[0].fill_(-7)  # Producer reuse must not change the frozen copy.
+    engine.copy_slots(2, 1, checkpoint_only=True)
+    for i, (flag, view) in enumerate(zip(flags, views)):
+        assert torch.all(view[1] == (i + 1 if flag else -11))
+
+    engine.copy_slots(0, 3)  # General movement still includes runtime-only state.
+    for view in views:
+        assert torch.all(view[3] == -7)
+    engine.zero_slots(torch.tensor([0, 3]), torch.tensor([True, False]))
+    for view in views:
+        assert torch.count_nonzero(view[0]) == 0
+        assert torch.all(view[3] == -7)

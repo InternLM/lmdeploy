@@ -262,3 +262,40 @@ def test_deepseek_v4_model_config_rejects_unsupported_native_compress_rate():
 
     with pytest.raises(ValueError, match='only supports ratios'):
         AutoModelConfigBuilder.build(hf_config)
+
+
+@pytest.mark.parametrize('num_spec_tokens', [0, 3, 5])
+def test_glm5_next_tail_checkpoint_policy_requires_closed_pool_boundary(monkeypatch, num_spec_tokens):
+    from lmdeploy.hf_configs.configuration_glm5_next import Glm5NextConfig
+    from lmdeploy.pytorch.configurations.glm5_next import Glm5NextModelConfigBuilder
+    from lmdeploy.pytorch.consts import (
+        GLM5_KDA_CONV_STATE,
+        GLM5_KDA_RECURRENT_STATE,
+        GLM5_KPOOL_TAIL_K_STATE,
+        GLM5_KPOOL_TAIL_SCORE_STATE,
+    )
+
+    monkeypatch.setattr('lmdeploy.pytorch.configurations.deepseek_v2.flash_mla_available', lambda: True)
+    hf_config = Glm5NextConfig()
+    model = Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=num_spec_tokens)
+    specs = {spec.name: spec for spec in model.state_cache_specs}
+    for name in (GLM5_KDA_CONV_STATE, GLM5_KDA_RECURRENT_STATE):
+        assert specs[name].prefix_checkpoint
+    for name in (GLM5_KPOOL_TAIL_K_STATE, GLM5_KPOOL_TAIL_SCORE_STATE):
+        assert not specs[name].prefix_checkpoint
+        assert specs[name].shape[1] == hf_config.text_config.index_kpool + 1 + num_spec_tokens
+    cache = CacheConfig(max_batches=1, block_size=16, num_cpu_blocks=0, num_gpu_blocks=0)
+    model.update_cache_config_func(cache)
+    assert cache.prefix_cache_block_aligned
+    assert cache.block_size == 64
+    assert cache.block_size % hf_config.text_config.index_kpool == 0
+    if num_spec_tokens:
+        cache.prefix_cache_decode_state_interval = 64
+        with pytest.raises(ValueError, match='only publishes prefill'):
+            model.update_cache_config_func(cache)
+    draft = Glm5NextModelConfigBuilder.build(Glm5NextConfig(), is_draft_model=True,
+                                            num_spec_tokens=num_spec_tokens)
+    assert not draft.state_cache_specs
+    hf_config.text_config.index_kpool = 3
+    with pytest.raises(ValueError, match='index_kpool=4'):
+        Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=num_spec_tokens)

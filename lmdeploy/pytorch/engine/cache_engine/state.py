@@ -10,7 +10,7 @@ from lmdeploy.pytorch.backends import get_backend
 
 from ...config import CacheConfig, ModelConfig, StateCacheSpec
 from ...kv_connector.base import KVCachePool
-from .layout import CacheAllocation
+from .layout import CacheAllocation, CachePool
 from .schema import CacheTensorSpec, build_state_cache_tensor_specs
 from .view import NamedCacheView
 
@@ -20,6 +20,34 @@ def _allocate_state_caches(tensor_specs: Sequence[CacheTensorSpec], num_caches: 
     """Realize state-cache tensor specs through the selected backend layout."""
     layout = get_backend().get_cache_backend().build_state_layout(tensor_specs)
     return layout.allocate(num_caches=num_caches, device=device)
+
+
+def _allocate_state_cache_groups(tensor_specs: Sequence[CacheTensorSpec],
+                                 state_specs: Sequence[StateCacheSpec] | None,
+                                 num_caches: int,
+                                 device: torch.device | str) -> tuple[CacheAllocation, tuple[CachePool, ...]]:
+    """Keep runtime-only state out of physical checkpoint-copy pools."""
+    checkpoint_flags = [spec.prefix_checkpoint for spec in state_specs] if state_specs else [True] * len(tensor_specs)
+    if all(checkpoint_flags):
+        allocation = _allocate_state_caches(tensor_specs, num_caches, device)
+        return allocation, allocation.pools
+
+    # Packed layouts copy owning pools, not named views. Partition before
+    # layout construction, then restore the model-facing declaration order.
+    views = [None] * len(tensor_specs)
+    pools = []
+    checkpoint_pools = ()
+    for checkpoint in (True, False):
+        indices = [i for i, flag in enumerate(checkpoint_flags) if flag == checkpoint]
+        if not indices:
+            continue
+        allocation = _allocate_state_caches([tensor_specs[i] for i in indices], num_caches, device)
+        pools.extend(allocation.pools)
+        if checkpoint:
+            checkpoint_pools = allocation.pools
+        for i, view in zip(indices, allocation.tensor_views):
+            views[i] = view
+    return CacheAllocation(pools=tuple(pools), tensor_views=tuple(views)), checkpoint_pools
 
 
 class StateCacheEngine:
@@ -32,12 +60,12 @@ class StateCacheEngine:
 
         # Non-CUDA device integrations patch the canonical "cuda" device path
         # before reaching this layer, so keep using it here.
-        self.allocation = _allocate_state_caches(tensor_specs,
-                                                 num_caches=cache_config.num_state_caches,
-                                                 device='cuda')
+        self.allocation, checkpoint_pools = _allocate_state_cache_groups(
+            tensor_specs, model_config.state_cache_specs, cache_config.num_state_caches, device='cuda')
         self._cache_tensors = list(self.allocation.tensor_views)
         # Each pool declares the axis that indexes independently movable slots.
         self._slot_tensors = tuple((pool.tensor, pool.entry_axis) for pool in self.allocation.pools)
+        self._checkpoint_slot_tensors = tuple((pool.tensor, pool.entry_axis) for pool in checkpoint_pools)
         if any(spec.layer_rows is not None for spec in tensor_specs):
             self._named_state_caches = NamedCacheView(tensor_specs, self._cache_tensors)
         else:
@@ -51,7 +79,8 @@ class StateCacheEngine:
                               state_specs: Sequence[StateCacheSpec] | None = None) -> int:
         """Return owning storage bytes required by one state slot."""
         tensor_specs = build_state_cache_tensor_specs(state_shapes, state_specs=state_specs)
-        return _allocate_state_caches(tensor_specs, num_caches=1, device='meta').nbytes
+        allocation, _ = _allocate_state_cache_groups(tensor_specs, state_specs, num_caches=1, device='meta')
+        return allocation.nbytes
 
     @property
     def state_caches(self) -> Sequence[torch.Tensor]:
@@ -128,8 +157,13 @@ class StateCacheEngine:
             length = 1
         yield start_src, start_dst, length
 
-    def copy_slots(self, src_slots: int | Sequence[int], dst_slots: int | Sequence[int]) -> None:
-        """Copy non-overlapping state slots across every physical tensor."""
+    def copy_slots(self, src_slots: int | Sequence[int], dst_slots: int | Sequence[int],
+                   *, checkpoint_only: bool = False) -> None:
+        """Copy non-overlapping slots, optionally excluding runtime-only state.
+
+        Excluded state is left untouched on both save and restore. Its model must not read stale contents when resuming
+        at a prefix boundary.
+        """
         if not self._cache_tensors:
             return
 
@@ -149,7 +183,8 @@ class StateCacheEngine:
             raise ValueError('src_slots and dst_slots must not overlap for stream-ordered state copies.')
 
         copy_ranges = tuple(self._coalesce_copy_ranges(src_slots, dst_slots))
-        for tensor, slot_axis in self._slot_tensors:
+        slot_tensors = self._checkpoint_slot_tensors if checkpoint_only else self._slot_tensors
+        for tensor, slot_axis in slot_tensors:
             for src, dst, length in copy_ranges:
                 src_tensor = tensor.narrow(slot_axis, src, length)
                 dst_tensor = tensor.narrow(slot_axis, dst, length)
