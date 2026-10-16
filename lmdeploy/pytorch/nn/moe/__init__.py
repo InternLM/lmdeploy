@@ -24,6 +24,9 @@ def build_fused_moe(
     layer_idx: int = 0,
     act_func: Callable = None,
     prefix: str = '',
+    *,
+    output_scale: float = 1.0,
+    fp32_acc: bool = False,
 ):
     """Fused moe builder."""
     quant_method = None
@@ -45,9 +48,13 @@ def build_fused_moe(
             all_reduce=all_reduce,
             layer_idx=layer_idx,
             act_func=act_func,
+            output_scale=output_scale,
+            fp32_acc=fp32_acc,
         )
 
     if quant_method == 'smooth_quant':
+        if fp32_acc or output_scale != 1.0:
+            raise NotImplementedError('W8A8 MoE does not support fp32_acc or output_scale.')
         assert not bias, 'Quant model does not support bias for now.'
         assert act_func is None, ('Quant model does not support activation function for now.')
         from .w8a8 import FusedMoEW8A8
@@ -69,6 +76,8 @@ def build_fused_moe(
         )
 
         if is_static_per_tensor:
+            if fp32_acc or output_scale != 1.0:
+                raise NotImplementedError('Static FP8 MoE does not support fp32_acc or output_scale.')
             assert not bias, (
                 'Static FP8 MoE does not support bias.'
             )
@@ -107,8 +116,13 @@ def build_fused_moe(
             all_reduce=all_reduce,
             layer_idx=layer_idx,
             act_func=act_func,
+            output_scale=output_scale,
+            fp32_acc=fp32_acc,
         )
     elif quant_method == 'compressed-tensors':
+        # W4A16 already requests FP32 expert reduction for every invocation.
+        if output_scale != 1.0:
+            raise NotImplementedError('W4A16 MoE does not support output_scale.')
         if bias:
             raise RuntimeError('Compressed-tensors W4A16 routed experts do not support bias.')
         if act_func is not None:

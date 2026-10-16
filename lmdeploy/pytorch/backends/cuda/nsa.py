@@ -42,7 +42,7 @@ from ..nsa import (
 logger = get_logger('lmdeploy')
 
 
-def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int) -> int:
+def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int, *, num_heads: int | None = None) -> int:
     """Return the query rows fitting in a bounded FP32 score tensor."""
     if max_kv_seqlen <= 0:
         return 1
@@ -52,6 +52,20 @@ def _get_max_score_rows(max_kv_seqlen: int, max_logits_bytes: int) -> int:
     # Bounding flattened KV alone therefore does not bound the M * N logits
     # allocation; limit M so its FP32 payload stays within the runtime budget.
     _fp32_bytes = 4
+    if num_heads is not None:
+        # Compressed DeepGEMM logits allocate ceil(M / block_q) * block_q
+        # rows with a 256-element (1024-byte) aligned FP32 row stride.
+        if not 0 < num_heads <= 128 or num_heads % 4:
+            raise ValueError('DeepGEMM score heads must be a multiple of four in [4, 128].')
+        block_q = 128 // num_heads
+        row_bytes = ((max_kv_seqlen + 255) // 256 * 256) * _fp32_bytes
+        rows = max_logits_bytes // (block_q * row_bytes) * block_q
+        if rows == 0:
+            raise ValueError(
+                f'DSA score budget {max_logits_bytes} bytes is smaller than the minimum '
+                f'aligned allocation {block_q * row_bytes} bytes. Increase '
+                'LMDEPLOY_DSA_INDEXER_MAX_LOGITS_MB.')
+        return rows
     return max(1, max_logits_bytes // (max_kv_seqlen * _fp32_bytes))
 
 

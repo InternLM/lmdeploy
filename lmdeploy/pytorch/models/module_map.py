@@ -63,6 +63,13 @@ MODULE_MAP.update({
     'GlmMoeDsaForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm_moe_dsa.GlmMoeDsaForCausalLM',
 })
 
+# GLM-5.3 Flash
+MODULE_MAP.update({
+    'Glm5NextForConditionalGeneration':
+    f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm5_next.Glm5NextForConditionalGeneration',
+    'Glm5NextMTPModel': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.glm5_next.Glm5NextMTPModel',
+})
+
 # internlm2
 MODULE_MAP.update({
     'InternLM2ForCausalLM': f'{LMDEPLOY_PYTORCH_MODEL_PATH}.internlm2.InternLM2ForCausalLM',

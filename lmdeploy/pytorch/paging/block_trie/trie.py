@@ -591,6 +591,16 @@ class BlockTrie:
             if child is not None and not self._node_matches_block(child, token_ids, extra_identity):
                 break
 
+            if (seq._seq_meta.prefix_cache_checkpoint_block_size and child is not None
+                    and end > seq.num_history_ids):
+                # An aligned-state model may miss its recurrent checkpoint
+                # even though token blocks exist, or restore an earlier state.
+                # Keep the recomputed suffix writable and private; canonical
+                # KV/KPool pages must not be substituted before this forward.
+                trie_block_map[block_idx] = child.block_id
+                node = child
+                continue
+
             if fresh_block_range is not None and block_idx in fresh_block_range:
                 # Traverse an existing identity path while retaining the fresh,
                 # writable sequence block. A missing child ends path extension:
@@ -644,6 +654,13 @@ class BlockTrie:
         recompute_overlap = seq.prefix_cache.recompute_overlap
         node = self._ensure_attached_allocation_cursor(seq)
         num_valid_ids = seq.num_valid_ids
+        if seq._seq_meta.prefix_cache_token_lookahead:
+            if seq.logprob_start_pos >= 0:
+                # Scoring forwards skip the draft model entirely.
+                return
+            # Only prompt-conditioned draft payload is canonical. Proposal KV
+            # and the final prompt row depending on a sampled token stay private.
+            num_valid_ids = min(num_valid_ids, seq.input_end_pos - seq._seq_meta.prefix_cache_token_lookahead)
         if seq.kv_token_limit is not None:
             num_valid_ids = min(num_valid_ids, seq.kv_token_limit)
 

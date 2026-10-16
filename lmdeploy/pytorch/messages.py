@@ -22,6 +22,7 @@ from lmdeploy.pytorch.prefix_cache_state import (  # noqa: F401
     StateCheckpointProducerPin,
     StateCheckpointRestore,
     StateCheckpointSaveReservation,
+    TokenLookahead,
 )
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
@@ -211,6 +212,8 @@ class SequenceMeta:
     sampling_strategy: 'SamplingStrategy' = None
     use_mrope: bool = False
     enable_prefix_caching: bool = False
+    prefix_cache_checkpoint_block_size: int = 0
+    prefix_cache_token_lookahead: int = 0
 
 
 class SequenceManager:
@@ -880,7 +883,19 @@ class SchedulerSequence:
             return self.history_multimodals.get_datas(match_start, self.num_all_ids)
         return input_multimodals
 
+    def get_prefix_cache_token_dependency(self, end: int) -> PrefixCacheExtraIdentity:
+        """Exact next-token dependency of a shifted draft prefix [0, end)."""
+        count = self._seq_meta.prefix_cache_token_lookahead
+        if not count:
+            return ()
+        return (TokenLookahead(end, tuple(int(x) for x in self.history_cache[end:end + count])),)
+
     def get_prefix_cache_extra_identity(self, start: int, end: int) -> PrefixCacheExtraIdentity:
+        count = self._seq_meta.prefix_cache_token_lookahead
+        return (self._get_prefix_cache_multimodal_identity(start, end + count)
+                + self.get_prefix_cache_token_dependency(end))
+
+    def _get_prefix_cache_multimodal_identity(self, start: int, end: int) -> PrefixCacheExtraIdentity:
         """Get canonical multimodal identity entries for a token range.
 
         The common caller asks for a full block, but partial ranges are used when verifying sparse SSM checkpoint
@@ -915,13 +930,16 @@ class SchedulerSequence:
         Multimodal processors expect an image/video span to be consumed as a whole.  If a candidate cache hit would stop
         in the middle of such a span, rewind to the span start and then to a block boundary.  Rounding a later span
         start down can itself land inside an earlier span when multimodal spans are close together, so keep rewinding
-        until the final block boundary is outside every span.
+        until the final block boundary is outside every span. Full-frontier
+        draft state also depends on lookahead tokens: include those preceding
+        rows so a match never resumes at an image's vocabulary-only boundary.
         """
         if step <= 0:
             return step
 
-        spans = [(span.start, span.end) for span in self.prefix_cache.multimodal_spans]
-        spans.extend((emb.start, emb.end) for emb in self.history_embeddings.embeddings)
+        lookahead = self._seq_meta.prefix_cache_token_lookahead
+        spans = [(max(0, span.start - lookahead), span.end) for span in self.prefix_cache.multimodal_spans]
+        spans.extend((max(0, emb.start - lookahead), emb.end) for emb in self.history_embeddings.embeddings)
         if len(spans) == 0:
             return (step // self.block_size) * self.block_size
 
@@ -946,10 +964,12 @@ class SchedulerSequence:
         return max(0, max_step)
 
     def is_prefix_cache_boundary_safe(self, step: int):
-        """Check that an exact cache boundary is outside multimodal spans."""
-        if any(span.start < step < span.end for span in self.prefix_cache.multimodal_spans):
+        """Keep both target and shifted draft dependencies outside spans."""
+        lookahead = self._seq_meta.prefix_cache_token_lookahead
+        if any(max(0, span.start - lookahead) < step < span.end for span in self.prefix_cache.multimodal_spans):
             return False
-        return not any(emb.start < step < emb.end for emb in self.history_embeddings.embeddings)
+        return not any(max(0, emb.start - lookahead) < step < emb.end
+                       for emb in self.history_embeddings.embeddings)
 
     def get_prefix_cache_max_match_step(self):
         """Get the deepest effective prefix step allowed for a cache hit."""

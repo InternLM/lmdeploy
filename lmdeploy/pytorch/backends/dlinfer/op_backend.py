@@ -38,6 +38,8 @@ class DlinferOpsBackend(DefaultOpsBackend):
             from .activation import DlinferSiluAndMulImpl
             return cast(ImplT, DlinferSiluAndMulImpl())
         if isinstance(spec, ApplyRotaryEmbBuildSpec):
+            if spec.enable_fp32_compute:
+                raise NotImplementedError('Dlinfer ApplyRotaryEmb does not support enable_fp32_compute=True.')
             from .apply_rotary_emb import DlinferApplyRotaryEmbImpl
             return cast(ImplT, DlinferApplyRotaryEmbImpl())
         if isinstance(spec, RMSNormBuildSpec):

@@ -46,7 +46,11 @@ class RejectionSampler(nn.Module):
         bonus_logits = target_logits[:, -1]
         bonus_token_ids = FusedLogitsProcessor(
             bonus_sampling_inputs).sampling(bonus_logits)
-        target_draft_logits = target_logits[:, :-1].contiguous()
+        # Verification/recovery must use the AR sampling distribution too.
+        # Filter out of place so bonus sampling and returned logits are intact.
+        filtered_logits = FusedLogitsProcessor(
+            expanded_sampling_inputs).filter_logits(target_logits.flatten(0, 1))
+        target_draft_logits = filtered_logits.view_as(target_logits)[:, :-1].contiguous()
 
         is_greedy = None
         if bonus_sampling_inputs.has_greedy:

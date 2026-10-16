@@ -601,33 +601,53 @@ def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
     assert all(inp.is_decoding for inp in forwarded_inputs[1:])
 
 
-def test_async_model_forward_preserves_dp_global_decoding_in_draft_loop(monkeypatch):
-    """Rebuilt draft-loop DPMeta must keep DP-global decode state."""
+@pytest.mark.parametrize('num_spec_tokens', [1, 3, 5])
+@pytest.mark.parametrize('local_decode,global_decode,is_chunk,is_dummy', [
+    pytest.param(True, False, False, False, id='mixed-decode-rank'),
+    pytest.param(False, False, False, False, id='prefill-rank'),
+    pytest.param(True, True, False, False, id='all-decode'),
+    pytest.param(False, False, True, False, id='nonfinal-chunk'),
+    pytest.param(False, False, False, True, id='dummy-rank'),
+])
+def test_async_model_forward_transitions_dp_global_phase_in_draft_loop(
+        monkeypatch, num_spec_tokens, local_decode, global_decode, is_chunk, is_dummy):
+    """Only the first draft inherits the target phase, without mutating it."""
     import lmdeploy.pytorch.spec_decode.spec_agent as spec_agent_mod
-    from lmdeploy.pytorch.model_inputs import DPMeta
-    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
 
-    monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(lambda seqlen, num_tokens: DPMeta()))
-    inputs, extra_inputs = _make_non_last_chunk_inputs(dp_meta=DPMeta(dp_batches=[2, 2], dp_is_decoding=True))
-    inputs.is_chunk = False
+    def build_meta(seqlen, batches):
+        return DPMeta(dp_batches=list(batches))
 
+    monkeypatch.setattr(spec_agent_mod.DPMeta, 'build', staticmethod(build_meta))
+    target_meta = DPMeta(dp_batches=[2, 3], dp_is_decoding=global_decode)
+    inputs, extra_inputs = _make_non_last_chunk_inputs(dp_meta=target_meta)
+    inputs.is_chunk = is_chunk
+    inputs.is_dummy = is_dummy
+    inputs.is_decoding = local_decode
     agent = object.__new__(SpecModelAgent)
-    agent.num_spec_tokens = 3
+    agent.num_spec_tokens = num_spec_tokens
     agent.rank = 0
     agent.proposer = _DummyProposer()
     agent.guided_helper = GuidedSpecHelper()
-    forward_calls = 0
+    forwarded = []
 
-    def _forward_impl(_inputs):
-        nonlocal forward_calls
-        forward_calls += 1
-        return {'call': forward_calls}
+    def forward(inputs):
+        forwarded.append((inputs.is_decoding, inputs.global_is_decoding(), inputs.dp_meta))
+        return {}
 
-    agent._forward_impl = _forward_impl
-
+    agent._forward_impl = forward
     asyncio.run(agent._async_autoregressive_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
-    assert agent.proposer.model.update_inputs_dp_is_decoding == [True, True]
+    assert [(local, glob) for local, glob, _ in forwarded] == [
+        (local_decode, global_decode), *[(True, True)] * (num_spec_tokens - 1)]
+    assert inputs.dp_meta is target_meta
+    assert target_meta.dp_is_decoding is global_decode
+    assert target_meta.dp_batches == [2, 3]
+    for _, _, meta in forwarded[1:]:
+        assert meta is not target_meta
+        assert meta.dp_batches == target_meta.dp_batches
+    assert agent.proposer.model.update_inputs_dp_is_decoding == [True] * (num_spec_tokens - 1)
+    if num_spec_tokens > 1:
+        assert agent.proposer.model.get_meta().padding_batch_size == 3
 
 
 def test_spec_model_agent_warmup_adds_dp_meta_for_draft_capture(monkeypatch):
