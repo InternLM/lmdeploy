@@ -77,6 +77,34 @@ add_library(sampling_kernels STATIC sampling_kernels.cu)
 set_property(TARGET sampling_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET sampling_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
+add_library(speculative_sampling_kernels STATIC
+    speculative_sampling_kernels.cu)
+set_property(TARGET speculative_sampling_kernels
+    PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET speculative_sampling_kernels
+    PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(speculative_sampling_kernels PRIVATE
+    core
+    CUDA::curand)
+
+add_library(draft_carry_kernels STATIC
+    draft_carry_kernels.cu)
+set_property(TARGET draft_carry_kernels
+    PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET draft_carry_kernels
+    PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(draft_carry_kernels PRIVATE
+    core)
+
+add_library(speculative_sequence_kernels STATIC
+    speculative_sequence_kernels.cu)
+set_property(TARGET speculative_sequence_kernels
+    PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET speculative_sequence_kernels
+    PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(speculative_sequence_kernels PRIVATE
+    core)
+
 add_library(apply_token_bitmask_inplace_cuda STATIC apply_token_bitmask_inplace_cuda.cu)
 set_property(TARGET apply_token_bitmask_inplace_cuda PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET apply_token_bitmask_inplace_cuda PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)

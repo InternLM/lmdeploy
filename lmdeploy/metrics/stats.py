@@ -285,10 +285,25 @@ class SpeculativeDecodingStats:
         """Update from engine output."""
         spec_info = getattr(outputs.req_metrics, 'spec_info', None)
         if spec_info:
-            self.num_drafts += 1
-            self.num_draft_tokens += spec_info['num_draft_tokens']
-            self.num_accepted_tokens += spec_info['num_accepted_tokens']
-            self.num_accepted_tokens_per_pos[:spec_info['num_accepted_tokens']] += 1
+            if 'num_drafts' in spec_info:
+                self.num_drafts += \
+                    spec_info['num_drafts']
+                self.num_draft_tokens += \
+                    spec_info['num_draft_tokens']
+                self.num_accepted_tokens += \
+                    spec_info['num_accepted_tokens']
+                self.num_accepted_tokens_per_pos += \
+                    np.asarray(
+                        spec_info[
+                            'num_accepted_tokens_per_pos'])
+            else:
+                self.num_drafts += 1
+                self.num_draft_tokens += \
+                    spec_info['num_draft_tokens']
+                self.num_accepted_tokens += \
+                    spec_info['num_accepted_tokens']
+                self.num_accepted_tokens_per_pos[
+                    :spec_info['num_accepted_tokens']] += 1
 
     def update_per_draft(self, num_draft_tokens: int, num_accepted_tokens: int):
         """Update with per draft stats."""

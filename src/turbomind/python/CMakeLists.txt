@@ -17,8 +17,21 @@ pybind11_add_module(${PROJECT_NAME}
     linear_bind.cpp
     xgrammar_bind.cpp
     ../kernels/linear_attn/python_bind.cpp
-    ../kernels/gemm/moe_gate_python_bind.cpp)
-target_link_libraries(${PROJECT_NAME} PRIVATE turbomind xgrammar)
+    ../kernels/gemm/moe_gate_python_bind.cpp
+    ../kernels/speculative_sampling_python_bind.cpp
+    ../kernels/draft_carry_python_bind.cpp
+    ../models/speculative/eagle3/target_hidden_projection_python_bind.cpp
+    ../kernels/speculative_sequence_python_bind.cpp
+    ../kernels/attention/verification/python_bind.cpp)
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    turbomind
+    speculative_sampling_kernels
+    draft_carry_kernels
+    target_hidden_projection_kernels
+    speculative_sequence_kernels
+    verification_attention
+    attention
+    xgrammar)
 
 string(REPLACE "." ";" _cuda_version ${CMAKE_CUDA_COMPILER_VERSION})
 list(GET _cuda_version 0 CUDA_MAJOR)

@@ -26,14 +26,23 @@ namespace turbomind {
 
 class LogitsProcessor: public BaseGenerationParam {
 public:
-    explicit LogitsProcessor(const BaseGenerationParam& base, int phases);
+    explicit LogitsProcessor(
+        const BaseGenerationParam& base, int phases, bool speculative_engine, int parameter_capacity);
 
     void Setup(int phase, TensorMap& env);
 
     void Forward(int phase, TensorMap& env);
 
+    void ForwardVerificationBlock(int                  phase,
+                                  Tensor_<float>       logits,
+                                  const Buffer_<int*>& token_ids_ptrs,
+                                  const Buffer_<int>&  effective_history,
+                                  const Buffer_<bool>& logits_active);
+
 private:
     struct Data;
+
+    bool speculative_engine_;
 
     std::vector<std::shared_ptr<Data>> data_;
 

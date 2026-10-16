@@ -12,7 +12,11 @@ class InternVitWeight;
 
 class InternVit: public VisionModel {
 public:
-    InternVit(const EngineParam& engine, const Context& ctx, const InternVitWeight& weights, int phases);
+    InternVit(const EngineParam&     engine,
+              const Context&         ctx,
+              const InternVitWeight& weights,
+              int                    phases,
+              bool                   successor_embeddings);
 
     ~InternVit() override;
 

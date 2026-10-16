@@ -55,11 +55,13 @@ struct LogitsProcessor::Data {
     bool has_temperature_penalty{};
 };
 
-LogitsProcessor::LogitsProcessor(const BaseGenerationParam& base, int phases): BaseGenerationParam{base}
+LogitsProcessor::LogitsProcessor(
+    const BaseGenerationParam& base, int phases, bool speculative_engine, int parameter_capacity):
+    BaseGenerationParam{base}, speculative_engine_{speculative_engine}
 {
-    buf_ = std::make_shared<Data>(max_batch_size_, kCPUpinned);
+    buf_ = std::make_shared<Data>(parameter_capacity, kCPUpinned);
     for (int i = 0; i < phases; ++i) {
-        data_.push_back(std::make_shared<Data>(max_batch_size_, kDEVICE));
+        data_.push_back(std::make_shared<Data>(parameter_capacity, kDEVICE));
     }
 }
 
@@ -82,12 +84,12 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
 
     // repetition penalty
     if (d.has_repetition_penalty) {
-        ApplyRepetitionPenalty(logits, d.repetition_penalty_buf, token_ids_ptrs, sequence_length, stream);
+        ApplyRepetitionPenalty(logits, d.repetition_penalty_buf, token_ids_ptrs, sequence_length, nullptr, stream);
     }
 
     // ban bad words
     if (auto& bad_words = d.bad_words_ten) {
-        BanBadWords(logits, token_ids_ptrs, sequence_length, bad_words, stream);
+        BanBadWords(logits, token_ids_ptrs, sequence_length, bad_words, nullptr, stream);
     }
 
     // min length
@@ -116,6 +118,49 @@ void LogitsProcessor::Forward(int phase, TensorMap& env)
     TM_LOG_DEBUG("{} stop", __PRETTY_FUNCTION__);
 }
 
+void LogitsProcessor::ForwardVerificationBlock(int                  phase,
+                                               Tensor_<float>       logits,
+                                               const Buffer_<int*>& token_ids_ptrs,
+                                               const Buffer_<int>&  effective_history,
+                                               const Buffer_<bool>& logits_active)
+{
+    TM_FUNCTION_SCOPE();
+    TM_LOG_DEBUG("{} start", __PRETTY_FUNCTION__);
+
+    const auto bsz = logits.shape(0);
+
+    auto& d = *data_.at(phase);
+
+    auto stream = core::Context::stream().handle();
+
+    if (d.has_repetition_penalty) {
+        ApplyRepetitionPenalty(
+            logits, d.repetition_penalty_buf, token_ids_ptrs, effective_history, logits_active.data(), stream);
+    }
+
+    if (auto& bad_words = d.bad_words_ten) {
+        BanBadWords(logits, token_ids_ptrs, effective_history, bad_words, logits_active.data(), stream);
+    }
+
+    if (d.has_min_length_penalty) {
+        TM_SCOPE_CALL(invokeMinLengthPenalty(logits.data(),
+                                             d.min_lengths_buf.data(),
+                                             effective_history.data(),
+                                             vocab_size_padded_,
+                                             bsz,
+                                             d.end_ids_ten.data(),
+                                             d.end_ids_ten.shape(1),
+                                             stream));
+    }
+
+    if (d.has_temperature_penalty) {
+        TM_SCOPE_CALL(invokeBatchApplyTemperaturePenalty_v2(
+            logits.data(), (float*)nullptr, d.temperature_buf.data(), bsz, vocab_size_, vocab_size_padded_, stream));
+    }
+
+    TM_LOG_DEBUG("{} stop", __PRETTY_FUNCTION__);
+}
+
 void LogitsProcessor::Setup(int phase, TensorMap& env)
 {
     TM_FUNCTION_SCOPE();
@@ -126,9 +171,31 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
     // const auto& rs   = env.at("batch").data<BatchData*>()[0]->rc;
     Buffer_<Sequence*> rs = env.at("requests").buffer();
 
+    std::vector<Sequence*> parameter_requests;
+    Buffer_<Sequence*>     setup_requests = rs;
+
+    if (speculative_engine_) {
+        std::vector<Sequence*> generating_requests;
+        generating_requests.reserve(rs.size());
+        for (Sequence* request : rs) {
+            if (request->submitted->generating) {
+                generating_requests.push_back(request);
+            }
+        }
+        const int P = env.at("verification_positions").data<int>()[0];
+        const int G = generating_requests.size();
+        parameter_requests.resize(P * G);
+        for (int position = 0; position < P; ++position) {
+            for (int g = 0; g < G; ++g) {
+                parameter_requests[position * G + g] = generating_requests[g];
+            }
+        }
+        setup_requests = {parameter_requests.data(), static_cast<ssize_t>(parameter_requests.size()), kCPU};
+    }
+
     auto& copy = *env.at("copy").data<BatchCopy*>()[0];
 
-    const int bsz = rs.size();
+    const int bsz = setup_requests.size();
 
     auto& repetition_penalty = buf_->repetition_penalty_buf;
     auto& temperature        = buf_->temperature_buf;
@@ -140,7 +207,7 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
     d.has_bad_words_penalty   = {};
 
     for (int i = 0; i < bsz; ++i) {
-        auto& g = rs[i]->gen_cfg;
+        auto& g = setup_requests[i]->gen_cfg;
 
         // repetition_penalty
         repetition_penalty[i] = g.repetition_penalty;
@@ -155,8 +222,8 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
         }
 
         // min_length
-        min_lengths[i] = rs[i]->prompt_len + g.min_new_tokens;
-        if (rs[i]->seq_len + rs[i]->inflight_new_tokens < min_lengths[i]) {
+        min_lengths[i] = setup_requests[i]->prompt_len + g.min_new_tokens;
+        if (setup_requests[i]->seq_len + setup_requests[i]->inflight_new_tokens < min_lengths[i]) {
             d.has_min_length_penalty = true;
         }
     }
@@ -176,7 +243,7 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
     d.bad_words_ten = {};
     init_stop_bad_words(&GenerationConfig::bad_ids,  //
                         "bad_words",
-                        rs,
+                        setup_requests,
                         buf_->bad_words_buf.data(),
                         d.bad_words_buf.data(),
                         d.bad_words_ten,
@@ -186,20 +253,20 @@ void LogitsProcessor::Setup(int phase, TensorMap& env)
         d.end_ids_ten  = {};
         int max_length = 0;
         for (int i = 0; i < bsz; ++i) {
-            max_length = std::max(max_length, (int)rs[i]->gen_cfg.eos_ids.size());
+            max_length = std::max(max_length, (int)setup_requests[i]->gen_cfg.eos_ids.size());
         }
         if (max_length) {
             max_length     = std::min(max_length, kMaxEndIdsSize);
             int* h_end_ids = buf_->end_ids_buf.data();
             std::fill(h_end_ids, h_end_ids + std::min(kMaxEndIdsSize, max_length) * bsz, -1);
             for (int i = 0; i < bsz; ++i) {
-                const auto& eos_ids = rs[i]->gen_cfg.eos_ids;
+                const auto& eos_ids = setup_requests[i]->gen_cfg.eos_ids;
                 if (eos_ids.size() == 0) {
                     continue;
                 }
                 if (TM_UNLIKELY(eos_ids.size() > kMaxEndIdsSize)) {
                     TM_LOG_WARN("ID {}: eos length ({}) exceeds {}, truncated to {}",
-                                rs[i]->req->id,
+                                setup_requests[i]->req->id,
                                 eos_ids.size(),
                                 kMaxEndIdsSize,
                                 kMaxEndIdsSize);

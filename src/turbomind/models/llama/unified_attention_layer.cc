@@ -37,6 +37,7 @@
 #include "src/turbomind/kernels/attention/attention.h"
 #include "src/turbomind/kernels/attention/decoding.h"
 #include "src/turbomind/kernels/attention/kv_cache_utils_v2.h"
+#include "src/turbomind/kernels/attention/verification/attention.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 
 #include "src/turbomind/macro.h"
@@ -86,12 +87,12 @@ struct BlockConfig {
 
 struct AttentionData {
     struct Stat {
-        int n;
-        int q_sum;
-        int q_max;
-        int k_sum;
-        int k_max;
-    } decode, prefill;
+        int request_count;
+        int query_count;
+        int max_query_length;
+        int key_capacity_sum;
+        int max_key_capacity;
+    } verification, decode, prefill;
 
     Buffer_<void*> block_ptrs;
     Buffer_<int>   block_ptrs_offsets;
@@ -141,7 +142,24 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weigh
     is_warm_up_{*context.is_warm_up},
     context_{context},
     linear_(*context.linear),
-    arch_{getSMVersion()}
+    arch_{getSMVersion()},
+    sm_count_{getSMCount()},
+    direct_verification_supported_{[&] {
+        const auto& reference = *weights.at(0);
+        const verification_attention::Capability capability{
+            arch_,
+            reference.data_type,
+            reference.head_dim,
+            engine.spec_num_draft_tokens + 1,
+            quant_policy_,
+            engine.attn_cp_size,
+            reference.is_mla(),
+            static_cast<bool>(reference.sinks),
+            static_cast<int>(context.device_prop.sharedMemPerBlockOptin),
+        };
+        return engine.spec_num_draft_tokens > 0
+               && verification_attention::supports(capability);
+    }()}
 {
     TM_CHECK_GE(weights.size(), 1);
 
@@ -264,13 +282,29 @@ void UnifiedAttentionLayer::Run(BatchOp op, int phase, TensorMap& env)
 
         // Borrow the global mask owned by LanguageModel (pointer only; its content is
         // built at Forward time) and resolve this rank's token offset within it.
-        d->token_mask      = env.at("token_mask").buffer().borrow();
-        d->token_mask_base = 0;
-        if (engine_param_.attn_dp_size > 1) {
-            const auto& local_token_num = env.at("batch").data<BatchData*>()[0]->local_token_num;
-            TM_CHECK_EQ((int)local_token_num.size(), engine_param_.attn_dp_size);
-            d->token_mask_base =
-                std::accumulate(local_token_num.begin(), local_token_num.begin() + engine_param_.attn_dp_rank, 0);
+        // Optional: the speculative executor composition does not produce one.
+        if (auto mask = env.try_("token_mask")) {
+            d->token_mask      = mask->buffer().borrow();
+            d->token_mask_base = 0;
+            if (engine_param_.attn_dp_size > 1) {
+                const auto& local_token_num = env.at("batch").data<BatchData*>()[0]->local_token_num;
+                TM_CHECK_EQ((int)local_token_num.size(), engine_param_.attn_dp_size);
+                d->token_mask_base =
+                    std::accumulate(local_token_num.begin(), local_token_num.begin() + engine_param_.attn_dp_rank, 0);
+            }
+        }
+
+        // This is needed in async mode to clear the `attn` buffer for the finished sequences. Ohterwise random NaNs
+        // will crash the MoE router later
+        /// TODO: use better solution, this increase memory usage and heterogenous attention layers may still break it
+        if (tmp_attn_) {
+            Clear(tmp_attn_.slice(
+                0,
+                d->verification.query_count + d->decode.query_count + d->prefill.query_count));
+            Clear(split_cnt_);
+            if (engine_param_.attn_cp_size > 1) {
+                invokeFillNegInfML(partial_ML_.data(), partial_ML_.size() / 2, core::Context::stream().handle());
+            }
         }
     }
 }
@@ -304,31 +338,65 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
         copy(block_ptrs_offsets_buf_, bsz + 1, d.block_ptrs_offsets);
     }
 
-    /// prepare Q/K stats for decode/prefill
-    d.decode = d.prefill = {};
+    /// prepare Q/K stats for verification/decode/prefill
+    d.verification = d.decode = d.prefill = {};
 
-    d.decode.n  = std::find_if(rc.begin(), rc.end(), [](auto r) { return r->input_len > 1; }) - rc.begin();
-    d.prefill.n = bsz - d.decode.n;
+    if (direct_verification_supported_) {
+        d.verification.request_count =
+            std::find_if(rc.begin(), rc.end(), [](const Sequence* request) {
+                return !request->submitted->is_verification_row();
+            })
+            - rc.begin();
+        d.decode.request_count =
+            std::find_if(rc.begin() + d.verification.request_count,
+                         rc.end(),
+                         [](const Sequence* request) { return request->submitted->input_len > 1; })
+            - (rc.begin() + d.verification.request_count);
+        d.prefill.request_count = bsz - d.verification.request_count - d.decode.request_count;
+    }
+    else if (engine_param_.spec_num_draft_tokens > 0) {
+        d.prefill.request_count = bsz;
+    }
+    else {
+        d.decode.request_count =
+            std::find_if(rc.begin(), rc.end(), [](const Sequence* request) {
+                return request->submitted->input_len > 1;
+            })
+            - rc.begin();
+        d.prefill.request_count = bsz - d.decode.request_count;
+    }
 
     // d.dbg_offset = d.dbg_size = 0;
 
     for (int i = 0; i < bsz; ++i) {
-        const auto& c = *rc[i];
+        const Sequence&     c   = *rc[i];
+        const SubmittedRow& row = *c.submitted;
 
         // if (c.request->id == 4 && c.input_len > 1) {
-        //     d.dbg_offset = d.decode.q_sum + d.prefill.q_sum;
+        //     d.dbg_offset = d.decode.query_count + d.prefill.query_count;
         //     d.dbg_size   = c.input_len;
         // }
 
-        auto& s = i < d.decode.n ? d.decode : d.prefill;
-        s.q_sum += c.input_len;
-        s.k_sum += c.history_len + c.inflight_input_len + c.input_len;
-        s.q_max = std::max(s.q_max, c.input_len);
-        s.k_max = std::max(s.k_max, c.history_len + c.inflight_input_len + c.input_len);
+        auto& s = i < d.verification.request_count
+                      ? d.verification
+                      : (i < d.verification.request_count + d.decode.request_count
+                             ? d.decode
+                             : d.prefill);
+        s.query_count += row.input_len;
+        s.key_capacity_sum += row.key_capacity_end;
+        s.max_query_length = std::max(s.max_query_length, row.input_len);
+        s.max_key_capacity = std::max(s.max_key_capacity, row.key_capacity_end);
     }
 
     // auto &D = d.decode, &P = d.prefill;
-    // dbg(D.n, D.k_sum, D.k_max, P.n, P.q_sum, P.q_max, P.k_sum, P.k_max);
+    // dbg(D.request_count,
+    //     D.key_capacity_sum,
+    //     D.max_key_capacity,
+    //     P.request_count,
+    //     P.query_count,
+    //     P.max_query_length,
+    //     P.key_capacity_sum,
+    //     P.max_key_capacity);
 
     /// handling different RoPE types
     if (rope_param_.type == RopeType::kDynamic) {
@@ -360,6 +428,36 @@ void UnifiedAttentionLayer::Setup(int phase, TensorMap& env)
             d.mrope_position_ids     = mrope_default_buf_.borrow();
         }
     }
+}
+
+void UnifiedAttentionLayer::SetForwardMetadata(int phase, const AttentionForwardMetadata& metadata)
+{
+    auto& d = *data_[phase];
+
+    d.verification = {
+        metadata.verification.request_count,
+        metadata.verification.query_count,
+        metadata.verification.max_query_length,
+        metadata.verification.key_capacity_sum,
+        metadata.verification.max_key_capacity,
+    };
+    d.decode = {
+        metadata.decode.request_count,
+        metadata.decode.query_count,
+        metadata.decode.max_query_length,
+        metadata.decode.key_capacity_sum,
+        metadata.decode.max_key_capacity,
+    };
+    d.prefill = {
+        metadata.prefill.request_count,
+        metadata.prefill.query_count,
+        metadata.prefill.max_query_length,
+        metadata.prefill.key_capacity_sum,
+        metadata.prefill.max_key_capacity,
+    };
+
+    d.q_offsets = metadata.q_offsets.borrow();
+    d.k_offsets = metadata.k_offsets.borrow();
 }
 
 void UnifiedAttentionLayer::Forward(ForwardParam p)
@@ -454,18 +552,30 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
 
     auto& d = *data_.at(p.phase);
 
-    const int batch_size = d.decode.n + d.prefill.n;
-    const int q_count    = qkv.shape(0);
+    const int query_count =
+        d.verification.query_count + d.decode.query_count + d.prefill.query_count;
 
-    TM_CHECK_EQ(d.prefill.q_sum + d.decode.n, q_count);
+    Tensor attn;
+    if (tmp_attn_) {
+        attn = tmp_attn_.slice(0, query_count);
+    }
+    else {
+        attn = {{query_count, local_head_num * size_per_head}, dtype, device};
+    }
 
-    const int local_q_kv_head_num = local_head_num + 2 * local_kv_head_num;
-
-    Tensor attn{{q_count, local_head_num * size_per_head}, dtype, device};
+    if (query_count == 0) {
+        return attn;
+    }
 
     const bool is_mla = weights.is_mla();
 
-    Tensor tmp_kv{{local_kv_head_num, is_mla ? 1 : 2, d.prefill.k_sum + MAX_CTA_S, size_per_head}, dtype, device};
+    Tensor tmp_kv;
+    if (d.prefill.request_count) {
+        tmp_kv = Tensor{
+            {local_kv_head_num, is_mla ? 1 : 2, d.prefill.key_capacity_sum + MAX_CTA_S, size_per_head},
+            dtype,
+            device};
+    }
 
     auto CreateParams = [&](int offset, AttentionData::Stat stat, int max_kv_splits, cudaStream_t stream) {
         AttentionParams<T> params{};
@@ -497,11 +607,11 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             params.v_bias = params.k_bias + local_kv_head_num * size_per_head;
         }
 
-        params.batch_size = stat.n;
+        params.batch_size = stat.request_count;
 
-        params.token_num = stat.q_sum;
-        params.max_q_len = stat.q_max;
-        params.max_k_len = stat.k_max;
+        params.token_num = stat.query_count;
+        params.max_q_len = stat.max_query_length;
+        params.max_k_len = stat.max_key_capacity;
 
         TM_CHECK_LE(weights.cache_block_offset, INT_MAX);
 
@@ -512,24 +622,27 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
                                                        engine_param_.cache_block_seq_len};
 
         // prefill only
-        if (is_mla) {
-            params.linear_iter_params = LinearIteratorParams{
-                tmp_kv.raw_data(),           // flattened KV
-                stat.k_sum * size_per_head,  // stride to next head
-                0                            // stride from K to V
-            };
-        }
-        else {
-            params.linear_iter_params = LinearIteratorParams{
-                tmp_kv.raw_data(),               // flattened KV
-                stat.k_sum * size_per_head * 2,  // stride to next head
-                stat.k_sum * size_per_head       // stride from K to V
-            };
+        if (tmp_kv) {
+            if (is_mla) {
+                params.linear_iter_params = LinearIteratorParams{
+                    tmp_kv.raw_data(),                      // flattened KV
+                    stat.key_capacity_sum * size_per_head,  // stride to next head
+                    0                                       // stride from K to V
+                };
+            }
+            else {
+                params.linear_iter_params = LinearIteratorParams{
+                    tmp_kv.raw_data(),                          // flattened KV
+                    stat.key_capacity_sum * size_per_head * 2,  // stride to next head
+                    stat.key_capacity_sum * size_per_head       // stride from K to V
+                };
+            }
         }
 
-        params.finished = d.finished.data() + offset;
+        const bool* finished      = d.finished.data_or((bool*)nullptr);
+        params.finished           = finished ? finished + offset : nullptr;
         // decode rows: base; prefill rows: + decode.n (this rank's slice of the global mask)
-        params.token_mask         = d.token_mask.data() + d.token_mask_base + offset;
+        params.token_mask = d.token_mask ? d.token_mask.data() + d.token_mask_base + offset : nullptr;
         params.cu_q_len           = d.q_offsets.data() + offset;
         params.cu_k_len           = d.k_offsets.data() + offset;
         params.readonly_block_num = d.readonly_block_num.data() + offset;
@@ -608,19 +721,69 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         return params;
     };
 
+    auto MakeVerificationArguments = [&](const AttentionParams<T>& writer,
+                                         int                       query_offset,
+                                         AttentionData::Stat       stat,
+                                         cudaStream_t              stream) {
+        verification_attention::Arguments a{};
+        a.out                 = writer.out;
+        a.q                   = writer.q;
+        a.q_bias              = writer.q_bias;
+        a.q_stride            = writer.stride;
+        a.block_ptrs          = writer.block_iter_params.block_ptrs;
+        a.block_ptr_offsets   = writer.block_iter_params.cu_block_nums;
+        a.q_offsets           = writer.cu_q_len;
+        a.k_offsets           = writer.cu_k_len;
+        a.finished            = writer.finished;
+        a.request_count       = stat.request_count;
+        a.query_count         = stat.query_count;
+        a.query_offset        = query_offset;
+        a.max_query_length    = stat.max_query_length;
+        a.max_key_length      = stat.max_key_capacity;
+        a.query_head_count    = writer.num_heads;
+        a.kv_head_count       = writer.num_kv_heads;
+        a.query_group_size    = a.query_head_count / a.kv_head_count;
+        a.query_group_size_divmod = cutlass::FastDivmod(a.query_group_size);
+        a.head_dim            = writer.size_per_head;
+        a.block_len           = writer.block_iter_params.block_len;
+        a.block_len_divmod    = cutlass::FastDivmod(a.block_len);
+        a.cache_block_offset  = writer.block_iter_params.offset;
+        a.window_size         = writer.window_size;
+        a.qk_scale_log2       = writer.inv_sqrt_dh;
+        a.rope                = writer.rope_param;
+        a.partial_o           = partial_O_.data();
+        a.partial_ml          = partial_ML_.data();
+        a.data_type           = dtype;
+        a.stream              = stream;
+
+        const int m_slices = cdiv(
+            a.max_query_length * a.query_group_size,
+            verification_attention::CtaM(a));
+        const int base_ctas = a.request_count * a.kv_head_count * m_slices;
+        a.split_count = verification_attention::choose_split_count(a.query_count,
+                                                                    base_ctas,
+                                                                    a.max_key_length,
+                                                                    verification_attention::KeyTile(a),
+                                                                    kMaxWorkspaceTokens,
+                                                                    kMaxKVSplits,
+                                                                    sm_count_);
+        return a;
+    };
+
     const cudaStream_t stream = core::Context::stream().handle();
 
     cudaStream_t pf_stream = stream;
     cudaStream_t dc_stream = stream;
 
-    if (d.decode.n && d.prefill.n) {
+    const bool has_executor_attention = d.verification.request_count || d.decode.request_count;
+    if (has_executor_attention && d.prefill.request_count) {
         pf_stream = aux_stream_;
         TM_CUDA_CHECK(cudaEventRecord(qkv_event_, stream));
         TM_CUDA_CHECK(cudaStreamWaitEvent(aux_stream_, qkv_event_));
     }
 
-    if (d.prefill.n && !is_warm_up_) {
-        const int offset = d.decode.n;
+    if (d.prefill.request_count && !is_warm_up_) {
+        const int offset = d.verification.request_count + d.decode.request_count;
         // We are executing prefill & decoding kernels concurrently, but only have 1 workspace
         // disable split kv for prefill for now
         auto params = CreateParams(offset, d.prefill, 1, pf_stream);
@@ -629,7 +792,7 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
             TM_CUDA_CHECK(cudaGetLastError());
 
             /// TODO: skip flattening for `sm_80`
-            invokeFlattenKV_v2_(params, d.prefill.k_sum);
+            invokeFlattenKV_v2_(params, d.prefill.key_capacity_sum);
             TM_CUDA_CHECK(cudaGetLastError());
 
             dispatchAttention(params);
@@ -637,15 +800,28 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         }
     }
 
-    if (d.decode.n && !is_warm_up_) {
-        auto params = CreateParams(0, d.decode, kMaxKVSplits, dc_stream);
+    if (d.verification.request_count && !is_warm_up_) {
+        auto params = CreateParams(0, d.verification, kMaxKVSplits, dc_stream);
+        if constexpr (sizeof(T) == 2) {
+            invokeProcessKV_v2_(params);
+            TM_CUDA_CHECK(cudaGetLastError());
+            auto arguments = MakeVerificationArguments(params, 0, d.verification, dc_stream);
+            verification_attention::run(arguments);
+            TM_CUDA_CHECK(cudaGetLastError());
+        }
+    }
+
+    if (d.decode.request_count && !is_warm_up_) {
+        const int offset = d.verification.request_count;
+        auto params = CreateParams(
+            offset, d.decode, d.verification.request_count ? 1 : kMaxKVSplits, dc_stream);
         if constexpr (sizeof(T) == 2) {
             dispatchDecoding<T>(params);
             TM_CUDA_CHECK(cudaGetLastError());
         }
     }
 
-    if (d.decode.n && d.prefill.n) {
+    if (has_executor_attention && d.prefill.request_count) {
         TM_CUDA_CHECK(cudaEventRecord(aux_event_, aux_stream_));
         TM_CUDA_CHECK(cudaStreamWaitEvent(stream, aux_event_));
     }
