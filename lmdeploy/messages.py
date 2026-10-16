@@ -540,6 +540,8 @@ class PytorchEngineConfig:
         dllm_denoising_steps: Dllm denoising steps.
         dllm_confidence_threshold: dllm unmasking threshold for
             dynamic unmasking.
+        communication_backend: ``nccl`` (default) uses native process-group collectives.
+            ``auto`` opts into eligible communication optimizations.
         kv_transfer_config: External KV-cache connector configuration. This is
             supported only by the PyTorch engine. ``None`` disables external
             KV-cache transfer.
@@ -599,6 +601,7 @@ class PytorchEngineConfig:
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
     piecewise_cudagraph_max_tokens: int | None = None
+    communication_backend: Literal['nccl', 'auto'] = 'nccl'
 
     def __post_init__(self):
         """Check input validation."""
@@ -651,7 +654,8 @@ class PytorchEngineConfig:
             self.kv_transfer_config = KVTransferConfig(**self.kv_transfer_config)
         elif self.kv_transfer_config is not None and not isinstance(self.kv_transfer_config, KVTransferConfig):
             raise TypeError('kv_transfer_config must be a KVTransferConfig, dict, or None')
-
+        if self.communication_backend not in ('nccl', 'auto'):
+            raise ValueError('communication_backend must be nccl or auto')
 
 class ResponseType(enum.Enum):
     """Response type."""
