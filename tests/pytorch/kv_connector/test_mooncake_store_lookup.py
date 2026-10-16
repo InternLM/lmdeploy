@@ -41,8 +41,8 @@ class _FakeStoreWorker:
         self.lookup_started = threading.Event()
         self.lookup_gate = None
 
-    def lookup(self, token_len, block_hashes):
-        self.lookup_calls.append((token_len, [bytes(block_hash) for block_hash in block_hashes]))
+    def lookup(self, token_len, block_hashes, *, recompute_blocks=0):
+        self.lookup_calls.append((token_len, [bytes(block_hash) for block_hash in block_hashes], recompute_blocks))
         gate = self.lookup_gate
         self.lookup_started.set()
         if gate is not None:
@@ -116,13 +116,14 @@ def test_blob_block_hashes_rejects_an_invalid_layout(blob, hash_len):
 
 
 @pytest.mark.parametrize(('store_result', 'expected'), [(37, 37), (0, 0)])
-def test_sync_lookup_hit_and_miss_over_real_zmq(lookup_pair_factory, store_result, expected):
+@pytest.mark.parametrize('recompute_blocks', [0, 1])
+def test_sync_lookup_hit_and_miss_over_real_zmq(lookup_pair_factory, store_result, expected, recompute_blocks):
     store_worker = _FakeStoreWorker([store_result])
     client, _, _ = lookup_pair_factory(store_worker)
     hashes = [b'a' * 16, b'b' * 16]
 
-    assert client.lookup(1, 128, hashes, non_block=False) == expected
-    assert store_worker.lookup_calls == [(128, hashes)]
+    assert client.lookup(1, 128, hashes, non_block=False, recompute_blocks=recompute_blocks) == expected
+    assert store_worker.lookup_calls == [(128, hashes, recompute_blocks)]
 
 
 def test_async_lookup_is_pending_and_submitted_only_once(lookup_pair_factory):
@@ -137,7 +138,7 @@ def test_async_lookup_is_pending_and_submitted_only_once(lookup_pair_factory):
         assert store_worker.lookup_started.wait(timeout=2)
         assert client.is_pending(2)
         assert client.lookup(2, 64, hashes) is None
-        assert store_worker.lookup_calls == [(64, hashes)]
+        assert store_worker.lookup_calls == [(64, hashes, 0)]
 
         gate.set()
         assert _poll_lookup(client, 2, 64, hashes) == 23
@@ -165,7 +166,7 @@ def test_discard_drops_an_inflight_result_before_reusing_request_id(lookup_pair_
         assert client.lookup(3, 64, hashes, non_block=True) is None
         second_gate.set()
         assert _poll_lookup(client, 3, 64, hashes) == 29
-        assert store_worker.lookup_calls == [(64, hashes), (64, hashes)]
+        assert store_worker.lookup_calls == [(64, hashes, 0), (64, hashes, 0)]
     finally:
         first_gate.set()
         second_gate.set()

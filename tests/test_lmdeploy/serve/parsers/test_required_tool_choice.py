@@ -162,7 +162,7 @@ def test_required_grammar_requires_at_least_one_tool_call(
     else:
         call = '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Paris"}}\n</tool_call>'
     text = 'Need to check.</think>\n\n' if reasoning else ''
-    text += call * call_count
+    text += '\n'.join([call] * call_count)
 
     assert matcher.accept_string(text)
     assert matcher.accept_token(0) is (call_count > 0)
