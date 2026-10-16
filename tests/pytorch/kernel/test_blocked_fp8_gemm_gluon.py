@@ -27,7 +27,9 @@ def test_small_dense_provider_selection(provider, features, expected, monkeypatc
 @torch.inference_mode()
 def test_small_dense_provider_exact_graph(rows):
     from lmdeploy.pytorch.backends.cuda.blockedf8_modules import (
-        DeepGemmLinearBlockedF8Impl, HopperSmallMLinearBlockedF8Impl)
+        DeepGemmLinearBlockedF8Impl,
+        HopperSmallMLinearBlockedF8Impl,
+    )
 
     torch.manual_seed(1024)
     k, n = 4096, 24576
@@ -304,3 +306,85 @@ def test_fp8_gemm_nt_rejects_invalid_dtype_and_layout():
         fp8_gemm_nt(a, b, output, None, num_sms=0)
     with pytest.raises(ValueError, match='num_sms must be between 1 and'):
         fp8_gemm_nt(a, b, output, None, num_sms=device_num_sms + 1)
+
+
+@pytest.mark.parametrize('k', [2048, 4096])
+@pytest.mark.parametrize('capacity', [128, 384, 1024])
+@pytest.mark.parametrize('column_major', [False, True])
+@torch.inference_mode()
+def test_grouped_gluon_exact_graph(k, capacity, column_major):
+    from lmdeploy.pytorch.kernels.cuda.blocked_fp8_gemm_gluon import grouped_fp8_gemm_nt_masked
+    from lmdeploy.pytorch.third_party.deep_gemm import m_grouped_fp8_gemm_nt_masked
+
+    torch.manual_seed(1024)
+    groups, n = 36, 4096
+    aq = torch.randn(groups, capacity, k, device='cuda').to(FP8_DTYPE)
+    bq = torch.randn(groups, n, k, device='cuda').to(FP8_DTYPE)
+    asc = (torch.empty(groups, k // 128, capacity, device='cuda').transpose(1, 2)
+           if column_major else torch.empty(groups, capacity, k // 128, device='cuda'))
+    bsc = torch.empty(groups, n // 128, k // 128, device='cuda')
+    masks = torch.zeros(groups, device='cuda', dtype=torch.int32)
+    out = torch.empty(groups, capacity, n, device='cuda', dtype=torch.bfloat16)
+    reference = torch.empty_like(out)
+    asc.uniform_(.001, .02)
+    bsc.uniform_(.001, .02)
+    grouped_fp8_gemm_nt_masked((aq, asc), (bq, bsc), out, masks)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        grouped_fp8_gemm_nt_masked((aq, asc), (bq, bsc), out, masks)
+    for iteration in range(8):
+        counts = (torch.arange(groups, device='cuda') * 3 + iteration) % 33
+        if iteration == 0:
+            counts.zero_()
+        if iteration == 7:
+            counts[0] = capacity
+        masks.copy_(counts)
+        aq.copy_(torch.randn_like(aq, dtype=torch.bfloat16).to(aq.dtype))
+        asc.uniform_(.001, .02)
+        bsc.uniform_(.001, .02)
+        graph.replay()
+        m_grouped_fp8_gemm_nt_masked((aq, asc), (bq, bsc), reference, masks, 3)
+        valid = torch.arange(capacity, device='cuda')[None, :] < masks[:, None]
+        torch.testing.assert_close(out[valid], reference[valid], atol=0, rtol=0)
+
+
+@pytest.mark.parametrize('decode,enabled,expected_m,use_candidate', [
+    (True, True, 3, True),
+    (True, True, 5, False),
+    (False, True, 3, False),
+    (True, False, 3, False),
+])
+@torch.inference_mode()
+def test_grouped_gluon_backend_fallback(decode, enabled, expected_m, use_candidate, monkeypatch):
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.backends.cuda.moe import blocked_fp8 as backend
+    from lmdeploy.pytorch.kernels.cuda import blocked_fp8_gemm_gluon as kernel
+    from lmdeploy.pytorch.third_party.deep_gemm import m_grouped_fp8_gemm_nt_masked
+
+    torch.manual_seed(1024)
+    groups, capacity, n, k = 36, 128, 4096, 2048
+    aq = torch.randn(groups, capacity, k, device='cuda').to(FP8_DTYPE)
+    bq = torch.randn(groups, n, k, device='cuda').to(FP8_DTYPE)
+    asc = torch.rand(groups, capacity, k // 128, device='cuda') * .02
+    bsc = torch.rand(groups, n // 128, k // 128, device='cuda') * .02
+    masks = (torch.arange(groups, device='cuda', dtype=torch.int32) % 11).contiguous()
+    out = torch.empty(groups, capacity, n, device='cuda', dtype=torch.bfloat16)
+    reference = torch.empty_like(out)
+    m_grouped_fp8_gemm_nt_masked((aq, asc), (bq, bsc), reference, masks, expected_m)
+    impl = object.__new__(backend.FusedMoELowLatency)
+    impl._small_m_gluon = enabled
+    context = SimpleNamespace(global_is_decoding=lambda: decode)
+    monkeypatch.setattr(backend, 'get_step_ctx_manager', lambda: SimpleNamespace(current_context=lambda: context))
+    original = kernel.grouped_fp8_gemm_nt_masked
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(kernel, 'grouped_fp8_gemm_nt_masked', counted)
+    impl._deepgemm_grouped_fp8_nt_masked((aq, asc), (bq, bsc), out, masks, expected_m)
+    assert bool(calls) == use_candidate
+    valid = torch.arange(capacity, device='cuda')[None, :] < masks[:, None]
+    torch.testing.assert_close(out[valid], reference[valid], atol=0, rtol=0)
