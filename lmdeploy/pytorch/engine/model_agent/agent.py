@@ -1596,12 +1596,8 @@ class BaseModelAgent:
                 self.memdecode_agent.reset_graph_runner()
 
     def _split_updated_weights(self, weights: list[tuple[str, torch.Tensor]]):
-        """Split target and draft weights using the existing MTP contract."""
-        if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
-            return weights, []
-        main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
-        draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
-        return main, draft
+        """Route HF-named update tensors before model-specific renaming."""
+        return self.spec_agent.split_updated_weights(weights)
 
     def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):
         """Load one externally supplied bucket into the target and draft
@@ -1761,14 +1757,6 @@ class BaseModelAgent:
                 return list(bucket.reconstruct_tensors())
             return [(k, _construct(v)) for k, v in weights]
 
-        def _split_main_and_draft(weights):
-            # TODO, zhouxinyu, support split and update weights for other mtp methods
-            if not self.spec_agent.is_enabled() or self.spec_agent.method != 'qwen3_5_mtp':
-                return weights, []
-            main = [(name, weight) for name, weight in weights if not name.startswith('mtp.')]
-            draft = [(name, weight) for name, weight in weights if name.startswith('mtp.')]
-            return main, draft
-
         with self.all_context():
             # After deserialization, weights is a dict with following keys:
             # - metadata: List[FlattenedTensorMetadata]
@@ -1783,7 +1771,7 @@ class BaseModelAgent:
             spec_model = self.spec_agent.get_model()
 
             weights = _deserialize_weights(serialized_data)
-            main_weights, draft_weights = _split_main_and_draft(weights)
+            main_weights, draft_weights = self._split_updated_weights(weights)
 
             for m, w, tag in [(model, main_weights, 'main'), (spec_model, draft_weights, 'draft')]:
                 if m is None or not w:

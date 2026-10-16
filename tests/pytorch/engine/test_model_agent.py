@@ -1,15 +1,21 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import pickle
 from collections import deque
 from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
+from unittest.mock import Mock
 
+import pybase64
 import pytest
 import torch
 
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.spec_decode.base import BaseSpecModelAgent
+from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+from lmdeploy.utils import FlattenedTensorBucket
 
 
 def _input_logprob_model_inputs(input_ids, indices):
@@ -1422,10 +1428,8 @@ class TestResetGraphRunner:
             get_model=lambda: model,
             get_prefill_warmup_token_sizes=lambda: prefill_token_sizes,
         )
-        agent.spec_agent = SimpleNamespace(
-            get_model=lambda: None,
-            is_enabled=lambda: False,
-        )
+        agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+        agent.spec_agent._enabled = False
         agent.state = SimpleNamespace(is_sleeping=is_sleeping)
         agent.all_context = nullcontext
         agent.reset_graph_runner = lambda: events.append('reset')
@@ -1719,18 +1723,10 @@ class TestCheckpointEngineWeightUpdate:
             def get_model(self):
                 return self.model
 
-        class _SpecAgent:
-            method = None
-
-            def is_enabled(self):
-                return False
-
-            def get_model(self):
-                return None
-
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.patched_model = _PatchedModel()
-        agent.spec_agent = _SpecAgent()
+        agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+        agent.spec_agent._enabled = False
         agent.memdecode_agent = None
         agent._checkpoint_engine_zmq_ctx = None
         agent.state = SimpleNamespace(is_sleeping=True)
@@ -2023,3 +2019,85 @@ class TestMemDecodeModelAgentLifecycle:
             ('base_cache', swap_in_map, swap_out_map),
             ('memory_cache', swap_in_map, swap_out_map),
         ]
+
+
+@pytest.fixture(params=['flat', 'null_llm', 'nested', 'mirrored'])
+def weight_update_agent(request):
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    config = SimpleNamespace(num_hidden_layers=5, num_nextn_predict_layers=2)
+    # Follower ranks have the draft config but no local proposer.
+    agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+    agent.spec_agent._enabled = True
+    agent.spec_agent.method = 'deepseek_mtp'
+    agent.spec_agent.proposer = None
+    agent.spec_agent.model_config = SimpleNamespace(hf_config=config, num_layers=2)
+    if request.param == 'null_llm':
+        agent.spec_agent.model_config.llm_config = None
+    elif request.param in ('nested', 'mirrored'):
+        agent.spec_agent.model_config.llm_config = config
+        # A wrapper can omit language fields or contain stale mirrored values.
+        agent.spec_agent.model_config.hf_config = (
+            SimpleNamespace(text_config=config) if request.param == 'nested'
+            else SimpleNamespace(num_hidden_layers=99, num_nextn_predict_layers=1))
+    return agent
+
+
+@pytest.mark.parametrize('method,enabled,indices', [
+    ('deepseek_mtp', True, [2, 3]), ('qwen3_5_mtp', True, [6]),
+    ('deepseek_mtp', False, []), ('eagle', True, []),
+])
+@pytest.mark.parametrize('prefix', ['model.layers.', 'model.language_model.layers.'])
+def test_split_updated_weights(weight_update_agent, method, enabled, indices, prefix):
+    agent = weight_update_agent
+    agent.spec_agent.method = method
+    agent.spec_agent._enabled = enabled
+    names = ['model.embed_tokens.weight', 'model.layers.4.input_layernorm.weight',
+             'model.layers.5.eh_proj.weight', 'model.layers.6.shared_head.norm.weight',
+             'model.layers.50.eh_proj.weight', 'model.layers.7.eh_proj.weight', 'mtp.fc.weight', 'lm_head.weight']
+    names = [name.replace('model.layers.', prefix) for name in names]
+    weights = [(name, torch.zeros(1)) for name in names]
+    main, draft = agent._split_updated_weights(weights)
+    assert [n for n, _ in draft] == [names[i] for i in indices]
+    assert [n for n, _ in main] == [n for i, n in enumerate(names) if i not in indices]
+    assert all(t is dict(weights)[n] for n, t in main + draft)
+
+
+@pytest.mark.parametrize('entry', ['update_params', 'shared_bucket_loader'])
+@pytest.mark.parametrize('prefix', ['model.layers.', 'model.language_model.layers.'])
+@pytest.mark.parametrize('bucket_kind', ['mixed', 'main_only', 'draft_only', 'empty'])
+def test_update_routes_before_renaming(weight_update_agent, monkeypatch, entry, prefix, bucket_kind):
+    agent = weight_update_agent
+    loaded = {'main': [], 'draft': []}
+
+    def model(tag):
+        return SimpleNamespace(rename_weight=lambda n: 'renamed.' + n,
+                               load_weights=lambda weights: loaded[tag].extend(weights))
+
+    main, draft = model('main'), model('draft')
+    agent.patched_model = SimpleNamespace(get_model=lambda: main)
+    agent.spec_agent.get_model = lambda: draft
+    expected = {'main': [('lm_head.weight', torch.tensor([1.]))],
+                'draft': [(f'{prefix}5.enorm.weight', torch.tensor([2.]))]}
+    if bucket_kind in ('draft_only', 'empty'):
+        expected['main'] = []
+    if bucket_kind in ('main_only', 'empty'):
+        expected['draft'] = []
+    weights = expected['main'] + expected['draft']
+    if entry == 'update_params':
+        bucket = FlattenedTensorBucket(named_tensors=weights)
+        agent.all_context = nullcontext
+        agent._update_params_ipc_tensor = bucket.get_flattened_tensor() if weights else None
+        agent._update_params_ipc_event = Mock()
+        monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
+        payload = pybase64.b64encode(pickle.dumps({'metadata': bucket.metadata})).decode()
+        agent.update_params(UpdateParamsRequest(serialized_named_tensors=payload,
+                                                load_format='flattened_bucket', finished=False))
+        assert agent._update_params_ipc_event.record.call_count == sum(bool(v) for v in expected.values())
+    else:
+        # NCCL and checkpoint-engine IPC use this upstream shared loader.
+        agent._load_updated_weight_bucket(weights, 'test')
+    for tag, expected_weights in expected.items():
+        assert len(loaded[tag]) == len(expected_weights)
+        for (actual_name, actual_tensor), (name, tensor) in zip(loaded[tag], expected_weights):
+            assert actual_name == 'renamed.' + name
+            torch.testing.assert_close(actual_tensor, tensor)
