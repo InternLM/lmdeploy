@@ -162,6 +162,7 @@ def _flash_prefill_fwd_kernel(
     k_ptr,
     v_ptr,
     o_ptr,
+    lse_ptr,
     cu_seqlens_q_ptr,
     cu_seqlens_k_ptr,
     q_start_loc_ptr,
@@ -183,6 +184,8 @@ def _flash_prefill_fwd_kernel(
     stride_os: tl.constexpr,
     stride_oh: tl.constexpr,
     stride_od: tl.constexpr,
+    stride_ls: tl.constexpr,
+    stride_lh: tl.constexpr,
     kv_group_num,
     head_dim_k: tl.constexpr,
     head_dim_v: tl.constexpr,
@@ -191,6 +194,7 @@ def _flash_prefill_fwd_kernel(
     logit_softcapping: tl.constexpr,
     shared_kv: tl.constexpr,
     block_sparse_size: tl.constexpr,
+    RETURN_LSE: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_DK: tl.constexpr,
@@ -373,6 +377,12 @@ def _flash_prefill_fwd_kernel(
     off_o = ((q_start_loc + offs_m[:, None]) * stride_os + head_id * stride_oh + offs_dv[None, :] * stride_od)
     out_ptrs = o_ptr + off_o
     tl.store(out_ptrs, acc, mask=(offs_m[:, None] < q_seqlen) & mask_dv[None, :])
+    if RETURN_LSE:
+        lse_ptrs = (lse_ptr + (q_start_loc + offs_m) * stride_ls +
+                    head_id * stride_lh)
+        tl.store(lse_ptrs,
+                 m_i / tl_log2(math.e),
+                 mask=offs_m < q_seqlen)
 
 
 def _kernel_meta_sm7x(BLOCK_DK):
@@ -482,6 +492,7 @@ def flash_attn_varlen_func(
     sinks: Tensor = None,
     block_sparse_size: int = 1,
     kv_layout: str = 'hsd',
+    return_lse: bool = False,
 ):
     """Varlen flash Attention forward.
 
@@ -514,6 +525,8 @@ def flash_attn_varlen_func(
     head_dim_v = v.size(d_dim)
 
     o = q.new_empty(*q.size()[:-1], head_dim_v)
+    lse = torch.empty(q.shape[:-1], dtype=torch.float32,
+                      device=q.device) if return_lse else None
     assert head_dim_q == head_dim_k and head_dim_v == o.size(-1)
 
     if softmax_scale is None:
@@ -562,6 +575,7 @@ def flash_attn_varlen_func(
         k,
         v,
         o,
+        lse,
         cu_seqlens_q,
         cu_seqlens_k,
         q_start_loc,
@@ -583,6 +597,8 @@ def flash_attn_varlen_func(
         stride_os=o.stride(0),
         stride_oh=o.stride(1),
         stride_od=o.stride(2),
+        stride_ls=lse.stride(0) if return_lse else 0,
+        stride_lh=lse.stride(1) if return_lse else 0,
         kv_group_num=kv_group_num,
         head_dim_k=head_dim_k,
         head_dim_v=head_dim_v,
@@ -591,6 +607,7 @@ def flash_attn_varlen_func(
         logit_softcapping=softcap,
         shared_kv=shared_kv,
         block_sparse_size=block_sparse_size,
+        RETURN_LSE=return_lse,
         BLOCK_DK=BLOCK_DK,
         BLOCK_DK1=BLOCK_DK1,
         BLOCK_DV=BLOCK_DV,
@@ -600,4 +617,6 @@ def flash_attn_varlen_func(
         num_stages=num_stages,
     )
 
+    if return_lse:
+        return o, lse
     return o

@@ -6,6 +6,7 @@ import torch
 from torch import Tensor
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.distributed import get_dcp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 
 if TYPE_CHECKING:
@@ -126,6 +127,11 @@ class CudaGraphMixin:
         input_buffers['cu_seqlens_q'] = input_buffers['cu_seqlens'][0]
         input_buffers['cu_seqlens_k'] = input_buffers['cu_seqlens'][1]
 
+        dcp_world_size, _ = get_dcp_world_rank()
+        if dcp_world_size > 1:
+            input_buffers['dcp_local_kv_seqlens'] = torch.zeros(
+                max_batches, dtype=torch.int32, device=device)
+
         if graph_meta.step_meta_plan is not None:
             step_ctx = get_step_ctx_manager().current_context()
             graph_meta.step_meta_buffers = graph_meta.step_meta_plan.make_cudagraph_buffers(
@@ -180,6 +186,7 @@ class CudaGraphMixin:
 
         num_tokens = input_ids.size(-1)
         decode_query_len = graph_meta.decode_query_len
+        dcp_world_size, dcp_rank = get_dcp_world_rank()
         # fill buffer
         # Random padding balances MoE routing; the fused deterministic fill
         # below overwrites only the real token prefix.
@@ -200,6 +207,9 @@ class CudaGraphMixin:
             input_buffers['qkv_lens'],
             input_buffers['cu_seqlens'],
             decode_query_len,
+            dcp_local_kv_seqlens=input_buffers.get('dcp_local_kv_seqlens'),
+            dcp_size=dcp_world_size,
+            dcp_rank=dcp_rank,
         )
         if inputs_embeds is not None:
             emb_size = inputs_embeds.size(-1)
@@ -216,6 +226,11 @@ class CudaGraphMixin:
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens']
         attn_metadata.cu_seqlens_q = input_buffers['cu_seqlens_q']
         attn_metadata.cu_seqlens_k = input_buffers['cu_seqlens_k']
+
+        if dcp_world_size > 1:
+            attn_metadata.dcp_local_kv_seqlens = input_buffers['dcp_local_kv_seqlens']
+        else:
+            attn_metadata.dcp_local_kv_seqlens = input_buffers['kv_seqlens']
 
         if graph_meta.step_meta_plan is not None:
             step_ctx = get_step_ctx_manager().current_context()
@@ -247,8 +262,7 @@ class CudaGraphMixin:
                 )
                 # Keep graph input addresses stable for the old FlashMLA metadata API.
                 scheduler_buffer.copy_(metadata.tile_scheduler_metadata)
-                input_buffers['num_splits'][:new_batch_size + 1].copy_(
-                    metadata.num_splits[:new_batch_size + 1])
+                input_buffers['num_splits'].copy_(metadata.num_splits)
             attn_metadata.tile_scheduler_metadata = scheduler_buffer
             attn_metadata.num_splits = input_buffers['num_splits']
 

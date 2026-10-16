@@ -97,6 +97,7 @@ class _DummySeq:
         self.history_embeddings = []
         self._input_multimodals = input_multimodals
         self.prefix_cache = SimpleNamespace(match_start_step=match_start_step)
+        self.kv_token_limit = None
         self.return_logits = False
         self.return_routed_experts = False
         self.return_ce_loss = False
@@ -1892,3 +1893,11 @@ def test_create_model_inputs_delta_valid_only_matches_one_decode_advance(max_q_s
     # base kv at the (stale) build state + one canonical decode advance
     assert output.max_kv_seqlen == max(num_all_ids) + max_q_seqlen
     assert output.sum_kv_seqlen == sum(num_all_ids) + len(valid_seqs) * max_q_seqlen
+
+
+def test_normal_prefill_rejects_nonfinal_chunk_before_building_inputs():
+    from lmdeploy.pytorch.engine.inputs_maker import _ForwardInputsTask
+
+    task = object.__new__(_ForwardInputsTask)
+    with pytest.raises(AssertionError, match='Non-final chunks must use exclusive chunk inputs'):
+        task._build_prefill_inputs([SimpleNamespace(kv_token_limit=64)])
