@@ -74,13 +74,18 @@ class BaseSpecModelAgent:
             draft_prefixes = ('mtp.', )
         elif method == 'deepseek_mtp':
             # DeepSeek/GLM store physical MTP layers after the main stack, not
-            # under mtp.*. Use the draft HF config: ModelConfig.num_layers is
+            # under mtp.*. Use the language config: ModelConfig.num_layers is
             # only the number of draft layers. This config also exists on
             # follower ranks that have no local proposer/model.
-            config = self.model_config.hf_config
+            config = getattr(self.model_config, 'llm_config', None)
+            if config is None:
+                config = self.model_config.hf_config
             start = config.num_hidden_layers
             count = getattr(config, 'num_nextn_predict_layers', 1)
-            draft_prefixes = tuple(f'model.layers.{idx}.' for idx in range(start, start + count))
+            # GLM-5.3 checkpoints wrap the language model in a multimodal model.
+            draft_prefixes = tuple(f'{prefix}{idx}.'
+                                   for prefix in ('model.layers.', 'model.language_model.layers.')
+                                   for idx in range(start, start + count))
         else:
             return weights, []
 

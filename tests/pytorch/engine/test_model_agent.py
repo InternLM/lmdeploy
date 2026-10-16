@@ -2021,8 +2021,8 @@ class TestMemDecodeModelAgentLifecycle:
         ]
 
 
-@pytest.fixture
-def weight_update_agent():
+@pytest.fixture(params=['flat', 'null_llm', 'nested', 'mirrored'])
+def weight_update_agent(request):
     agent = BaseModelAgent.__new__(BaseModelAgent)
     config = SimpleNamespace(num_hidden_layers=5, num_nextn_predict_layers=2)
     # Follower ranks have the draft config but no local proposer.
@@ -2031,6 +2031,14 @@ def weight_update_agent():
     agent.spec_agent.method = 'deepseek_mtp'
     agent.spec_agent.proposer = None
     agent.spec_agent.model_config = SimpleNamespace(hf_config=config, num_layers=2)
+    if request.param == 'null_llm':
+        agent.spec_agent.model_config.llm_config = None
+    elif request.param in ('nested', 'mirrored'):
+        agent.spec_agent.model_config.llm_config = config
+        # A wrapper can omit language fields or contain stale mirrored values.
+        agent.spec_agent.model_config.hf_config = (
+            SimpleNamespace(text_config=config) if request.param == 'nested'
+            else SimpleNamespace(num_hidden_layers=99, num_nextn_predict_layers=1))
     return agent
 
 
@@ -2038,13 +2046,15 @@ def weight_update_agent():
     ('deepseek_mtp', True, [2, 3]), ('qwen3_5_mtp', True, [6]),
     ('deepseek_mtp', False, []), ('eagle', True, []),
 ])
-def test_split_updated_weights(weight_update_agent, method, enabled, indices):
+@pytest.mark.parametrize('prefix', ['model.layers.', 'model.language_model.layers.'])
+def test_split_updated_weights(weight_update_agent, method, enabled, indices, prefix):
     agent = weight_update_agent
     agent.spec_agent.method = method
     agent.spec_agent._enabled = enabled
     names = ['model.embed_tokens.weight', 'model.layers.4.input_layernorm.weight',
              'model.layers.5.eh_proj.weight', 'model.layers.6.shared_head.norm.weight',
              'model.layers.50.eh_proj.weight', 'model.layers.7.eh_proj.weight', 'mtp.fc.weight', 'lm_head.weight']
+    names = [name.replace('model.layers.', prefix) for name in names]
     weights = [(name, torch.zeros(1)) for name in names]
     main, draft = agent._split_updated_weights(weights)
     assert [n for n, _ in draft] == [names[i] for i in indices]
@@ -2053,7 +2063,9 @@ def test_split_updated_weights(weight_update_agent, method, enabled, indices):
 
 
 @pytest.mark.parametrize('entry', ['update_params', 'shared_bucket_loader'])
-def test_update_routes_before_renaming(weight_update_agent, monkeypatch, entry):
+@pytest.mark.parametrize('prefix', ['model.layers.', 'model.language_model.layers.'])
+@pytest.mark.parametrize('bucket_kind', ['mixed', 'main_only', 'draft_only', 'empty'])
+def test_update_routes_before_renaming(weight_update_agent, monkeypatch, entry, prefix, bucket_kind):
     agent = weight_update_agent
     loaded = {'main': [], 'draft': []}
 
@@ -2064,22 +2076,28 @@ def test_update_routes_before_renaming(weight_update_agent, monkeypatch, entry):
     main, draft = model('main'), model('draft')
     agent.patched_model = SimpleNamespace(get_model=lambda: main)
     agent.spec_agent.get_model = lambda: draft
-    weights = [('lm_head.weight', torch.tensor([1.])), ('model.layers.5.enorm.weight', torch.tensor([2.]))]
+    expected = {'main': [('lm_head.weight', torch.tensor([1.]))],
+                'draft': [(f'{prefix}5.enorm.weight', torch.tensor([2.]))]}
+    if bucket_kind in ('draft_only', 'empty'):
+        expected['main'] = []
+    if bucket_kind in ('main_only', 'empty'):
+        expected['draft'] = []
+    weights = expected['main'] + expected['draft']
     if entry == 'update_params':
         bucket = FlattenedTensorBucket(named_tensors=weights)
         agent.all_context = nullcontext
-        agent._update_params_ipc_tensor = bucket.get_flattened_tensor()
+        agent._update_params_ipc_tensor = bucket.get_flattened_tensor() if weights else None
         agent._update_params_ipc_event = Mock()
         monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
         payload = pybase64.b64encode(pickle.dumps({'metadata': bucket.metadata})).decode()
         agent.update_params(UpdateParamsRequest(serialized_named_tensors=payload,
                                                 load_format='flattened_bucket', finished=False))
-        assert agent._update_params_ipc_event.record.call_count == 2
+        assert agent._update_params_ipc_event.record.call_count == sum(bool(v) for v in expected.values())
     else:
         # NCCL and checkpoint-engine IPC use this upstream shared loader.
         agent._load_updated_weight_bucket(weights, 'test')
-    for tag, (name, tensor) in zip(('main', 'draft'), weights):
-        assert len(loaded[tag]) == 1
-        actual_name, actual_tensor = loaded[tag][0]
-        assert actual_name == 'renamed.' + name
-        torch.testing.assert_close(actual_tensor, tensor)
+    for tag, expected_weights in expected.items():
+        assert len(loaded[tag]) == len(expected_weights)
+        for (actual_name, actual_tensor), (name, tensor) in zip(loaded[tag], expected_weights):
+            assert actual_name == 'renamed.' + name
+            torch.testing.assert_close(actual_tensor, tensor)
