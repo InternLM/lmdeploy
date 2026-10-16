@@ -128,14 +128,9 @@ def _validate_input_request(request: MessagesRequest):
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             'system cannot be used when input_ids is set because raw input_ids bypass message rendering.')
-    if request.tools:
-        return create_error_response(
-            HTTPStatus.BAD_REQUEST,
-            'tools cannot be used when input_ids is set because raw input_ids bypass message rendering.')
-    if request.tool_choice is not None and not _is_tool_choice_auto(request.tool_choice):
-        return create_error_response(
-            HTTPStatus.BAD_REQUEST,
-            'tool_choice cannot be used when input_ids is set because raw input_ids bypass message rendering.')
+    # Raw input_ids already include the rendered tool prompt, but tools and
+    # tool_choice still describe the generated output. Keep that schema for
+    # parser validation/coercion and guided decoding without rendering it again.
     return None
 
 

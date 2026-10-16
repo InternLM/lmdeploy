@@ -26,6 +26,7 @@ from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 from lmdeploy.serve.parsers.tool_parser.interns2preview_tool_parser import InternS2PreviewToolParser
 from lmdeploy.serve.parsers.tool_parser.qwen3_tool_parser import Qwen3ToolParser
+from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
@@ -1104,27 +1105,48 @@ def test_messages_image_data_preserves_input_ids_in_multimodal_content():
     assert kwargs['input_ids'] is None
 
 
-def test_messages_rejects_tools_with_input_ids():
-    context = _FakeServerContext(response_parser_cls=_ToolAndReasoningParser)
-    client = _make_client(server_context=context)
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('choice', [{'type': 'auto'}, {'type': 'tool', 'name': 'search'}])
+def test_messages_raw_tokens_preserve_tool_parsing(stream, choice):
+    class Parser(BaseResponseParser):
+        tool_parser_cls = Qwen3CoderToolParser
+
+    context = _FakeServerContext(response_parser_cls=Parser)
+
+    async def generate(*args, **kwargs):
+        fragments = ['<tool_call><function=search>', '<parameter=query>hi</parameter>',
+                     '</function></tool_call>']
+        for index, fragment in enumerate(fragments):
+            yield SimpleNamespace(
+                response=fragment, token_ids=[101 + index], input_token_len=3,
+                generate_token_len=index + 1, finish_reason='stop' if index == 2 else None,
+                cached_tokens=0, cache_block_ids=None, routed_experts=None, logprobs=None,
+            )
+
+    context.async_engine.generate = generate
     response = _post_messages(
-        client,
-        messages=[],
-        input_ids=[1, 2, 3],
-        tools=[{
-            'name': 'search',
-            'description': 'demo',
-            'input_schema': {
-                'type': 'object',
-                'properties': {},
-            },
-        }],
-        tool_choice={
-            'type': 'auto',
-        },
+        _make_client(server_context=context), messages=[], input_ids=[1, 2, 3],
+        tools=[SEARCH_TOOL], tool_choice=choice, stream=stream,
     )
-    assert response.status_code == 400
-    assert 'tools cannot be used when input_ids is set' in response.json()['error']['message']
+    assert response.status_code == 200
+    args, kwargs = context.async_engine.preprocess_calls[-1]
+    assert args[0] is None
+    assert kwargs['input_ids'] == [1, 2, 3]
+    assert kwargs['tools'][0]['name'] == 'search'
+    if stream:
+        events = [json.loads(line[6:]) for line in response.iter_lines() if line.startswith('data: ')]
+        starts = [e['content_block'] for e in events if e['type'] == 'content_block_start']
+        assert starts[0]['type'] == 'tool_use'
+        assert starts[0]['name'] == 'search'
+        arguments = ''.join(e['delta']['partial_json'] for e in events
+                            if e['type'] == 'content_block_delta' and e['delta']['type'] == 'input_json_delta')
+        assert json.loads(arguments) == {'query': 'hi'}
+        assert next(e for e in events if e['type'] == 'message_delta')['delta']['stop_reason'] == 'tool_use'
+    else:
+        data = response.json()
+        assert data['stop_reason'] == 'tool_use'
+        assert data['content'][0]['name'] == 'search'
+        assert data['content'][0]['input'] == {'query': 'hi'}
 
 
 def test_anthropic_model_listing():
