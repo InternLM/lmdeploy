@@ -504,8 +504,8 @@ class Scheduler:
     def reset_cache_after_worker_drain(self) -> None:
         """Invalidate local cache identity after sleep discards worker storage.
 
-        Ended external loads and save leases must release their references first. Remote Store objects are not
-        invalidated; future requests may restore them through the normal lookup/load completion protocol.
+        Ended external loads and save leases must release their references first. Workers have already advanced the
+        external cache generation, so neither local nor remote pre-sleep KV can be reused after wakeup.
         """
         self.finish_kv_transfers_after_worker_drain()
         if self.sessions:

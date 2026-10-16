@@ -634,7 +634,8 @@ def test_registration_rejects_non_cuda_noncontiguous_and_empty_rows(tmp_path):
     worker.shutdown()
 
 
-def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path):
+@pytest.mark.parametrize('cache_generation', ['', 'after-sleep'])
+def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path, cache_generation):
     path = write_store_config(tmp_path)
     store = FakeStore(get_results=[0, -1])
     worker = MooncakeStoreWorker(
@@ -643,6 +644,7 @@ def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path
         tp_rank=5,
         tp_size=8,
         kv_head_replica_num=4,
+        cache_generation=cache_generation,
         store_factory=lambda: store,
     )
     worker.register_kv_caches({
@@ -724,9 +726,11 @@ def test_async_load_writes_target_and_mtp_cache_rows(tmp_path, monkeypatch):
     worker.shutdown()
 
 
+@pytest.mark.parametrize('cache_generation', ['', 'after-sleep'])
 def test_async_save_waits_for_forward_and_writes_only_owned_missing_blocks(
     tmp_path,
     monkeypatch,
+    cache_generation,
 ):
     path = write_store_config(tmp_path)
     event = FakeCudaEvent()
@@ -746,6 +750,7 @@ def test_async_save_waits_for_forward_and_writes_only_owned_missing_blocks(
         tp_rank=3,
         tp_size=4,
         kv_head_replica_num=2,
+        cache_generation=cache_generation,
         store_factory=lambda: store,
         replicate_config=replicate_config,
     )
@@ -840,3 +845,25 @@ def test_shutdown_is_idempotent_and_propagates_close_error(tmp_path):
 
     assert store.close_calls == 1
     assert worker.store is None
+
+
+def test_cache_generation_invalidates_remote_hits_without_deleting_shared_objects(tmp_path):
+    # Store storage outlives workers. Even delayed writes to an old generation
+    # cannot be mistaken for KV produced after a sleep/weight update.
+    keys = {'another-tenant-key'}
+    store = FakeStore()
+    store.batch_is_exist = lambda batch: [int(key in keys) for key in batch]
+    hashes = build_prefix_block_hashes(range(128), 64)
+    old_keys = set()
+    for generation in ['', 'first-wakeup', 'second-wakeup']:
+        worker, _ = make_worker(tmp_path, store=store, cache_generation=generation)
+        keys.update(old_keys)
+        assert worker.lookup(128, hashes) == 0
+        current = {build_store_key(worker.key_metadata, 0, h) for h in hashes}
+        assert not current.intersection(old_keys)
+        keys.update(current)
+        assert worker.lookup(128, hashes) == 128
+        worker.shutdown()
+        old_keys.update(current)
+    assert old_keys <= keys
+    assert 'another-tenant-key' in keys
