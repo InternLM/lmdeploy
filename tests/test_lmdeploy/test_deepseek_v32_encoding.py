@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 
+import pytest
+
 from lmdeploy.deepseek_v32_encoding import (
     bos_token,
     encode_messages,
@@ -253,3 +255,10 @@ def test_deepseek_v32_response_parser_streaming_dsml_function_calls():
     assert tool_deltas[0].function.name == 'search'
     arguments = ''.join(tool_call.function.arguments or '' for tool_call in tool_deltas)
     assert json.loads(arguments) == {'query': 'DeepSeek V3.2'}
+
+
+def test_deepseek_v32_parse_completion_text_malformed_raises_value_error():
+    with pytest.raises(ValueError, match='Invalid summary format'):
+        parse_message_from_completion_text('partial answer, no terminal token', thinking_mode='chat')
+    with pytest.raises(ValueError, match='Invalid thinking format'):
+        parse_message_from_completion_text(f'no end of thinking{eos_token}', thinking_mode='thinking')
