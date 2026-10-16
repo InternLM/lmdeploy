@@ -8,6 +8,7 @@
 
 #include "src/turbomind/comm/cuda_ipc/multimem.cuh"
 
+#include "src/turbomind/comm/token_ownership.h"
 #include "src/turbomind/core/data_type.h"
 #include "src/turbomind/kernels/core/array_ops.h"
 #include "src/turbomind/kernels/core/common.h"
@@ -320,27 +321,17 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
 
     TM_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
 
-    Array<int, kMaxRanks> offsets{};
-    Array<int, kMaxRanks> firsts{};
-    Array<int, kMaxRanks> lasts{};
+    Array<OwnedTokenRows, kMaxRanks> ownership{};
 
-    for (int i = 0, offset = 0; i < global_n_ranks_; ++i) {
-        const int num   = local_token_nums[i / inner_tp];
-        const int slice = (num + inner_tp - 1) / inner_tp;
-        const int first = std::min(num, i % inner_tp * slice);
-        const int last  = std::min(num, first + slice);
-
-        std::tie(offsets[i], firsts[i], lasts[i]) = std::tie(offset, first, last);
-
-        if ((i + 1) % inner_tp == 0) {
-            offset += num;
-        }
+    for (int i = 0; i < global_n_ranks_; ++i) {
+        ownership[i] = ComputeTokenOwnership(i, tp0, tp1, local_token_nums);
     }
     const int g_rank = rank(0);
 
-    const int first  = firsts[g_rank];
-    const int last   = lasts[g_rank];
-    const int offset = offsets[g_rank];
+    const auto& owned  = ownership[g_rank];
+    const int   first  = owned.local_begin();
+    const int   last   = owned.local_end();
+    const int   offset = owned.global_offset();
 
     auto semaphore = groups_.at(0).semaphore.handle();
 
@@ -376,8 +367,9 @@ void CudaIpcCommImpl::AllreduceResidualBiasRMSnormEx(void*        hidden,
         else {
             Array<int2, kMaxRanks> ag_ranges{};
             for (int i = 0; i < tp1; ++i) {
-                const auto r = g1.l2g[i];
-                ag_ranges[i] = {offsets[r] + firsts[r], offsets[r] + lasts[r]};
+                const auto  r          = g1.l2g[i];
+                const auto& peer_owned = ownership[r];
+                ag_ranges[i]           = {peer_owned.global_begin(), peer_owned.global_end()};
             }
             const int max_ctas = max_ctas_.apply(48);
             AllreduceResidualBiasRMSnormV_Simple_Pull<<<max_ctas, 1024, 0, stream>>>((T*)hidden,

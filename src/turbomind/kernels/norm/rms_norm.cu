@@ -135,6 +135,30 @@ void invokeRMSNorm(Tensor& out, const Tensor& x, const Tensor& w, float eps, boo
     TM_CUDA_CHECK(cudaGetLastError());
 }
 
+void invokeRMSNormConcat(Tensor&       out,
+                         const Tensor& left,
+                         const Tensor& left_weight,
+                         float         left_eps,
+                         bool          left_zero_centered,
+                         const Tensor& right,
+                         const Tensor& right_weight,
+                         float         right_eps,
+                         bool          right_zero_centered,
+                         cudaStream_t  stream)
+{
+    const auto [token_num, hidden_size] = left.shapes(0, 1);
+
+    if (token_num == 0) {
+        return;
+    }
+
+    Tensor left_out  = out.slice({0, 0}, {token_num, hidden_size});
+    Tensor right_out = out.slice({0, hidden_size}, {token_num, hidden_size});
+
+    invokeRMSNorm(left_out, left, left_weight, left_eps, left_zero_centered, stream);
+    invokeRMSNorm(right_out, right, right_weight, right_eps, right_zero_centered, stream);
+}
+
 namespace kernel {
 
 template<class T, class A, int vec_size, int max_dim, bool ZeroCentered>

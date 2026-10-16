@@ -1087,7 +1087,6 @@ int SelectRecurrentGdrBlockDv(const Problem& problem, DataType state_dtype)
     return SelectRecurrentGdrBlockDv<__nv_bfloat16>(problem);
 }
 
-template<class StateT>
 __global__ __launch_bounds__(32,
                              1) void PrepareGroupedStateDescriptors(const __grid_constant__ CUtensorMap state_tma_desc,
                                                                     const int64_t*                      addresses,
@@ -1112,7 +1111,7 @@ __global__ __launch_bounds__(32,
         CopyTmaDescriptor(&smem_descriptor, &state_tma_desc, lane, 32);
         __syncwarp();
         if (lane == 0) {
-            auto* state_base = reinterpret_cast<StateT*>(static_cast<uintptr_t>(addresses[pointer_index]));
+            const void* state_base = reinterpret_cast<const void*>(static_cast<uintptr_t>(addresses[pointer_index]));
             ReplaceTmaAddress(&smem_descriptor, state_base);
         }
         __syncwarp();
@@ -1136,18 +1135,8 @@ void PrepareSm90RecurrentStateTmaDescriptorsTyped(const core::Tensor& state_ptrs
     using Kernel              = Sm90GdrRecurrent<BlockDv, StateT>;
     const auto state_tma_desc = Kernel::MakeStateTmaDesc(
         reinterpret_cast<StateT*>(state_tma_descs.raw_data()), layers_per_block, heads_per_block, BlockDv);
-    const auto* addresses   = reinterpret_cast<const int64_t*>(state_ptrs.raw_data());
-    auto*       descriptors = reinterpret_cast<CUtensorMap*>(state_tma_descs.raw_data());
-    const int   work        = layer_groups * sequence_count * num_head_groups;
-    PrepareGroupedStateDescriptors<StateT><<<work, 32, 0, stream>>>(state_tma_desc,
-                                                                    addresses,
-                                                                    state_ptrs.stride(0),
-                                                                    state_ptrs.stride(1),
-                                                                    state_ptrs.stride(2),
-                                                                    descriptors,
-                                                                    sequence_count,
-                                                                    num_head_groups);
-    TM_CUDA_CHECK(cudaGetLastError());
+    detail::PrepareSm90StateTmaDescriptors(
+        state_ptrs, state_tma_descs, layer_groups, sequence_count, num_head_groups, state_tma_desc, stream);
 }
 
 template<int BlockDv, class StateT>
@@ -1217,6 +1206,28 @@ void LaunchSm90GdrRecurrentTyped(const core::Tensor& q,
 }  // namespace
 
 namespace detail {
+
+void PrepareSm90StateTmaDescriptors(const core::Tensor& state_ptrs,
+                                    core::Tensor&       state_tma_descs,
+                                    int                 layer_groups,
+                                    int                 sequence_count,
+                                    int                 num_head_groups,
+                                    const CUtensorMap&  prototype,
+                                    cudaStream_t        stream)
+{
+    const auto* addresses   = reinterpret_cast<const int64_t*>(state_ptrs.raw_data());
+    auto*       descriptors = reinterpret_cast<CUtensorMap*>(state_tma_descs.raw_data());
+    const int   work        = layer_groups * sequence_count * num_head_groups;
+    PrepareGroupedStateDescriptors<<<work, 32, 0, stream>>>(prototype,
+                                                            addresses,
+                                                            state_ptrs.stride(0),
+                                                            state_ptrs.stride(1),
+                                                            state_ptrs.stride(2),
+                                                            descriptors,
+                                                            sequence_count,
+                                                            num_head_groups);
+    TM_CUDA_CHECK(cudaGetLastError());
+}
 
 void LaunchSm90Recurrent(const core::Tensor& q,
                          const core::Tensor& k,

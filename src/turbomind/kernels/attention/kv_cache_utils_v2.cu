@@ -25,6 +25,7 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
                                                     const int*      cu_k_len,
                                                     const int*      cu_block_num,
                                                     const int*      readonly_block_num,
+                                                    const bool*     finished,
                                                     RopeKernelParam rope_param,
                                                     int64_t         stride_b,
                                                     int64_t         stride_c,
@@ -50,6 +51,10 @@ __global__ void __launch_bounds__(128) ProcessKV_v2(char**          blocks,
     const int token_idx = blockIdx.x * CTA_S;  // local offset into `input_length`
     const int head_idx  = blockIdx.y;
     const int batch_idx = blockIdx.z;
+
+    if (finished && finished[batch_idx]) {
+        return;
+    }
 
     const int qi_beg = cu_q_len[batch_idx];
     const int qi_end = cu_q_len[batch_idx + 1];
@@ -219,6 +224,7 @@ void invokeProcessKV_v2(char**                 blocks,
                         const int*             cu_k_len,
                         const int*             cu_block_num,
                         const int*             readonly_block_num,
+                        const bool*            finished,
                         const RopeKernelParam& rope_param,
                         int64_t                stride_b,
                         int64_t                stride_c,
@@ -261,6 +267,7 @@ void invokeProcessKV_v2(char**                 blocks,
                                                                               cu_k_len,
                                                                               cu_block_num,
                                                                               readonly_block_num,
+                                                                              finished,
                                                                               rope_param,
                                                                               stride_b,
                                                                               stride_c,
@@ -316,6 +323,7 @@ void invokeProcessKV_v2(char**                 blocks,
                                      const int*             cu_k_len,                                                  \
                                      const int*             cu_block_num,                                              \
                                      const int*             readonly_block_num,                                        \
+                                     const bool*            finished,                                                  \
                                      const RopeKernelParam& rope_param,                                                \
                                      int64_t                stride_b,                                                  \
                                      int64_t                stride_c,                                                  \
@@ -343,6 +351,7 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
                                                     const Tkv**     blocks,
                                                     const int*      cu_k_len,
                                                     const int*      cu_block_num,
+                                                    const bool*     finished,
                                                     RopeKernelParam rope_param,
                                                     int64_t         stride_b,
                                                     int64_t         stride_c,
@@ -365,6 +374,10 @@ __global__ void __launch_bounds__(128) flattenKV_v2(T*              k,
     const int token_idx = blockIdx.x * CTA_S;
     const int head_idx  = blockIdx.y;
     const int batch_idx = blockIdx.z;
+
+    if (finished && finished[batch_idx]) {
+        return;
+    }
 
     const int ti_0   = cu_k_len[0];
     const int ti_beg = cu_k_len[batch_idx] - ti_0;
@@ -473,6 +486,7 @@ void invokeFlattenKV_v2(T*                     k,
                         char**                 blocks,
                         const int*             cu_k_len,
                         const int*             cu_block_num,
+                        const bool*            finished,
                         const RopeKernelParam& rope_param,
                         int64_t                stride_b,
                         int64_t                stride_c,
@@ -511,6 +525,7 @@ void invokeFlattenKV_v2(T*                     k,
                                                                             (const Tkv**)blocks,
                                                                             cu_k_len,
                                                                             cu_block_num,
+                                                                            finished,
                                                                             rope_param,
                                                                             stride_b,
                                                                             stride_c,
@@ -561,6 +576,7 @@ void invokeFlattenKV_v2(T*                     k,
                                      char**                 blocks,                                                    \
                                      const int*             cu_k_len,                                                  \
                                      const int*             cu_block_num,                                              \
+                                     const bool*            finished,                                                  \
                                      const RopeKernelParam& rope_param,                                                \
                                      int64_t                stride_b,                                                  \
                                      int64_t                stride_c,                                                  \
