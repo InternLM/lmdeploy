@@ -554,7 +554,7 @@ def kpool_pooled_block_offsets(token_block_offsets: Tensor, pool_size: int,
         raise ValueError('token_block_offsets must have at least one dimension.')
     stride = page_size * pool_size // KPOOL_PAGE_SIZE
     if page_size * pool_size % KPOOL_PAGE_SIZE or stride < 1:
-        raise ValueError("KPool storage pages must cover whole token pages.")
+        raise ValueError('KPool storage pages must cover whole token pages.')
     if stride == 1:
         return token_block_offsets
     columns = torch.arange(0, token_block_offsets.size(-1), stride, device=token_block_offsets.device)

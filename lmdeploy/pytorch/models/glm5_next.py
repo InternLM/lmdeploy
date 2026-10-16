@@ -912,7 +912,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         return key_states, value_states, k_pe
 
     def _update_kpool_cache(self, hidden_states, tail_state, state_ids, attn_metadata):
-        """Target owns the raw ring; pool assembly only consumes a scratch tail."""
+        """Target owns the raw ring; pool assembly only consumes a scratch
+        tail."""
         if tail_state is None or len(tail_state) != 2 or state_ids is None:
             raise RuntimeError('GLM-5.3 KPool requires raw key/score rings and stable state ids.')
         if not tail_state[0].is_cuda:
@@ -937,7 +938,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         return result
 
     def _write_kpool_prefill_pools(self, key, score, tail_state, valid_rows, attn_metadata):
-        """Write prefill pools from row-local scratch; caller persists tokens."""
+        """Write prefill pools from row-local scratch; caller persists
+        tokens."""
         if attn_metadata.is_decoding or not key.is_cuda:
             raise RuntimeError('KPool prefill requires CUDA tensors and prefill metadata.')
         tail_k_state, tail_score_state = tail_state

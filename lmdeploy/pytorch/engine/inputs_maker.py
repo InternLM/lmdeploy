@@ -21,8 +21,8 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.long_context import (
     get_long_context_chunk_capacity,
     get_long_context_chunk_limit,
-    limit_long_context_checkpoint,
     has_long_context_multimodal,
+    limit_long_context_checkpoint,
     plan_long_context_chunk,
     sort_long_context_multimodals,
 )

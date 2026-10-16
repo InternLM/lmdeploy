@@ -146,11 +146,12 @@ def _update_raw_kpool_kernel(
 
 def update_raw_kpool(keys, scores, raw_keys, raw_scores, state_ids, q_seqlens, kv_seqlens,
                      cu_seqlens_q, pool_size):
-    """Assemble decode pools and persist raw tokens without materializing scratch tails.
+    """Assemble decode pools and persist raw tokens without materializing
+    scratch tails.
 
-    Live state rows and writable cache owners must be request-private. Input rows are packed by cu_seqlens_q;
-    graph padding may have shorter query lengths. Capacity retains every trial token plus the accepted-history tail,
-    so rejection can reconstruct any accepted prefix from the raw ring. Closed pools use step-major ordering.
+    Live state rows and writable cache owners must be request-private. Input rows are packed by cu_seqlens_q; graph
+    padding may have shorter query lengths. Capacity retains every trial token plus the accepted-history tail, so
+    rejection can reconstruct any accepted prefix from the raw ring. Closed pools use step-major ordering.
     """
     batch = state_ids.numel()
     if keys.ndim != 2 or scores.shape != keys.shape or not batch or keys.size(0) % batch:
@@ -471,9 +472,8 @@ def _write_ring(K, S, NewK, NewS, Ids, History, Lengths, Starts,
 def read_raw_tail(keys, scores, state_ids, history, pool_size=4):
     """Read the incomplete pool on CUDA at accepted history, never trial end.
 
-    Capacity must retain Q new rows plus the previous pool_size-1 rows. Slot
-    strides may include other layers; only the token/dimension axes are dense.
-    Invalid graph rows produce zero scratch and never touch a live state.
+    Capacity must retain Q new rows plus the previous pool_size-1 rows. Slot strides may include other layers; only the
+    token/dimension axes are dense. Invalid graph rows produce zero scratch and never touch a live state.
     """
     if not keys.is_cuda:
         raise ValueError('read_raw_tail requires CUDA tensors.')
@@ -489,8 +489,8 @@ def read_raw_tail(keys, scores, state_ids, history, pool_size=4):
 def write_raw_ring(keys, scores, new_keys, new_scores, state_ids, history, lengths, starts):
     """Persist the newest capacity rows on CUDA, after all old-tail consumers.
 
-    Prefill compresses the entire chunk separately. Rejected proposals may
-    remain in storage but cannot be read beyond the subsequent accepted history.
+    Prefill compresses the entire chunk separately. Rejected proposals may remain in storage but cannot be read beyond
+    the subsequent accepted history.
     """
     if not keys.is_cuda:
         raise ValueError('write_raw_ring requires CUDA tensors.')
@@ -532,11 +532,9 @@ def _score_pages(Q, W, Cache, Lengths, Table, Out,
 def score_paged(query, weight, cache, lengths, table):
     """Gather four compact 16-entry pages into each 64-key compute tile.
 
-    A bounded worker grid iterates over device-side lengths, including on
-    graph replay. Query strides and fragmented physical page IDs are
-    independent of storage geometry. Only columns below each row's length
-    are initialized; consumers must mask padding, as for DeepGEMM's
-    clean_logits=False output. No device-to-host length read is required.
+    A bounded worker grid iterates over device-side lengths, including on graph replay. Query strides and fragmented
+    physical page IDs are independent of storage geometry. Only columns below each row's length are initialized;
+    consumers must mask padding, as for DeepGEMM's clean_logits=False output. No device-to-host length read is required.
     """
     rows, heads, dim = query.shape
     width = table.size(1) * cache.size(1)

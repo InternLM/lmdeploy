@@ -104,7 +104,8 @@ def get_long_context_chunk_capacity(seq: 'SchedulerSequence', max_prefill_token_
 
 
 def limit_long_context_checkpoint(seq: 'SchedulerSequence', limit: int) -> int:
-    """Apply the history-dependent final checkpoint cut to a static capacity."""
+    """Apply the history-dependent final checkpoint cut to a static
+    capacity."""
     alignment = getattr(getattr(seq, '_seq_meta', None), 'prefix_cache_checkpoint_block_size', 0)
     if alignment:
         # A state at the very end of a prompt cannot serve an identical next

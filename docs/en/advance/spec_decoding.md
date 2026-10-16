@@ -187,8 +187,7 @@ if __name__ == '__main__':
   values must be multiples of 64.
 - PD migration is not supported.
 
-The native FP8 CUDA path also supports DP/EP serving, for example `--tp 2 --dp 2
---ep 4`. Enable text-prefill PCG with `--piecewise-cudagraph-max-tokens 512`
+The native FP8 CUDA path also supports DP/EP serving, for example `--tp 2 --dp 2 --ep 4`. Enable text-prefill PCG with `--piecewise-cudagraph-max-tokens 512`
 and `--max-prefill-token-num 512`. Startup warmup prepares these plans; skipping
 warmup leaves unprepared prefills eager. Vision-bearing chunks also fall back to
 eager execution. MTP draft prefill remains eager, while supported decode steps

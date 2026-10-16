@@ -297,8 +297,7 @@ class TestGptOssResponseParser:
 
 
 class TestGptOssResponseFormatGrammarConversion:
-    """Tests for GptOssResponseParser response_format → structural_tag
-    conversion (replaces the old Harmony-native prompt injection)."""
+    """Tests for response_format to structural_tag conversion."""
 
     @pytest.mark.parametrize('schema_dict', [
         {'type': 'object', 'properties': {'x': {'type': 'integer'}}},

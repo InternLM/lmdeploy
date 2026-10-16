@@ -27,7 +27,8 @@ _GLM5_FULL_LAYER_TYPES = frozenset({
 
 
 def update_cache_config(cache_config, token_lookahead=0):
-    """Keep the 64-token MLA / 16-entry KPool owner under one allocator reference."""
+    """Keep the 64-token MLA / 16-entry KPool owner under one allocator
+    reference."""
     if cache_config.role != EngineRole.Hybrid:
         raise ValueError('GLM-5.3 logical64/kernel64 cache does not support PD migration.')
     if (cache_config.block_size, cache_config.kernel_block_size) != (64, 64):
@@ -39,7 +40,7 @@ def update_cache_config(cache_config, token_lookahead=0):
     cache_config.prefix_cache_block_aligned = True
     cache_config.prefix_cache_token_lookahead = token_lookahead
     if token_lookahead and cache_config.prefix_cache_decode_state_interval:
-        raise ValueError("GLM-5.3 MTP prefix caching only publishes prefill checkpoints.")
+        raise ValueError('GLM-5.3 MTP prefix caching only publishes prefill checkpoints.')
     if cache_config.prefix_cache_decode_state_interval % 64:
         raise ValueError('GLM-5.3 prefix_cache_decode_state_interval must be a multiple of 64.')
 
