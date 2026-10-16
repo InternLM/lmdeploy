@@ -5,6 +5,58 @@ GROUP_SIZE = 128
 FP8_DTYPE = torch.float8_e4m3fn
 
 
+@pytest.mark.parametrize('provider,features,expected', [
+    ('auto', (4096, 24576), 'HopperSmallMLinearBlockedF8Impl'),
+    ('auto', (4096, 4096), 'DeepGemmLinearBlockedF8Impl'),
+    ('deepgemm', (4096, 24576), 'DeepGemmLinearBlockedF8Impl'),
+    ('gluon', (4096, 24576), 'GluonLinearBlockedF8Impl'),
+    ('triton', (4096, 24576), 'TritonLinearBlockedF8Impl'),
+])
+def test_small_dense_provider_selection(provider, features, expected, monkeypatch):
+    from lmdeploy.pytorch.backends.blockedf8_modules import LinearBlockedF8BuildSpec
+    from lmdeploy.pytorch.backends.cuda import blockedf8_modules as backend
+
+    monkeypatch.setattr(backend, 'blocked_fp8_gemm_backend', provider)
+    spec = LinearBlockedF8BuildSpec(in_features=features[0], out_features=features[1],
+                                   block_size=128, bias=False, output_dtype=torch.bfloat16,
+                                   fp8_dtype=FP8_DTYPE, scale_fmt=None)
+    assert type(backend._build_linear_blocked_f8(spec)).__name__ == expected
+
+
+@pytest.mark.parametrize('rows', [1, 2, 12, 24, 32, 33, 128])
+@torch.inference_mode()
+def test_small_dense_provider_exact_graph(rows):
+    from lmdeploy.pytorch.backends.cuda.blockedf8_modules import (
+        DeepGemmLinearBlockedF8Impl, HopperSmallMLinearBlockedF8Impl)
+
+    torch.manual_seed(1024)
+    k, n = 4096, 24576
+    # Nonuniform scales are necessary: uniform powers of two can conceal a
+    # changed block-scale accumulation order.
+    weight, scale = _quantize_b_nt(torch.randn(n, k, device='cuda', dtype=torch.bfloat16))
+    x = torch.randn(1, rows, k, device='cuda', dtype=torch.bfloat16)
+    bias = torch.randn(n, device='cuda', dtype=torch.bfloat16)
+    base = DeepGemmLinearBlockedF8Impl(k, n, 128, torch.bfloat16)
+    candidate = HopperSmallMLinearBlockedF8Impl(k, n, 128, torch.bfloat16)
+
+    def expected():
+        return base.forward(x, weight, scale, bias)
+
+    def run():
+        return candidate.forward(x, weight, scale, bias)
+
+    torch.testing.assert_close(run(), expected(), atol=0, rtol=0)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        result = run()
+    for index in range(5):
+        x.normal_(std=10 ** (index - 2))
+        scale.uniform_(0.001, 0.1)
+        bias.normal_()
+        graph.replay()
+        torch.testing.assert_close(result, expected(), atol=0, rtol=0)
+
+
 def _has_gluon() -> bool:
     if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
         return False
