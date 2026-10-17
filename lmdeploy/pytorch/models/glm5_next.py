@@ -22,6 +22,7 @@ from lmdeploy.pytorch.backends.cuda.kpool import (
     kpool_expand_groups_cuda,
     kpool_gather_token_tail_cuda,
     kpool_prefill_metadata,
+    kpool_prefill_metadata_cuda,
     kpool_prefill_update_cuda,
     kpool_raw_decode_update_cuda,
     kpool_rotate_query_cuda,
@@ -1027,6 +1028,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                     indexer_k_cache,
                     attn_metadata,
                     return_groups=broadcast_groups,
+                    kpool_metadata=kpool_metadata,
                 )
         else:
             logical_indices = torch.empty(
@@ -1042,9 +1044,13 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             dist.broadcast(logical_indices, src=source_rank, group=group)
         if broadcast_groups:
             if not attn_metadata.is_decoding:
-                _, _, seq_lens, group_lengths, _, _ = kpool_prefill_metadata(
-                    attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
-                    total_rows, self.index_kpool)
+                if kpool_metadata is not None:
+                    seq_lens = kpool_metadata.seq_lens
+                    group_lengths = kpool_metadata.group_lengths
+                else:
+                    _, _, seq_lens, group_lengths, _, _ = kpool_prefill_metadata(
+                        attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
+                        total_rows, self.index_kpool)
             expand = kpool_expand_groups_cuda if logical_indices.is_cuda else kpool_expand_selected_groups
             logical_indices = expand(logical_indices, group_lengths,
                                      self.index_kpool, self.index_topk, seq_lens=seq_lens)
@@ -1058,6 +1064,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         attn_metadata: Any,
         *,
         return_groups: bool = False,
+        kpool_metadata: Any = None,
     ) -> torch.Tensor:
         """Select request-local pooled history for chunked prefill."""
         if query_fp8.is_cuda:
@@ -1065,7 +1072,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                 query_fp8, query_weight, indexer_k_cache,
                 attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
                 attn_metadata.block_offsets, attn_metadata.kv_flatten_size,
-                self.index_kpool, self.index_topk, return_groups=return_groups)
+                self.index_kpool, self.index_topk, return_groups=return_groups, metadata=kpool_metadata)
         q_seqlens = attn_metadata.q_seqlens.tolist()
         kv_seqlens = attn_metadata.kv_seqlens.tolist()
         logical_parts = []
@@ -1509,12 +1516,19 @@ class Glm5NextModel(nn.Module):
                 f'GLM-5.3 expects {len(self.layers)} layer caches, got {len(past_key_values)}.'
             )
         kpool_metadata = None
-        if hidden_states.is_cuda and attn_metadata.is_decoding:
+        if hidden_states.is_cuda and (attn_metadata.is_decoding
+                                      or attn_metadata.max_kv_seqlen > self.config.index_topk):
             first_full_layer = next(layer for layer in self.layers if not layer.is_linear_attention)
             page_size = first_full_layer.self_attn.indexer.get_block_cache().size(1)
-            kpool_metadata = kpool_decode_metadata_cuda(
-                attn_metadata, hidden_states.size(1), self.config.index_kpool,
-                get_tp_world_rank('attn')[1] == 0, page_size=page_size)
+            if attn_metadata.is_decoding:
+                kpool_metadata = kpool_decode_metadata_cuda(
+                    attn_metadata, hidden_states.size(1), self.config.index_kpool,
+                    get_tp_world_rank('attn')[1] == 0, page_size=page_size)
+            else:
+                kpool_metadata = kpool_prefill_metadata_cuda(
+                    attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
+                    attn_metadata.block_offsets, hidden_states.size(1),
+                    self.config.index_kpool, page_size=page_size)
         hc_input_fp32 = None
         prepare_hc_fp32 = hidden_states.is_cuda and hidden_states.size(0) * hidden_states.size(1) <= 32
         for layer, past_key_value in zip(self.layers, past_key_values):
