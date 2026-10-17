@@ -24,6 +24,7 @@ struct EngineConfig {
     X(float, cache_max_block_count, 0)                                                                                 \
     X(int, cache_chunk_size, 0)                                                                                        \
     X(bool, enable_prefix_caching, false)                                                                              \
+    X(std::string, lmcache_addr, "")                                                                                   \
     X(int, cache_checkpoint_interval, 4096)                                                                            \
     X(std::string, cache_prompt, "auto")                                                                               \
     X(int, cache_prompt_boundary_skip, 1)                                                                              \

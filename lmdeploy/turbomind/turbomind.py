@@ -59,6 +59,41 @@ def _tm_dict_to_torch_dict(tm_dict: _tm.TensorMap):
     return ret
 
 
+def _replace_multimodal_token_ids(input_ids, mm_inputs, vocab_size=None):
+    """Replace native multimodal placeholder ids with cache-key ids."""
+    if mm_inputs is None:
+        return input_ids
+
+    items = getattr(mm_inputs, 'items', None)
+    if not items:
+        return input_ids
+
+    token_ids = list(input_ids)
+    token_count = len(token_ids)
+    for item in items:
+        fingerprint = bytes(getattr(item, 'fingerprint', b''))
+        if not fingerprint or not any(fingerprint):
+            continue
+
+        begin = int(item.token_begin)
+        end = int(item.token_end)
+        if begin < 0 or end <= begin or end > token_count:
+            raise ValueError(
+                'native multimodal token span is outside input_ids: '
+                f'[{begin}, {end}) for {token_count} tokens')
+
+        # This is intentionally the same projection used by vLLM/LMCache:
+        # int(hex_hash, 16) & 0xffff, i.e. the final two digest bytes.
+        cache_token_id = int(fingerprint.hex(), 16) & 0xffff
+        if vocab_size is not None and cache_token_id >= vocab_size:
+            raise ValueError(
+                'LMCache multimodal hash token is outside the model vocabulary: '
+                f'{cache_token_id} >= {vocab_size}')
+        token_ids[begin:end] = [cache_token_id] * (end - begin)
+
+    return token_ids
+
+
 def complete_parallel_config(cfg: TurbomindEngineConfig):
     if any((cfg.attn_dp_size, cfg.attn_tp_size, cfg.attn_cp_size, cfg.mlp_dp_size, cfg.mlp_tp_size,
             cfg.outer_dp_size)):
@@ -252,6 +287,7 @@ class TurboMind:
         ec.cache_prompt = engine_config.cache_prompt
         ec.cache_prompt_boundary_skip = engine_config.cache_prompt_boundary_skip
         ec.cache_generation = engine_config.cache_generation
+        ec.lmcache_addr = engine_config.lmcache_addr or ''
         ec.enable_metrics = engine_config.enable_metrics
         ec.num_tokens_per_iter = engine_config.num_tokens_per_iter
         ec.max_prefill_iters = engine_config.max_prefill_iters
@@ -279,7 +315,7 @@ class TurboMind:
                     f'ep={engine_config.ep}, '
                     f'moe_a2a_backend={engine_config.moe_a2a_backend}')
 
-        model_comm = _tm.TurboMind.create(model_dir='', engine_config=ec)
+        model_comm = _tm.TurboMind.create(model_dir=model_path, engine_config=ec)
         self._create_weight(model_comm)
 
         model_loader = ModelLoader(
@@ -710,6 +746,12 @@ class TurboMindInstance:
         logger.info(f'[async_stream_infer] session {session_id} start')
         gen_cfg = self._get_generation_config(gen_config)
 
+        mm_inputs = self.tm_model.mm_input_converter(multimodal)
+        if self.tm_model.engine_config.lmcache_addr:
+            input_ids = _replace_multimodal_token_ids(input_ids,
+                                                      mm_inputs,
+                                                      vocab_size=self.tm_model._vocab_size)
+
         inputs, input_len = self.prepare_inputs(input_ids=input_ids,
                                                 input_embeddings=input_embeddings,
                                                 input_embedding_ranges=input_embedding_ranges,
@@ -728,7 +770,6 @@ class TurboMindInstance:
         session = _tm.SessionParam(id=session_id, step=0)
 
         inputs = _np_dict_to_tm_dict(inputs)
-        mm_inputs = self.tm_model.mm_input_converter(multimodal)
 
         sem = StreamingSemaphore()
         signal_cb = partial(self.async_signal_cb, sem)

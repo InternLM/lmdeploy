@@ -44,6 +44,17 @@ std::ostream& operator<<(std::ostream& os, const GenerationConfig& c)
     return os;
 }
 
+CacheRestorePlan::~CacheRestorePlan()
+{
+    for (auto* slots : {&prefixes, &checkpoints}) {
+        for (auto& slot : *slots) {
+            if (is_valid(slot)) {
+                slot->Deallocate(allocator);
+            }
+        }
+    }
+}
+
 void UpdateState(Request& r, int status, int seq_len)
 {
     try {
