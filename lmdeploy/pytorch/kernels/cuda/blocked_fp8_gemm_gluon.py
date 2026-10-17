@@ -1325,8 +1325,8 @@ def fp8_gemm_nt(a, b, d, c, *, num_sms=None):
 def grouped_fp8_gemm_nt_masked(a, b, output, masked_m):
     """Hopper small-M expert GEMM with GPU row counts and FP32 block scales.
 
-    Only valid rows are consumed downstream. TMA can store the padded final
-    eight-row tile, as in the existing masked provider.
+    Only valid rows are consumed downstream. TMA can store the padded final eight-row tile, as in the existing masked
+    provider.
     """
     a_quant, a_scale = a
     b_quant, b_scale = b

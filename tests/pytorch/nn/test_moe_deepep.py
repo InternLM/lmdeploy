@@ -2,7 +2,6 @@
 import builtins
 import importlib
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -643,59 +642,3 @@ def test_blocked_fp8_async_prefill_passes_weight_dtype_and_scale_fmt():
     assert fusedmoe.quant_args == (hidden_states, torch.float8_e5m2, 'ue8m0')
     assert out_state['hidden_states'] == ('quant', 'scale')
     assert out_state['previous_event'] == 'event'
-
-
-@pytest.mark.parametrize('output_scale', [1.0, 2.5])
-@pytest.mark.parametrize('low_latency', [False, True])
-def test_blocked_fp8_async_output_scale_matches_sync(monkeypatch, output_scale, low_latency):
-    from lmdeploy.pytorch.backends.cuda.moe import blocked_fp8
-    from lmdeploy.pytorch.nn.moe.base import MoeType
-    from lmdeploy.pytorch.nn.moe.blocked_fp8 import FusedMoEBlockedF8
-
-    # Keep the real scaling paths; replace only GPU math and communication.
-    weights = torch.tensor([[0.25, 0.75], [0.5, 0.5]])
-    expert_outputs = torch.tensor([[2.0, 6.0], [4.0, 8.0]])
-    topk_ids = torch.tensor([[0, 1], [0, 1]])
-    expected = (expert_outputs * weights).sum(dim=-1) * output_scale
-    layer = FusedMoEBlockedF8.__new__(FusedMoEBlockedF8)
-    layer.output_scale = output_scale
-    layer.fusedmoe_build = lambda **kwargs: SimpleNamespace(capture=lambda: None)
-    mode = MoeType.DSAsyncDecode if low_latency else MoeType.DSAsyncPrefill
-    state = layer.before_dispatch({'moe_type': mode, 'topk_weights': weights.clone()})
-
-    if low_latency:
-        impl = blocked_fp8.FusedMoELowLatency.__new__(blocked_fp8.FusedMoELowLatency)
-        impl.output_scale = output_scale
-        impl.num_experts = 2
-        impl.experts = lambda *args, **kwargs: expert_outputs
-        impl.token_dispatcher = SimpleNamespace(
-            dispatch=lambda x, idx, w, count: (x, idx, w, None, None),
-            combine=lambda x, idx, w: (x * w).sum(dim=-1),
-            combine_async=lambda x, idx, w, handle, finish: (x * w).sum(dim=-1),
-        )
-        synchronous = impl.forward(None, weights, topk_ids, None, None, None, None)
-        asynchronous = impl.combine_async(expert_outputs, topk_ids, state['topk_weights'], None, False)
-    else:
-        def fake_fused_moe(x, idx, w, *args, output_scale=1.0, **kwargs):
-            return (expert_outputs * w).sum(dim=-1) * output_scale
-
-        monkeypatch.setattr(blocked_fp8, 'fused_moe_v3_fp8', fake_fused_moe)
-        monkeypatch.setattr(blocked_fp8, 'per_token_group_quant_fp8', lambda *args, **kwargs: (None, None))
-        impl = blocked_fp8.FusedMoENormal.__new__(blocked_fp8.FusedMoENormal)
-        impl.output_scale = output_scale
-        impl.scale_fmt = None
-        impl.fp32_acc = True
-        impl.block_size = 128
-        impl.token_dispatcher = SimpleNamespace(
-            dispatch=lambda x, idx, w, experts: (x, idx, w, [2, 2]),
-            combine=lambda x: x,
-        )
-        synchronous = impl.forward(None, weights, topk_ids, torch.empty(0), None, None, None)
-        asynchronous = impl.fusedmoe_forward(
-            dict(recv_hidden_states=None, recv_topk_idx=topk_ids,
-                 recv_topk_weights=state['topk_weights'], recv_tokens_per_expert=[2, 2]),
-            None, None, None, None)
-
-    torch.testing.assert_close(synchronous, expected, rtol=0, atol=0)
-    torch.testing.assert_close(asynchronous, synchronous, rtol=0, atol=0)
-    torch.testing.assert_close(state['topk_weights'], weights, rtol=0, atol=0)

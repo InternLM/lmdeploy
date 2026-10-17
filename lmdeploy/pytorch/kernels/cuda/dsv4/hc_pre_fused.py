@@ -81,7 +81,8 @@ def _get_scale_mixes_kernel():
 
 
 def hc_scale_mixes(mixes: torch.Tensor, x_fp32: torch.Tensor, eps: float) -> torch.Tensor:
-    """Fuse input RMS statistics and projection scaling for small GLM batches."""
+    """Fuse input RMS statistics and projection scaling for small GLM
+    batches."""
     out = torch.empty_like(mixes)
     _get_scale_mixes_kernel()[(mixes.numel() // 24,)](
         mixes, x_fp32, out, eps, num_warps=16, enable_fp_fusion=False)
