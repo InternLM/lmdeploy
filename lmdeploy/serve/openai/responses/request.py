@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.core.generation_config import build_generation_config
+from lmdeploy.serve.core.model_name import model_or_adapter_matches
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool, ToolChoice, ToolChoiceFuncName
 from lmdeploy.serve.openai.responses.protocol import ResponsesRequest
 from lmdeploy.utils import get_logger
@@ -77,7 +78,8 @@ def check_request(
         return None, validation_error
 
     model_name = request.model or server_context.async_engine.model_name
-    if model_name not in _get_model_list(server_context):
+    if not model_or_adapter_matches(model_name, server_context.async_engine,
+                                    getattr(server_context.engine_config, 'adapters', None)):
         return None, error_response(HTTPStatus.NOT_FOUND, f'The model {model_name!r} does not exist.', param='model')
 
     try:
@@ -127,7 +129,8 @@ def check_request(
 
 
 def _get_model_list(server_context) -> list[str]:
-    model_names = [server_context.async_engine.model_name]
+    engine = server_context.async_engine
+    model_names = list(getattr(engine, 'model_aliases', None) or [engine.model_name])
     cfg = server_context.engine_config
     model_names += getattr(cfg, 'adapters', None) or []
     return model_names
