@@ -218,6 +218,11 @@ async def _stream_choice(
                     if data == '[DONE]':
                         continue
                     payload = json.loads(data)
+                    if 'error' in payload:
+                        # The child already ended its stream with an error
+                        # event; forward it so the client receives it.
+                        await queue.put(('error_event', index, payload))
+                        continue
                     if payload.get(
                             'usage'
                     ) is not None and not payload.get('choices'):
@@ -302,6 +307,7 @@ async def _collate_streams(
 
             payloads = []
             stream_error = None
+            error_event = None
             for item in items:
                 if item[0] == 'data':
                     payloads.append(item[1])
@@ -310,6 +316,10 @@ async def _collate_streams(
                     usages[item[1]] = item[2]
                 elif item[0] == 'done':
                     completed += 1
+                elif item[0] == 'error_event':
+                    # item[1]: index, item[2]: error payload
+                    error_event = item[2]
+                    break
                 else:
                     stream_error = item[1]
                     break
@@ -318,6 +328,12 @@ async def _collate_streams(
                 yield f'data: {json.dumps(payload)}\n\n'
             if stream_error is not None:
                 raise stream_error
+            if error_event is not None:
+                # End the stream as the single-choice path does; the finally
+                # block cancels the remaining choices.
+                yield f'data: {json.dumps(error_event)}\n\n'
+                yield 'data: [DONE]\n\n'
+                return
         if include_usage and len(usages) == len(tasks):
             ordered_usages = [usages[index] for index in range(len(tasks))]
             usage_response = {
