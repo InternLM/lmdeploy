@@ -198,7 +198,7 @@ LMDeploy TurboMind 引擎拥有卓越的推理能力，在各种规模的模型�
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
   <li>GLM-4.1V-Thinking (9B)</li>
-  <li>GLM-5.3-Flash</li>
+  <li>GLM-5.3-Flash (320B-A18B)</li>
   <li>Molmo (7B-D,72B)</li>
   <li>Gemma3 (1B - 27B)</li>
   <li>Llama4 (Scout, Maverick)</li>
