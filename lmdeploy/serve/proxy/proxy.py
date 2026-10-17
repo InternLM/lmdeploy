@@ -269,7 +269,7 @@ class NodeManager:
                         urls_without_speeds.append(node_url)
             all_matched_urls = urls_with_speeds + urls_without_speeds
             if len(all_matched_urls) == 0:
-                return None
+                return [], []
             # some nodes does not contain speed
             # we can set them the average speed value
             average_speed = sum(speeds) / len(speeds) if len(speeds) else 1
