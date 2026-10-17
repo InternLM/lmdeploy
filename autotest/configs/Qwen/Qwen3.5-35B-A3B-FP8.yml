@@ -1,41 +1,5 @@
 # HF model id: Qwen/Qwen3.5-35B-A3B-FP8
 
-a100:
-- model_type:
-  - chat
-  - vl
-  engine_config:
-    tp: 1
-  backends:
-  - name: turbomind
-    communicators:
-    - nccl
-  test_coverage:
-  - benchmark
-  - evaluate
-  - func
-  - longtext_benchmark
-  - longtext_evaluate
-  - mllm_evaluate
-  interface:
-    turbomind:
-    - suites:
-      - base
-      - logprob
-      - toolcall
-      - reasoning
-      extra:
-        logprobs-mode: raw_logprobs
-        tool-call-parser: qwen3coder
-        reasoning-parser: default
-    - suites:
-      - anthropic
-      extra:
-        logprobs-mode: raw_logprobs
-    - suites:
-      - abort
-      extra:
-        enable-abort-handling: true
 h:
 - model_type:
   - chat
@@ -46,6 +10,9 @@ h:
   - name: turbomind
     communicators:
     - nccl
+  - name: pytorch
+    communicators:
+    - nccl
   test_coverage:
   - benchmark
   - evaluate
@@ -54,6 +21,23 @@ h:
   - longtext_evaluate
   - mllm_evaluate
   interface:
+    pytorch:
+    - suites:
+      - base
+      - logprob
+      - experts
+      - toolcall
+      - reasoning
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: true
+        tool-call-parser: qwen3coder
+        reasoning-parser: default
+    - suites:
+      - anthropic
+      extra:
+        logprobs-mode: raw_logprobs
+        enable-return-routed-experts: true
     turbomind:
     - suites:
       - base
@@ -68,29 +52,20 @@ h:
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
-    - suites:
-      - abort
-      extra:
-        enable-abort-handling: true
 - model_type:
   - chat
   - vl
   engine_config:
-    tp: 2
+    tp: 1
+    extra:
+      prefix-cache-state-budget: 256
+      max-prefill-token-num: 64
   backends:
   - name: pytorch
     communicators:
     - nccl
   test_coverage:
-  - func
-  interface:
-    pytorch:
-    - suites:
-      - abort
-      extra:
-        enable-abort-handling: true
-    - suites:
-      - sleep
+  - prefix_cache
 - model_type:
   - chat
   - vl
@@ -111,11 +86,3 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
-  interface:
-    pytorch:
-    - suites:
-      - abort
-      extra:
-        enable-abort-handling: true
-    - suites:
-      - sleep
