@@ -32,6 +32,9 @@
     },
     {
       "pattern": "^https://wiki.python.org/moin/DebuggingWithGdb"
+    },
+    {
+      "pattern": "^https://www.llama.com/"
     }
   ],
   "httpHeaders": [
