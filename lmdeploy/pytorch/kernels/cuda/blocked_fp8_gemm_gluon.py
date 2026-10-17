@@ -97,7 +97,7 @@ def _load_block_scales(
 
 
 @gluon.jit
-def _fp8_gemm_nt_single_partition_kernel(
+def _fp8_gemm_nt_single_partition_tile(
     a_desc,
     a_scale_ptr,
     b_desc,
@@ -113,6 +113,7 @@ def _fp8_gemm_nt_single_partition_kernel(
     scale_block_n: gl.constexpr,
     num_buffers: gl.constexpr,
     num_warps: gl.constexpr,
+    off_m, off_n, a_row_base, b_row_base, d_row_base,
 ):
     # These are compile-time contract checks: they improve compiler failures
     # without adding instructions or latency to the generated kernel.
@@ -130,16 +131,7 @@ def _fp8_gemm_nt_single_partition_kernel(
     block_k: gl.constexpr = a_desc.block_type.shape[1]
     gl.static_assert(b_desc.block_type.shape[1] == block_k, 'A and B tile K must match')
     gl.static_assert(K % block_k == 0, 'K must contain whole scale blocks')
-    gl.static_assert(stride_asm == 1, 'A scales must be column-major')
-
-    if transpose_output:
-        # Compute C^T = B @ A^T so WGMMA's flexible N dimension represents
-        # the tiny logical M dimension of the original output.
-        off_m = gl.program_id(axis=1) * block_m
-        off_n = gl.program_id(axis=0) * block_n
-    else:
-        off_m = gl.program_id(axis=0) * block_m
-        off_n = gl.program_id(axis=1) * block_n
+    gl.static_assert(stride_asm > 0 and stride_ask > 0, 'A scales must have positive strides')
 
     gl.static_assert(num_buffers >= 2)
     a_smem = gl.allocate_shared_memory(
@@ -208,13 +200,13 @@ def _fp8_gemm_nt_single_partition_kernel(
         mbarrier.expect(ready_barrier, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
         tma.async_copy_global_to_shared(
             a_desc,
-            [off_m, k_block_idx * block_k],
+            [off_m + a_row_base, k_block_idx * block_k],
             ready_barrier,
             a_smem.index(stage_idx),
         )
         tma.async_copy_global_to_shared(
             b_desc,
-            [off_n, k_block_idx * block_k],
+            [off_n + b_row_base, k_block_idx * block_k],
             ready_barrier,
             b_smem.index(stage_idx),
         )
@@ -235,13 +227,13 @@ def _fp8_gemm_nt_single_partition_kernel(
         mbarrier.expect(producer_barrier, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
         tma.async_copy_global_to_shared(
             a_desc,
-            [off_m, producer_idx * block_k],
+            [off_m + a_row_base, producer_idx * block_k],
             producer_barrier,
             a_smem.index(producer_stage),
         )
         tma.async_copy_global_to_shared(
             b_desc,
-            [off_n, producer_idx * block_k],
+            [off_n + b_row_base, producer_idx * block_k],
             producer_barrier,
             b_smem.index(producer_stage),
         )
@@ -279,13 +271,13 @@ def _fp8_gemm_nt_single_partition_kernel(
             mbarrier.expect(group_producer_barrier, a_desc.block_type.nbytes + b_desc.block_type.nbytes)
             tma.async_copy_global_to_shared(
                 a_desc,
-                [off_m, group_producer_idx * block_k],
+                [off_m + a_row_base, group_producer_idx * block_k],
                 group_producer_barrier,
                 a_smem.index(group_producer_stage),
             )
             tma.async_copy_global_to_shared(
                 b_desc,
-                [off_n, group_producer_idx * block_k],
+                [off_n + b_row_base, group_producer_idx * block_k],
                 group_producer_barrier,
                 b_smem.index(group_producer_stage),
             )
@@ -356,10 +348,77 @@ def _fp8_gemm_nt_single_partition_kernel(
         d_smem.store(final_acc.to(d_desc.dtype))
     fence_async_shared()
     if transpose_output:
-        tma.async_copy_shared_to_global(d_desc, [off_n, off_m], d_smem)
+        tma.async_copy_shared_to_global(d_desc, [off_n + d_row_base, off_m], d_smem)
     else:
-        tma.async_copy_shared_to_global(d_desc, [off_m, off_n], d_smem)
+        tma.async_copy_shared_to_global(d_desc, [off_m + d_row_base, off_n], d_smem)
     tma.store_wait(pendings=0)
+
+
+@gluon.jit
+def _fp8_gemm_nt_single_partition_kernel(
+    a_desc,
+    a_scale_ptr,
+    b_desc,
+    b_scale_ptr,
+    d_desc,
+    M,
+    K: gl.constexpr,
+    stride_asm: gl.constexpr,
+    stride_ask: gl.constexpr,
+    stride_bsn: gl.constexpr,
+    stride_bsk: gl.constexpr,
+    transpose_output: gl.constexpr,
+    scale_block_n: gl.constexpr,
+    num_buffers: gl.constexpr,
+    num_warps: gl.constexpr,
+):
+    # Keep errors at this public kernel boundary, preserving their exception
+    # type when the arithmetic body is inlined from the shared tile helper.
+    gl.static_assert(a_desc.dtype == gl.float8e4nv, 'A must use FP8 E4M3')
+    gl.static_assert(b_desc.dtype == gl.float8e4nv, 'B must use FP8 E4M3')
+    gl.static_assert(d_desc.dtype == gl.bfloat16, 'output must use BF16')
+    gl.static_assert(a_scale_ptr.dtype.element_ty == gl.float32, 'A scales must use FP32')
+    gl.static_assert(b_scale_ptr.dtype.element_ty == gl.float32, 'B scales must use FP32')
+    gl.static_assert(stride_asm == 1, 'A scales must be column-major')
+    block_m: gl.constexpr = a_desc.block_type.shape[0]
+    block_n: gl.constexpr = b_desc.block_type.shape[0]
+    if transpose_output:
+        # Compute C^T = B @ A^T so WGMMA's flexible N dimension represents
+        # the tiny logical M dimension of the original output.
+        off_m = gl.program_id(axis=1) * block_m
+        off_n = gl.program_id(axis=0) * block_n
+    else:
+        off_m = gl.program_id(axis=0) * block_m
+        off_n = gl.program_id(axis=1) * block_n
+
+    _fp8_gemm_nt_single_partition_tile(
+        a_desc, a_scale_ptr, b_desc, b_scale_ptr, d_desc, M, K,
+        stride_asm, stride_ask, stride_bsn, stride_bsk, transpose_output,
+        scale_block_n, num_buffers, num_warps, off_m, off_n, 0, 0, 0)
+
+
+@gluon.jit
+def _grouped_fp8_gemm_nt_masked_kernel(
+    a_desc, a_scale_ptr, b_desc, b_scale_ptr, d_desc, masked_m,
+    capacity: gl.constexpr, N: gl.constexpr, K: gl.constexpr,
+    stride_asg: gl.constexpr, stride_bsg: gl.constexpr,
+    stride_asm: gl.constexpr, stride_ask: gl.constexpr,
+    stride_bsn: gl.constexpr, stride_bsk: gl.constexpr,
+    num_buffers: gl.constexpr, num_warps: gl.constexpr,
+):
+    group = gl.program_id(2)
+    rows = gl.load(masked_m + group)
+    block_n: gl.constexpr = b_desc.block_type.shape[0]
+    block_m: gl.constexpr = a_desc.block_type.shape[0]
+    # Loop over actual device counts. The host's expected_m estimate must never
+    # truncate received expert rows or introduce a device-to-host synchronization.
+    for offset in range(gl.program_id(0) * block_n, rows, gl.num_programs(0) * block_n):
+        _fp8_gemm_nt_single_partition_tile(
+            a_desc, a_scale_ptr + group * stride_asg,
+            b_desc, b_scale_ptr + group * stride_bsg, d_desc, rows, K,
+            stride_asm, stride_ask, stride_bsn, stride_bsk, True,
+            128, num_buffers, num_warps, gl.program_id(1) * block_m, offset,
+            group * N, group * capacity, group * capacity)
 
 
 @gluon.jit
@@ -1261,3 +1320,23 @@ def fp8_gemm_nt(a, b, d, c, *, num_sms=None):
         _launch_warp_specialized(a_quant, a_scale, b_quant, b_scale, d)
     else:
         _launch_persistent(a_quant, a_scale, b_quant, b_scale, d, num_sms)
+
+
+def grouped_fp8_gemm_nt_masked(a, b, output, masked_m):
+    """Hopper small-M expert GEMM with GPU row counts and FP32 block scales.
+
+    Only valid rows are consumed downstream. TMA can store the padded final eight-row tile, as in the existing masked
+    provider.
+    """
+    a_quant, a_scale = a
+    b_quant, b_scale = b
+    groups, capacity, k = a_quant.shape
+    n = b_quant.size(1)
+    block_m, block_n = 64, 8
+    a_desc, b_desc, d_desc = _make_transposed_small_descriptors(
+        a_quant.flatten(0, 1), b_quant.flatten(0, 1), output.flatten(0, 1), block_m, block_n)
+    _grouped_fp8_gemm_nt_masked_kernel[(2, triton.cdiv(n, block_m), groups)](
+        a_desc, a_scale, b_desc, b_scale, d_desc, masked_m, capacity, n, k,
+        a_scale.stride(0), b_scale.stride(0), *a_scale.stride()[1:], *b_scale.stride()[1:],
+        num_buffers=8, num_warps=4)
+    return output

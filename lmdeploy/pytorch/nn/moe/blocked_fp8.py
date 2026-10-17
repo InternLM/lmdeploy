@@ -259,9 +259,6 @@ class FusedMoEBlockedF8(FusedMoEBase):
             state = state.to_dict()
 
         moe_type = state['moe_type']
-        if moe_type in (MoeType.DSAsyncPrefill, MoeType.DSAsyncDecode) and self.output_scale != 1.0:
-            # Async callers already normalized before splitting microbatches.
-            state['topk_weights'] = state['topk_weights'].float() * self.output_scale
         if moe_type == MoeType.DSAsyncPrefill:
             fusedmoe = self.fusedmoe_build(low_latency_mode=False)
             state['fusedmoe'] = fusedmoe
