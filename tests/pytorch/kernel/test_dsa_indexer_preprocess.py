@@ -71,9 +71,13 @@ def test_prepare_dsa_indexer_q_matches_unfused_quantization(rope_interleaved, he
 
 @pytest.mark.skipif(not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9,
                     reason='requires device with cc>=9.0')
-@pytest.mark.parametrize('rope_interleaved', [True, False])
-@pytest.mark.parametrize('q_seqlens,kv_seqlens', [([1, 1], [3, 2]), ([3, 2], [5, 3])])
-def test_prepare_dsa_indexer_k_cache_matches_prepared_k_fill(q_seqlens, kv_seqlens, rope_interleaved):
+@pytest.mark.parametrize(
+    ('q_seqlens', 'kv_seqlens', 'rope_interleaved', 'dcp_size', 'dcp_rank'),
+    [([1, 1], [3, 2], True, 1, 0), ([1, 1], [3, 2], False, 1, 0),
+     ([3, 2], [5, 3], True, 1, 0), ([3, 2], [5, 3], False, 1, 0),
+     ([3, 2], [5, 3], False, 2, 1)])
+def test_prepare_dsa_indexer_k_cache_matches_prepared_k_fill(
+        q_seqlens, kv_seqlens, rope_interleaved, dcp_size, dcp_rank):
     from lmdeploy.pytorch.kernels.cuda.dsa_indexer_preprocess import prepare_dsa_indexer_k_cache
     from lmdeploy.pytorch.kernels.cuda.fill_kv_cache import fill_kv_cache_blocked_fp8
 
@@ -106,7 +110,9 @@ def test_prepare_dsa_indexer_k_cache_matches_prepared_k_fill(q_seqlens, kv_seqle
                               max_q_seqlen=max(q_seqlens),
                               block_offsets=block_offsets,
                               group_size=128,
-                              scale_fmt='ue8m0')
+                              scale_fmt='ue8m0',
+                              dcp_size=dcp_size,
+                              dcp_rank=dcp_rank)
     prepare_dsa_indexer_k_cache(k,
                                 norm_weight,
                                 norm_bias,
@@ -119,7 +125,9 @@ def test_prepare_dsa_indexer_k_cache_matches_prepared_k_fill(q_seqlens, kv_seqle
                                 block_offsets,
                                 max_q_seqlen=max(q_seqlens),
                                 eps=1e-6,
-                                rope_interleaved=rope_interleaved)
+                                rope_interleaved=rope_interleaved,
+                                dcp_size=dcp_size,
+                                dcp_rank=dcp_rank)
 
     assert torch.equal(cache_fused, cache_ref)
     assert torch.equal(scale_fused, scale_ref)

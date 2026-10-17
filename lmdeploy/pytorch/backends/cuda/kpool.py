@@ -98,7 +98,8 @@ def kpool_decode_update_cuda(keys, scores, tail_keys, tail_scores, state_ids,
 
 def kpool_raw_decode_update_cuda(keys, scores, raw_keys, raw_scores, state_ids, q_seqlens, kv_seqlens,
                                   cu_seqlens_q, packed_cache, block_offsets, ape, pool_size, round_scale):
-    """Fuse raw-ring decode state updates while retaining compact cache addressing."""
+    """Fuse raw-ring decode state updates while retaining compact cache
+    addressing."""
     closed_keys, closed_scores, groups, valid = update_raw_kpool(
         keys, scores, raw_keys, raw_scores, state_ids, q_seqlens, kv_seqlens, cu_seqlens_q, pool_size)
     values, scales = kpool_compress_quantize_cuda(
@@ -161,8 +162,8 @@ def _get_deep_gemm():
 def _mqa_has_local_columns() -> bool:
     """New DeepGEMM can return compact, request-local logits columns.
 
-    Older pybind wheels expose only their signature docstring. Conservatively
-    use the shared absolute-column API when no compact signature is advertised.
+    Older pybind wheels expose only their signature docstring. Conservatively use the shared absolute-column API when no
+    compact signature is advertised.
     """
     func = _get_deep_gemm().fp8_mqa_logits
     try:
@@ -376,8 +377,8 @@ def kpool_score_paged_cuda(
 ) -> Tensor:
     """Score compact16 pages with Triton, or legacy page64 with DeepGEMM.
 
-    Only columns below group_lengths are defined in either path. Pass the
-    same lengths to the selector so graph padding is never consumed.
+    Only columns below group_lengths are defined in either path. Pass the same lengths to the selector so graph padding
+    is never consumed.
     """
     _validate_query(query_fp8, query_weight)
     rows = query_fp8.size(0)
@@ -434,9 +435,8 @@ def kpool_score_paged_cuda(
 class CudaKPoolAttention:
     """Sequence-dependent KPool/MLA execution between captured projections.
 
-    The supplied attention operation owns model math and cache updates; this
-    CUDA adapter owns raw-token slicing and its PCG output bridge. It never
-    captures the dense/sparse decision or request-local state indexing.
+    The supplied attention operation owns model math and cache updates; this CUDA adapter owns raw-token slicing and its
+    PCG output bridge. It never captures the dense/sparse decision or request-local state indexing.
     """
 
     def __init__(self, attention):

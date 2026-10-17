@@ -120,6 +120,8 @@ class SubCliServe:
         ArgumentHelper.kernel_block_size(pt_group)
         ArgumentHelper.prefix_cache_state_budget(pt_group)
         ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
+        ArgumentHelper.prefill_save_alignment(pt_group)
+        ArgumentHelper.mooncake_state_save_slots(pt_group)
 
         # common engine args
         language_model_only = ArgumentHelper.language_model_only(pt_group)
@@ -138,6 +140,7 @@ class SubCliServe:
         disable_metrics = ArgumentHelper.disable_metrics(pt_group)
         dp = ArgumentHelper.dp(pt_group)
         ep_act = ArgumentHelper.ep(pt_group)
+        ArgumentHelper.dcp(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
         ArgumentHelper.enable_eplb(pt_group)
         ArgumentHelper.role(pt_group)
@@ -250,6 +253,7 @@ class SubCliServe:
             backend_config = PytorchEngineConfig(
                 dtype=args.dtype,
                 tp=args.tp,
+                dcp=args.dcp,
                 dp=args.dp,
                 ep=args.ep,
                 max_batch_size=max_batch_size,
@@ -262,6 +266,8 @@ class SubCliServe:
                 enable_prefix_caching=args.enable_prefix_caching,
                 prefix_cache_state_budget=args.prefix_cache_state_budget,
                 prefix_cache_decode_state_interval=args.prefix_cache_decode_state_interval,
+                prefill_save_alignment=args.prefill_save_alignment,
+                mooncake_state_save_slots=args.mooncake_state_save_slots,
                 device_type=args.device,
                 quant_policy=args.quant_policy,
                 eager_mode=args.eager_mode,

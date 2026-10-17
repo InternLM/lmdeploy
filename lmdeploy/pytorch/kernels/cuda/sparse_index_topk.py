@@ -38,8 +38,8 @@ def _ordered_fp32_key(score, canonical_zero: bool = False):
     if canonical_zero:
         score = T.if_then_else(score == 0, T.float32(0), score)
     bits = T.reinterpret(score, T.uint32)
-    sign_mask = T.cast(2147483648, T.uint32)
-    all_ones = T.cast(4294967295, T.uint32)
+    sign_mask = T.cast(0x80000000, T.uint32)
+    all_ones = T.cast(0xFFFFFFFF, T.uint32)
     return T.if_then_else(T.bitwise_and(bits, sign_mask) == T.cast(0, T.uint32),
                           T.bitwise_xor(bits, sign_mask),
                           T.bitwise_xor(bits, all_ones))

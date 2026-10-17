@@ -25,6 +25,8 @@ def _fill_dsa_indexer_metadata_kernel(
     MAX_BLOCK_TABLE_LEN: tl.constexpr,
     TILE_SIZE: tl.constexpr,
     EXPAND_BLOCKS: tl.constexpr,
+    DCP_SIZE: tl.constexpr,
+    DCP_RANK: tl.constexpr,
 ):
     tl.static_assert(MAX_QUERY_LEN > 1, 'MTP query length must exceed one')
     tl.static_assert(MAX_BLOCK_TABLE_LEN > 0,
@@ -53,6 +55,8 @@ def _fill_dsa_indexer_metadata_kernel(
 
     query_mask = offsets < q_len
     visible_kv_len = kv_len - q_len + offsets + 1
+    # Apply global causality before converting to interleaved rank-local lengths.
+    visible_kv_len = tl.maximum((visible_kv_len + DCP_SIZE - 1 - DCP_RANK) // DCP_SIZE, 0)
     tl.store(indexer_kv_seqlens + q_start + offsets,
              visible_kv_len,
              mask=query_mask)
@@ -81,8 +85,14 @@ def fill_dsa_indexer_metadata(
         expanded_block_offsets: torch.Tensor | None,
         num_tokens: int,
         max_query_len: int,
+        *,
+        dcp_size: int = 1,
+        dcp_rank: int = 0,
 ) -> None:
-    """Fill multi-token DSA indexer metadata into caller-owned tensors."""
+    """Fill per-query causal KV lengths and optional expanded block tables.
+
+    Input lengths are global. Output lengths are rank-local with DCP, otherwise global.
+    """
     batch_size, block_table_len = block_offsets.size()
     expand_blocks = expanded_block_offsets is not None
     elements_per_batch = (max_query_len * block_table_len
@@ -111,5 +121,7 @@ def fill_dsa_indexer_metadata(
         MAX_BLOCK_TABLE_LEN=block_table_len,
         TILE_SIZE=tile_size,
         EXPAND_BLOCKS=expand_blocks,
+        DCP_SIZE=dcp_size,
+        DCP_RANK=dcp_rank,
         num_warps=4,
     )

@@ -458,6 +458,8 @@ class PytorchEngineConfig:
             The `auto` option will use FP16 precision for FP32 and FP16
             models, and BF16 precision for BF16 models.
         tp: Tensor Parallelism. default 1.
+        dcp: Decode context parallelism size. It reuses ranks inside
+            each attention tensor-parallel group. Default 1.
         dp: Data Parallelism. default 1.
         dp_rank: rank of dp.
         ep: Expert Parallelism. default 1.
@@ -499,6 +501,14 @@ class PytorchEngineConfig:
             but use more checkpoint memory and copy work; larger values reduce
             overhead but make decode-prefix hits less likely. Positive values
             must be multiples of the cache block size.
+        prefill_save_alignment: Token alignment for prefill state checkpoints,
+            shared by local prefix caching and Mooncake Store. Defaults to
+            8192 and must be a positive multiple of block_size. Only applies
+            to models with linear-attention state caches; full-attention-only
+            models ignore it. Intermediate aligned positions may be skipped.
+        mooncake_state_save_slots: Number of temporary hybrid state snapshots
+            reserved for asynchronous Mooncake saves. Defaults to 8. A full
+            snapshot pool skips the save without blocking inference.
         device_type: The inference device type, options ['cuda']
         eager_mode: Enable "eager" mode or not
         custom_module_map: nn module map customized by users. Once
@@ -544,6 +554,7 @@ class PytorchEngineConfig:
     """
     dtype: str = 'auto'
     tp: int = 1
+    dcp: int = 1
     dp: int = 1
     dp_rank: int = 0
     ep: int = 1
@@ -565,6 +576,8 @@ class PytorchEngineConfig:
     enable_prefix_caching: bool = False
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
+    prefill_save_alignment: int = 8192
+    mooncake_state_save_slots: int = 8
     device_type: str = 'cuda'
     eager_mode: bool = False
     custom_module_map: dict[str, str] = None
@@ -603,6 +616,11 @@ class PytorchEngineConfig:
             self.kernel_block_size = self.block_size
         assert self.dtype in ['auto', 'float16', 'bfloat16']
         assert self.tp >= 1, 'invalid tp'
+        assert self.dcp >= 1, 'invalid dcp'
+        assert self.tp % self.dcp == 0, 'tp must be divisible by dcp'
+        if self.dcp > 1:
+            assert self.device_type == 'cuda', 'DCP requires CUDA'
+            assert self.kv_transfer_config is None, 'DCP does not support KV-cache connectors'
         assert self.dp >= 1, 'invalid dp'
         assert self.ep >= 1, 'invalid ep'
         assert 0 < self.cache_max_entry_count < 1, \
@@ -615,6 +633,8 @@ class PytorchEngineConfig:
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
+        assert self.prefill_save_alignment > 0, 'invalid prefill_save_alignment'
+        assert self.mooncake_state_save_slots > 0, 'invalid mooncake_state_save_slots'
         try:
             self.quant_policy = QuantPolicy(self.quant_policy)
         except ValueError as e:
@@ -798,6 +818,11 @@ class ScheduleMetrics:
     cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0
     scheduler_tick: int = 0
+    # None means external prefix caching is disabled. Counts are cumulative
+    # snapshots; polling metrics must not consume them.
+    external_prefix_cache_hit_rate: float | None = None
+    external_prefix_cache_queries: int = 0
+    external_prefix_cache_hits: int = 0
 
 
 @dataclass
@@ -868,14 +893,23 @@ class SpeculativeConfig:
         dflash_block_size: DFlash query/verify window length. When set, this
             DFlash-specific value overrides ``num_speculative_tokens`` using
             ``num_speculative_tokens = dflash_block_size - 1``.
+        disable_prefix_cache_block_drop: Reuse the trailing prefix-cache block
+            for autoregressive MTP/EAGLE methods. Its boundary draft KV may depend on a different
+            following token, which can affect acceptance rates. Target-model
+            verification remains enabled. For hybrid Mooncake Store, this can
+            avoid rewinding to an earlier linear-attention state checkpoint.
+            DFlash and DSpark are not supported.
     """
     method: str
     model: str = ''
     num_speculative_tokens: int = 1
     dflash_block_size: int | None = None
+    disable_prefix_cache_block_drop: bool = False
 
     def __post_init__(self):
-        """Resolve the DFlash block-size override."""
+        """Validate method-specific options and resolve the draft window."""
+        if self.disable_prefix_cache_block_drop and self.method in ('dflash', 'dspark'):
+            raise ValueError(f'disable_prefix_cache_block_drop is not supported for {self.method}.')
         if self.dflash_block_size is not None:
             if self.method != 'dflash':
                 raise ValueError('dflash_block_size is supported only when method="dflash".')

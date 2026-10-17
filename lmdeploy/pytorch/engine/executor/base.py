@@ -52,6 +52,21 @@ class ExecutorBase:
         self.world_size = dist_config.world_size
         self.device_type = device_type
         self.specdecode_config = specdecode_config
+        if cache_config.use_mooncake_store and model_config.states_shapes and specdecode_config is not None:
+            supported_mtp = (specdecode_config.method == 'qwen3_5_mtp'
+                             or (specdecode_config.method == 'deepseek_mtp'
+                                 and model_config.hf_config.model_type == 'glm5_next'))
+            if (not supported_mtp or not model_config.is_gated_delta
+                    or specdecode_config.model_config.states_shapes or specdecode_config.model_config.num_layers != 1):
+                raise ValueError('Hybrid Mooncake Store speculative decoding requires Qwen3.5 with qwen3_5_mtp '
+                                 'or GLM-5.3 with deepseek_mtp, a gated-delta target, '
+                                 'and one MTP layer without state caches')
+        if (cache_config.use_mooncake_store and model_config.states_shapes
+                and model_config.is_gated_delta and device_type == 'cuda'):
+            from lmdeploy.pytorch.backends.cuda.utils import has_tilelang
+            if not has_tilelang():
+                raise RuntimeError('Hybrid Mooncake Store requires TileLang causal convolution on CUDA: '
+                                   'the Dao backend does not restore prefill initial states')
         self._maybe_disable_unsupported_prefix_caching(check_window=not self._has_cache_update_hook())
 
     def _has_cache_update_hook(self):
@@ -223,6 +238,32 @@ class ExecutorBase:
             return 0
         return _envs.dsa_indexer_max_logits_mb * (1 << 20)
 
+    def _get_dcp_workspace_size(self, num_prefill_tokens: int) -> int:
+        """Get the backend's DCP workspace estimate for KV-cache sizing."""
+        if self.cache_config.dcp <= 1:
+            return 0
+
+        from lmdeploy.pytorch.backends.cp_utils import get_dcp_workspace_size
+
+        config = self.cache_config
+        model = self.model_config
+        num_decode_tokens = config.max_batches
+        if self.specdecode_config is not None:
+            # Verification includes draft tokens plus one target token.
+            num_decode_tokens *= self.specdecode_config.num_speculative_tokens + 1
+        return get_dcp_workspace_size(
+            num_prefill_tokens=num_prefill_tokens,
+            num_decode_tokens=num_decode_tokens,
+            batch_size=config.max_batches,
+            num_heads=model.num_attention_heads // self.dist_config.attn_tp,
+            head_dim=model.head_dim,
+            dtype=model.dtype,
+            block_size=config.block_size,
+            dcp_size=config.dcp,
+            topk=model.mla_index_topk,
+            score_workspace_bytes=self._get_dsa_score_workspace_size(),
+        )
+
     def _get_runtime_size(self, free_mems: list[int], cache_block_sizes: list[_WorkerCachePlanSizes],
                           vocab_size: int) -> tuple[int, int]:
         """Find best prefill num."""
@@ -237,7 +278,8 @@ class ExecutorBase:
             # logits/vocab size. They are not pageable KV cache, so reserve
             # them before applying the KV cache memory ratio.
             runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocab_size * 2)
-            runtime_cache_size += dsa_score_workspace
+            # The DCP phase estimate already includes indexer scores.
+            runtime_cache_size += max(dsa_score_workspace, self._get_dcp_workspace_size(max_prefill_token_num))
             available_mems = [int((free_mem - runtime_cache_size) * cache_max_entry_count) for free_mem in free_mems]
             # Keep at least a small number of KV blocks after runtime reserve.
             # If not possible, reduce the prefill token budget and try again.
@@ -293,7 +335,8 @@ class ExecutorBase:
             # max_batches runtime slots plus one spare for rolling prefill;
             # prefix-cache checkpoints use an explicitly configured extra budget.
             # TODO: Share memory between state cache and pageable cache
-            num_state_caches = int(cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget)
+            num_state_caches = int(cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget
+                                   + cache_config.num_store_state_caches)
             cache_config.num_state_caches = num_state_caches
 
         if model_config is None:
@@ -420,6 +463,9 @@ class ExecutorBase:
         self._sync_spec_cache_block_size()
         self._validate_memdecode_configs()
         self.cache_config.states_shapes = self.model_config.states_shapes
+        if (self.cache_config.states_shapes and self.cache_config.needs_prefix_cache_identity
+                and self.cache_config.prefill_save_alignment % self.cache_config.block_size != 0):
+            raise ValueError('prefill_save_alignment must be a multiple of block_size')
 
         spec_cache_config, spec_model_config = self._get_spec_configs()
         cache_block_sizes = self._prepare_worker_cache_plans(self.cache_config, spec_cache_config)
@@ -431,6 +477,15 @@ class ExecutorBase:
 
         self.set_cache_config(self.cache_config, spec_cache_config)
         self.set_model_config(self.model_config, spec_model_config)
+
+    def _log_kv_cache_capacity(self) -> None:
+        """Log usable token capacity across DCP shards, excluding reserved
+        blocks."""
+        config = self.cache_config
+        num_gpu_blocks = config.num_gpu_blocks - config.num_reserved_gpu_blocks
+        num_tokens = num_gpu_blocks * config.block_size * config.dcp
+        logger.info(f'GPU KV cache capacity: {num_tokens:,} tokens '
+                    f'({num_gpu_blocks:,} usable blocks/rank, DCP={config.dcp}).')
 
     def init(self):
         """init."""
@@ -450,6 +505,7 @@ class ExecutorBase:
         if self.misc_config.memdecode_config is not None:
             logger.info('Building MemDecode memory KV/state cache engines.')
         self.build_cache_engine()
+        self._log_kv_cache_capacity()
         logger.info('Warming up model.')
         self.warmup()
 
