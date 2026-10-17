@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 
+from lmdeploy.pytorch.messages import InputEmbeddings
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.vl.constants import Modality
 
@@ -36,6 +37,10 @@ class BlockTrieTestMixin:
                            modality=Modality.IMAGE,
                            meta=dict(image_token_id=99)) for start, end, value in spans
         ])
+
+    def _input_embeddings(self, start: int, end: int, value: float, hidden_size: int = 8):
+        embeddings = np.full((end - start, hidden_size), value, dtype=np.float32)
+        return [InputEmbeddings(embeddings=embeddings, start=start, end=end)]
 
     def _routed_experts(self, num_tokens: int, offset: int = 0):
         values = np.arange(offset, offset + num_tokens * 2, dtype=np.uint16)
