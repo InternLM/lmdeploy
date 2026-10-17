@@ -105,6 +105,38 @@ def test_deepseek_v32_tool_results_reopen_thinking():
     assert '<function_results>\n<result>Sunny</result>\n</function_results>\n\n<think>' in prompt
 
 
+def test_deepseek_v32_thinking_drop_keeps_developer_message():
+    messages = [
+        {'role': 'system', 'content': 'You are helpful.'},
+        {'role': 'developer', 'content': 'Always answer in French.'},
+        {'role': 'user', 'content': 'Real question'},
+    ]
+
+    prompt = encode_messages(messages, thinking_mode='thinking')
+
+    assert "# The user's message is: Always answer in French." in prompt
+    assert '<｜User｜>Real question<｜Assistant｜><think>' in prompt
+
+
+def test_deepseek_v32_thinking_drop_keeps_developer_in_multiturn():
+    messages = [
+        {'role': 'user', 'content': 'First question'},
+        {
+            'role': 'assistant',
+            'content': 'First answer',
+            'reasoning_content': 'private chain of thought',
+        },
+        {'role': 'developer', 'content': 'Now answer in French.'},
+        {'role': 'user', 'content': 'Second question'},
+    ]
+
+    prompt = encode_messages(messages, thinking_mode='thinking')
+
+    assert "# The user's message is: Now answer in French." in prompt
+    assert 'private chain of thought' not in prompt
+    assert '<｜User｜>Second question<｜Assistant｜><think>' in prompt
+
+
 def test_deepseek_v32_parse_completion_text():
     completion = (
         'I should call a tool.</think>\n\n'
