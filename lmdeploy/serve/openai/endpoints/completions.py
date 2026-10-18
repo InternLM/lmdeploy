@@ -223,7 +223,7 @@ def register(router: APIRouter, server_context) -> None:
             # First chunk with role
             final_usage = UsageInfo() if include_usage else None
             try:
-                for generator in generators:
+                for index, generator in enumerate(generators):
                     async for res in generator:
                         logprobs = None
                         if request.logprobs and res.logprobs:
@@ -238,7 +238,7 @@ def register(router: APIRouter, server_context) -> None:
                             final_usage.completion_tokens += final_res.generate_token_len
                             final_usage.total_tokens += total_tokens
                         response_json = create_stream_response_json(
-                            index=0,
+                            index=index,
                             text=res.response,
                             finish_reason=res.finish_reason,
                             logprobs=logprobs)
