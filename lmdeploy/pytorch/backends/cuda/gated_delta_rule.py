@@ -567,14 +567,11 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             )
             # Keep every graph bucket's addresses alive until model release.
             # A resize-and-replace buffer could leave an older graph pointing
-            # at freed storage. The slot capacity normally covers every graph
-            # bucket, so eager batch changes do not grow the workspace cache.
-            # Scratch is not session state and is overwritten before use.
+            # at freed storage. Scratch is indexed by active batch row, not
+            # persistent state slot; prefix-cache slots must not inflate it.
             if not hasattr(self, '_replayssm_workspaces'):
                 self._replayssm_workspaces = {}
-            capacity = replay_state.checkpoint.shape[0]
-            if query.shape[0] > capacity:
-                capacity = 1 << (query.shape[0] - 1).bit_length()
+            capacity = 1 << (query.shape[0] - 1).bit_length()
             workspace_key = (query.device, capacity, replay_state.raw_v_ring.shape[1:],
                              replay_state.raw_k_ring.shape[1:], replay_state.raw_v_ring.dtype,
                              replay_state.raw_k_ring.dtype, replay_state.g_ring.dtype, replay_state.beta_ring.dtype)

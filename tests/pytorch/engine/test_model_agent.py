@@ -1170,8 +1170,9 @@ def test_model_forward_cudagraph_checkpoint_publish_restore_and_continue():
     copy_events = []
 
     class _RecordingStateCacheEngine(StateCacheEngine):
-        def copy_slots(self, sources, destinations):
-            super().copy_slots(sources, destinations)
+        def copy_slots(self, sources, destinations, *, checkpoint_only=False):
+            assert checkpoint_only
+            super().copy_slots(sources, destinations, checkpoint_only=checkpoint_only)
             for source, destination in zip(sources, destinations):
                 copy_events.append((source, destination,
                                     named_caches[GDN_REPLAY_CURSOR_CACHE_NAME]
@@ -1186,6 +1187,7 @@ def test_model_forward_cudagraph_checkpoint_publish_restore_and_continue():
     state_cache_engine._slot_tensors = tuple(
         (cache, 0 if name == GDN_REPLAY_CURSOR_CACHE_NAME else 1)
         for name, cache in named_caches.items())
+    state_cache_engine._checkpoint_slot_tensors = state_cache_engine._slot_tensors
     state_cache_engine._named_state_caches = named_caches
     forward_stream = torch.cuda.Stream()
     reference = torch.zeros(batch, hv, vdim, kdim,

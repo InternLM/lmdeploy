@@ -204,7 +204,8 @@ class CudaKdaImpl(KdaImpl):
                 state.g_ring, state.cursor.packed_cursor, ids, force_flush=state.force_flush)
         else:
             # Retain every capture bucket's workspace addresses until release.
-            capacity = max(state.checkpoint.shape[0], 1 << (batch - 1).bit_length())
+            # Scratch uses batch rows, independent of persistent prefix slots.
+            capacity = 1 << (batch - 1).bit_length()
             if not hasattr(self, '_replayssm_workspaces'):
                 self._replayssm_workspaces = {}
             if capacity not in self._replayssm_workspaces:

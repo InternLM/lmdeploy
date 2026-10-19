@@ -86,8 +86,8 @@ def test_mtp_replayssm_matches_committed_recurrent_state(buffer_len, tmax, expli
     if channelwise:
         h, hv, kdim, vdim = 2, 2, 128, 128
     state = _make_state(slots, h, hv, kdim, vdim, buffer_len, tmax, dtype, channelwise)
-    # Production retains one slot-capacity workspace across smaller graph buckets.
-    workspace = make_gdn_replayssm_spec_workspace(state, slots) if explicit_workspace else None
+    # A batch-sized workspace must handle persistent slot IDs beyond its capacity.
+    workspace = make_gdn_replayssm_spec_workspace(state, batch) if explicit_workspace else None
     committed = torch.zeros(batch, hv, vdim, kdim, device='cuda', dtype=torch.float32)
 
     for step in range(12):
@@ -143,7 +143,8 @@ def test_mtp_strided_inputs_graph_replay_matches_packed_state(channelwise):
 
     torch.manual_seed(881)
     batch, heads, dim, tmax, buffer_len = 3, 3, 96, 3, 16
-    states = [_make_state(batch, heads, heads, dim, dim, buffer_len, tmax, torch.bfloat16, channelwise)
+    slots = batch + 5
+    states = [_make_state(slots, heads, heads, dim, dim, buffer_len, tmax, torch.bfloat16, channelwise)
               for _ in range(2)]
     workspaces = [make_gdn_replayssm_spec_workspace(state, batch) for state in states]
     mixed = torch.randn(batch, 3 * heads * dim, tmax, device='cuda', dtype=torch.bfloat16)
@@ -181,7 +182,7 @@ def test_mtp_strided_inputs_graph_replay_matches_packed_state(channelwise):
         mixed.normal_()
         gate.uniform_(-0.4, -0.01)
         beta.uniform_(0, 1)
-        ids.copy_((torch.arange(batch, device='cuda') + step) % batch)
+        ids.copy_((torch.arange(batch, device='cuda') + step) % slots)
         if step % 5 == 0:
             ids[-1] = -1
         qlens.copy_((torch.arange(batch, device='cuda') + step) % (tmax + 1))
