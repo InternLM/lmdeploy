@@ -37,6 +37,7 @@ def _snapshot_replayssm_raw_kernel(
     V: tl.constexpr,
     BK: tl.constexpr,
     BV: tl.constexpr,
+    CHANNELWISE_G: tl.constexpr,
 ):
     row = tl.program_id(0)
     hv = tl.program_id(1)
@@ -50,9 +51,16 @@ def _snapshot_replayssm_raw_kernel(
     ov = tl.arange(0, BV)
     vv = tl.load(raw_v + slot * stride_v + (hv * R + t[:, None]) * V + ov[None, :], mask=ov[None, :] < V, other=0)
     tl.store(snap_v + ((row * HV + hv) * R + t[:, None]) * V + ov[None, :], vv, mask=ov[None, :] < V)
-    gg = tl.load(gates + slot * stride_g + hv * R + t)
+    if CHANNELWISE_G:
+        ok = tl.arange(0, BK)
+        gg = tl.load(gates + slot * stride_g + (hv * R + t[:, None]) * K + ok[None, :],
+                     mask=ok[None, :] < K, other=0.0)
+        tl.store(snap_g + ((row * HV + hv) * R + t[:, None]) * K + ok[None, :],
+                 gg, mask=ok[None, :] < K)
+    else:
+        gg = tl.load(gates + slot * stride_g + hv * R + t)
+        tl.store(snap_g + (row * HV + hv) * R + t, gg)
     bb = tl.load(betas + slot * stride_beta + hv * R + t)
-    tl.store(snap_g + (row * HV + hv) * R + t, gg)
     tl.store(snap_beta + (row * HV + hv) * R + t, bb)
     if hv % (HV // H) == 0:
         ok = tl.arange(0, BK)
@@ -84,6 +92,7 @@ def gdn_replayssm_exact_fold_kernel(
     BK: tl.constexpr,
     BV: tl.constexpr,
     FOLD_PARTIAL: tl.constexpr,
+    CHANNELWISE_G: tl.constexpr,
 ):
     """Fold only previously committed raw history for rows marked flush."""
     i_v = tl.program_id(0)
@@ -117,7 +126,11 @@ def gdn_replayssm_exact_fold_kernel(
             raw_v = tl.load(raw_v_ring + state_idx * stride_raw_v_slot
                             + (i_hv * R + phys) * V + o_v,
                             mask=mask_v, other=0.0).to(tl.float32)
-            gate = tl.load(g_ring + state_idx * stride_g_slot + i_hv * R + phys).to(tl.float32)
+            if CHANNELWISE_G:
+                gate = tl.load(g_ring + state_idx * stride_g_slot + (i_hv * R + phys) * K + o_k,
+                               mask=mask_k, other=0.0).to(tl.float32)[None, :]
+            else:
+                gate = tl.load(g_ring + state_idx * stride_g_slot + i_hv * R + phys).to(tl.float32)
             beta = tl.load(beta_ring + state_idx * stride_beta_slot + i_hv * R + phys).to(tl.float32)
             key = raw_k / tl.sqrt(tl.sum(raw_k * raw_k) + 1e-6)
             h *= tl.exp(gate)
@@ -149,12 +162,15 @@ def gdn_replayssm_spec_circular_kernel(
     stride_q_b,
     stride_q_t,
     stride_q_h,
+    stride_q_d,
     stride_k_b,
     stride_k_t,
     stride_k_h,
+    stride_k_d,
     stride_v_b,
     stride_v_t,
     stride_v_h,
+    stride_v_d,
     stride_g_b,
     stride_g_t,
     stride_beta_b,
@@ -182,12 +198,12 @@ def gdn_replayssm_spec_circular_kernel(
     BK: tl.constexpr,
     BV: tl.constexpr,
     BC: tl.constexpr,
+    CHANNELWISE_G: tl.constexpr,
 ):
     """Fold/reconstruct and verify after the raw-history snapshot barrier.
 
-    Flush CTAs read the immutable snapshot, never the live raw rings:
-    another value tile or grouped value head may already be writing the new
-    speculative window into the same ring positions.
+    Flush CTAs read the immutable snapshot, never the live raw rings: another value tile or grouped value head may
+    already be writing the new speculative window into the same ring positions.
     """
     i_v = tl.program_id(0)
     i_b = tl.program_id(1)
@@ -239,8 +255,12 @@ def gdn_replayssm_spec_circular_kernel(
                 raw_v = tl.load(snap_v + i_b * HV * R * V
                                 + (i_hv * R + phys) * V + o_v,
                                 mask=mask_v, other=0.0).to(tl.float32)
-                gate = tl.load(snap_g + i_b * HV * R
-                               + i_hv * R + phys).to(tl.float32)
+                if CHANNELWISE_G:
+                    gate = tl.load(snap_g + ((i_b * HV + i_hv) * R + phys) * K + o_k,
+                                   mask=mask_k, other=0.0).to(tl.float32)[None, :]
+                else:
+                    gate = tl.load(snap_g + i_b * HV * R
+                                   + i_hv * R + phys).to(tl.float32)
                 beta_raw = tl.load(snap_beta + i_b * HV * R
                                    + i_hv * R + phys).to(tl.float32)
                 key = raw_k / tl.sqrt(tl.sum(raw_k * raw_k) + 1e-6)
@@ -252,42 +272,63 @@ def gdn_replayssm_spec_circular_kernel(
         o_c = tl.arange(0, BC)
         cache_valid = o_c < stored_write_pos
         phys_c = (stored_cache_base + o_c) & (R - 1)
-        gates = tl.load(g_ring + state_idx * stride_g_ring_slot
-                        + i_hv * R + phys_c,
-                        mask=cache_valid, other=0.0).to(tl.float32)
-        prefix = tl.cumsum(gates, axis=0)
-        total = tl.sum(gates, axis=0)
-        decay = tl.where(cache_valid, tl.exp(total - prefix), 0.0)
-        d_hist = tl.load(d_ring + state_idx * stride_d_slot
-                         + (i_hv * R + phys_c[None, :]) * V + o_v[:, None],
-                         mask=mask_v[:, None] & cache_valid[None, :],
-                         other=0.0).to(q.dtype.element_ty)
-        k_hist = tl.load(k_ring + state_idx * stride_k_ring_slot
-                         + (i_h * R + phys_c[:, None]) * K + o_k[None, :],
-                         mask=cache_valid[:, None] & mask_k[None, :],
-                         other=0.0).to(q.dtype.element_ty)
-        h = h * tl.exp(total) + tl.dot(
-            (d_hist * decay[None, :]).to(q.dtype.element_ty),
-            k_hist,
-            input_precision='ieee').to(tl.float32)
+        if CHANNELWISE_G:
+            gates = tl.load(g_ring + state_idx * stride_g_ring_slot
+                            + (i_hv * R + phys_c[:, None]) * K + o_k[None, :],
+                            mask=cache_valid[:, None] & mask_k[None, :], other=0.0)
+            total = tl.sum(gates, axis=0)
+            decay = tl.exp(total[None, :] - tl.cumsum(gates, axis=0))
+            d_hist = tl.load(d_ring + state_idx * stride_d_slot
+                             + (i_hv * R + phys_c[None, :]) * V + o_v[:, None],
+                             mask=mask_v[:, None] & cache_valid[None, :], other=0.0).to(tl.float32)
+            k_hist = tl.load(k_ring + state_idx * stride_k_ring_slot
+                             + (i_h * R + phys_c[:, None]) * K + o_k[None, :],
+                             mask=cache_valid[:, None] & mask_k[None, :], other=0.0).to(tl.float32)
+            h = h * tl.exp(total)[None, :] + tl.dot(d_hist, k_hist * decay, input_precision='ieee')
+        else:
+            gates = tl.load(g_ring + state_idx * stride_g_ring_slot
+                            + i_hv * R + phys_c,
+                            mask=cache_valid, other=0.0).to(tl.float32)
+            prefix = tl.cumsum(gates, axis=0)
+            total = tl.sum(gates, axis=0)
+            decay = tl.where(cache_valid, tl.exp(total - prefix), 0.0)
+            d_hist = tl.load(d_ring + state_idx * stride_d_slot
+                             + (i_hv * R + phys_c[None, :]) * V + o_v[:, None],
+                             mask=mask_v[:, None] & cache_valid[None, :],
+                             other=0.0).to(q.dtype.element_ty)
+            k_hist = tl.load(k_ring + state_idx * stride_k_ring_slot
+                             + (i_h * R + phys_c[:, None]) * K + o_k[None, :],
+                             mask=cache_valid[:, None] & mask_k[None, :],
+                             other=0.0).to(q.dtype.element_ty)
+            h = h * tl.exp(total) + tl.dot(
+                (d_hist * decay[None, :]).to(q.dtype.element_ty),
+                k_hist,
+                input_precision='ieee').to(tl.float32)
 
     write_k = (i_v == 0) and (i_hv == i_h * (HV // H))
     for t in range(TMAX):
         if t < qlen:
             q_raw = tl.load(q + i_b * stride_q_b + t * stride_q_t
-                            + i_h * stride_q_h + o_k,
+                            + i_h * stride_q_h + o_k * stride_q_d,
                             mask=mask_k, other=0.0).to(tl.float32)
             k_raw = tl.load(k + i_b * stride_k_b + t * stride_k_t
-                            + i_h * stride_k_h + o_k,
+                            + i_h * stride_k_h + o_k * stride_k_d,
                             mask=mask_k, other=0.0).to(tl.float32)
             query_t = q_raw / tl.sqrt(tl.sum(q_raw * q_raw) + 1e-6) * scale
             key_t = k_raw / tl.sqrt(tl.sum(k_raw * k_raw) + 1e-6)
             value_t = tl.load(v + i_b * stride_v_b + t * stride_v_t
-                              + i_hv * stride_v_h + o_v,
+                              + i_hv * stride_v_h + o_v * stride_v_d,
                               mask=mask_v, other=0.0).to(tl.float32)
-            gate_t = tl.load(g + i_b * stride_g_b + t * stride_g_t + i_hv).to(tl.float32)
+            if CHANNELWISE_G:
+                gate_t = tl.load(g + i_b * stride_g_b + t * stride_g_t + i_hv * K + o_k,
+                                 mask=mask_k, other=0.0).to(tl.float32)
+            else:
+                gate_t = tl.load(g + i_b * stride_g_b + t * stride_g_t + i_hv).to(tl.float32)
             beta_t = tl.load(beta + i_b * stride_beta_b + t * stride_beta_t + i_hv).to(tl.float32)
-            h *= tl.exp(gate_t)
+            if CHANNELWISE_G:
+                h *= tl.exp(gate_t)[None, :]
+            else:
+                h *= tl.exp(gate_t)
             delta = (value_t - tl.sum(h * key_t[None, :], axis=1)) * beta_t
             h += delta[:, None] * key_t[None, :]
             result = tl.sum(h * query_t[None, :], axis=1)
@@ -305,7 +346,11 @@ def gdn_replayssm_spec_circular_kernel(
                 tl.store(raw_k_ring + state_idx * stride_raw_k_slot + (i_h * R + phys) * K + o_k,
                          k_raw.to(raw_k_ring.dtype.element_ty), mask=mask_k)
             if i_v == 0:
-                tl.store(g_ring + state_idx * stride_g_ring_slot + i_hv * R + phys, gate_t)
+                if CHANNELWISE_G:
+                    tl.store(g_ring + state_idx * stride_g_ring_slot + (i_hv * R + phys) * K + o_k,
+                             gate_t, mask=mask_k)
+                else:
+                    tl.store(g_ring + state_idx * stride_g_ring_slot + i_hv * R + phys, gate_t)
                 tl.store(beta_ring + state_idx * stride_beta_ring_slot + i_hv * R + phys, beta_t)
 
 
@@ -344,7 +389,8 @@ def commit_gdn_replayssm_spec_cursor_kernel(
 def _validate_spec_tensors(q, k, v, g, beta, state, q_seqlens):
     B, T, H, K = q.shape
     _, Tv, HV, V = v.shape
-    if T != Tv or k.shape != q.shape or g.shape != (B, T, HV) or beta.shape != (B, T, HV):
+    gate_shape = (B, T, HV, K) if g.ndim == 4 else (B, T, HV)
+    if T != Tv or k.shape != q.shape or g.shape != gate_shape or beta.shape != (B, T, HV):
         raise ValueError('invalid q/k/v/g/beta shapes for MTP ReplaySSM')
     if T != state.cursor.Tmax:
         raise ValueError(f'MTP verify width {T} does not match configured Tmax={state.cursor.Tmax}')
@@ -358,10 +404,9 @@ def _validate_spec_tensors(q, k, v, g, beta, state, q_seqlens):
 def make_gdn_replayssm_spec_workspace(state, batch: int) -> tuple[torch.Tensor, ...]:
     """Allocate transient raw-history buffers, not persistent cache state.
 
-    The CUDA backend owns one workspace per bounded capacity/geometry and
-    retains it for the lifetime of the model. No new workspace is allocated
-    in the production steady-state path. Standalone callers may pass their
-    own workspace or use the allocation fallback in the wrapper.
+    The CUDA backend owns one workspace per bounded capacity/geometry and retains it for the lifetime of the model. No
+    new workspace is allocated in the production steady-state path. Standalone callers may pass their own workspace or
+    use the allocation fallback in the wrapper.
     """
     _, hv, vdim, kdim = state.checkpoint.shape
     h = state.raw_k_ring.shape[1]
@@ -370,7 +415,7 @@ def make_gdn_replayssm_spec_workspace(state, batch: int) -> tuple[torch.Tensor, 
     return (
         torch.empty((batch, hv, r, vdim), dtype=state.raw_v_ring.dtype, **kwargs),
         torch.empty((batch, h, r, kdim), dtype=state.raw_k_ring.dtype, **kwargs),
-        torch.empty((batch, hv, r), dtype=state.g_ring.dtype, **kwargs),
+        torch.empty((batch, *state.g_ring.shape[1:]), dtype=state.g_ring.dtype, **kwargs),
         torch.empty((batch, hv, r), dtype=state.beta_ring.dtype, **kwargs),
     )
 
@@ -394,11 +439,13 @@ def fused_recurrent_gdn_replayssm_spec(q: torch.Tensor,
     BC = max(16, triton.next_power_of_2(R))
     if scale is None:
         scale = K**-0.5
-    out = torch.empty_like(v)
+    out = torch.empty_like(v, memory_format=torch.contiguous_format)
     if workspace is None:
         workspace = make_gdn_replayssm_spec_workspace(state, B)
     snap_v, snap_k, snap_g, snap_beta = workspace
-    shapes = ((HV, R, V), (H, R, K), (HV, R), (HV, R))
+    shapes = ((HV, R, V), (H, R, K), tuple(state.g_ring.shape[1:]), (HV, R))
+    if state.g_ring.shape[1:] != ((HV, R, K) if g.ndim == 4 else (HV, R)):
+        raise ValueError('ReplaySSM gate and history geometry disagree')
     dtypes = (state.raw_v_ring.dtype, state.raw_k_ring.dtype, state.g_ring.dtype, state.beta_ring.dtype)
     if any(tensor.shape[0] < B or tensor.shape[1:] != shape
            or tensor.dtype != dtype or tensor.device != q.device or not tensor.is_contiguous()
@@ -409,15 +456,16 @@ def fused_recurrent_gdn_replayssm_spec(q: torch.Tensor,
         state.cursor.packed_cursor, state_indices, snap_v, snap_k, snap_g, snap_beta,
         state.raw_v_ring.stride(0), state.raw_k_ring.stride(0), state.g_ring.stride(0),
         state.beta_ring.stride(0), state.cursor.packed_cursor.stride(0), state_indices.stride(0),
-        H=H, HV=HV, R=R, K=K, V=V, BK=BK, BV=triton.next_power_of_2(V), num_warps=4)
+        H=H, HV=HV, R=R, K=K, V=V, BK=BK, BV=triton.next_power_of_2(V),
+        CHANNELWISE_G=g.ndim == 4, num_warps=4)
     args = (
         q, k, v, g, beta, out, state.checkpoint, state.d_ring,
         state.k_ring, state.g_ring, state.raw_v_ring, state.raw_k_ring,
         state.beta_ring, state.cursor.packed_cursor, state_indices, q_seqlens,
         snap_v, snap_k, snap_g, snap_beta,
-        q.stride(0), q.stride(1), q.stride(2),
-        k.stride(0), k.stride(1), k.stride(2),
-        v.stride(0), v.stride(1), v.stride(2),
+        q.stride(0), q.stride(1), q.stride(2), q.stride(3),
+        k.stride(0), k.stride(1), k.stride(2), k.stride(3),
+        v.stride(0), v.stride(1), v.stride(2), v.stride(3),
         g.stride(0), g.stride(1), beta.stride(0), beta.stride(1),
         out.stride(0), out.stride(1), state.checkpoint.stride(0),
         state.d_ring.stride(0), state.k_ring.stride(0), state.g_ring.stride(0),
@@ -428,14 +476,15 @@ def fused_recurrent_gdn_replayssm_spec(q: torch.Tensor,
     grid = (triton.cdiv(V, BV), B, HV)
     gdn_replayssm_spec_circular_kernel[grid](
         *args, H=H, HV=HV, K=K, V=V, R=R, TMAX=T, BT=BT,
-        BK=BK, BV=BV, BC=BC,
+        BK=BK, BV=BV, BC=BC, CHANNELWISE_G=g.ndim == 4,
         num_warps=MTP_RECONSTRUCT_SM90_CONFIG['num_warps'],
         num_stages=MTP_RECONSTRUCT_SM90_CONFIG['num_stages'])
     return out, state.checkpoint
 
 
 def fold_gdn_replayssm_mtp_history(state, state_indices: torch.Tensor) -> None:
-    """Exactly materialize committed raw history before continuation prefill."""
+    """Exactly materialize committed raw history before continuation
+    prefill."""
     _, hv, vdim, kdim = state.checkpoint.shape
     h = state.raw_k_ring.shape[1]
     ring_len = state.cursor.R
@@ -450,7 +499,7 @@ def fold_gdn_replayssm_mtp_history(state, state_indices: torch.Tensor) -> None:
         state.raw_k_ring.stride(0), state.g_ring.stride(0),
         state.beta_ring.stride(0), state.cursor.packed_cursor.stride(0),
         state_indices.stride(0), H=h, HV=hv, K=kdim, V=vdim, R=ring_len,
-        BK=bk, BV=bv, FOLD_PARTIAL=True,
+        BK=bk, BV=bv, FOLD_PARTIAL=True, CHANNELWISE_G=state.g_ring.ndim == 4,
         num_warps=config['num_warps'], num_stages=config['num_stages'])
 
 

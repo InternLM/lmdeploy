@@ -27,6 +27,7 @@ class KdaImpl(ABC):
         num_heads: int,
         head_dim: int,
         lower_bound: float,
+        replay_state=None,
     ) -> torch.Tensor:
         """Run short convolution followed by the KDA recurrence."""
         raise NotImplementedError

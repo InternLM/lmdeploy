@@ -12,6 +12,9 @@ STANDARD_SM90_CONFIG_TABLE = (
     (256, dict(BV=128, NK=4, num_warps=1, num_stages=3, dot_precision='ieee')),
     (None, dict(BV=128, NK=4, num_warps=1, num_stages=4, dot_precision='ieee')),
 )
+# Channelwise KDA uses FP32 reductions, not the scalar path's tensor-core layout.
+KDA_STANDARD_SM90_CONFIG = dict(BV=128, NK=2, num_warps=4, num_stages=1, dot_precision='ieee')
+
 # Backward-compatible production-shape alias. New dispatch should call the
 # batch-aware helper below.
 STANDARD_SM90_CONFIG = STANDARD_SM90_CONFIG_TABLE[3][1]

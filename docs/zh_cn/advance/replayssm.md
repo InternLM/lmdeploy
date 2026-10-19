@@ -1,16 +1,16 @@
-# Gated DeltaNet ReplaySSM
+# Gated DeltaNet 与 KDA ReplaySSM
 
 ReplaySSM 是一种推理优化：缓存近期状态空间模型（SSM）的**输入**，并从较早的
 checkpoint 重放这些输入，而不是每生成一个 token 都把完整循环状态写回 HBM。
 该方法来自 [ReplaySSM 原理文章][replayssm-blog]及其
 [参考实现][replayssm-code]。LMDeploy 将其用于 Qwen3-Next 和 Qwen3.5 系列模型
-中的 [Gated DeltaNet][gdn-paper] 层。
+中的 [Gated DeltaNet][gdn-paper] 层，以及 GLM-5.3 Flash 的通道级 KDA 层。
 
 ## 当前状态
 
 ReplaySSM 是实验性的 PyTorch CUDA 功能，需要显式开启，默认关闭。受支持的
-标准解码和 `qwen3_5_mtp` 配置可以设置 `enable_replayssm=True` 启用。
-executor 构造阶段会检查 backend、engine role、ring geometry、speculative method、
+标准解码、Qwen3.5 的 `qwen3_5_mtp` 和 GLM-5.3 Flash 的 `deepseek_mtp` 配置可以设置 `enable_replayssm=True` 启用。
+executor 构造阶段会检查 backend、engine role、外部 cache connector、ring geometry、speculative method、
 GPU 架构和模型类型；不受支持的配置会提前报错。当 `enable_replayssm=False` 时，
 executor 启动和现有基线路径均不受影响。
 
@@ -18,11 +18,49 @@ executor 启动和现有基线路径均不受影响。
 
 - SM90 GPU 上的 PyTorch CUDA backend；
 - 同机 `Hybrid` engine；
-- Qwen3-Next 和 Qwen3.5 系列 Gated DeltaNet 模型；
-- 标准自回归解码或 `qwen3_5_mtp` 投机解码。
+- Qwen3-Next 和 Qwen3.5 系列 Gated DeltaNet 模型，以及 GLM-5.3 Flash KDA；
+- 标准自回归解码或对应模型的 MTP 投机解码。
 
 本检查点尚不支持 TurboMind、非 CUDA 设备、P/D 解耦状态传输、外部 cache
 connector 或其他循环架构。
+
+DeepSeek-V4 不含 GDN/KDA 层，**不支持 ReplaySSM**，使用 `deepseek_mtp` 也不例外。
+它的 compressor/window 状态属于另一种协议。flag-off 兼容性测试不能作为 ReplaySSM
+支持或加速证据。排除其支持范围不等于证明 flag-off 精度对齐；历史单启动 GSM8K
+下降0.834个百分点的原因仍未确定。
+
+启用的 `kv_transfer_config` 会在 executor 分配模型和缓存前被拒绝，包括 producer、consumer、
+双向角色及自定义 connector。仅更换 cache key 前缀不能让外部恢复安全：Replay 的
+checkpoint/rings/cursor 协议尚未获得传输资格。本地 prefix cache 与外部 connector 不同。
+
+### 性能与验收边界
+
+状态正确性、任务精度、同 batch 延迟、同显存预算容量应分别验收，不能相互替代。
+GLM KDA 路径不是通用的同 batch 延迟优化：H200 有状态 ring-cycle 测量中，B128
+标准解码从77.41增至99.81微秒，MTP5合成混合接受从280.12增至311.57微秒。
+测量包含递推和 cursor 推进，但不是整模延迟或真实生产接受分布。
+
+GLM MTP 已测容量吞吐提升9.50%比较的是固定 KV blocks 下 native B224 与 Replay B512；
+Qwen MTP B192 对 B512 则提升0.93%。两者都不证明达到20%收益或同 batch 尾延迟下降。
+这些更大性能 batch 的自然 EOS 精度、流式 TTFT/TPOT 尚未验收。已有同 batch 全量 GSM8K
+重复均值通过的是约定的单侧下降0.5个百分点门，不是统计非劣性或逐 token 等价保证。
+保持默认关闭，应先按目标负载验证再开启。
+
+## GLM-5.3 Flash
+
+引擎同样使用 `enable_replayssm=True` 和 `replayssm_buffer_len=16`。
+投机解码使用 `SpeculativeConfig(method='deepseek_mtp', num_speculative_tokens=5)`，
+ring 长度必须满足 `L >= 2 * (num_speculative_tokens + 1)`。
+
+KDA 的衰减按 key 通道变化，因此 gate ring 为 `[H,L,K]`，而不是 `[HV,L]`。
+AR 和 MTP 的 checkpoint、变换后 delta/key/gate ring 均为 FP32；MTP 额外保留
+BF16 原始 key/value ring 与 FP32 beta。重建时衰减作用在 key 因子上。
+卷积、chunked prefill、KPool tail 与仅含 MLA 的 MTP predictor 保持原实现。
+共享 cursor 仍由 target 每步统一推进，MTP 只提交接受的输入状态转换。
+
+这是实验性支持，不保证 bitwise 一致或一定加速。AR 仍保留完整 checkpoint 并新增
+ring；MTP 则替换每个投机位置的完整 KDA 快照。应针对实际负载测量精度、延迟和内存。
+下文标量 GDN 的布局及数值策略不变。
 
 ## 基本原理
 
@@ -93,13 +131,13 @@ cache allocation 还会带 slot 和 layer 维。packed cursor 例外：每个 sl
 
 Standard ReplaySSM 缓存：
 
-| 内容 | Shape | Dtype | 含义 |
-|---|---:|---|---|
-| checkpoint `S0` | `[HV,V,K]` | SSM-state dtype | 上一个 flush boundary 的状态 |
-| `d_ring` | `[HV,L,V]` | SSM-state dtype | delta-rule correction 向量 `d_i` |
-| `k_ring` | `[H,L,K]` | SSM-state dtype | value-head group 共享的 L2-normalized key |
-| `g_ring` | `[HV,L]` | FP32 | log-decay，`alpha_i = exp(g_i)` |
-| cursor | `[3]` | int32 | `[write_pos, cache_base, is_flush]` |
+| 内容            |      Shape | Dtype           | 含义                                      |
+| --------------- | ---------: | --------------- | ----------------------------------------- |
+| checkpoint `S0` | `[HV,V,K]` | SSM-state dtype | 上一个 flush boundary 的状态              |
+| `d_ring`        | `[HV,L,V]` | SSM-state dtype | delta-rule correction 向量 `d_i`          |
+| `k_ring`        |  `[H,L,K]` | SSM-state dtype | value-head group 共享的 L2-normalized key |
+| `g_ring`        |   `[HV,L]` | FP32            | log-decay，`alpha_i = exp(g_i)`           |
+| cursor          |      `[3]` | int32           | `[write_pos, cache_base, is_flush]`       |
 
 普通 standard 路径中 `cache_base` 和 `is_flush` 为零。non-flush token 只追加
 `(d_i,k_i,g_i)`；不缓存 `q_i`、`v_i`、`beta_i`。原因是 `q_i` 只读取状态，
@@ -108,16 +146,16 @@ Standard ReplaySSM 缓存：
 MTP ReplaySSM 还会缓存 raw inputs，以便使用原始 closed-loop recurrence 折叠
 persistent checkpoint：
 
-| 内容 | Shape | Dtype | 含义 |
-|---|---:|---|---|
-| checkpoint `S0` | `[HV,V,K]` | FP32 | 最近一次物化的 committed state |
-| `d_ring` | `[HV,L,V]` | activation dtype | 快速重构使用的 correction vector |
-| `k_ring` | `[H,L,K]` | activation dtype | 快速重构使用的 normalized key |
-| `g_ring` | `[HV,L]` | FP32 | log-decay |
-| `raw_v_ring` | `[HV,L,V]` | activation dtype | exact fold 使用的原始 value input |
-| `raw_k_ring` | `[H,L,K]` | activation dtype | L2 normalization 之前的 key |
-| `beta_ring` | `[HV,L]` | FP32 | 重新计算 `d_i` 的 writing strength |
-| cursor | `[3]` | int32 | committed length、circular base、next-step flush flag |
+| 内容            |      Shape | Dtype            | 含义                                                  |
+| --------------- | ---------: | ---------------- | ----------------------------------------------------- |
+| checkpoint `S0` | `[HV,V,K]` | FP32             | 最近一次物化的 committed state                        |
+| `d_ring`        | `[HV,L,V]` | activation dtype | 快速重构使用的 correction vector                      |
+| `k_ring`        |  `[H,L,K]` | activation dtype | 快速重构使用的 normalized key                         |
+| `g_ring`        |   `[HV,L]` | FP32             | log-decay                                             |
+| `raw_v_ring`    | `[HV,L,V]` | activation dtype | exact fold 使用的原始 value input                     |
+| `raw_k_ring`    |  `[H,L,K]` | activation dtype | L2 normalization 之前的 key                           |
+| `beta_ring`     |   `[HV,L]` | FP32             | 重新计算 `d_i` 的 writing strength                    |
+| cursor          |      `[3]` | int32            | committed length、circular base、next-step flush flag |
 
 transformed rings 用于普通 verification/重构的快速路径，raw rings 是 checkpoint
 写回的权威输入。`q` 不影响 `S_(i-1) -> S_i` 的状态转移，只影响 `y_i`，因此不用
@@ -208,12 +246,13 @@ target-input 数推进 cursor，因此 rejected suffix 不可见。如果需要 
 LMDeploy 根据已有投机解码配置自动选择 ReplaySSM 协议，不另外提供 MTP
 ReplaySSM 开关。
 
-| 配置 | 行为 |
-|---|---|
-| `enable_replayssm=False` | 现有基线路径 |
-| 开启 Replay，未配置投机解码 | 标准 ReplaySSM |
-| 开启 Replay，同时使用 `qwen3_5_mtp` | MTP ReplaySSM |
-| 开启 Replay，同时使用其他投机算法 | 启动时报错 |
+| 配置                                               | 行为              |
+| -------------------------------------------------- | ----------------- |
+| `enable_replayssm=False`                           | 现有基线路径      |
+| 开启 Replay，未配置投机解码                        | 标准 ReplaySSM    |
+| 开启 Replay，同时使用 `qwen3_5_mtp`                | MTP ReplaySSM     |
+| GLM-5.3 Flash 开启 Replay，同时使用 `deepseek_mtp` | KDA MTP ReplaySSM |
+| 开启 Replay，同时使用其他投机算法                  | 启动时报错        |
 
 ## 基本用法
 
@@ -315,7 +354,7 @@ LMDeploy 初始化时会记录所选模式、每个 state slot 的对齐字节�
 - [Gated Delta Networks: Improving Mamba2 with Delta Rule][gdn-paper]
 - [Qwen3.5-35B-A3B 模型配置][qwen35-model]
 
-[replayssm-blog]: https://dao-lab.ai/blog/2026/replayssm/
-[replayssm-code]: https://github.com/Johnny-Liou/ReplaySSM
 [gdn-paper]: https://arxiv.org/abs/2412.06464
 [qwen35-model]: https://huggingface.co/Qwen/Qwen3.5-35B-A3B
+[replayssm-blog]: https://dao-lab.ai/blog/2026/replayssm/
+[replayssm-code]: https://github.com/Johnny-Liou/ReplaySSM

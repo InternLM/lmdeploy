@@ -510,7 +510,7 @@ class PytorchEngineConfig:
             reserved for asynchronous Mooncake saves. Defaults to 8. A full
             snapshot pool skips the save without blocking inference.
         enable_replayssm: Enable ReplaySSM for supported PyTorch CUDA Gated
-            DeltaNet models. Default False.
+            DeltaNet and GLM-5.3 KDA models. Default False.
         replayssm_buffer_len: ReplaySSM ring length. Supported values are 8,
             16, and 32. Default 16.
         device_type: The inference device type, options ['cuda']

@@ -15,21 +15,29 @@ from .base import ExecutorBase
 
 def _validate_replayssm_preallocation(cache_config: CacheConfig,
                                       specdecode_config: SpecDecodeConfig = None) -> None:
-    """Reject unsupported ReplaySSM geometry before model/cache allocation."""
+    """Reject unsupported ReplaySSM combinations before model/cache
+    allocation."""
     if not cache_config.enable_replayssm:
         return
     if cache_config.device_type != 'cuda':
         raise ValueError('ReplaySSM requires the PyTorch CUDA backend.')
     if cache_config.role != EngineRole.Hybrid:
         raise ValueError('ReplaySSM does not support P/D-disaggregated engine roles.')
+    transfer_config = cache_config.kv_transfer_config
+    if transfer_config is not None and transfer_config.is_kv_transfer_instance:
+        # External caches do not encode the Replay ring/checkpoint protocol in
+        # their compatibility identity. Even producer-only use can collide with
+        # native state, so reject every connector role rather than only loads.
+        raise ValueError('ReplaySSM does not support external KV-cache connectors; '
+                         'disable ReplaySSM or remove kv_transfer_config.')
     buffer_len = cache_config.replayssm_buffer_len
     if buffer_len not in (8, 16, 32):
         raise ValueError('replayssm_buffer_len must be one of 8, 16, or 32.')
     if specdecode_config is None:
         return
-    if specdecode_config.method != 'qwen3_5_mtp':
+    if specdecode_config.method not in ('qwen3_5_mtp', 'deepseek_mtp'):
         raise ValueError(
-            'ReplaySSM speculative decoding supports only qwen3_5_mtp, got '
+            'ReplaySSM speculative decoding supports only qwen3_5_mtp or GLM-5.3 deepseek_mtp, got '
             f'{specdecode_config.method!r}.')
     tmax = specdecode_config.num_speculative_tokens + 1
     if buffer_len < 2 * tmax:
@@ -143,8 +151,13 @@ def build_executor(
             raise ValueError(
                 'ReplaySSM is currently qualified only for SM90 CUDA GPUs, '
                 f'got SM{capability[0]}{capability[1]}.')
-        if not model_config.is_gated_delta:
-            raise ValueError('ReplaySSM is supported only for Gated DeltaNet models.')
+        if model_config.replayssm_mode is None:
+            raise ValueError('ReplaySSM requires a supported Gated DeltaNet or GLM-5.3 KDA model.')
+        if specdecode_config is not None:
+            expected = ('deepseek_mtp' if model_config.hf_config.model_type == 'glm5_next'
+                        else 'qwen3_5_mtp')
+            if specdecode_config.method != expected:
+                raise ValueError(f'ReplaySSM for this model requires {expected}.')
     # Finalize cache policy before any executor copies configs to workers or
     # builds backend operators. Target and memory models share CacheConfig.
     shared_cache_models = [model_config]

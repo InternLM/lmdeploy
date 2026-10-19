@@ -6,6 +6,7 @@ import triton
 import triton.language as tl
 
 from .gated_delta_replayssm_config import (
+    KDA_STANDARD_SM90_CONFIG,
     RESET_CURSOR_SM90_CONFIG,
     STANDARD_CURSOR_SM90_CONFIG,
     get_standard_replayssm_config,
@@ -54,6 +55,7 @@ def _gdn_replayssm_decode_kernel(
     BKT: tl.constexpr,
     HAS_FORCE_FLUSH: tl.constexpr,
     DOT_PRECISION: tl.constexpr,
+    CHANNELWISE_G: tl.constexpr,
 ):
     i_v = tl.program_id(0)
     i_b = tl.program_id(1)
@@ -75,23 +77,24 @@ def _gdn_replayssm_decode_kernel(
         is_flush = is_flush | (tl.load(force_flush + i_b) != 0)
     cache_valid = o_c < write_pos
 
-    g_cur = tl.load(g + i_b * stride_g_b + i_hv).to(tl.float32)
     beta_cur = tl.load(beta + i_b * stride_beta_b + i_hv).to(tl.float32)
-    alpha_cur = tl.exp(g_cur)
-
-    p_g_hist = g_ring + state_idx * stride_g_ring_slot + i_hv * L + o_c
-    g_hist = tl.load(p_g_hist, mask=cache_valid, other=0.0).to(tl.float32)
-    g_prefix = tl.cumsum(g_hist, axis=0)
-    g_total = tl.sum(g_hist, axis=0)
-    replay_decay = tl.where(cache_valid, tl.exp(g_total - g_prefix), 0.0)
-    total_decay = tl.exp(g_total)
+    if not CHANNELWISE_G:
+        g_cur = tl.load(g + i_b * stride_g_b + i_hv).to(tl.float32)
+        alpha_cur = tl.exp(g_cur)
+        p_g_hist = g_ring + state_idx * stride_g_ring_slot + i_hv * L + o_c
+        g_hist = tl.load(p_g_hist, mask=cache_valid, other=0.0).to(tl.float32)
+        g_prefix = tl.cumsum(g_hist, axis=0)
+        g_total = tl.sum(g_hist, axis=0)
+        replay_decay = tl.where(cache_valid, tl.exp(g_total - g_prefix), 0.0)
+        total_decay = tl.exp(g_total)
 
     p_d_hist = (d_ring + state_idx * stride_d_slot
                 + (i_hv * L + o_c[None, :]) * V + o_v[:, None])
     d_hist = tl.load(p_d_hist,
                      mask=mask_v[:, None] & cache_valid[None, :],
                      other=0.0).to(tl.float32)
-    d_tc = (d_hist * replay_decay[None, :]).to(q.dtype.element_ty)
+    if not CHANNELWISE_G:
+        d_tc = (d_hist * replay_decay[None, :]).to(q.dtype.element_ty)
 
     p_q = q + i_b * stride_q_b + i_h * stride_q_h
     p_k = k + i_b * stride_k_b + i_h * stride_k_h
@@ -124,17 +127,45 @@ def _gdn_replayssm_decode_kernel(
         k_hist = tl.load(p_k_hist,
                          mask=cache_valid[:, None] & mask_kt[None, :],
                          other=0.0).to(q.dtype.element_ty)
-        h = h0 * total_decay + tl.dot(d_tc, k_hist, input_precision=DOT_PRECISION).to(tl.float32)
-        state_q += tl.sum(h * q_cur[None, :], axis=1)
-        state_k += tl.sum(h * k_cur[None, :], axis=1)
+        if CHANNELWISE_G:
+            # A KDA gate scales key channels, not the value/delta axis.
+            gates = tl.load(g_ring + state_idx * stride_g_ring_slot
+                            + (i_hv * L + o_c[:, None]) * K + o_kt[None, :],
+                            mask=cache_valid[:, None] & mask_kt[None, :], other=0.0)
+            total = tl.sum(gates, axis=0)
+            decay = tl.exp(total[None, :] - tl.cumsum(gates, axis=0))
+            k_hist = tl.load(p_k_hist,
+                             mask=cache_valid[:, None] & mask_kt[None, :], other=0.0).to(tl.float32)
+            g_cur = tl.load(g + i_b * stride_g_b + i_hv * K + o_kt,
+                            mask=mask_kt, other=0.0).to(tl.float32)
+            alpha = tl.exp(g_cur)
+            # Only two state projections are needed for one-token decode.
+            # Contract the channelwise history with q/k before the delta
+            # factor: avoid an FP32 [V,L] x [L,K] state reconstruction.
+            checkpoint_decay = tl.exp(total) * alpha
+            weighted_keys = k_hist * decay * alpha[None, :]
+            history_q = tl.sum(weighted_keys * q_cur[None, :], axis=1)
+            history_k = tl.sum(weighted_keys * k_cur[None, :], axis=1)
+            state_q += tl.sum(h0 * (checkpoint_decay * q_cur)[None, :], axis=1)
+            state_k += tl.sum(h0 * (checkpoint_decay * k_cur)[None, :], axis=1)
+            state_q += tl.sum(d_hist * history_q[None, :], axis=1)
+            state_k += tl.sum(d_hist * history_k[None, :], axis=1)
+        else:
+            h = h0 * total_decay + tl.dot(d_tc, k_hist, input_precision=DOT_PRECISION).to(tl.float32)
+            state_q += tl.sum(h * q_cur[None, :], axis=1)
+            state_k += tl.sum(h * k_cur[None, :], axis=1)
 
+        if CHANNELWISE_G and (not is_flush) and i_v == 0:
+            tl.store(g_ring + state_idx * stride_g_ring_slot
+                     + (i_hv * L + write_pos) * K + o_kt, g_cur, mask=mask_kt)
         if write_k:
             p_k_new = (k_ring + state_idx * stride_k_ring_slot
                        + (i_h * L + write_pos) * K + o_kt)
             tl.store(p_k_new, k_cur.to(p_k_new.dtype.element_ty), mask=mask_kt)
 
-    state_q *= alpha_cur
-    state_k *= alpha_cur
+    if not CHANNELWISE_G:
+        state_q *= alpha_cur
+        state_k *= alpha_cur
     d_cur = beta_cur * (b_v - state_k)
     result = state_q + d_cur * tl.sum(cur_kq)
     tl.store(p_out, result.to(p_out.dtype.element_ty), mask=mask_v)
@@ -152,15 +183,33 @@ def _gdn_replayssm_decode_kernel(
             k_hist = tl.load(p_k_hist,
                              mask=cache_valid[:, None] & mask_kt[None, :],
                              other=0.0).to(q.dtype.element_ty)
-            h = h0 * total_decay + tl.dot(d_tc, k_hist, input_precision=DOT_PRECISION).to(tl.float32)
-            h = alpha_cur * h + d_cur[:, None] * k_cur[None, :]
+            if CHANNELWISE_G:
+                # A KDA gate scales key channels, not the value/delta axis.
+                gates = tl.load(g_ring + state_idx * stride_g_ring_slot
+                                + (i_hv * L + o_c[:, None]) * K + o_kt[None, :],
+                                mask=cache_valid[:, None] & mask_kt[None, :], other=0.0)
+                total = tl.sum(gates, axis=0)
+                decay = tl.exp(total[None, :] - tl.cumsum(gates, axis=0))
+                k_hist = tl.load(p_k_hist,
+                                 mask=cache_valid[:, None] & mask_kt[None, :], other=0.0).to(tl.float32)
+                h = h0 * tl.exp(total)[None, :] + tl.dot(
+                    d_hist, k_hist * decay, input_precision='ieee')
+                g_cur = tl.load(g + i_b * stride_g_b + i_hv * K + o_kt,
+                                mask=mask_kt, other=0.0).to(tl.float32)
+                h *= tl.exp(g_cur)[None, :]
+            else:
+                h = h0 * total_decay + tl.dot(d_tc, k_hist, input_precision=DOT_PRECISION).to(tl.float32)
+            if CHANNELWISE_G:
+                h = h + d_cur[:, None] * k_cur[None, :]
+            else:
+                h = alpha_cur * h + d_cur[:, None] * k_cur[None, :]
             tl.store(p_h0, h.to(p_h0.dtype.element_ty),
                      mask=mask_v[:, None] & mask_kt[None, :])
     else:
         p_d_new = (d_ring + state_idx * stride_d_slot
                    + (i_hv * L + write_pos) * V + o_v)
         tl.store(p_d_new, d_cur.to(p_d_new.dtype.element_ty), mask=mask_v)
-        if i_v == 0:
+        if i_v == 0 and not CHANNELWISE_G:
             tl.store(g_ring + state_idx * stride_g_ring_slot + i_hv * L + write_pos,
                      g_cur)
 
@@ -193,7 +242,8 @@ def _fold_standard_history_kernel(checkpoint, d_ring, k_ring, g_ring, cursor,
                                   H: tl.constexpr, HV: tl.constexpr,
                                   K: tl.constexpr, V: tl.constexpr,
                                   L: tl.constexpr, BK: tl.constexpr,
-                                  BV: tl.constexpr, BC: tl.constexpr):
+                                  BV: tl.constexpr, BC: tl.constexpr,
+                                  CHANNELWISE_G: tl.constexpr):
     """Materialize a partial standard ring before a continuation prefill."""
     i_v = tl.program_id(0)
     i_b = tl.program_id(1)
@@ -212,11 +262,12 @@ def _fold_standard_history_kernel(checkpoint, d_ring, k_ring, g_ring, cursor,
     mask_v = o_v < V
     mask_k = o_k < K
     cache_valid = o_c < write_pos
-    gates = tl.load(g_ring + state_idx * stride_g_slot + i_hv * L + o_c,
-                    mask=cache_valid, other=0.0).to(tl.float32)
-    prefix = tl.cumsum(gates, axis=0)
-    total = tl.sum(gates, axis=0)
-    decay = tl.where(cache_valid, tl.exp(total - prefix), 0.0)
+    if not CHANNELWISE_G:
+        gates = tl.load(g_ring + state_idx * stride_g_slot + i_hv * L + o_c,
+                        mask=cache_valid, other=0.0).to(tl.float32)
+        prefix = tl.cumsum(gates, axis=0)
+        total = tl.sum(gates, axis=0)
+        decay = tl.where(cache_valid, tl.exp(total - prefix), 0.0)
     d_hist = tl.load(d_ring + state_idx * stride_d_slot
                      + (i_hv * L + o_c[None, :]) * V + o_v[:, None],
                      mask=mask_v[:, None] & cache_valid[None, :], other=0.0)
@@ -226,9 +277,18 @@ def _fold_standard_history_kernel(checkpoint, d_ring, k_ring, g_ring, cursor,
     p_state = (checkpoint + state_idx * stride_state_slot + i_hv * V * K
                + o_v[:, None] * K + o_k[None, :])
     state = tl.load(p_state, mask=mask_v[:, None] & mask_k[None, :], other=0.0).to(tl.float32)
-    state = state * tl.exp(total) + tl.dot(
-        (d_hist * decay[None, :]).to(d_hist.dtype), k_hist,
-        input_precision='ieee').to(tl.float32)
+    if CHANNELWISE_G:
+        gates = tl.load(g_ring + state_idx * stride_g_slot
+                        + (i_hv * L + o_c[:, None]) * K + o_k[None, :],
+                        mask=cache_valid[:, None] & mask_k[None, :], other=0.0)
+        total = tl.sum(gates, axis=0)
+        decay = tl.exp(total[None, :] - tl.cumsum(gates, axis=0))
+        state = state * tl.exp(total)[None, :] + tl.dot(
+            d_hist.to(tl.float32), k_hist.to(tl.float32) * decay, input_precision='ieee')
+    else:
+        state = state * tl.exp(total) + tl.dot(
+            (d_hist * decay[None, :]).to(d_hist.dtype), k_hist,
+            input_precision='ieee').to(tl.float32)
     tl.store(p_state, state, mask=mask_v[:, None] & mask_k[None, :])
 
 
@@ -264,14 +324,17 @@ def fused_recurrent_gdn_replayssm_decode(q: torch.Tensor,
     _, Tv, HV, V = v.shape
     if T != 1 or Tv != 1:
         raise ValueError('standard ReplaySSM decode requires exactly one token per row')
-    if k.shape != q.shape or g.shape != (B, 1, HV) or beta.shape != (B, 1, HV):
+    channelwise = g.ndim == 4
+    gate_shape = (B, 1, HV, K) if channelwise else (B, 1, HV)
+    if k.shape != q.shape or g.shape != gate_shape or beta.shape != (B, 1, HV):
         raise ValueError('invalid q/k/g/beta shape for standard ReplaySSM')
     if checkpoint.shape[1:] != (HV, V, K):
         raise ValueError('invalid ReplaySSM checkpoint shape')
     L = d_ring.shape[2]
     if d_ring.shape[1:] != (HV, L, V) or k_ring.shape[1:] != (H, L, K):
         raise ValueError('invalid ReplaySSM d/k ring shape')
-    if g_ring.shape[1:] != (HV, L) or g_ring.dtype != torch.float32:
+    ring_gate_shape = (HV, L, K) if channelwise else (HV, L)
+    if g_ring.shape[1:] != ring_gate_shape or g_ring.dtype != torch.float32:
         raise ValueError('invalid ReplaySSM g ring shape or dtype')
     if packed_cursor.ndim != 2 or packed_cursor.shape[1] != 3 or packed_cursor.dtype != torch.int32:
         raise ValueError('packed_cursor must have shape [slots, 3] and dtype int32')
@@ -283,7 +346,7 @@ def fused_recurrent_gdn_replayssm_decode(q: torch.Tensor,
         scale = K**-0.5
 
     BK = triton.next_power_of_2(K)
-    config = get_standard_replayssm_config(B)
+    config = KDA_STANDARD_SM90_CONFIG if channelwise else get_standard_replayssm_config(B)
     nk = min(config['NK'], BK)
     BKT = BK // nk
     BV = min(triton.next_power_of_2(V), config['BV'])
@@ -301,7 +364,7 @@ def fused_recurrent_gdn_replayssm_decode(q: torch.Tensor,
         scale,
         H=H, HV=HV, K=K, V=V, L=L, BK=BK, BV=BV, BC=BC,
         NK=nk, BKT=BKT, HAS_FORCE_FLUSH=force_flush is not None,
-        DOT_PRECISION=dot_precision, num_warps=config['num_warps'],
+        DOT_PRECISION=dot_precision, CHANNELWISE_G=channelwise, num_warps=config['num_warps'],
         num_stages=config['num_stages'])
     return out, checkpoint
 
@@ -332,7 +395,8 @@ def fold_gdn_replayssm_standard_history(checkpoint: torch.Tensor,
     h = k_ring.shape[1]
     length = d_ring.shape[2]
     bk = triton.next_power_of_2(kdim)
-    config = get_standard_replayssm_config(state_indices.numel())
+    config = (KDA_STANDARD_SM90_CONFIG if g_ring.ndim == 4
+              else get_standard_replayssm_config(state_indices.numel()))
     bv = min(triton.next_power_of_2(vdim), config['BV'])
     bc = max(16, triton.next_power_of_2(length))
     grid = (triton.cdiv(vdim, bv), state_indices.numel(), hv)
@@ -341,6 +405,7 @@ def fold_gdn_replayssm_standard_history(checkpoint: torch.Tensor,
         checkpoint.stride(0), d_ring.stride(0), k_ring.stride(0),
         g_ring.stride(0), packed_cursor.stride(0), state_indices.stride(0),
         H=h, HV=hv, K=kdim, V=vdim, L=length, BK=bk, BV=bv, BC=bc,
+        CHANNELWISE_G=g_ring.ndim == 4,
         num_warps=config['num_warps'],
         num_stages=config['num_stages'])
 

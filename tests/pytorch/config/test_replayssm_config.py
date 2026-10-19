@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import KVTransferConfig, PytorchEngineConfig
 from lmdeploy.pytorch.config import SpecDecodeConfig
 from lmdeploy.pytorch.configurations.qwen3_next import configure_gdn_replayssm
 from lmdeploy.pytorch.consts import (
@@ -77,7 +77,61 @@ def test_public_mtp_replayssm_accepts_supported_preallocation_config():
     _validate_replayssm_preallocation(cache_config, spec_config)
 
 
-@pytest.mark.parametrize('method', ['deepseek_mtp', 'hy3_mtp', 'medusa'])
+@pytest.mark.parametrize('connector', ['MooncakeStoreConnector', 'CustomConnector'])
+@pytest.mark.parametrize('role', ['kv_producer', 'kv_consumer', 'kv_both'])
+@pytest.mark.parametrize('method', [None, 'qwen3_5_mtp', 'deepseek_mtp'])
+def test_replayssm_rejects_external_connector_before_model_loading(monkeypatch, connector, role, method):
+    cache_config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
+        enable_replayssm=True,
+        kv_transfer_config=KVTransferConfig(kv_connector=connector, kv_role=role)))
+    spec_config = None if method is None else SpecDecodeConfig(
+        model='', method=method, num_speculative_tokens=3)
+
+    def unexpected_model_load(*args, **kwargs):
+        pytest.fail('connector must be rejected before reading model config or allocating caches')
+
+    monkeypatch.setattr('lmdeploy.pytorch.engine.executor.ModelConfig.from_pretrained', unexpected_model_load)
+    with pytest.raises(ValueError, match='ReplaySSM does not support external KV-cache connectors'):
+        build_executor('model-must-not-be-read', cache_config, None,
+                       SimpleNamespace(dp=1, world_size=1), None, specdecode_config=spec_config)
+
+
+@pytest.mark.parametrize('connector', ['MooncakeStoreConnector', 'CustomConnector'])
+@pytest.mark.parametrize('role', ['kv_producer', 'kv_consumer', 'kv_both'])
+def test_flag_off_does_not_restrict_external_connectors(connector, role):
+    cache_config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
+        enable_replayssm=False,
+        kv_transfer_config=KVTransferConfig(kv_connector=connector, kv_role=role)))
+    _validate_replayssm_preallocation(cache_config)
+    assert cache_config.kv_transfer_config.is_kv_transfer_instance
+
+
+@pytest.mark.parametrize('method', [None, 'qwen3_5_mtp', 'deepseek_mtp'])
+def test_replayssm_accepts_empty_transfer_config(method):
+    cache_config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
+        enable_replayssm=True, kv_transfer_config=KVTransferConfig()))
+    spec_config = None if method is None else SpecDecodeConfig(
+        model='', method=method, num_speculative_tokens=3)
+    _validate_replayssm_preallocation(cache_config, spec_config)
+
+
+@pytest.mark.parametrize('method', [None, 'deepseek_mtp'])
+def test_replayssm_rejects_model_without_gdn_or_kda(monkeypatch, method):
+    cache_config = ConfigBuilder.build_cache_config(PytorchEngineConfig(enable_replayssm=True))
+    spec_config = None if method is None else SpecDecodeConfig(
+        model='', method=method, num_speculative_tokens=3)
+    # DSV4 and other unsupported families must not be admitted just because
+    # their cache has state or their speculative method is deepseek_mtp.
+    monkeypatch.setattr('lmdeploy.pytorch.engine.executor.ModelConfig.from_pretrained',
+                        lambda *args, **kwargs: SimpleNamespace(replayssm_mode=None))
+    monkeypatch.setattr(torch.cuda, 'is_available', lambda: False)
+    with pytest.raises(ValueError, match='supported Gated DeltaNet or GLM-5.3 KDA'):
+        build_executor('unsupported-model', cache_config, None,
+                       SimpleNamespace(dp=1, world_size=1),
+                       SimpleNamespace(hf_overrides=None, model_format=None), specdecode_config=spec_config)
+
+
+@pytest.mark.parametrize('method', ['hy3_mtp', 'medusa'])
 def test_mtp_replayssm_rejects_unsupported_speculative_method(method):
     cache_config = ConfigBuilder.build_cache_config(
         PytorchEngineConfig(enable_replayssm=True, replayssm_buffer_len=16))
@@ -226,3 +280,36 @@ def test_cursor_operations_keep_independently_tuned_blocks():
 def test_mtp_exact_fold_uses_single_row_specialization():
     assert get_mtp_exact_fold_config(1) == {'BV': 32, 'num_warps': 2, 'num_stages': 3}
     assert get_mtp_exact_fold_config(2) == {'BV': 16, 'num_warps': 1, 'num_stages': 1}
+
+
+@pytest.mark.parametrize('num_spec_tokens', [0, 3, 5])
+def test_glm_replayssm_preserves_kpool_and_replaces_only_kda_banks(monkeypatch, num_spec_tokens):
+    from lmdeploy.hf_configs.configuration_glm5_next import Glm5NextConfig
+    from lmdeploy.pytorch.configurations.glm5_next import Glm5NextModelConfigBuilder
+    from lmdeploy.pytorch.consts import GLM5_KPOOL_TAIL_K_STATE, GLM5_KPOOL_TAIL_SCORE_STATE
+
+    monkeypatch.setattr('lmdeploy.pytorch.configurations.deepseek_v2.flash_mla_available', lambda: True)
+    hf = Glm5NextConfig(text_config=dict(num_hidden_layers=3,
+        layer_types=['linear_attention', 'full_attention', 'linear_attention'],
+        linear_num_heads=4, linear_head_dim=128, index_head_dim=128))
+    kwargs = dict(num_spec_tokens=num_spec_tokens, tp=2,
+                  spec_method='deepseek_mtp' if num_spec_tokens else None)
+    baseline = Glm5NextModelConfigBuilder.build(hf, **kwargs)
+    config = Glm5NextModelConfigBuilder.build(hf, enable_replayssm=True, **kwargs)
+    specs = {spec.name: spec for spec in config.state_cache_specs}
+    for tail in (GLM5_KPOOL_TAIL_K_STATE, GLM5_KPOOL_TAIL_SCORE_STATE):
+        assert specs[tail] == next(s for s in baseline.state_cache_specs if s.name == tail)
+        assert not specs[tail].store_cacheable
+    assert specs[GDN_REPLAY_CHECKPOINT_CACHE_NAME].shape == (2, 128, 128)
+    assert tuple(specs[GDN_REPLAY_CHECKPOINT_CACHE_NAME].layer_ids) == (0, 2)
+    assert specs[GDN_REPLAY_G_CACHE_NAME].shape == (2, 16, 128)
+    assert specs[GDN_REPLAY_D_CACHE_NAME].dtype == torch.float32
+    assert specs[GDN_REPLAY_K_CACHE_NAME].dtype == torch.float32
+    assert config.replayssm_mode == ('mtp' if num_spec_tokens else 'standard')
+    assert (GDN_REPLAY_RAW_K_CACHE_NAME in specs) == bool(num_spec_tokens)
+    assert baseline.replayssm_mode is None
+    draft = Glm5NextModelConfigBuilder.build(hf, enable_replayssm=True, is_draft_model=True, **kwargs)
+    assert draft.replayssm_mode is None
+    assert not draft.state_cache_specs
+    with pytest.raises(ValueError, match='deepseek_mtp only'):
+        Glm5NextModelConfigBuilder.build(hf, enable_replayssm=True, spec_method='qwen3_5_mtp')

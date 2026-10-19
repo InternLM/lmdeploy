@@ -33,6 +33,7 @@ from lmdeploy.pytorch.backends.cuda.kpool import (
 )
 from lmdeploy.pytorch.configurations.glm5_next import is_glm5_kda_layer
 from lmdeploy.pytorch.consts import (
+    GDN_REPLAY_CURSOR_CACHE_NAME,
     GLM5_KDA_CONV_STATE,
     GLM5_KDA_RECURRENT_STATE,
     GLM5_KPOOL_TAIL_K_STATE,
@@ -52,7 +53,13 @@ from lmdeploy.pytorch.nn import (
     ParallelLMHead,
     RMSNorm,
 )
-from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMeta, GatedDeltaMetaBuilder, build_rmsnorm_gated
+from lmdeploy.pytorch.nn.gated_delta import (
+    GatedDeltaMeta,
+    GatedDeltaMetaBuilder,
+    GatedDeltaReplayState,
+    build_gated_delta_replay_state,
+    build_rmsnorm_gated,
+)
 from lmdeploy.pytorch.nn.kpool import (
     kpool_expand_selected_groups,
     kpool_pooled_block_offsets,
@@ -738,8 +745,11 @@ class Glm5NextLinearAttention(nn.Module):
             conv_bias=None,
             a_log=self.A_log,
             dt_bias=self.dt_bias,
-            conv_state=past_key_value[0],
-            recurrent_state=past_key_value[1],
+            conv_state=(past_key_value.conv_state if isinstance(past_key_value, GatedDeltaReplayState)
+                        else past_key_value[0]),
+            recurrent_state=(past_key_value.checkpoint if isinstance(past_key_value, GatedDeltaReplayState)
+                             else past_key_value[1]),
+            replay_state=past_key_value if isinstance(past_key_value, GatedDeltaReplayState) else None,
             metadata=kda_metadata,
             num_heads=self.local_num_heads,
             head_dim=self.head_dim,
@@ -1753,12 +1763,10 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
         context: StepContext | None = None,
     ):
         named_states = context.named_state_caches
-        required_states = (
-            GLM5_KDA_CONV_STATE,
-            GLM5_KDA_RECURRENT_STATE,
-            GLM5_KPOOL_TAIL_K_STATE,
-            GLM5_KPOOL_TAIL_SCORE_STATE,
-        )
+        replay_enabled = named_states is not None and GDN_REPLAY_CURSOR_CACHE_NAME in named_states
+        required_states = (GLM5_KPOOL_TAIL_K_STATE, GLM5_KPOOL_TAIL_SCORE_STATE)
+        if not replay_enabled:
+            required_states += (GLM5_KDA_CONV_STATE, GLM5_KDA_RECURRENT_STATE)
         if named_states is None:
             raise RuntimeError('GLM-5.3 requires named state caches.')
         missing = [name for name in required_states if name not in named_states]
@@ -1766,16 +1774,25 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
             raise RuntimeError(
                 f'GLM-5.3 is missing named state caches: {missing}.')
 
-        # These specs are deliberately unlayered: their leading dimension is
-        # the compact KDA/full-attention row.  Runtime storage leads with the
-        # request-state slot, so transpose once into layer-major views.
-        kda_conv = named_states[GLM5_KDA_CONV_STATE].transpose(0, 1)
-        kda_recurrent = named_states[
-            GLM5_KDA_RECURRENT_STATE].transpose(0, 1)
+        # Replay KDA banks are layer-scoped. Baseline KDA and KPool specs
+        # pack compact layer rows inside each request slot; transpose those
+        # banks once into layer-major views.
+        if replay_enabled:
+            build = self.ctx_mgr.build_ctx
+            linear_caches = [
+                build_gated_delta_replay_state(named_states, layer_id, build.replayssm_mode,
+                                               build.replayssm_buffer_len, build.num_spec_tokens + 1,
+                                               getattr(context, 'replayssm_force_flush', None))
+                for layer_id in range(self.config.num_hidden_layers)
+                if is_glm5_kda_layer(self.config, layer_id)
+            ]
+        else:
+            kda_conv = named_states[GLM5_KDA_CONV_STATE].transpose(0, 1)
+            kda_recurrent = named_states[GLM5_KDA_RECURRENT_STATE].transpose(0, 1)
+            linear_caches = list(zip(kda_conv, kda_recurrent))
         tail_k = named_states[GLM5_KPOOL_TAIL_K_STATE].transpose(0, 1)
         tail_score = named_states[
             GLM5_KPOOL_TAIL_SCORE_STATE].transpose(0, 1)
-        linear_caches = list(zip(kda_conv, kda_recurrent))
         kpool_tail_states = list(zip(tail_k, tail_score))
         full_caches = list(past_key_values)
         interleaved_caches = []

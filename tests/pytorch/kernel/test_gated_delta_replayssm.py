@@ -15,7 +15,8 @@ def _make_step(batch, h, hv, kdim, vdim, dtype, seed):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required')
 @pytest.mark.parametrize('buffer_len', [1, 8, 16, 32])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16, torch.float32])
-def test_standard_replayssm_matches_recurrent_across_flushes(buffer_len, dtype):
+@pytest.mark.parametrize('channelwise', [False, True])
+def test_standard_replayssm_matches_recurrent_across_flushes(buffer_len, dtype, channelwise):
     from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
         advance_gdn_replayssm_standard_cursor,
         fused_recurrent_gdn_replayssm_decode,
@@ -23,18 +24,24 @@ def test_standard_replayssm_matches_recurrent_across_flushes(buffer_len, dtype):
     from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
 
     batch, h, hv, kdim, vdim = 3, 2, 4, 64, 96
+    if channelwise:
+        h, hv, kdim, vdim = 2, 2, 128, 128
+    state_dtype = torch.float32 if channelwise else dtype
     slots = 5
     state_ids = torch.tensor([1, 3, 4], device='cuda', dtype=torch.int64)
     gen = torch.Generator(device='cuda').manual_seed(123)
-    baseline = torch.randn(slots, hv, vdim, kdim, device='cuda', dtype=dtype, generator=gen)
+    baseline = torch.randn(slots, hv, vdim, kdim, device='cuda', dtype=state_dtype, generator=gen)
     checkpoint = baseline.clone()
-    d_ring = torch.zeros(slots, hv, buffer_len, vdim, device='cuda', dtype=dtype)
-    k_ring = torch.zeros(slots, h, buffer_len, kdim, device='cuda', dtype=dtype)
-    g_ring = torch.zeros(slots, hv, buffer_len, device='cuda', dtype=torch.float32)
+    d_ring = torch.zeros(slots, hv, buffer_len, vdim, device='cuda', dtype=state_dtype)
+    k_ring = torch.zeros(slots, h, buffer_len, kdim, device='cuda', dtype=state_dtype)
+    gate_shape = (slots, hv, buffer_len, kdim) if channelwise else (slots, hv, buffer_len)
+    g_ring = torch.zeros(gate_shape, device='cuda', dtype=torch.float32)
     cursor = torch.zeros(slots, 3, device='cuda', dtype=torch.int32)
 
     for step in range(2 * buffer_len + 3):
         q, k, v, g, beta = _make_step(batch, h, hv, kdim, vdim, dtype, step)
+        if channelwise:
+            g = -torch.rand(batch, 1, hv, kdim, device='cuda') * 0.2
         q_ref = q.repeat_interleave(hv // h, dim=2).contiguous()
         k_ref = k.repeat_interleave(hv // h, dim=2).contiguous()
         expected, _ = fused_recurrent_gated_delta_rule(
@@ -69,7 +76,8 @@ def test_standard_replayssm_matches_recurrent_across_flushes(buffer_len, dtype):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required')
-def test_standard_replayssm_memcheck_matrix_invalid_rows_are_byte_identical():
+@pytest.mark.parametrize('channelwise', [False, True])
+def test_standard_replayssm_memcheck_matrix_invalid_rows_are_byte_identical(channelwise):
     from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
         advance_gdn_replayssm_standard_cursor,
         fused_recurrent_gdn_replayssm_decode,
@@ -81,11 +89,15 @@ def test_standard_replayssm_memcheck_matrix_invalid_rows_are_byte_identical():
     d_ring = torch.randn(3, hv, buffer_len, vdim, device='cuda', dtype=torch.float32)
     k_ring = torch.randn(3, h, buffer_len, kdim, device='cuda', dtype=torch.float32)
     g_ring = torch.randn(3, hv, buffer_len, device='cuda', dtype=torch.float32)
+    if channelwise:
+        g_ring = torch.randn(3, hv, buffer_len, kdim, device='cuda')
     cursor = torch.zeros(3, 3, device='cuda', dtype=torch.int32)
     cursor[0, 0] = buffer_len - 1
     before = tuple(t.clone() for t in (checkpoint, d_ring, k_ring, g_ring, cursor))
     q, k, v, g, beta = _make_step(batch, h, hv, kdim, vdim, torch.float32, 99)
 
+    if channelwise:
+        g = -torch.rand(*g.shape, kdim, device='cuda') * 0.2
     out, _ = fused_recurrent_gdn_replayssm_decode(
         q, k, v, g, beta, checkpoint, d_ring, k_ring, g_ring, cursor, state_ids)
     advance_gdn_replayssm_standard_cursor(cursor, state_ids, buffer_len)

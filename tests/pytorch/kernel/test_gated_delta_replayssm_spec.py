@@ -36,17 +36,19 @@ def _reference(q, k, v, g, beta, initial_state, q_seqlens):
     return out, state
 
 
-def _make_state(slots, h, hv, kdim, vdim, buffer_len, tmax, dtype):
+def _make_state(slots, h, hv, kdim, vdim, buffer_len, tmax, dtype, channelwise=False):
     from lmdeploy.pytorch.nn.gated_delta import GatedDeltaReplayCursor, GatedDeltaReplayState
 
+    ring_dtype = torch.float32 if channelwise else dtype
+    gate_shape = (slots, hv, buffer_len, kdim) if channelwise else (slots, hv, buffer_len)
     checkpoint = torch.zeros(slots, hv, vdim, kdim, device='cuda', dtype=torch.float32)
     return GatedDeltaReplayState(
         mode='mtp',
         conv_state=torch.empty(0, device='cuda'),
         checkpoint=checkpoint,
-        d_ring=torch.zeros(slots, hv, buffer_len, vdim, device='cuda', dtype=dtype),
-        k_ring=torch.zeros(slots, h, buffer_len, kdim, device='cuda', dtype=dtype),
-        g_ring=torch.zeros(slots, hv, buffer_len, device='cuda', dtype=torch.float32),
+        d_ring=torch.zeros(slots, hv, buffer_len, vdim, device='cuda', dtype=ring_dtype),
+        k_ring=torch.zeros(slots, h, buffer_len, kdim, device='cuda', dtype=ring_dtype),
+        g_ring=torch.zeros(gate_shape, device='cuda', dtype=torch.float32),
         cursor=GatedDeltaReplayCursor(
             torch.zeros(slots, 3, device='cuda', dtype=torch.int32), buffer_len, buffer_len, tmax),
         raw_v_ring=torch.zeros(slots, hv, buffer_len, vdim, device='cuda', dtype=dtype),
@@ -67,7 +69,10 @@ def _make_state(slots, h, hv, kdim, vdim, buffer_len, tmax, dtype):
     (32, 8),
 ])
 @pytest.mark.parametrize('explicit_workspace', [False, True])
-def test_mtp_replayssm_matches_committed_recurrent_state(buffer_len, tmax, explicit_workspace):
+@pytest.mark.parametrize('channelwise', [False, True])
+@pytest.mark.parametrize('strided_input', [False, True])
+def test_mtp_replayssm_matches_committed_recurrent_state(buffer_len, tmax, explicit_workspace, channelwise,
+                                                      strided_input):
     from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import (
         commit_gdn_replayssm_spec_cursor,
         fold_gdn_replayssm_mtp_history,
@@ -78,13 +83,20 @@ def test_mtp_replayssm_matches_committed_recurrent_state(buffer_len, tmax, expli
     dtype = torch.bfloat16
     batch, h, hv, kdim, vdim, slots = 3, 1, 2, 16, 24, 5
     state_ids = torch.tensor([0, 2, 4], device='cuda', dtype=torch.int64)
-    state = _make_state(slots, h, hv, kdim, vdim, buffer_len, tmax, dtype)
+    if channelwise:
+        h, hv, kdim, vdim = 2, 2, 128, 128
+    state = _make_state(slots, h, hv, kdim, vdim, buffer_len, tmax, dtype, channelwise)
     # Production retains one slot-capacity workspace across smaller graph buckets.
     workspace = make_gdn_replayssm_spec_workspace(state, slots) if explicit_workspace else None
     committed = torch.zeros(batch, hv, vdim, kdim, device='cuda', dtype=torch.float32)
 
     for step in range(12):
         q, k, v, g, beta = _step(batch, tmax, h, hv, kdim, vdim, dtype, 100 + step)
+        if strided_input:
+            # Match upstream convolution's [B,D,T] output without packing.
+            q, k, v = [x.permute(0, 2, 3, 1).contiguous().permute(0, 3, 1, 2) for x in (q, k, v)]
+        if channelwise:
+            g = -torch.rand(batch, tmax, hv, kdim, device='cuda') * 0.2
         q_seqlens = torch.tensor([tmax, tmax, 1], device='cuda', dtype=torch.int64)
         rejected = torch.tensor(
             [step % tmax, (step * 2 + 1) % tmax, min(1, tmax - 1)], device='cuda', dtype=torch.int32)
@@ -93,6 +105,7 @@ def test_mtp_replayssm_matches_committed_recurrent_state(buffer_len, tmax, expli
         expected_out, _ = _reference(q, k, v, g, beta, committed, q_seqlens)
         actual_out, _ = fused_recurrent_gdn_replayssm_spec(
             q, k, v, g, beta, state, state_ids, q_seqlens, workspace=workspace)
+        assert actual_out.is_contiguous()
         torch.testing.assert_close(actual_out, expected_out, atol=4e-2, rtol=4e-2)
         if was_flush.any():
             torch.testing.assert_close(
@@ -120,14 +133,80 @@ def test_mtp_replayssm_matches_committed_recurrent_state(buffer_len, tmax, expli
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required')
-def test_mtp_replayssm_memcheck_matrix_invalid_rows_do_not_touch_persistent_state():
+@pytest.mark.parametrize('channelwise', [False, True])
+def test_mtp_strided_inputs_graph_replay_matches_packed_state(channelwise):
+    from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import (
+        commit_gdn_replayssm_spec_cursor,
+        fused_recurrent_gdn_replayssm_spec,
+        make_gdn_replayssm_spec_workspace,
+    )
+
+    torch.manual_seed(881)
+    batch, heads, dim, tmax, buffer_len = 3, 3, 96, 3, 16
+    states = [_make_state(batch, heads, heads, dim, dim, buffer_len, tmax, torch.bfloat16, channelwise)
+              for _ in range(2)]
+    workspaces = [make_gdn_replayssm_spec_workspace(state, batch) for state in states]
+    mixed = torch.randn(batch, 3 * heads * dim, tmax, device='cuda', dtype=torch.bfloat16)
+    gate_shape = (batch, tmax, heads, dim) if channelwise else (batch, tmax, heads)
+    gate = -torch.rand(gate_shape, device='cuda') * 0.2
+    beta = torch.rand(batch, tmax, heads, device='cuda')
+    ids = torch.arange(batch, device='cuda')
+    qlens = torch.full((batch,), tmax, device='cuda', dtype=torch.int32)
+    rejected = torch.zeros_like(qlens)
+    fields = ('checkpoint', 'd_ring', 'k_ring', 'g_ring', 'raw_v_ring', 'raw_k_ring', 'beta_ring')
+
+    def forward(index):
+        data = mixed.transpose(1, 2)
+        if index == 0:
+            data = data.contiguous()
+        q, k, v = [x.reshape(batch, tmax, heads, dim) for x in data.split(heads * dim, dim=-1)]
+        return fused_recurrent_gdn_replayssm_spec(
+            q, k, v, gate, beta, states[index], ids, qlens, workspace=workspaces[index])[0]
+
+    graphs, outputs = [], []
+    for index in range(2):
+        forward(index)
+        torch.cuda.synchronize()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            output = forward(index)
+        graphs.append(graph)
+        outputs.append(output)
+    for state in states:
+        for name in fields:
+            getattr(state, name).zero_()
+        state.cursor.packed_cursor.zero_()
+
+    for step in range(32):
+        mixed.normal_()
+        gate.uniform_(-0.4, -0.01)
+        beta.uniform_(0, 1)
+        ids.copy_((torch.arange(batch, device='cuda') + step) % batch)
+        if step % 5 == 0:
+            ids[-1] = -1
+        qlens.copy_((torch.arange(batch, device='cuda') + step) % (tmax + 1))
+        rejected.copy_(torch.minimum(qlens, (torch.arange(batch, device='cuda') + step // 3) % (tmax + 1)))
+        for graph in graphs:
+            graph.replay()
+        assert outputs[1].is_contiguous()
+        torch.testing.assert_close(outputs[0], outputs[1], atol=0, rtol=0)
+        for name in fields:
+            torch.testing.assert_close(getattr(states[0], name), getattr(states[1], name), atol=0, rtol=0)
+        for state in states:
+            commit_gdn_replayssm_spec_cursor(state.cursor.packed_cursor, ids, qlens, rejected, buffer_len, tmax)
+        torch.testing.assert_close(states[0].cursor.packed_cursor, states[1].cursor.packed_cursor, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required')
+@pytest.mark.parametrize('channelwise', [False, True])
+def test_mtp_replayssm_memcheck_matrix_invalid_rows_do_not_touch_persistent_state(channelwise):
     from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import (
         commit_gdn_replayssm_spec_cursor,
         fused_recurrent_gdn_replayssm_spec,
     )
 
     batch, tmax, h, hv, kdim, vdim, slots, buffer_len = 2, 4, 1, 2, 16, 24, 3, 8
-    state = _make_state(slots, h, hv, kdim, vdim, buffer_len, tmax, torch.float16)
+    state = _make_state(slots, h, hv, kdim, vdim, buffer_len, tmax, torch.float16, channelwise)
     tensors = (state.checkpoint, state.d_ring, state.k_ring, state.g_ring, state.raw_v_ring,
                state.raw_k_ring, state.beta_ring, state.cursor.packed_cursor)
     for tensor in tensors:
@@ -138,6 +217,8 @@ def test_mtp_replayssm_memcheck_matrix_invalid_rows_do_not_touch_persistent_stat
     q_seqlens = torch.full((batch, ), tmax, device='cuda', dtype=torch.int64)
     rejected = torch.tensor([0, 2], device='cuda', dtype=torch.int32)
 
+    if channelwise:
+        g = -torch.rand(*g.shape, kdim, device='cuda') * 0.2
     out, _ = fused_recurrent_gdn_replayssm_spec(q, k, v, g, beta, state, state_ids, q_seqlens)
     commit_gdn_replayssm_spec_cursor(
         state.cursor.packed_cursor, state_ids, q_seqlens, rejected, buffer_len, tmax)
@@ -172,8 +253,9 @@ def test_mtp_exact_fold_single_row_specialization():
     torch.testing.assert_close(state.checkpoint, expected, atol=4e-3, rtol=4e-3)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
-def test_flush_raw_history_is_immutable_until_all_consumers_finish():
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required')
+@pytest.mark.parametrize('channelwise', [False, True])
+def test_flush_raw_history_is_immutable_until_all_consumers_finish(channelwise):
     from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import fused_recurrent_gdn_replayssm_spec
     from lmdeploy.pytorch.nn.gated_delta import GatedDeltaReplayCursor, GatedDeltaReplayState
 
@@ -181,21 +263,23 @@ def test_flush_raw_history_is_immutable_until_all_consumers_finish():
     B, H, HV, K, V, R, T = 128, 16, 32, 128, 128, 8, 4
 
     def rand(*s, dtype=torch.bfloat16):
-        return torch.randn(*s, device="cuda", dtype=dtype) * 0.2
+        return torch.randn(*s, device='cuda', dtype=dtype) * 0.2
 
     raw_k = rand(B, H, R, K)
     raw_v = rand(B, HV, R, V)
-    g_ring = -torch.rand(B, HV, R, device="cuda") * 0.2
+    g_ring = -torch.rand(B, HV, R, device='cuda') * 0.2
     beta_ring = torch.rand_like(g_ring)
-    cursor = torch.zeros(B, 3, device="cuda", dtype=torch.int32)
+    if channelwise:
+        g_ring = -torch.rand(B, HV, R, K, device='cuda') * 0.2
+    cursor = torch.zeros(B, 3, device='cuda', dtype=torch.int32)
     cursor[:, 0] = 5
     cursor[:, 2] = 1
     s = GatedDeltaReplayState(
-        mode="mtp",
-        conv_state=torch.empty(0, device="cuda"),
+        mode='mtp',
+        conv_state=torch.empty(0, device='cuda'),
         checkpoint=rand(B, HV, V, K, dtype=torch.float32),
-        d_ring=rand(B, HV, R, V),
-        k_ring=rand(B, H, R, K),
+        d_ring=rand(B, HV, R, V, dtype=torch.float32 if channelwise else torch.bfloat16),
+        k_ring=rand(B, H, R, K, dtype=torch.float32 if channelwise else torch.bfloat16),
         g_ring=g_ring,
         cursor=GatedDeltaReplayCursor(cursor, R, R, T),
         raw_v_ring=raw_v,
@@ -205,17 +289,20 @@ def test_flush_raw_history_is_immutable_until_all_consumers_finish():
     q = rand(B, T, H, K)
     k = rand(B, T, H, K)
     v = rand(B, T, HV, V)
-    g = -torch.rand(B, T, HV, device="cuda") * 0.2
-    beta = torch.rand(B, T, HV, device="cuda", dtype=torch.bfloat16)
-    ids = torch.arange(B, device="cuda", dtype=torch.int64)
-    qlen = torch.full((B,), T, device="cuda", dtype=torch.int64)
+    g = -torch.rand(B, T, HV, device='cuda') * 0.2
+    beta = torch.rand(B, T, HV, device='cuda', dtype=torch.bfloat16)
+    if channelwise:
+        g = -torch.rand(B, T, HV, K, device='cuda') * 0.2
+    ids = torch.arange(B, device='cuda', dtype=torch.int64)
+    qlen = torch.full((B,), T, device='cuda', dtype=torch.int64)
     saved = {n: x.clone() for n, x in vars(s).items() if isinstance(x, torch.Tensor)}
     # Oracle consumes the entire committed prefix before any ring overwrite.
     h = s.checkpoint.clone()
     for t in range(5):
         key = raw_k[:, :, t].float().repeat_interleave(HV // H, 1)
         key = key / (key.square().sum(-1, keepdim=True) + 1e-6).sqrt()
-        h = h * g_ring[:, :, t].exp()[..., None, None]
+        gate = g_ring[:, :, t].exp()
+        h = h * (gate[..., None, :] if channelwise else gate[..., None, None])
         d = (raw_v[:, :, t].float() - (h * key[:, :, None, :]).sum(-1)) * beta_ring[:, :, t, None]
         h = h + d[..., None] * key[:, :, None, :]
     expected = h.clone()
@@ -225,7 +312,8 @@ def test_flush_raw_history_is_immutable_until_all_consumers_finish():
         query = q[:, t].float().repeat_interleave(HV // H, 1)
         key = key / (key.square().sum(-1, keepdim=True) + 1e-6).sqrt()
         query = query / (query.square().sum(-1, keepdim=True) + 1e-6).sqrt() * K**-0.5
-        h = h * g[:, t].exp()[..., None, None]
+        gate = g[:, t].exp()
+        h = h * (gate[..., None, :] if channelwise else gate[..., None, None])
         d = (v[:, t].float() - (h * key[:, :, None, :]).sum(-1)) * beta[:, t, :, None].float()
         h = h + d[..., None] * key[:, :, None, :]
         outputs.append((h * query[:, :, None, :]).sum(-1).to(v.dtype))

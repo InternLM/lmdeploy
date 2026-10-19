@@ -1,4 +1,4 @@
-# ReplaySSM for Gated DeltaNet
+# ReplaySSM for Gated DeltaNet and KDA
 
 ReplaySSM is an inference optimization that caches recent state-space-model
 (SSM) **inputs** and replays them from an older checkpoint, instead of writing
@@ -6,14 +6,15 @@ the full recurrent state to HBM after every token. The method was introduced in
 the [ReplaySSM article][replayssm-blog] and
 [reference implementation][replayssm-code]. LMDeploy applies it to the
 [Gated DeltaNet][gdn-paper] layers used by Qwen3-Next and Qwen3.5-family
-models.
+models, and to the channelwise KDA layers in GLM-5.3 Flash.
 
 ## Status
 
 ReplaySSM is an experimental, opt-in PyTorch CUDA feature and is disabled by
-default. Supported standard-decode and `qwen3_5_mtp` configurations can be
+default. Supported standard-decode, `qwen3_5_mtp` (Qwen3.5), and
+`deepseek_mtp` (GLM-5.3 Flash) configurations can be
 enabled with `enable_replayssm=True`. Executor construction validates the
-backend, engine role, ring geometry, speculative method, GPU architecture, and
+backend, engine role, external cache connectors, ring geometry, speculative method, GPU architecture, and
 model family, and fails early for unsupported configurations. With
 `enable_replayssm=False`, executor startup and the existing baseline path are
 unchanged.
@@ -22,12 +23,64 @@ Current validation is limited to:
 
 - the PyTorch CUDA backend on SM90 GPUs;
 - colocated `Hybrid` engines;
-- Qwen3-Next and Qwen3.5-family Gated DeltaNet models; and
-- standard autoregressive decoding or `qwen3_5_mtp` speculative decoding.
+- Qwen3-Next and Qwen3.5-family Gated DeltaNet models, or GLM-5.3 Flash KDA; and
+- standard autoregressive decoding or the corresponding MTP method.
 
 TurboMind, non-CUDA devices, P/D-disaggregated state transfer, external cache
 connectors, and other recurrent architectures are not supported by this
 checkpoint.
+
+DeepSeek-V4 has no GDN/KDA layers and is **not supported** by ReplaySSM,
+including with `deepseek_mtp`. Its compressor/window state is a different
+protocol. Flag-off compatibility measurements are not ReplaySSM support or
+speedup evidence. Removing it from the support scope does not establish
+flag-off quality parity; the recorded single-startup GSM8K drop of 0.834
+percentage points remains unexplained.
+
+An enabled `kv_transfer_config` is rejected by executor validation before model/cache
+allocation, for producer, consumer, and combined roles, including custom
+connectors. Changing a cache key prefix does not make external restore safe:
+the Replay checkpoint/rings/cursor protocol has not been qualified for transfer.
+Local prefix caching is distinct from an external connector.
+
+### Performance and qualification boundaries
+
+Use separate gates for state correctness, task accuracy, same-batch latency,
+and memory-budget capacity. Passing one does not establish the others.
+In particular, the GLM KDA path is not a general same-batch latency optimization:
+H200 stateful ring-cycle measurements at B128 took 77.41 to 99.81 microseconds
+for standard decode and 280.12 to 311.57 microseconds for MTP5 with synthetic
+mixed acceptance. These measure recurrence plus cursor advancement, not full
+model latency or a production acceptance distribution.
+
+The measured GLM MTP capacity throughput gain of 9.50% instead compares
+native B224 with Replay B512 under a fixed KV-block budget. Qwen MTP B192 to
+B512 gained 0.93%. Neither establishes a 20% gain, nor lower same-batch tail
+latency. Natural-EOS accuracy at those larger performance batch sizes and
+streaming TTFT/TPOT remain unqualified. Existing same-batch repeated GSM8K
+means passed the agreed one-sided 0.5-percentage-point loss gate, not a
+statistical non-inferiority or token-equivalence guarantee. Keep the feature
+default-off and evaluate the intended workload before enabling it.
+
+## GLM-5.3 Flash
+
+Use the same `enable_replayssm=True` and `replayssm_buffer_len=16` engine
+options. For speculative decoding, use
+`SpeculativeConfig(method='deepseek_mtp', num_speculative_tokens=5)`; the
+ring must satisfy `L >= 2 * (num_speculative_tokens + 1)`.
+
+KDA decay is per key channel, so its gate ring is `[H,L,K]`, not `[HV,L]`.
+The checkpoint and transformed delta/key/gate rings are FP32 in both AR and
+MTP modes. MTP additionally keeps BF16 raw key/value rings and FP32 beta.
+The decay weights the key factor during reconstruction. Convolution,
+chunked prefill, KPool tails, and the MLA-only MTP predictor retain their
+existing implementations. The shared cursor still advances once per target
+step; only accepted input transitions become committed MTP history.
+
+This is experimental support, not a bitwise-equivalence or speedup guarantee.
+AR retains the full checkpoint and adds rings; MTP replaces per-position full
+KDA snapshots. Measure quality, latency, and memory for the intended workload.
+The scalar-GDN layouts and numerical policies below are unchanged.
 
 ## Basic principle
 
@@ -109,13 +162,13 @@ all GDN layers.
 
 Standard ReplaySSM keeps:
 
-| Value | Shape | Dtype | Meaning |
-|---|---:|---|---|
-| checkpoint `S0` | `[HV,V,K]` | SSM-state dtype | State at the last flush boundary |
-| `d_ring` | `[HV,L,V]` | SSM-state dtype | Delta-rule correction vectors `d_i` |
-| `k_ring` | `[H,L,K]` | SSM-state dtype | L2-normalized keys shared by value-head groups |
-| `g_ring` | `[HV,L]` | FP32 | Log-decays, with `alpha_i = exp(g_i)` |
-| cursor | `[3]` | int32 | `[write_pos, cache_base, is_flush]` |
+| Value           |      Shape | Dtype           | Meaning                                        |
+| --------------- | ---------: | --------------- | ---------------------------------------------- |
+| checkpoint `S0` | `[HV,V,K]` | SSM-state dtype | State at the last flush boundary               |
+| `d_ring`        | `[HV,L,V]` | SSM-state dtype | Delta-rule correction vectors `d_i`            |
+| `k_ring`        |  `[H,L,K]` | SSM-state dtype | L2-normalized keys shared by value-head groups |
+| `g_ring`        |   `[HV,L]` | FP32            | Log-decays, with `alpha_i = exp(g_i)`          |
+| cursor          |      `[3]` | int32           | `[write_pos, cache_base, is_flush]`            |
 
 `cache_base` and `is_flush` are zero in the ordinary standard path. A normal
 non-flush token appends `(d_i,k_i,g_i)`; it does not cache `q_i`, `v_i`, or
@@ -125,16 +178,16 @@ been absorbed into `d_i`.
 MTP ReplaySSM additionally keeps raw inputs so a persistent checkpoint can be
 folded with the original closed-loop recurrence:
 
-| Value | Shape | Dtype | Meaning |
-|---|---:|---|---|
-| checkpoint `S0` | `[HV,V,K]` | FP32 | Last materialized committed state |
-| `d_ring` | `[HV,L,V]` | activation dtype | Fast reconstruction correction vectors |
-| `k_ring` | `[H,L,K]` | activation dtype | Fast reconstruction normalized keys |
-| `g_ring` | `[HV,L]` | FP32 | Log-decays |
-| `raw_v_ring` | `[HV,L,V]` | activation dtype | Raw value inputs for exact fold |
-| `raw_k_ring` | `[H,L,K]` | activation dtype | Keys before L2 normalization |
-| `beta_ring` | `[HV,L]` | FP32 | Writing strengths used to recompute `d_i` |
-| cursor | `[3]` | int32 | Committed length, circular base, and next-step flush flag |
+| Value           |      Shape | Dtype            | Meaning                                                   |
+| --------------- | ---------: | ---------------- | --------------------------------------------------------- |
+| checkpoint `S0` | `[HV,V,K]` | FP32             | Last materialized committed state                         |
+| `d_ring`        | `[HV,L,V]` | activation dtype | Fast reconstruction correction vectors                    |
+| `k_ring`        |  `[H,L,K]` | activation dtype | Fast reconstruction normalized keys                       |
+| `g_ring`        |   `[HV,L]` | FP32             | Log-decays                                                |
+| `raw_v_ring`    | `[HV,L,V]` | activation dtype | Raw value inputs for exact fold                           |
+| `raw_k_ring`    |  `[H,L,K]` | activation dtype | Keys before L2 normalization                              |
+| `beta_ring`     |   `[HV,L]` | FP32             | Writing strengths used to recompute `d_i`                 |
+| cursor          |      `[3]` | int32            | Committed length, circular base, and next-step flush flag |
 
 The transformed rings make normal verification/reconstruction fast. The raw
 rings are the authority for checkpoint write-back. Queries are not cached
@@ -233,12 +286,13 @@ prefix is folded before the new speculative window is written.
 LMDeploy selects the ReplaySSM protocol from the existing speculative
 configuration; there is no separate MTP ReplaySSM switch.
 
-| Configuration | Behavior |
-|---|---|
-| `enable_replayssm=False` | Existing baseline path |
-| Replay enabled, no speculative config | Standard ReplaySSM |
-| Replay enabled with `qwen3_5_mtp` | MTP ReplaySSM |
-| Replay enabled with another speculative method | Startup error |
+| Configuration                                       | Behavior               |
+| --------------------------------------------------- | ---------------------- |
+| `enable_replayssm=False`                            | Existing baseline path |
+| Replay enabled, no speculative config               | Standard ReplaySSM     |
+| Replay enabled with `qwen3_5_mtp`                   | MTP ReplaySSM          |
+| Replay enabled with `deepseek_mtp` on GLM-5.3 Flash | KDA MTP ReplaySSM      |
+| Replay enabled with another speculative method      | Startup error          |
 
 ## Basic usage
 
@@ -344,7 +398,7 @@ correctness and performance control.
 - [Gated Delta Networks: Improving Mamba2 with Delta Rule][gdn-paper]
 - [Qwen3.5-35B-A3B model configuration][qwen35-model]
 
-[replayssm-blog]: https://dao-lab.ai/blog/2026/replayssm/
-[replayssm-code]: https://github.com/Johnny-Liou/ReplaySSM
 [gdn-paper]: https://arxiv.org/abs/2412.06464
 [qwen35-model]: https://huggingface.co/Qwen/Qwen3.5-35B-A3B
+[replayssm-blog]: https://dao-lab.ai/blog/2026/replayssm/
+[replayssm-code]: https://github.com/Johnny-Liou/ReplaySSM

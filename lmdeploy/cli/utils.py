@@ -666,7 +666,7 @@ class ArgumentHelper:
         return parser.add_argument('--enable-replayssm',
                                    action='store_true',
                                    default=False,
-                                   help='Enable ReplaySSM for supported PyTorch CUDA Gated DeltaNet models.')
+                                   help='Enable ReplaySSM for supported CUDA Gated DeltaNet and GLM-5.3 KDA models.')
 
     @staticmethod
     def replayssm_buffer_len(parser):

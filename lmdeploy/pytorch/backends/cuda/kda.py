@@ -100,7 +100,7 @@ class CudaKdaImpl(KdaImpl):
         self.forward = piecewise_forward
 
     def _forward_spec(self, mixed_qkv, raw_gate, raw_beta, conv_state,
-                      recurrent_state, metadata, **kwargs):
+                      recurrent_state, metadata, replay_state=None, **kwargs):
         """Checkpoint every verified token at its accepted-history ring slot.
 
         State is addressed by accepted history length, not the last proposed length. The ring therefore also handles
@@ -120,7 +120,8 @@ class CudaKdaImpl(KdaImpl):
         offsets = torch.arange(-width, 0, device=ids.device)
         read_offsets = (history[:, None] + offsets).remainder(conv_state.size(-1))
         conv = conv_cache.gather(2, read_offsets[:, None].expand(-1, conv_cache.size(1), -1))
-        recurrent = _state_select(recurrent_state, ids, read_slot)
+        recurrent = (_select_state(recurrent_state, metadata) if replay_state is not None
+                     else _state_select(recurrent_state, ids, read_slot))
         local = copy(metadata)
         local.num_spec_tokens = 0
         local.spec_state_offsets = None
@@ -138,8 +139,80 @@ class CudaKdaImpl(KdaImpl):
         write_offsets = (lengths[:, None] + offsets).remainder(conv_state.size(-1))
         conv_cache.scatter_(2, write_offsets[:, None].expand(-1, conv_cache.size(1), -1), conv)
         _store_state(conv_state, conv_cache, metadata)
-        store(recurrent_state, recurrent, lengths)
+        if replay_state is not None:
+            _store_state(recurrent_state, recurrent, metadata)
+        else:
+            store(recurrent_state, recurrent, lengths)
         return output
+
+    def _forward_replay(self, mixed_qkv, raw_gate, raw_beta, conv_state,
+                        recurrent_state, metadata, replay_state, **kwargs):
+        from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
+            fold_gdn_replayssm_standard_history,
+            fused_recurrent_gdn_replayssm_decode,
+        )
+        from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import (
+            fold_gdn_replayssm_mtp_history,
+            fused_recurrent_gdn_replayssm_spec,
+            make_gdn_replayssm_spec_workspace,
+        )
+        from lmdeploy.pytorch.kernels.cuda.kda_replayssm import prepare_kda_replay_gates
+
+        state = replay_state
+        ids = metadata.origin_state_ids
+        if not metadata.is_decoding:
+            if state.mode == 'mtp':
+                fold_gdn_replayssm_mtp_history(state, ids)
+                # Reuse the original convolution ring/prefill path, but select
+                # and store a single recurrent checkpoint instead of Tmax states.
+                return self._forward_spec(mixed_qkv, raw_gate, raw_beta, conv_state,
+                                          recurrent_state, metadata, replay_state=state, **kwargs)
+            fold_gdn_replayssm_standard_history(
+                state.checkpoint, state.d_ring, state.k_ring, state.g_ring,
+                state.cursor.packed_cursor, ids)
+            return self.forward(mixed_qkv, raw_gate, raw_beta, conv_state=conv_state,
+                                recurrent_state=recurrent_state, metadata=metadata, **kwargs)
+
+        batch = ids.numel()
+        steps = mixed_qkv.size(1) // batch
+        heads, dim = kwargs['num_heads'], kwargs['head_dim']
+        if state.mode == 'mtp':
+            # Keep upstream's tentative convolution ring and accepted-history
+            # addressing; only the recurrent-state representation changes.
+            weight = kwargs['conv_weight']
+            if weight.ndim == 3:
+                weight = weight.squeeze(1)
+            mixed = self.shared_conv_update(
+                mixed_qkv.reshape(batch, steps, -1).transpose(1, 2), conv_state, weight,
+                bias=kwargs['conv_bias'], activation='silu',
+                conv_state_indices=ids.to(torch.int32), cache_seqlens=metadata.cache_seqlens)
+            # Replay verify reads stride-T channels directly, avoiding a
+            # full Q/K/V pack while preserving upstream convolution state.
+            mixed = mixed.transpose(1, 2)
+        else:
+            mixed = self._conv(mixed_qkv, kwargs['conv_weight'], kwargs['conv_bias'],
+                               conv_state, metadata).reshape(batch, steps, -1)
+        q, k, v = [x.reshape(batch, steps, heads, dim)
+                   for x in mixed.split(heads * dim, dim=-1)]
+        g, beta = prepare_kda_replay_gates(
+            raw_gate.reshape(batch, steps, heads, dim).contiguous(),
+            raw_beta.reshape(batch, steps, heads).contiguous(),
+            kwargs['a_log'], kwargs['dt_bias'], kwargs['lower_bound'])
+        if state.mode == 'standard':
+            output, _ = fused_recurrent_gdn_replayssm_decode(
+                q, k, v, g, beta, state.checkpoint, state.d_ring, state.k_ring,
+                state.g_ring, state.cursor.packed_cursor, ids, force_flush=state.force_flush)
+        else:
+            # Retain every capture bucket's workspace addresses until release.
+            capacity = max(state.checkpoint.shape[0], 1 << (batch - 1).bit_length())
+            if not hasattr(self, '_replayssm_workspaces'):
+                self._replayssm_workspaces = {}
+            if capacity not in self._replayssm_workspaces:
+                self._replayssm_workspaces[capacity] = make_gdn_replayssm_spec_workspace(state, capacity)
+            output, _ = fused_recurrent_gdn_replayssm_spec(
+                q, k, v, g, beta, state, ids, metadata.q_seqlens,
+                workspace=self._replayssm_workspaces[capacity])
+        return output.reshape(1, batch * steps, heads, dim)
 
     def _decode_recurrent(self, q, k, v, g, beta, A_log, dt_bias, initial_state,
                           output_final_state=True, lower_bound=None, state_indices=None, cache_seqlens=None, **kwargs):
@@ -245,7 +318,14 @@ class CudaKdaImpl(KdaImpl):
         num_heads: int,
         head_dim: int,
         lower_bound: float,
+        replay_state=None,
     ) -> torch.Tensor:
+        if replay_state is not None:
+            return self._forward_replay(
+                mixed_qkv, raw_gate, raw_beta, conv_state, recurrent_state, metadata,
+                replay_state, conv_weight=conv_weight, conv_bias=conv_bias,
+                a_log=a_log, dt_bias=dt_bias, num_heads=num_heads,
+                head_dim=head_dim, lower_bound=lower_bound)
         if (getattr(metadata, 'num_spec_tokens', 0) or 0) > 0:
             return self._forward_spec(
                 mixed_qkv, raw_gate, raw_beta, conv_state, recurrent_state,
