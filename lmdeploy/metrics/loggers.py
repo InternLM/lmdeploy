@@ -121,6 +121,9 @@ class LoggingStatLogger(StatLoggerBase):
         if scheduler_stats.prefix_cache_hit_rate != 0:
             log_msg += f'Prefix cache hit rate: {scheduler_stats.prefix_cache_hit_rate * 100 :.1f}%, '
 
+        if scheduler_stats.external_prefix_cache_hit_rate is not None:
+            log_msg += f'External prefix cache hit rate: {scheduler_stats.external_prefix_cache_hit_rate * 100:.1f}%, '
+
         if spec_msg is not None:
             log_msg += spec_msg
 
@@ -195,6 +198,20 @@ class PrometheusStatLogger(StatLoggerBase):
             name='lmdeploy:prefix_cache_hit_rate',
             documentation='Prefix-cache hit rate. 1 means 100 percent of queried prefix tokens hit.',
             labelnames=labelnames).labels(*labelvalues)
+
+        self.gauge_external_prefix_cache_hit_rate = prometheus_client.Gauge(
+            name='lmdeploy:external_prefix_cache_hit_rate',
+            documentation='Cumulative external prefix-cache hit rate. Queries exclude locally reused tokens.',
+            labelnames=labelnames).labels(*labelvalues)
+        self.counter_external_prefix_cache_queries = prometheus_client.Counter(
+            name='lmdeploy:external_prefix_cache_queries',
+            documentation='External prefix-cache queries, in tokens, excluding locally reused prefixes.',
+            labelnames=labelnames).labels(*labelvalues)
+        self.counter_external_prefix_cache_hits = prometheus_client.Counter(
+            name='lmdeploy:external_prefix_cache_hits',
+            documentation='External prefix-cache hits, in tokens, counted at request admission.',
+            labelnames=labelnames).labels(*labelvalues)
+        self._last_external_prefix_cache_counts = (0, 0)
 
         #
         # Counters
@@ -385,6 +402,18 @@ class PrometheusStatLogger(StatLoggerBase):
         self.gauge_scheduler_waiting.set(stats.num_waiting_reqs)
         self.gauge_gpu_cache_usage.set(stats.gpu_cache_usage)
         self.gauge_prefix_cache_hit_rate.set(stats.prefix_cache_hit_rate)
+        if stats.external_prefix_cache_hit_rate is not None:
+            self.gauge_external_prefix_cache_hit_rate.set(stats.external_prefix_cache_hit_rate)
+            queries, hits = stats.external_prefix_cache_queries, stats.external_prefix_cache_hits
+            last_queries, last_hits = self._last_external_prefix_cache_counts
+            # Schedule metrics are cumulative snapshots, also read by health
+            # probes. Repeated polls must not increment these counters again.
+            # If the engine restarts, its new totals begin another counter epoch.
+            if queries < last_queries or hits < last_hits:
+                last_queries, last_hits = 0, 0
+            self.counter_external_prefix_cache_queries.inc(queries - last_queries)
+            self.counter_external_prefix_cache_hits.inc(hits - last_hits)
+            self._last_external_prefix_cache_counts = (queries, hits)
 
     def record_iteration(self, stats: IterationStats) -> None:
         """Report token-related metrics to prometheus."""

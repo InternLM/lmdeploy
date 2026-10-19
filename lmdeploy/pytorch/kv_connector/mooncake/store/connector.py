@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from lmdeploy.pytorch.kv_connector.base import (
+    KVCachePool,
     KVCacheValue,
     KVConnectorBase,
     KVConnectorOutput,
@@ -124,8 +125,16 @@ class MooncakeStoreConnector(KVConnectorBase):
 
     # Worker-side methods.
 
-    def register_kv_caches(self, kv_caches: Mapping[str, KVCacheValue]) -> None:
-        return self._require_worker().register_kv_caches(kv_caches)
+    def register_kv_caches(
+        self,
+        kv_caches: Mapping[str, KVCacheValue],
+        *,
+        state_cache_pools: Sequence[KVCachePool] = (),
+    ) -> None:
+        return self._require_worker().register_kv_caches(
+            kv_caches,
+            state_cache_pools=state_cache_pools,
+        )
 
     def start_load_kv(self) -> None:
         connector_metadata = self._get_connector_metadata()

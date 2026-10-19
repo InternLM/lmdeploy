@@ -91,7 +91,9 @@ class DefaultCacheBackend(CacheBackend):
             return 'packed'
 
         layouts = []
-        for kind, group in groupby(tensor_specs, key=layout_kind):
+        # A block pool is transferred as a whole row. Keep local-only payloads
+        # out of pools that contain persisted KV, including packed layouts.
+        for (kind, _), group in groupby(tensor_specs, key=lambda spec: (layout_kind(spec), spec.store_cacheable)):
             group = tuple(group)
             if kind == 'contiguous':
                 layout = ContiguousBlockCacheLayout(group, num_layers=num_layers)

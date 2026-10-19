@@ -1,15 +1,86 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import pickle
 from collections import deque
 from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
+from unittest.mock import Mock
 
+import pybase64
 import pytest
 import torch
 
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.spec_decode.base import BaseSpecModelAgent
+from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+from lmdeploy.utils import FlattenedTensorBucket
+
+
+@pytest.mark.parametrize('history_len', [0, 7])
+@pytest.mark.parametrize('num_spec_tokens', [0, 1, 3])
+@pytest.mark.parametrize('device', ['cpu', pytest.param('cuda', marks=pytest.mark.skipif(
+    not torch.cuda.is_available(), reason='CUDA is not available'))])
+def test_prefill_conv_short_chunks_keep_their_own_history(monkeypatch, history_len, num_spec_tokens, device):
+    import torch.nn.functional as F
+
+    from lmdeploy.pytorch.backends import gated_delta_rule as meta_module
+    from lmdeploy.pytorch.backends.cuda.causal_conv1d import CausalConv1dTilelangImpl
+    from lmdeploy.pytorch.backends.cuda.utils import has_tilelang
+
+    lengths = (1, 2, 3, 8)
+    width, channels = 4, 8
+    histories = [torch.arange((history_len + length) * channels, dtype=torch.float32,
+                             device=device).reshape(-1, channels) / 100 + index
+                 for index, length in enumerate(lengths)]
+    weight = torch.arange(channels * width, dtype=torch.float32, device=device).reshape(channels, width) / 100
+    state_ids = torch.tensor([3, 1, 4, 2], device=device)
+    state_len = width + num_spec_tokens
+    state = torch.full((5, channels, state_len), -100., device=device)
+    for slot, history in zip((3, 1, 4, 2), histories):
+        if history_len:
+            offsets = torch.arange(history_len - width, history_len, device=device)
+            if num_spec_tokens:
+                state[slot, :, offsets % state_len] = history[:history_len][-width:].T
+            else:
+                state[slot] = history[:history_len][-width:].T
+    q_lengths = torch.tensor(lengths, device=device)
+    cu_seqlens = torch.cat((q_lengths.new_zeros(1), q_lengths.cumsum(0)))
+    monkeypatch.setattr(meta_module, 'get_step_ctx_manager',
+                        lambda: SimpleNamespace(build_ctx=SimpleNamespace(num_spec_tokens=num_spec_tokens)))
+    meta = meta_module.GatedDeltaMeta(sum(lengths), width, state_ids, SimpleNamespace(
+        is_decoding=False, cu_seqlens_q=cu_seqlens, q_seqlens=q_lengths, kv_seqlens=q_lengths + history_len))
+    x = torch.cat([history[history_len:] for history in histories])[None]
+
+    def reference_conv(x, weight, bias, seq_idx, initial_states, return_final_states, activation):
+        outputs = []
+        start = 0
+        for index, length in enumerate(lengths):
+            values = torch.cat((initial_states[index], x[0, :, start:start + length]), dim=-1)
+            outputs.append(F.conv1d(values[None], weight[:, None], groups=channels))
+            start += length
+        return torch.cat(outputs, dim=-1)
+
+    if device == 'cuda':
+        if not has_tilelang():
+            pytest.skip('TileLang is not available')
+        impl = CausalConv1dTilelangImpl()
+    else:
+        impl = object.__new__(CausalConv1dTilelangImpl)
+        impl.conv1d_fn = reference_conv
+    output = impl._prefill(x, weight, None, state, meta, None)
+    expected_outputs = []
+    for slot, history, length in zip((3, 1, 4, 2), histories, lengths):
+        padded = F.pad(history.T, (width - 1, 0))
+        expected_outputs.append(F.conv1d(padded[None], weight[:, None], groups=channels)[..., -length:])
+        if num_spec_tokens:
+            offsets = torch.arange(history_len + length - width, history_len + length, device=device)
+            actual_state = state[slot, :, offsets % state_len]
+        else:
+            actual_state = state[slot]
+        torch.testing.assert_close(actual_state, padded[:, -width:])
+    torch.testing.assert_close(output, torch.cat(expected_outputs, dim=-1).transpose(1, 2))
 
 
 def _input_logprob_model_inputs(input_ids, indices):
@@ -688,17 +759,6 @@ def test_spec_agent_build_model_context_is_capability_based():
     assert agent.build_model_context() == SpecModelBuildContext()
 
 
-def test_spec_agent_reset_runtime_state_discards_chunk_carry():
-    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
-
-    agent = SpecModelAgent.__new__(SpecModelAgent)
-    agent._prev_chunk_last = {'hidden_states': object()}
-
-    agent.reset_runtime_state()
-
-    assert agent._prev_chunk_last == {}
-
-
 @pytest.mark.parametrize(
     ('is_dummy', 'expected_events'),
     [
@@ -1004,14 +1064,18 @@ def test_record_forward_input_stream_defers_origin_stream_reuse():
     forward_stream.wait_event(h2d_event)
     _record_forward_input_stream({'delta': tensor}, forward_stream)
     with torch.cuda.stream(forward_stream):
+        observed = torch.empty_like(tensor)
         torch.cuda._sleep(10_000_000)
-        observed = tensor.clone()
+        observed.copy_(tensor)
 
     del tensor
     with torch.cuda.stream(h2d_stream):
         replacement = torch.zeros((numel, ), dtype=torch.uint8, device='cuda')
 
-    assert replacement.data_ptr() != original_ptr
+    # A delayed host may reach this check after the consumer has finished;
+    # reusing its storage is then safe. Only pending work must pin the input.
+    if not forward_stream.query():
+        assert replacement.data_ptr() != original_ptr
     forward_stream.synchronize()
     h2d_stream.synchronize()
     assert torch.all(observed == 7)
@@ -1422,10 +1486,8 @@ class TestResetGraphRunner:
             get_model=lambda: model,
             get_prefill_warmup_token_sizes=lambda: prefill_token_sizes,
         )
-        agent.spec_agent = SimpleNamespace(
-            get_model=lambda: None,
-            is_enabled=lambda: False,
-        )
+        agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+        agent.spec_agent._enabled = False
         agent.state = SimpleNamespace(is_sleeping=is_sleeping)
         agent.all_context = nullcontext
         agent.reset_graph_runner = lambda: events.append('reset')
@@ -1467,7 +1529,6 @@ class TestResetGraphRunner:
 
         agent = SpecModelAgent.__new__(SpecModelAgent)
         agent.proposer = type('Proposer', (), {'model': _Model()})()
-        agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
 
         @contextmanager
         def _draft_context():
@@ -1484,7 +1545,6 @@ class TestResetGraphRunner:
             'reset',
             'exit_draft_context',
         ]
-        assert agent._prev_chunk_last == {}
 
 
 class TestModelAgentWakeup:
@@ -1600,7 +1660,6 @@ class TestModelAgentWakeup:
 
         spec_agent = SpecModelAgent.__new__(SpecModelAgent)
         spec_agent.proposer = type('Proposer', (), {'model': _SpecGraphRunner()})()
-        spec_agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
         spec_agent.cache_engine = object()
 
         @contextmanager
@@ -1649,7 +1708,6 @@ class TestModelAgentWakeup:
         assert model_agent._prev_chunk_output is None
         assert model_agent._prev_chunk_last_logit is None
         assert model_agent.step_inputs == {'fresh': 'step_inputs'}
-        assert spec_agent._prev_chunk_last == {}
         assert model_agent.cache_engine is None
         assert model_agent.state_cache_engine is None
         assert spec_agent.cache_engine is None
@@ -1719,18 +1777,10 @@ class TestCheckpointEngineWeightUpdate:
             def get_model(self):
                 return self.model
 
-        class _SpecAgent:
-            method = None
-
-            def is_enabled(self):
-                return False
-
-            def get_model(self):
-                return None
-
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.patched_model = _PatchedModel()
-        agent.spec_agent = _SpecAgent()
+        agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+        agent.spec_agent._enabled = False
         agent.memdecode_agent = None
         agent._checkpoint_engine_zmq_ctx = None
         agent.state = SimpleNamespace(is_sleeping=True)
@@ -2023,3 +2073,85 @@ class TestMemDecodeModelAgentLifecycle:
             ('base_cache', swap_in_map, swap_out_map),
             ('memory_cache', swap_in_map, swap_out_map),
         ]
+
+
+@pytest.fixture(params=['flat', 'null_llm', 'nested', 'mirrored'])
+def weight_update_agent(request):
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    config = SimpleNamespace(num_hidden_layers=5, num_nextn_predict_layers=2)
+    # Follower ranks have the draft config but no local proposer.
+    agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+    agent.spec_agent._enabled = True
+    agent.spec_agent.method = 'deepseek_mtp'
+    agent.spec_agent.proposer = None
+    agent.spec_agent.model_config = SimpleNamespace(hf_config=config, num_layers=2)
+    if request.param == 'null_llm':
+        agent.spec_agent.model_config.llm_config = None
+    elif request.param in ('nested', 'mirrored'):
+        agent.spec_agent.model_config.llm_config = config
+        # A wrapper can omit language fields or contain stale mirrored values.
+        agent.spec_agent.model_config.hf_config = (
+            SimpleNamespace(text_config=config) if request.param == 'nested'
+            else SimpleNamespace(num_hidden_layers=99, num_nextn_predict_layers=1))
+    return agent
+
+
+@pytest.mark.parametrize('method,enabled,indices', [
+    ('deepseek_mtp', True, [2, 3]), ('qwen3_5_mtp', True, [6]),
+    ('deepseek_mtp', False, []), ('eagle', True, []),
+])
+@pytest.mark.parametrize('prefix', ['model.layers.', 'model.language_model.layers.'])
+def test_split_updated_weights(weight_update_agent, method, enabled, indices, prefix):
+    agent = weight_update_agent
+    agent.spec_agent.method = method
+    agent.spec_agent._enabled = enabled
+    names = ['model.embed_tokens.weight', 'model.layers.4.input_layernorm.weight',
+             'model.layers.5.eh_proj.weight', 'model.layers.6.shared_head.norm.weight',
+             'model.layers.50.eh_proj.weight', 'model.layers.7.eh_proj.weight', 'mtp.fc.weight', 'lm_head.weight']
+    names = [name.replace('model.layers.', prefix) for name in names]
+    weights = [(name, torch.zeros(1)) for name in names]
+    main, draft = agent._split_updated_weights(weights)
+    assert [n for n, _ in draft] == [names[i] for i in indices]
+    assert [n for n, _ in main] == [n for i, n in enumerate(names) if i not in indices]
+    assert all(t is dict(weights)[n] for n, t in main + draft)
+
+
+@pytest.mark.parametrize('entry', ['update_params', 'shared_bucket_loader'])
+@pytest.mark.parametrize('prefix', ['model.layers.', 'model.language_model.layers.'])
+@pytest.mark.parametrize('bucket_kind', ['mixed', 'main_only', 'draft_only', 'empty'])
+def test_update_routes_before_renaming(weight_update_agent, monkeypatch, entry, prefix, bucket_kind):
+    agent = weight_update_agent
+    loaded = {'main': [], 'draft': []}
+
+    def model(tag):
+        return SimpleNamespace(rename_weight=lambda n: 'renamed.' + n,
+                               load_weights=lambda weights: loaded[tag].extend(weights))
+
+    main, draft = model('main'), model('draft')
+    agent.patched_model = SimpleNamespace(get_model=lambda: main)
+    agent.spec_agent.get_model = lambda: draft
+    expected = {'main': [('lm_head.weight', torch.tensor([1.]))],
+                'draft': [(f'{prefix}5.enorm.weight', torch.tensor([2.]))]}
+    if bucket_kind in ('draft_only', 'empty'):
+        expected['main'] = []
+    if bucket_kind in ('main_only', 'empty'):
+        expected['draft'] = []
+    weights = expected['main'] + expected['draft']
+    if entry == 'update_params':
+        bucket = FlattenedTensorBucket(named_tensors=weights)
+        agent.all_context = nullcontext
+        agent._update_params_ipc_tensor = bucket.get_flattened_tensor() if weights else None
+        agent._update_params_ipc_event = Mock()
+        monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
+        payload = pybase64.b64encode(pickle.dumps({'metadata': bucket.metadata})).decode()
+        agent.update_params(UpdateParamsRequest(serialized_named_tensors=payload,
+                                                load_format='flattened_bucket', finished=False))
+        assert agent._update_params_ipc_event.record.call_count == sum(bool(v) for v in expected.values())
+    else:
+        # NCCL and checkpoint-engine IPC use this upstream shared loader.
+        agent._load_updated_weight_bucket(weights, 'test')
+    for tag, expected_weights in expected.items():
+        assert len(loaded[tag]) == len(expected_weights)
+        for (actual_name, actual_tensor), (name, tensor) in zip(loaded[tag], expected_weights):
+            assert actual_name == 'renamed.' + name
+            torch.testing.assert_close(actual_tensor, tensor)

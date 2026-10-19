@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.backends import nsa
+from lmdeploy.pytorch.nn import nsa as nsa_module
 
 
 def _build_indexer_meta(q_seqlens: torch.Tensor,
@@ -218,13 +219,16 @@ def test_indexer_meta_skips_reused_mtp_topk():
 
 
 @pytest.mark.parametrize(
-    ('allow_skip', 'is_decoding', 'max_kv_seqlen', 'should_skip'),
-    [(True, False, 2048, True), (True, False, 2049, False),
-     (True, True, 2048, False), (False, False, 2048, False)])
+    ('allow_skip', 'disable_dense', 'is_decoding', 'max_kv_seqlen', 'should_skip'),
+    [(True, False, False, 2048, True), (True, True, False, 2048, False),
+     (True, False, False, 2049, False), (True, False, True, 2048, False),
+     (False, False, False, 2048, False)])
 def test_short_prefill_caches_indexer_k_before_optional_scoring(
-        monkeypatch, allow_skip, is_decoding, max_kv_seqlen, should_skip):
+        monkeypatch, allow_skip, disable_dense, is_decoding, max_kv_seqlen, should_skip):
+    from lmdeploy.pytorch import envs
     from lmdeploy.pytorch.backends.cuda import nsa as cuda_nsa
 
+    monkeypatch.setattr(envs, 'mla_disable_dense_prefill', disable_dense)
     prepare_q = torch.tensor(0)
     monkeypatch.setattr(cuda_nsa, '_get_dsa_indexer_k_cache_views',
                         lambda *_: (torch.empty(0), torch.empty(1, 1)))
@@ -244,7 +248,13 @@ def test_short_prefill_caches_indexer_k_before_optional_scoring(
     impl.dcp_rank = 0
     impl.topk = 2048
     impl.softmax_scale = 1.0
-    impl._allow_short_prefill_scoring_skip = allow_skip
+
+    def build_indexer(spec, **kwargs):
+        impl._allow_short_prefill_scoring_skip = spec.allow_short_prefill_scoring_skip
+        return impl
+
+    monkeypatch.setattr(nsa_module, 'get_backend', lambda: SimpleNamespace(build_op=build_indexer))
+    nsa_module.IndexerTopKFP8(2048, 1.0, 128, allow_short_prefill_scoring_skip=allow_skip)
     selected = torch.tensor(1)
     score_calls = []
 

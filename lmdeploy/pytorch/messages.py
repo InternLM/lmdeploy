@@ -212,6 +212,9 @@ class SequenceMeta:
     sampling_strategy: 'SamplingStrategy' = None
     use_mrope: bool = False
     enable_prefix_caching: bool = False
+    enable_mooncake_store: bool = False
+    # Zero disables state-checkpoint chunking, including for full-attention-only models.
+    prefill_save_alignment: int = 0
     prefix_cache_checkpoint_block_size: int = 0
     prefix_cache_token_lookahead: int = 0
 
@@ -700,6 +703,11 @@ class SchedulerSequence:
         return self._seq_meta.block_size
 
     @property
+    def prefill_input_shift(self) -> int:
+        """Draft input lookahead that prefill chunk boundaries must support."""
+        return self._seq_meta.strategy.prefill_input_shift
+
+    @property
     def history_image_num(self) -> int:
         """Get history image number."""
         return self._num_history_images
@@ -892,10 +900,10 @@ class SchedulerSequence:
 
     def get_prefix_cache_extra_identity(self, start: int, end: int) -> PrefixCacheExtraIdentity:
         count = self._seq_meta.prefix_cache_token_lookahead
-        return (self._get_prefix_cache_multimodal_identity(start, end + count)
+        return (self.get_prefix_cache_multimodal_identity(start, end + count)
                 + self.get_prefix_cache_token_dependency(end))
 
-    def _get_prefix_cache_multimodal_identity(self, start: int, end: int) -> PrefixCacheExtraIdentity:
+    def get_prefix_cache_multimodal_identity(self, start: int, end: int) -> tuple[MultimodalSpan, ...]:
         """Get canonical multimodal identity entries for a token range.
 
         The common caller asks for a full block, but partial ranges are used when verifying sparse SSM checkpoint
@@ -1002,7 +1010,7 @@ class SchedulerSequence:
         if multimodals is None:
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
-        if self._seq_meta.enable_prefix_caching:
+        if self._seq_meta.enable_prefix_caching or self._seq_meta.enable_mooncake_store:
             self._update_prefix_cache_spans(multimodals)
         self.history_multimodals.add_inputs(multimodals)
 

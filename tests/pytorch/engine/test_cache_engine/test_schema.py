@@ -56,7 +56,8 @@ def test_layer_row_map_rejects_invalid_membership(layer_ids, message):
 
 
 def test_build_block_cache_tensor_specs_counts_operator_request_rows():
-    request = BlockCacheRequest('index', (64, 1, 132), torch.uint8, per_row_contiguous=True)
+    request = BlockCacheRequest('index', (64, 1, 132), torch.uint8,
+                                per_row_contiguous=True, store_cacheable=False)
     tensor_specs = build_block_cache_tensor_specs_from_requests([request, request, request])
 
     assert len(tensor_specs) == 1
@@ -66,6 +67,7 @@ def test_build_block_cache_tensor_specs_counts_operator_request_rows():
     assert tensor_specs[0].consumer_rows == (0, 1, 2)
     assert tensor_specs[0].num_rows == 3
     assert tensor_specs[0].per_row_contiguous
+    assert not tensor_specs[0].store_cacheable
 
 
 def test_block_cache_request_normalizes_integer_like_shape_and_alignment():
@@ -89,7 +91,7 @@ def test_build_block_cache_tensor_specs_groups_heterogeneous_requests():
 def test_build_state_cache_tensor_specs_prefers_names_and_keeps_anonymous_fallback():
     named = build_state_cache_tensor_specs(
         state_shapes=[((99, ), torch.float32)],
-        state_specs=[StateCacheSpec('state', (5, ), torch.float16, layer_ids=[3, 1])],
+        state_specs=[StateCacheSpec('state', (5, ), torch.float16, layer_ids=[3, 1], store_cacheable=False)],
     )
     anonymous = build_state_cache_tensor_specs(
         state_shapes=[((3, ), torch.float32), ((2, ), torch.float16)],
@@ -98,5 +100,7 @@ def test_build_state_cache_tensor_specs_prefers_names_and_keeps_anonymous_fallba
     assert [spec.name for spec in named] == ['state']
     assert named[0].desc.shape == (2, 5)
     assert named[0].layer_rows.layer_ids == (3, 1)
+    assert not named[0].store_cacheable
     assert [spec.name for spec in anonymous] == ['state_0', 'state_1']
     assert all(spec.layer_rows is None for spec in anonymous)
+    assert all(spec.store_cacheable for spec in anonymous)

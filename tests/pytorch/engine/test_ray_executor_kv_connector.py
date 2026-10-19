@@ -180,7 +180,7 @@ def test_ray_executor_aggregates_connector_output_from_every_tp_rank(ray_compone
     rank_one = BatchedOutputs.connector_only(
         KVConnectorOutput(
             finished_receiving={11},
-            invalid_block_ids={3},
+            failed_receiving={11},
         ))
     executor = ray_executor_cls.__new__(ray_executor_cls)
     executor.workers = [_OutputWorker(rank_zero), _OutputWorker(rank_one)]
@@ -192,7 +192,7 @@ def test_ray_executor_aggregates_connector_output_from_every_tp_rank(ray_compone
     assert output.next_token_ids.tolist() == [5]
     assert output.kv_connector_output == KVConnectorOutput(
         finished_receiving={11},
-        invalid_block_ids={3},
+        failed_receiving={11},
     )
     assert [worker.get_outputs.calls for worker in executor.workers] == [1, 1]
 

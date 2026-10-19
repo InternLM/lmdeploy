@@ -171,8 +171,9 @@ class CacheConfig:
     num_state_caches: int = None
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
-    # Model-owned policy: only save complete owners and materialize a reusable
-    # aligned checkpoint before the final prefill suffix. Not a public option.
+    prefill_save_alignment: int = 8192
+    mooncake_state_save_slots: int = 8
+    # Model-owned checkpoint validity constraint, independent of prefill chunking.
     prefix_cache_block_aligned: bool = False
     prefix_cache_token_lookahead: int = 0
     states_shapes: list[tuple] = field(default_factory=list)
@@ -190,6 +191,10 @@ class CacheConfig:
         assert self.dcp >= 1, 'invalid dcp'
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
+        assert self.prefill_save_alignment > 0, 'invalid prefill_save_alignment'
+        assert self.mooncake_state_save_slots > 0, 'invalid mooncake_state_save_slots'
+        if self.use_mooncake_store and self.prefix_cache_decode_state_interval > 0:
+            raise ValueError('Mooncake Store and prefix_cache_decode_state_interval cannot be enabled together')
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
@@ -200,6 +205,26 @@ class CacheConfig:
                 'prefix_cache_decode_state_interval must be a multiple of block_size')
         self.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
             self.cudagraph_capture_batch_sizes, self.max_batches)
+
+    @property
+    def use_mooncake_store(self) -> bool:
+        """Whether this engine uses the Mooncake Store connector."""
+        config = self.kv_transfer_config
+        return (config is not None and config.is_kv_transfer_instance
+                and config.kv_connector == 'MooncakeStoreConnector')
+
+    @property
+    def num_store_state_caches(self) -> int:
+        """Reserved tail slots, excluded from runtime and local APC
+        allocation."""
+        if self.states_shapes and self.use_mooncake_store and self.kv_transfer_config.is_kv_producer:
+            return self.mooncake_state_save_slots
+        return 0
+
+    @property
+    def needs_prefix_cache_identity(self) -> bool:
+        """Local APC and Mooncake Store need stable multimodal identities."""
+        return self.enable_prefix_caching or self.use_mooncake_store
 
 
 class TPMode(enum.Enum):
@@ -432,6 +457,7 @@ class StateCacheSpec:
     dtype: torch.dtype
     layer_ids: list[int] | None = None
     alignment: int = 256
+    store_cacheable: bool = True
 
 
 @dataclass
@@ -738,6 +764,7 @@ class SpecDecodeConfig:
     dist_config: DistConfig = field(default_factory=DistConfig)
     target_layer_ids: tuple[int, ...] | None = None
     mask_token_id: int | None = None
+    disable_prefix_cache_block_drop: bool = False
 
     @classmethod
     def from_config(
@@ -752,6 +779,7 @@ class SpecDecodeConfig:
         model_format: str = None,
         hf_overrides: dict[str, Any] = None,
         dist_config: DistConfig = None,
+        disable_prefix_cache_block_drop: bool = False,
     ):
         draft_model = model or target_model
         dist_config = dist_config or DistConfig()
@@ -827,6 +855,7 @@ class SpecDecodeConfig:
             num_speculative_tokens=num_speculative_tokens,
             target_layer_ids=target_layer_ids,
             mask_token_id=mask_token_id,
+            disable_prefix_cache_block_drop=disable_prefix_cache_block_drop,
         )
         return obj
 

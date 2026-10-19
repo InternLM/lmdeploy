@@ -8,6 +8,7 @@ import pytest
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.kv_connector import (
+    KVCachePool,
     KVConnectorOutput,
     KVConnectorResult,
     KVConnectorRole,
@@ -219,7 +220,15 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
     worker.shutdown = MagicMock(return_value=None)
 
     assert connector.register_kv_caches(kv_caches) is None
-    worker.register_kv_caches.assert_called_once_with(kv_caches)
+    worker.register_kv_caches.assert_called_once_with(
+        kv_caches,
+        state_cache_pools=(),
+    )
+
+    state_pools = (KVCachePool(object(), 0), )
+    assert connector.register_kv_caches(kv_caches, state_cache_pools=state_pools) is None
+    assert worker.register_kv_caches.call_args_list[-1].args == (kv_caches, )
+    assert worker.register_kv_caches.call_args_list[-1].kwargs == {'state_cache_pools': state_pools}
 
     connector.bind_connector_metadata(metadata)
     assert connector.start_load_kv() is None

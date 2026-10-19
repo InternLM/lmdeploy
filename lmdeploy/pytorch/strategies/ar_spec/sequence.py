@@ -32,10 +32,10 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         super().__post_init__()
         self._num_valid_ids: int = len(self.history_cache)
         self._strategy: ARSpecSequenceStrategy = self._seq_meta.strategy
-        # GLM's explicit lookahead materializes the complete draft checkpoint
-        # at the target boundary. No dropped-token hidden bridge is needed.
+        # GLM's cache identity includes the next token used to complete the
+        # draft checkpoint. Other models retain the configured rewind policy.
         self.prefix_cache.recompute_overlap.recompute_blocks = (
-            0 if self._seq_meta.prefix_cache_token_lookahead else 1)
+            0 if self._seq_meta.prefix_cache_token_lookahead else self._strategy.recompute_blocks)
 
     @property
     def num_valid_ids(self):
@@ -183,6 +183,10 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
 
 
 class ARSpecSequenceStrategy(ARSequenceStrategy):
+
+    def __init__(self, recompute_blocks: int = 1, prefill_input_shift: int = 1):
+        self.recompute_blocks = recompute_blocks
+        self.prefill_input_shift = prefill_input_shift
 
     def make_sequence(self,
                       seq_id: int,

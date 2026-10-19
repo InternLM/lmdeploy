@@ -570,7 +570,7 @@ def kpool_pooled_write_locations(
     """Map request-local logical pool ids to packed physical cache slots."""
     _validate_pool_geometry(pool_size)
     if page_size not in (KPOOL_PAGE_SIZE, KPOOL_PAGE_SIZE // pool_size):
-        raise ValueError(f"Unsupported KPool storage page size: {page_size}.")
+        raise ValueError(f'Unsupported KPool storage page size: {page_size}.')
     if token_block_offsets.ndim != 1 or group_ids.ndim != 1:
         raise ValueError('token_block_offsets and group_ids must both be one-dimensional.')
     group_ids = group_ids.to(torch.int64)
