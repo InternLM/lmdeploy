@@ -456,6 +456,9 @@ class StateCacheSpec:
     layer_ids: list[int] | None = None
     alignment: int = 256
     store_cacheable: bool = True
+    # False only when resuming at every supported prefix boundary needs no
+    # prior contents. Runtime allocation and speculative rollback are unchanged.
+    prefix_checkpoint: bool = True
 
 
 @dataclass

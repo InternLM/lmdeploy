@@ -43,6 +43,7 @@ from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_t
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest
 from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_masked_post_quant_fwd
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     FlashAttention,
@@ -563,10 +564,7 @@ class Glm5NextMoE(DeepseekV2MoE):
         hidden_states: torch.Tensor,
         all_routed_experts: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if all_routed_experts is not None:
-            raise RuntimeError(
-                'GLM-5.3 routed-expert capture is not supported.')
-        out = super().forward(hidden_states, all_routed_experts=None)
+        out = super().forward(hidden_states, all_routed_experts=all_routed_experts)
         if self._fp32_tp_reduce:
             output_dtype = out.dtype
             out = out.float()
@@ -1411,7 +1409,8 @@ class Glm5NextDecoderLayer(nn.Module):
                 state_ids: torch.Tensor | None = None,
                 kpool_metadata: Any = None,
                 hc_input_fp32: torch.Tensor | None = None,
-                prepare_hc_fp32: bool = False) -> tuple[torch.Tensor, torch.Tensor | None]:
+                prepare_hc_fp32: bool = False,
+                all_routed_experts: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor | None]:
         residual = hidden_states
         hidden_states, post, comb = self._hc_pre(
             hidden_states,
@@ -1444,7 +1443,10 @@ class Glm5NextDecoderLayer(nn.Module):
             self.post_attention_layernorm,
             x_fp32=hc_input_fp32,
         )
-        hidden_states = self.mlp(hidden_states)
+        if isinstance(self.mlp, Glm5NextMoE):
+            hidden_states = self.mlp(hidden_states, all_routed_experts=all_routed_experts)
+        else:
+            hidden_states = self.mlp(hidden_states)
         return self._hc_post(hidden_states, residual, post, comb, prepare_hc_fp32)
 
 
@@ -1482,6 +1484,7 @@ class Glm5NextModel(nn.Module):
         attn_metadata: Any,
         state_ids: torch.Tensor,
         inputs_embeds: torch.Tensor | None = None,
+        all_routed_experts: torch.Tensor | None = None,
     ) -> torch.Tensor:
         del position_ids  # GLM-5.3 text attention has qk_rope_head_dim == 0.
         if state_ids is None:
@@ -1519,7 +1522,8 @@ class Glm5NextModel(nn.Module):
                                   state_ids=state_ids,
                                   kpool_metadata=kpool_metadata,
                                   hc_input_fp32=hc_input_fp32,
-                                  prepare_hc_fp32=prepare_hc_fp32)
+                                  prepare_hc_fp32=prepare_hc_fp32,
+                                  all_routed_experts=all_routed_experts)
         hidden_states = hidden_states.mean(dim=2)
         return self.norm(hidden_states)
 
@@ -1544,6 +1548,7 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None):
         nn.Module.__init__(self)
+        self.enable_return_routed_experts = get_build_model_context().enable_return_routed_experts
         self.mm_config = config
         self.config = config.text_config
         self.quantization_config = getattr(config, 'quantization_config', None)
@@ -1616,16 +1621,31 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
                 scatter_mask, vision_embeddings.to(inputs_embeds))
         if return_input_embeds and inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
+        all_routed_experts = None
+        if self.enable_return_routed_experts:
+            num_tokens = inputs_embeds.size(1) if inputs_embeds is not None else input_ids.size(1)
+            # Capture logical expert ids before EP dispatch. Dense layers keep
+            # the same sentinel as other models' router-replay outputs.
+            all_routed_experts = input_ids.new_full(
+                (num_tokens, self.config.num_hidden_layers, self.config.num_experts_per_tok),
+                torch.iinfo(torch.uint16).max,
+                dtype=torch.uint16,
+            )
         hidden_states = self.model(input_ids=input_ids,
                           position_ids=position_ids,
                           past_key_values=past_key_values,
                           attn_metadata=attn_metadata,
                           inputs_embeds=inputs_embeds,
-                          state_ids=state_ids)
+                          state_ids=state_ids,
+                          all_routed_experts=all_routed_experts)
+        if all_routed_experts is None and not return_input_embeds:
+            return hidden_states
+        outputs = dict(hidden_states=hidden_states)
+        if all_routed_experts is not None:
+            outputs['all_routed_experts'] = all_routed_experts
         if return_input_embeds:
-            return dict(hidden_states=hidden_states,
-                        target_inputs_embeds=inputs_embeds)
-        return hidden_states
+            outputs['target_inputs_embeds'] = inputs_embeds
+        return outputs
 
     def get_input_embeddings(self):
         return self.model.get_input_embeddings()

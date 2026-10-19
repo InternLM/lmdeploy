@@ -945,7 +945,8 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
         state_caches = object()
         named_state_caches = {}
 
-        def copy_slots(self, src, dst):
+        def copy_slots(self, src, dst, *, checkpoint_only=False):
+            assert checkpoint_only
             copy_calls.append(('state', src, dst))
             events.append('state_restore' if src == (5, ) else 'state_save')
 

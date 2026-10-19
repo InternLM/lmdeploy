@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import builtins
 import importlib
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -407,6 +409,8 @@ def test_bf16_ep_builder_passes_low_latency_token_limit(monkeypatch):
     impl.hidden_dim = 16
     impl.top_k = 2
     impl.layer_idx = 3
+    impl.fp32_acc = False
+    impl.output_scale = 1.0
     impl.out_dtype = torch.bfloat16
     impl.num_max_dispatch_tokens_per_rank = 256
 
@@ -642,3 +646,151 @@ def test_blocked_fp8_async_prefill_passes_weight_dtype_and_scale_fmt():
     assert fusedmoe.quant_args == (hidden_states, torch.float8_e5m2, 'ue8m0')
     assert out_state['hidden_states'] == ('quant', 'scale')
     assert out_state['previous_event'] == 'event'
+
+
+@pytest.mark.parametrize('fp32_acc', [False, True])
+@pytest.mark.parametrize('output_scale', [1.0, 2.5])
+@pytest.mark.parametrize('decode', [False, True])
+def test_bf16_ep_build_and_forward(monkeypatch, fp32_acc, output_scale, decode):
+    from lmdeploy.pytorch.backends.cuda import token_dispatcher as td
+    from lmdeploy.pytorch.backends.cuda.moe import default
+
+    calls = []
+
+    def forward(*args, act_func=None):
+        assert act_func is activation
+        # Routing weights must not have already been scaled.
+        torch.testing.assert_close(args[1], weights)
+        return args[0]
+
+    def build(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(forward=forward)
+
+    monkeypatch.setitem(sys.modules, 'deep_gemm', SimpleNamespace())
+    monkeypatch.setattr(default, '_build_deepep_moe', build)
+    monkeypatch.setattr(td, 'use_deepep', True)
+    monkeypatch.setattr(td.DeepEPBuffer, 'set_explicitly_destroy', lambda: None)
+    monkeypatch.setattr(default, 'get_deepep_state', lambda: SimpleNamespace(enable=lambda: None))
+    monkeypatch.setattr(default, 'register_piecewise_graph_impl', lambda impl: None)
+    monkeypatch.setattr(default, 'split_inputs_by_attn_tp', lambda x, w, i: (x, w, i, None))
+    monkeypatch.setattr(default, 'gather_outputs_by_attn_tp', lambda x, size: x)
+    monkeypatch.setattr(default, 'get_step_ctx_manager', lambda: SimpleNamespace(
+        current_context=lambda: SimpleNamespace(global_is_decoding=lambda: decode)))
+    impl = default.FusedMoEEPImpl(2, None, 2, 4, 16, fp32_acc=fp32_acc, output_scale=output_scale)
+    x = torch.ones(1, 16)
+    weights = torch.tensor([[0.25, 0.75]])
+    ids = torch.tensor([[0, 1]])
+    activation = object()
+    assert impl.forward(x, weights, ids, None, None, act_func=activation) is x
+    assert calls[-1][0][0] == decode
+    for _, kwargs in calls:
+        assert kwargs['fp32_acc'] is fp32_acc
+        assert kwargs['output_scale'] == output_scale
+
+
+@pytest.mark.parametrize('fp32_acc', [False, True])
+@pytest.mark.parametrize('output_scale', [1.0, 2.5])
+@pytest.mark.parametrize('decode', [False, True])
+def test_bf16_ep_concrete_builder(monkeypatch, fp32_acc, output_scale, decode):
+    from lmdeploy.pytorch.backends.cuda import token_dispatcher as td
+    from lmdeploy.pytorch.backends.cuda.moe import default
+
+    monkeypatch.setattr(td, 'DeepEPTokenDispatcherNormal', lambda **kw: None)
+    monkeypatch.setattr(td, 'DeepEPTokenDispatcherLowLatency', lambda **kw: None)
+    moe = default._build_deepep_moe(decode, 2, None, 4, 16, 2,
+                                  fp32_acc=fp32_acc, output_scale=output_scale)
+    assert moe.output_scale == output_scale
+    if not decode:
+        assert moe.fp32_acc is fp32_acc
+
+
+@pytest.mark.parametrize('fp32_acc', [False, True])
+@pytest.mark.parametrize('output_scale', [1.0, 2.5])
+def test_bf16_normal_sync_async_options(monkeypatch, fp32_acc, output_scale):
+    from lmdeploy.pytorch.backends.cuda import token_dispatcher as td
+    from lmdeploy.pytorch.backends.cuda.moe import default
+    from lmdeploy.pytorch.kernels.cuda.moe import ep
+
+    x, ids, weights, up, down, activation = [object() for _ in range(6)]
+    monkeypatch.setattr(td, 'DeepEPTokenDispatcherNormal', lambda **kw: SimpleNamespace(
+        dispatch=lambda *a: (x, ids, weights, [128]), combine=lambda out: out))
+    calls = []
+
+    def kernel(*args, **kwargs):
+        calls.append((args, kwargs))
+        return x
+
+    monkeypatch.setattr(ep, 'fused_moe_v3', kernel)
+    moe = default.FusedMoENormal(2, None, 4, 16, fp32_acc=fp32_acc, output_scale=output_scale)
+    assert moe.forward(x, weights, ids, up, down, act_func=activation) is x
+    state = dict(recv_hidden_states=x, recv_topk_idx=ids, recv_topk_weights=weights,
+                 recv_tokens_per_expert=[128])
+    assert moe.fusedmoe_forward(state, up, down, act_func=activation) is x
+    assert len(calls) == 2
+    for args, kwargs in calls:
+        assert args == (x, ids, weights, up, down, [128])
+        assert kwargs == dict(act_func=activation, fp32_acc=fp32_acc, output_scale=output_scale)
+
+
+@pytest.mark.parametrize('output_scale', [1.0, 2.5])
+def test_bf16_ll_sync_async_scale_once(monkeypatch, output_scale):
+    from lmdeploy.pytorch.backends.cuda import token_dispatcher as td
+    from lmdeploy.pytorch.backends.cuda.moe import default
+
+    x = torch.ones(2, 16, dtype=torch.bfloat16)
+    weights = torch.tensor([[0.25, 0.75], [0.5, 0.5]])
+    saved_weights = weights.clone()
+    ids = torch.tensor([[0, 1], [1, 2]])
+    mask, up, down, activation = [object() for _ in range(4)]
+    calls = []
+
+    def combine(x, ids, w, *args):
+        calls.append(w.clone())
+        return x
+
+    monkeypatch.setattr(td, 'DeepEPTokenDispatcherLowLatency', lambda **kw: SimpleNamespace(
+        combine=combine, combine_async=combine,
+        buffer_low_latency=SimpleNamespace(group_size=2), num_experts=4))
+    monkeypatch.setattr(default, 'dispatch_ll', lambda *a, **kw: (x, ids, weights, mask, 3))
+    moe = default.FusedMoELowLatency(2, None, 4, 16, 0, output_scale=output_scale)
+
+    def experts(rx, u, d, m, expected_m, act_func=None):
+        assert (rx is x and u is up and d is down and m is mask and act_func is activation)
+        assert expected_m == 3
+        return x
+
+    monkeypatch.setattr(moe, 'experts', experts)
+    assert moe.forward(x, weights, ids, up, down, act_func=activation) is x
+    state = dict(recv_hidden_states=x, recv_expert_count=mask, raw_hidden_shape=x.shape, topk_idx=ids)
+    assert moe.fusedmoe_forward(state, up, down, act_func=activation) is x
+    assert moe.combine_async(x, ids, weights, None, True) is x
+    assert len(calls) == 2
+    for w in calls:
+        torch.testing.assert_close(w, saved_weights * output_scale)
+    torch.testing.assert_close(weights, saved_weights)
+
+
+@pytest.mark.parametrize('decode', [False, True])
+def test_bf16_nn_async_gemm_uses_unquantized_weights(decode):
+    from lmdeploy.pytorch.nn.moe.base import MoeType
+    from lmdeploy.pytorch.nn.moe.default import FusedMoE
+
+    x, up, down = [torch.ones(1) for _ in range(3)]
+    activation = object()
+    calls = []
+
+    def forward(state, gate_up_weight, down_weight, act_func=None):
+        assert gate_up_weight is up and down_weight is down
+        assert act_func is activation
+        calls.append(True)
+        return x
+
+    # BF16 weights deliberately have no weight_scale_inv attribute.
+    moe = SimpleNamespace(gate_up=SimpleNamespace(weight=up), down=SimpleNamespace(weight=down),
+                          act_func=activation)
+    state = dict(moe_type=MoeType.DSAsyncDecode if decode else MoeType.DSAsyncPrefill,
+                 recv_hidden_states=x, fusedmoe=SimpleNamespace(fusedmoe_forward=forward),
+                 handle=None, topk_idx=None, topk_weights=None)
+    assert FusedMoE.gemm(moe, state)['hidden_states'] is x
+    assert calls == [True]

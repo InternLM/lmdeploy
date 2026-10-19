@@ -336,6 +336,10 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
                  text_config.index_head_dim),
                 torch.bfloat16,
                 store_cacheable=False,
+                # Prefix checkpoints are 64-token aligned and index_kpool=4:
+                # the incomplete pool is empty at restore. Keep the runtime
+                # raw ring for chunk continuation and speculative rejection.
+                prefix_checkpoint=False,
             ),
             StateCacheSpec(
                 GLM5_KPOOL_TAIL_SCORE_STATE,
@@ -343,6 +347,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
                  text_config.index_head_dim),
                 torch.bfloat16,
                 store_cacheable=False,
+                prefix_checkpoint=False,
             ),
         ]
         # Scheduler compatibility: named specs own allocation, while this
