@@ -89,7 +89,7 @@ passkey_retrieval(session_len, 5)
 
 ### 大海捞针
 
-可使用 OpenCompass 进行测评，具体使用方法，请参考[文档](https://github.com/open-compass/opencompass/blob/main/docs/zh_cn/advanced_guides/needleinahaystack_eval.md)
+可使用 OpenCompass 进行测评，具体使用方法，请参考[文档](https://github.com/open-compass/opencompass/blob/main/docs/zh_cn/faq/needleinahaystack_eval.md)
 
 ### 困惑度
 

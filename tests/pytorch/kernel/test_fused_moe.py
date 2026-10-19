@@ -806,12 +806,23 @@ def _clamped_swiglu_reference(x):
     return (F.silu(gate.clamp(max=10)) * up.clamp(-10, 10)).to(x.dtype)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+@pytest.fixture
+def deep_gemm_bf16():
+    if not torch.cuda.is_available():
+        pytest.skip('CUDA required for DeepGEMM BF16 grouped GEMM')
+    # These BF16 kernels currently dispatch to SM90 implementations only.
+    if torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip('DeepGEMM BF16 grouped GEMM requires SM90')
+    deep_gemm = pytest.importorskip('deep_gemm')
+    for name in ('m_grouped_bf16_gemm_nt_contiguous', 'm_grouped_bf16_gemm_nt_masked'):
+        if not callable(getattr(deep_gemm, name, None)):
+            pytest.skip(f'Installed DeepGEMM does not provide {name}')
+
+
 @pytest.mark.parametrize('fp32_acc', [False, True])
 @pytest.mark.parametrize('output_scale', [1.0, 2.5])
 @pytest.mark.parametrize('custom_act', [False, True])
-def test_bf16_ep_normal_experts(fp32_acc, output_scale, custom_act):
-    pytest.importorskip('deep_gemm')
+def test_bf16_ep_normal_experts(deep_gemm_bf16, fp32_acc, output_scale, custom_act):
     from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul
     from lmdeploy.pytorch.kernels.cuda.moe.ep import fused_moe_v3
 
@@ -853,10 +864,8 @@ def test_bf16_ep_normal_experts(fp32_acc, output_scale, custom_act):
     assert ((out.float() - ref.float()).norm() / ref.float().norm()).item() < 0.01
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 @pytest.mark.parametrize('custom_act', [False, True])
-def test_bf16_ep_masked_experts(custom_act):
-    pytest.importorskip('deep_gemm')
+def test_bf16_ep_masked_experts(deep_gemm_bf16, custom_act):
     from lmdeploy.pytorch.backends.cuda.moe.default import FusedMoELowLatency
     from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul
 
