@@ -229,6 +229,8 @@ class MPExecutor(ExecutorBase):
                  device_type: str = 'cuda',
                  trust_remote_code: bool = False):
         """Initialize Executor."""
+        if cache_config.compact_state_capacity is not None:
+            raise NotImplementedError('Compact state completion is not supported by the deprecated MP executor.')
         super().__init__(model_path=model_path,
                          model_config=model_config,
                          cache_config=cache_config,
@@ -429,6 +431,11 @@ class MPExecutor(ExecutorBase):
 
     async def forward_async(self, inputs):
         """Start forward."""
+        cache_inputs = inputs.get('cache_inputs')
+        model_inputs = inputs.get('inputs')
+        if ((cache_inputs is not None and cache_inputs.compact_access_id is not None)
+                or (model_inputs is not None and model_inputs.compact_state is not None)):
+            raise NotImplementedError('Compact state requires UniExecutor or RayExecutor all-rank completion.')
         await self.collective_rpc_async('forward_async', args=(inputs, ), return_mask=0)
 
     async def get_output_async(self):

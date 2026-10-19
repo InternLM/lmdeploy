@@ -47,6 +47,9 @@ class LongContextChunkPlan:
     chunk_size: int
     is_last_chunk: bool
     multimodals: 'MultiModalInputs|None'
+    # Exact compact-state boundary c, independent of the model-forward end e.
+    # Zero means no compact checkpoint candidate; legacy uses chunk_end.
+    checkpoint_step: int = 0
 
 
 def sort_long_context_multimodals(multimodals: 'MultiModalInputs') -> 'MultiModalInputs':
@@ -96,14 +99,16 @@ def get_long_context_chunk_capacity(seq: 'SchedulerSequence', max_prefill_token_
 
 
 def limit_long_context_checkpoint(seq: 'SchedulerSequence', limit: int) -> int:
-    """Cut the final prefill suffix after a reusable aligned checkpoint."""
+    """Cut only when an internal checkpoint cannot be exported directly."""
     alignment = seq._seq_meta.prefill_save_alignment
     if alignment and seq._seq_meta.enable_prefix_caching:
         # Matching leaves at least one input for logits, so an identical prompt
         # can reuse the preceding aligned state instead of its final state.
         step = ((seq.input_end_pos - 1) // alignment) * alignment
         if seq.num_history_ids < step and seq.is_prefix_cache_boundary_safe(step):
-            limit = min(limit, step - seq.num_history_ids)
+            stride = seq._seq_meta.compact_prefill_checkpoint_stride
+            if not stride or (step - seq.num_history_ids) % stride:
+                limit = min(limit, step - seq.num_history_ids)
     return limit
 
 
@@ -139,15 +144,32 @@ def plan_long_context_chunk(seq: 'SchedulerSequence',
             end = span_start
             break
 
+    checkpoint_step = 0
+    stride = seq._seq_meta.compact_prefill_checkpoint_stride
     save_alignment = seq._seq_meta.prefill_save_alignment
     # Embedding-only inputs do not yet have a Store content identity.
     if save_alignment and len(seq.history_embeddings) == 0:
-        save_end = end // save_alignment * save_alignment
+        # An identical prompt still needs a logits token. Compact mode can
+        # keep the normal final interval while exporting its preceding prefix.
+        candidate_end = end
+        if stride and seq._seq_meta.enable_prefix_caching and end == seq.input_end_pos:
+            candidate_end -= 1
+        save_end = candidate_end // save_alignment * save_alignment
         for span_start, span_end in reversed(chunk_spans):
             if span_start < save_end < span_end:
                 save_end = span_start // save_alignment * save_alignment
         if save_end > start:
-            end = save_end
+            if stride and (save_end == end or (save_end - start) % stride == 0):
+                checkpoint_step = save_end
+            else:
+                # Unsupported internal offset (e.g.56) keeps the old cut; the
+                # same boundary is then an ordinary final output, not a slow
+                # per-token prefill or an unmaterialized checkpoint.
+                end = save_end
+                if stride:
+                    checkpoint_step = end
+    if stride and not checkpoint_step and end > start:
+        checkpoint_step = end
 
     chunk_size = end - start
     out_multimodals = None
@@ -161,4 +183,5 @@ def plan_long_context_chunk(seq: 'SchedulerSequence',
                                 chunk_end=end,
                                 chunk_size=chunk_size,
                                 is_last_chunk=chunk_size == seq.num_token_ids,
-                                multimodals=out_multimodals)
+                                multimodals=out_multimodals,
+                                checkpoint_step=checkpoint_step)

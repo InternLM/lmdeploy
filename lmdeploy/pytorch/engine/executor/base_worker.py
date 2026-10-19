@@ -199,6 +199,11 @@ class WorkerWrapperBase:
         ret = self.pack_output(ret)
         return ret
 
+    async def drain_compact(self):
+        """Retain worker caches until every CPU/GPU/I/O producer is
+        quiescent."""
+        await self.model_agent.drain_compact()
+
     def shutdown_kv_connector(self):
         """Drain and close the worker-local KV connector."""
         self.model_agent.shutdown_kv_connector()

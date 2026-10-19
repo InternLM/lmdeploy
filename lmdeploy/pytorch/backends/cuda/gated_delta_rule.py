@@ -8,6 +8,7 @@ import torch
 import triton
 import triton.language as tl
 
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
 from ..gated_delta_rule import (
@@ -60,8 +61,31 @@ class GatedDeltaStepMetaUpdater(CudaStepMetaUpdater):
         return type(self)
 
     def update(self, step_context, sequence_metadata) -> None:
+        if getattr(step_context, 'compact_state', None) is not None:
+            if not step_context.is_decoding and step_context.compact_prefill is None:
+                raise ValueError('Compact prefill requires prebuilt host-length metadata.')
+            return
         if not step_context.is_decoding:
             prepare_chunked_gated_delta_rule(sequence_metadata.cu_seqlens_q)
+
+
+class CudaCompactGatedDeltaMeta(GatedDeltaMeta):
+    """CUDA indexed metadata: no legacy ring offsets or payload-gather indices."""
+
+    def __init__(self, num_tokens, is_decoding, state, prefill):
+        self.is_decoding = is_decoding
+        self.compact_state = state
+        self.compact_prefill = prefill
+        self.is_init_token = None
+        batch, width = state.output_ids.shape
+        if is_decoding:
+            if num_tokens != batch * width or prefill is not None:
+                raise ValueError('Compact decode requires one destination per input token and no prefill plan.')
+        else:
+            if (width != 1 or prefill is None or prefill.cu_seqlens.numel() != batch + 1
+                    or prefill.seq_idx.numel() != num_tokens or prefill.cu_seqlens.device != state.input_ids.device):
+                raise ValueError('Compact prefill requires matching packed metadata and one final destination.')
+            self.is_init_token = prefill.is_init_token
 
 
 class CudaGatedDeltaMetaImpl(GatedDeltaMetaImpl):
@@ -79,6 +103,10 @@ class CudaGatedDeltaMetaImpl(GatedDeltaMetaImpl):
         state_ids: torch.Tensor,
         attn_metadata: Any,
     ) -> GatedDeltaMeta:
+        context = get_step_ctx_manager().current_context()
+        if context is not None and getattr(context, 'compact_state', None) is not None:
+            return CudaCompactGatedDeltaMeta(num_tokens, attn_metadata.is_decoding,
+                                             context.compact_state, context.compact_prefill)
         return GatedDeltaMeta(num_tokens, conv_kernel_size, state_ids, attn_metadata)
 
     def forward(
@@ -396,6 +424,38 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
 
         self._piecewise_forward = piecewise_forward
         self.forward = piecewise_forward
+
+    def forward(self, query, key, value, b, a, dt_bias, a_log_exp, recurrent_state,
+                gated_delta_meta, kv_ratio, use_qk_l2norm_in_kernel):
+        meta = gated_delta_meta
+        ids = getattr(meta, 'compact_state', None)
+        if ids is None:
+            return super().forward(query, key, value, b, a, dt_bias, a_log_exp, recurrent_state,
+                                   meta, kv_ratio, use_qk_l2norm_in_kernel)
+        query, key, g, beta, normalized = self.prepare_inputs(
+            query, key, b, a, dt_bias, a_log_exp, kv_ratio,
+            use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, is_decoding=meta.is_decoding,
+            init_token_mask=meta.is_init_token)
+        if meta.is_decoding:
+            batch, width = ids.output_ids.shape
+            q, k, v, g, beta = [x[0].unflatten(0, (batch, width)).contiguous()
+                                for x in (query, key, value, g, beta)]
+            output, _ = self.recurrent_func(
+                q, k, v, g=g, beta=beta, initial_state=recurrent_state, output_final_state=True,
+                state_indices=ids.input_ids, output_state_indices=ids.output_ids,
+                allow_input_alias=ids.allow_input_alias,
+                use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel and not normalized, transpose_state_layout=True)
+            return output.flatten(0, 1).unsqueeze(0)
+        from lmdeploy.pytorch.kernels.cuda.indexed_chunk_gated_delta import indexed_chunk_gated_delta_rule
+        if use_qk_l2norm_in_kernel and not normalized:
+            query = torch.nn.functional.normalize(query, p=2, dim=-1)
+            key = torch.nn.functional.normalize(key, p=2, dim=-1)
+        prefill = meta.compact_prefill
+        return indexed_chunk_gated_delta_rule(
+            query, key, value, g, beta, recurrent_state, ids.input_ids, ids.output_ids[:, 0],
+            state_v_first=True, cu_seqlens=prefill.cu_seqlens, chunk_indices=prefill.chunk_indices,
+            chunk_offsets=prefill.chunk_offsets, checkpoint_ids=prefill.checkpoint_ids,
+            checkpoint_offsets=prefill.checkpoint_offsets, allow_input_alias=ids.allow_input_alias)
 
     def prepare_inputs(
         self,

@@ -336,7 +336,8 @@ class CudaOpsBackend(DefaultOpsBackend):
                 require_fa3_for_speculative_decoding()
                 cls.update_meta_flashattn(attn_metadata, step_context)
 
-        if step_context.model_config.is_gated_delta and not step_context.is_decoding:
+        if (step_context.model_config.is_gated_delta and not step_context.is_decoding
+                and getattr(step_context, 'compact_state', None) is None):
             cls.update_chunked_gated_delta_rule_meta(attn_metadata)
 
         return attn_metadata

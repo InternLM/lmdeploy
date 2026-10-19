@@ -65,3 +65,28 @@ def test_transfer_exception_does_not_complete_weights():
     engine.engine.complete_weights_update.assert_not_called()
     assert engine.sleeping_tags == {'weights', 'kv_cache'}
     assert engine.is_sleeping
+
+
+@pytest.mark.parametrize('finished,compact,success', [(False, True, True), (True, True, True),
+                                                    (True, True, False), (True, False, True)])
+def test_flattened_compact_completion_updates_frontend_only_after_success(finished, compact, success):
+    from lmdeploy.serve.openai.protocol import CompactStoreWeightIdentity, UpdateParamsRequest
+
+    engine, _ = make_endpoint()
+    engine.engine.update_params = Mock(side_effect=None if success else RuntimeError('reload failed'))
+    router = APIRouter()
+    register(router, SimpleNamespace(async_engine=engine))
+    endpoint = next(route.endpoint for route in router.routes if route.path == '/update_weights')
+    request = UpdateParamsRequest(serialized_named_tensors='payload', finished=finished,
+        compact_store_identity=CompactStoreWeightIdentity(model_identity='immutable') if compact else None)
+    if not success:
+        with pytest.raises(RuntimeError, match='reload failed'):
+            endpoint(request)
+    else:
+        assert endpoint(request).status_code == 200
+    if finished and compact and success:
+        engine.engine.complete_weights_update.assert_called_once_with()
+        assert engine.sleeping_tags == {'kv_cache'}
+    else:
+        engine.engine.complete_weights_update.assert_not_called()
+    assert engine.is_sleeping

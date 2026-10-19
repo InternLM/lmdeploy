@@ -658,6 +658,7 @@ def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(mo
     agent._push_output = lambda output: pytest.fail('unexpected output')
 
     inputs = SimpleNamespace(
+        compact_state=None,
         is_dummy=False,
         is_decoding=False,
         input_ids=torch.tensor([1]),
@@ -700,6 +701,9 @@ def test_release_shuts_down_connector_before_dropping_cache(monkeypatch):
     agent.cache_engine = cache_engine
     agent.state_cache_engine = object()
     agent.patched_model = object()
+    agent.compact_state_plan = object()
+    agent.compact_runtime = object()
+    agent.step_inputs = SimpleNamespace(compact_runtime=agent.compact_runtime)
     agent.reset_graph_runner = lambda: events.append('reset-graph')
     monkeypatch.setattr(agent_module.torch.cuda, 'empty_cache', lambda: events.append('empty-cache'))
 
@@ -709,6 +713,7 @@ def test_release_shuts_down_connector_before_dropping_cache(monkeypatch):
     assert agent.kv_connector is None
     assert agent.cache_engine is None
     assert agent.state_cache_engine is None
+    assert agent.compact_state_plan is agent.compact_runtime is agent.step_inputs is None
 
 
 def test_wakeup_rebuilds_connector_with_kv_cache():
@@ -723,3 +728,52 @@ def test_wakeup_rebuilds_connector_with_kv_cache():
 
     assert events == ['build-cache', 'warmup']
     assert agent.state.is_sleeping is False
+
+
+@pytest.mark.parametrize('failed_step', [False, True])
+def test_compact_sleep_waits_for_late_cpu_postprocess_before_gpu_drain(monkeypatch, failed_step):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    agent = _bare_model_agent()
+    calls = []
+    cache = object()
+    agent.cache_engine = cache
+    agent.state_cache_engine = object()
+    agent.kv_connector = None
+    agent.dist_config = SimpleNamespace(dp=1)
+    agent.state = SimpleNamespace(is_sleeping=False, to_sleep=SimpleNamespace(clear=lambda: None))
+    agent._compact_forward_idle = asyncio.Event()
+    agent._pre_in_que, agent._in_que, agent._out_que = (asyncio.Queue() for _ in range(3))
+    agent._out_que.put_nowait(('old-output', None))
+    agent._release_completed_h2d_transfers = lambda: None
+    agent.patched_model = SimpleNamespace(get_model=lambda: SimpleNamespace(to=lambda **kw: calls.append('offload')))
+    agent.spec_agent = SimpleNamespace(get_model=lambda: None)
+    agent.reset_graph_runner = lambda: calls.append('reset-graph')
+    agent.reset_runtime_state = lambda: calls.append('reset-runtime')
+    monkeypatch.setattr(agent_module.torch.cuda, 'synchronize', lambda: calls.append('gpu-drain'))
+    monkeypatch.setattr(agent_module.torch.cuda, 'empty_cache', lambda: None)
+
+    async def scenario():
+        async def late_postprocess():
+            await asyncio.sleep(0)
+            assert agent.cache_engine is cache and not calls
+            assert agent._out_que.empty()  # Initial stale completions were discarded first.
+            if failed_step:
+                raise RuntimeError('late CPU step failed')
+            agent._out_que.put_nowait(('late-output', None))
+            calls.append('postprocess-finished')
+            agent._compact_forward_idle.set()
+
+        agent._background_task = asyncio.create_task(late_postprocess())
+        if failed_step:
+            with pytest.raises(RuntimeError, match='without proving forward quiescence'):
+                await agent.sleep()
+            assert agent.cache_engine is cache and not calls
+            await asyncio.gather(agent._background_task, return_exceptions=True)
+        else:
+            await agent.sleep()
+            await agent._background_task
+            assert agent._out_que.empty()
+            assert calls == ['postprocess-finished', 'gpu-drain', 'reset-graph', 'offload',
+                             'gpu-drain', 'reset-runtime']
+    asyncio.run(scenario())

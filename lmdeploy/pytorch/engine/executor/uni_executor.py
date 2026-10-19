@@ -95,6 +95,18 @@ class UniExecutor(ExecutorBase):
         """Receive weights through checkpoint-engine CUDA IPC."""
         return self.model_agent.update_weights_from_ipc(request, reject_reason)
 
+    def update_params(self, request):
+        return self.model_agent.update_params(request)
+
+    def init_weights_update_group(self, request):
+        return self.model_agent.init_weights_update_group(request)
+
+    def update_weights_from_distributed(self, request):
+        return self.model_agent.update_weights_from_distributed(request)
+
+    def destroy_weights_update_group(self, request):
+        return self.model_agent.destroy_weights_update_group(request)
+
     def warmup(self):
         self.model_agent.warmup()
 
@@ -109,6 +121,9 @@ class UniExecutor(ExecutorBase):
     def stop(self):
         """Stop engine loop."""
         self.model_agent.stop()
+
+    async def drain_compact(self):
+        await self.model_agent.drain_compact()
 
     def release(self):
         """Release resources."""

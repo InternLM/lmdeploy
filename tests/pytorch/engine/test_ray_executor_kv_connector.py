@@ -184,7 +184,7 @@ def test_ray_executor_aggregates_connector_output_from_every_tp_rank(ray_compone
         ))
     executor = ray_executor_cls.__new__(ray_executor_cls)
     executor.workers = [_OutputWorker(rank_zero), _OutputWorker(rank_one)]
-    executor._connector_steps = deque([True])
+    executor._output_steps = deque([(True, None)])
     executor._kv_output_aggregator = KVConnectorOutputAggregator(world_size=2)
 
     output = asyncio.run(executor.get_output_async())
@@ -197,10 +197,10 @@ def test_ray_executor_aggregates_connector_output_from_every_tp_rank(ray_compone
     assert [worker.get_outputs.calls for worker in executor.workers] == [1, 1]
 
 
-def test_ray_executor_sleep_clears_dropped_connector_steps(ray_components):
+def test_ray_executor_sleep_clears_dropped_output_steps(ray_components):
     _, _, ray_executor_cls = ray_components
     executor = ray_executor_cls.__new__(ray_executor_cls)
-    executor._connector_steps = deque([True])
+    executor._output_steps = deque([(True, None)])
     executor._kv_output_aggregator = KVConnectorOutputAggregator(world_size=2)
     executor._kv_output_aggregator.aggregate([
         KVConnectorOutput(finished_receiving={11}),
@@ -214,7 +214,7 @@ def test_ray_executor_sleep_clears_dropped_connector_steps(ray_components):
 
     asyncio.run(executor.sleep())
 
-    assert not executor._connector_steps
+    assert not executor._output_steps
     output = executor._kv_output_aggregator.aggregate([
         KVConnectorOutput(),
         KVConnectorOutput(finished_receiving={11}),

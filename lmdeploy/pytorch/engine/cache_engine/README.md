@@ -254,6 +254,42 @@ Consumer rows and layer rows are different identities:
 Layer rows are state-cache metadata. They are not used to give standard K/V or
 operator-requested block caches synthetic model-layer identities.
 
+### Indexed compact state
+
+A recoverable `StateCacheSpec` may explicitly declare `compact_shape`, using
+its existing layer-row convention. It describes one exact-boundary recurrent
+state or ordered K-1 convolution history, not a speculative ring. Absence means
+unsupported; the allocator never infers a compact shape from legacy axes.
+
+`CompactStatePlan.from_model_config()` compiles these declarations and retains
+the backend layouts for both sizing and allocation. Passing that plan as
+`StateCacheEngine(..., compact_plan=plan)` replaces the legacy allocation:
+
+- recoverable fields have `capacity.num_units` entries;
+- runtime-only auxiliary fields retain their shape and have
+  `capacity.request_slots` entries;
+- model-facing declaration order and names stay unchanged;
+- connector pools contain only the compact recovery fields, not auxiliary tails.
+
+The caller must select indexed kernels and validated per-forward unit IDs with
+this allocation. Auxiliary consumers still use request-slot IDs, not unit IDs.
+Legacy state copy/zero APIs reject compact mode; checkpoints retain references
+and kernels write new private outputs. Omitted plans preserve legacy behavior.
+Stateless model plans allocate no state pools and do not select a backend.
+
+With explicit `allow_input_alias=True`, standard AR/MTP uses a private decode
+bank of `W = 1 + num_speculative_tokens` units. A newly admitted prefill leases
+one private destination; protected capacity credits guarantee promotion to the
+full bank when decode is scheduled. Shared checkpoints and in-flight Store
+reads remain outside that writable bank. An already promoted bank is retained
+across later prefills while its submitted accesses still require it.
+
+This is phase-specific **unit-ID leasing**, not per-request GPU allocation:
+the owning pool is allocated up front with `1 + R * W + B + S` units, including
+the reserved zero unit, request capacity `R`, checkpoint budget `B`, and Store
+budget `S`. The explicit disjoint-input mode instead uses `W + 1` private units
+per decode bank. Neither mode reduces request or KV-block capacity implicitly.
+
 ## Runtime Ownership and Movement
 
 After CPU and accelerator allocation, `CacheEngine` resolves corresponding

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
     from lmdeploy.pytorch.paging import Scheduler
     from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import StateCheckpointLifecycle
+    from lmdeploy.pytorch.paging.compact_state import CompactStateManager
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
     from .engine import Engine, SeqList
@@ -123,10 +124,12 @@ class EngineLoop:
                  seq_strategy: 'SequenceStrategy',
                  inputs_maker: 'InputsMakerAsync',
                  config: EngineLoopConfig,
-                 engine_conn: Optional['EngineP2PConnection'] = None):
+                 engine_conn: Optional['EngineP2PConnection'] = None,
+                 compact_state_manager: 'CompactStateManager | None' = None):
         self.req_manager = req_manager
         self.scheduler = scheduler
         self.state_checkpoints = state_checkpoints
+        self.compact_state_manager = compact_state_manager
         self.executor = executor
         self.seq_strategy = seq_strategy
         self.inputs_maker = inputs_maker
@@ -490,9 +493,16 @@ class EngineLoop:
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
         cache_inputs = forward_inputs['cache_inputs']
+        compact_access_id = cache_inputs.compact_access_id if cache_inputs is not None else None
+        has_compact_checkpoints = (
+            cache_inputs is not None and
+            (cache_inputs.compact_decode_ids is not None or
+             (cache_inputs.compact_prefill is not None and cache_inputs.compact_prefill.checkpoint_ids is not None)))
         # Connector-only work shares the executor queue to preserve ordering,
         # but owns neither model sequence state nor checkpoint pin transitions.
         has_model_work = model_inputs is not None or delta is not None
+        if compact_access_id is not None and (not has_model_work or self.compact_state_manager is None):
+            raise ValueError('Compact completion requires model work and its host state owner.')
         if has_model_work:
             self.inputs_maker.update_running_seqs(running, model_inputs)
         has_state_checkpoint_save = (cache_inputs is not None
@@ -502,14 +512,40 @@ class EngineLoop:
         # input is queued, matched checkpoints can be published before waiting
         # for GPU output; save checkpoints keep a producer pin until the output
         # event boundary so prefetch cannot evict/reuse their destination slots.
-        if has_model_work:
+        if has_model_work and compact_access_id is None:
             self.state_checkpoints.finish_forward_dispatch(
                 running,
                 has_save_plan=has_state_checkpoint_save,
             )
+        if has_compact_checkpoints:
+            self.state_checkpoints.publish_forward(compact_access_id)
         forward_inputs, next_running = await self._prefetch_next_inputs()
         out = await self.executor.get_output_async()
-        if has_model_work:
+        completed_access_id = out.compact_access_id if out is not None else None
+        if completed_access_id != compact_access_id:
+            raise RuntimeError('Compact completion does not match the submitted forward access.')
+        if compact_access_id is not None:
+            # Executor has crossed all required rank events. Prefetch retains
+            # its own access; never release through a mutable request/node ID.
+            if (model_inputs is None and delta is not None and out.next_token_ids is not None
+                    and self.compact_state_manager.needs_input_consumption(compact_access_id)):
+                # AR consumes its input token. ARSpec advances by W-rejected,
+                # which is the count of nonnegative returned target tokens,
+                # including the bonus token (NOT accepted drafts alone).
+                # These tokens already crossed the normal D2H/result path.
+                tokens = out.next_token_ids
+                if (not isinstance(tokens, torch.Tensor) or tokens.device.type != 'cpu'
+                        or tokens.dtype not in (torch.int32, torch.int64)
+                        or tokens.ndim not in (1, 2) or not running or tokens.shape[0] != len(running)
+                        or delta.max_q_seqlen <= 0):
+                    raise ValueError('Compact decode consumption requires matching completed host token rows.')
+                consumed = tuple((tokens.reshape(len(running), -1) >= 0).any(dim=1).tolist())
+                self.compact_state_manager.acknowledge(compact_access_id, consumed_inputs=consumed)
+            else:
+                self.compact_state_manager.acknowledge(compact_access_id)
+            if has_compact_checkpoints:
+                self.state_checkpoints.complete_forward(compact_access_id)
+        elif has_model_work:
             self.state_checkpoints.unpin_saves(running)
         self._finish_forward_output(out, running, model_inputs, delta)
         # out might come from shared memory, need to explicitly delete to release memory in time
@@ -696,6 +732,10 @@ class EngineLoop:
         if self.stop_event.is_set():
             # Already stopped, avoid calling executor.stop() multiple times
             return
+        if getattr(self, 'compact_state_manager', None) is not None:
+            # Cancellation/worker failure is not quiescence. Withdraw lookup
+            # visibility now, but leave every submitted access for real drain.
+            self.state_checkpoints.fail_pending_forwards()
         self.executor.stop()
         self.stop_event.set()
         self.cancel()
@@ -710,6 +750,8 @@ class EngineLoop:
 
 def build_engine_loop(engine: 'Engine'):
     """Build engine loop."""
+    from lmdeploy.pytorch.paging.compact_state import CompactStateManager
+
     from .inputs_maker import build_inputs_maker
 
     config = EngineLoopConfig.from_engine(engine)
@@ -723,4 +765,6 @@ def build_engine_loop(engine: 'Engine'):
         inputs_maker=inputs_maker,
         config=config,
         engine_conn=engine.engine_conn,
+        compact_state_manager=(engine.scheduler.state_manager
+                               if isinstance(engine.scheduler.state_manager, CompactStateManager) else None),
     )

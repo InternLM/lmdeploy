@@ -169,6 +169,10 @@ class CacheConfig:
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
+    # Internal explicit opt-in preserving legacy request/KV capacity.
+    # Indexed execution and checkpoint/Store ownership share this geometry;
+    # the public default remains legacy.
+    compact_state_capacity: 'CompactStateCapacity | None' = None
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
     prefill_save_alignment: int = 8192
@@ -444,6 +448,65 @@ class MemDecodeConfig:
             raise ValueError('router_path is required when adaptive_router is enabled.')
 
 
+@dataclass(frozen=True)
+class CompactStateCapacity:
+    """Separate legacy request capacity from private state-unit capacity.
+
+    This is an internal, opt-in geometry contract, not a reinterpretation of
+    ``CacheConfig.num_state_caches``. ``request_slots`` includes reserved slot
+    zero; checkpoint and Store budgets count shared units, not extra banks.
+    """
+
+    request_slots: int
+    max_update_tokens: int
+    checkpoint_budget: int = 0
+    store_budget: int = 0
+    # Explicit internal contract: standard AR/MTP always retain >=1 computed
+    # token. False keeps the disjoint mode for genuine zero-advance consumers.
+    allow_input_alias: bool = False
+
+    def __post_init__(self):
+        if type(self.allow_input_alias) is not bool:
+            raise ValueError('Compact input reuse permission must be a bool.')
+        values = (self.request_slots, self.max_update_tokens,
+                  self.checkpoint_budget, self.store_budget)
+        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
+            raise ValueError('Compact state capacities must be non-negative integers.')
+        if self.request_slots == 0:
+            if any(values[1:]):
+                raise ValueError('Stateless models must have zero compact state capacities.')
+        elif self.max_update_tokens == 0:
+            raise ValueError('Stateful models need at least one update token.')
+
+    @classmethod
+    def from_legacy(cls, num_state_caches: int | None, checkpoint_budget: int,
+                    store_budget: int, max_update_tokens: int, *,
+                    allow_input_alias: bool = False) -> 'CompactStateCapacity':
+        """Preserve A=M-B-S, R=A-1; absence of state allocates nothing."""
+        if num_state_caches is None:
+            return cls(0, 0)
+        request_slots = num_state_caches - checkpoint_budget - store_budget
+        if request_slots < 1:
+            raise ValueError('Legacy state capacity must include reserved request slot zero.')
+        return cls(request_slots, max_update_tokens, checkpoint_budget, store_budget,
+                   allow_input_alias=allow_input_alias)
+
+    @property
+    def request_capacity(self) -> int:
+        return max(0, self.request_slots - 1)
+
+    @property
+    def bank_width(self) -> int:
+        """V=W for exclusive reuse; V=W+1 preserves an untouched old input."""
+        return self.max_update_tokens + int(not self.allow_input_alias) if self.request_slots else 0
+
+    @property
+    def num_units(self) -> int:
+        if not self.request_slots:
+            return 0
+        return 1 + self.request_capacity * self.bank_width + self.checkpoint_budget + self.store_budget
+
+
 @dataclass
 class StateCacheSpec:
     """Spec for a named sequence-scoped state cache (e.g. compressor
@@ -457,6 +520,10 @@ class StateCacheSpec:
     # False only when resuming at every supported prefix boundary needs no
     # prior contents. Runtime allocation and speculative rollback are unchanged.
     prefix_checkpoint: bool = True
+    # Explicit single-boundary payload for the indexed CUDA state path. None
+    # means unsupported, not "infer by removing a ring axis". Auxiliary state
+    # keeps shape unchanged and is allocated per request, not per compact unit.
+    compact_shape: tuple[int, ...] | None = None
 
 
 @dataclass

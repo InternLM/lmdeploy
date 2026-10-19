@@ -5,7 +5,7 @@ import time
 from collections import deque
 from collections.abc import Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
@@ -44,6 +44,7 @@ from lmdeploy.pytorch.weight_loader.model_weight_loader import (
     process_weights_after_loading,
 )
 from lmdeploy.serve.openai.protocol import (
+    CompactStoreWeightIdentity,
     DestroyWeightsUpdateGroupRequest,
     InitWeightsUpdateGroupRequest,
     UpdateParamsRequest,
@@ -80,6 +81,14 @@ class SleepWakeupState:
 
 
 @dataclass
+class _CompactWeightReload:
+    """Unpublished weights: neither cache registration nor warmup is legal."""
+    identity: CompactStoreWeightIdentity | None = None
+    loaded_models: set[str] = field(default_factory=set)
+    failed: bool = False
+
+
+@dataclass
 class BatchedLogProbs:
     vals: torch.Tensor
     indices: torch.Tensor
@@ -107,11 +116,11 @@ class BatchedLogProbs:
 
 @dataclass
 class BatchedOutputs:
-    """One worker step's model result and optional KV-transfer progress.
+    """One worker step's model result and optional cache progress.
 
-    ``next_token_ids`` and ``stopped`` are ``None`` only for a connector-only
-    step, where workers must report asynchronous KV progress although no model
-    forward ran.
+    ``next_token_ids`` and ``stopped`` are ``None`` for progress-only reports,
+    including compact access completion from non-output TP ranks. The access
+    identity is not consumable until get_output_async passes its CUDA event.
     """
 
     next_token_ids: torch.Tensor | None
@@ -125,6 +134,7 @@ class BatchedOutputs:
     all_routed_experts: torch.Tensor | None = None
     ce_loss: torch.Tensor | None = None
     kv_connector_output: KVConnectorOutput | None = None
+    compact_access_id: int | None = None
 
     @classmethod
     def connector_only(cls, output: KVConnectorOutput) -> 'BatchedOutputs':
@@ -231,6 +241,35 @@ def model_forward(
     cache_inputs: CacheCheckpointInputs | None = None,
 ):
     """Perform model forward."""
+    if cache_inputs is not None and (cache_inputs.compact_source_ids is not None
+                                     or cache_inputs.compact_decode_ids is not None):
+        raise ValueError('Compact source/output binding must be consumed by the worker before model forward.')
+    compact = inputs.compact_state
+    if compact is not None and inputs.is_decoding and compact.partial_bank:
+        raise ValueError('Compact decode requires a fully admitted bank rebind after prefill.')
+    plan = getattr(state_cache_engine, 'compact_plan', None)
+    uses_compact = plan is not None and bool(plan.unit_specs)
+    if (compact is not None) != uses_compact:
+        raise ValueError('Compact model inputs and state-cache allocation must select the same mode.')
+    prefill = cache_inputs.compact_prefill if cache_inputs is not None else None
+    if compact is None and prefill is not None:
+        raise ValueError('Compact prefill requires compact model inputs.')
+    if compact is not None:
+        if cache_inputs is not None and (cache_inputs.state_restore_plan is not None
+                                         or cache_inputs.state_save_plan is not None):
+            raise ValueError('Compact execution cannot use legacy state-copy plans.')
+        if inputs.is_decoding and prefill is not None:
+            raise ValueError('One-forward compact prefill cannot be reused for decode.')
+        if not inputs.is_decoding and prefill is None:
+            if not inputs.is_dummy:
+                raise ValueError('Compact prefill requires a one-forward packed layout.')
+            from lmdeploy.pytorch.compact_state import CompactStatePrefill
+            # Startup dummy rows have uniform, host-known lengths. Real requests
+            # must supply scheduler-prepared layouts; never read device lengths.
+            batch = inputs.seq_length.numel()
+            prefill = CompactStatePrefill.from_lengths([inputs.max_q_seqlen] * batch, [0] * batch)
+            prefill = prefill.to_device(inputs.input_ids.device)
+    context_args = {} if prefill is None else dict(compact_prefill=prefill)
     stream = stream or torch.cuda.current_stream()
     with torch.cuda.stream(stream), step_ctx_manager(model.ctx_mgr):
         # forward
@@ -242,6 +281,7 @@ def model_forward(
             kv_caches=cache_engine.gpu_cache,
             state_caches=state_cache_engine.state_caches,
             kv_quant_policy=cache_engine.cache_config.quant_policy,
+            **context_args,
         )
 
         # Attach operator-owned block caches and configured state caches.
@@ -380,6 +420,7 @@ class BaseModelAgent:
         self.patched_model = None
         self.cache_engine = None
         self.block_cache_plan = None
+        self.compact_state_plan = None
         # Exact target/draft bytes used when cache capacity was calculated.
         self._cache_plan_block_nbytes: tuple[int, int]
         self.state_cache_engine = None
@@ -432,6 +473,9 @@ class BaseModelAgent:
         )
         # sleep wakeup state
         self.state: SleepWakeupState = SleepWakeupState(is_sleeping=misc_config.empty_init)
+        self._compact_weight_reload = (_CompactWeightReload() if misc_config.empty_init
+                                       and cache_config.compact_state_capacity is not None
+                                       and cache_config.use_mooncake_store else None)
 
         self._init_runtime_state()
 
@@ -441,6 +485,7 @@ class BaseModelAgent:
     def _init_runtime_state(self):
         """Initialize request-local decode and chunk state."""
         self.step_inputs = self.strategy_factory.build_step_inputs()
+        self.compact_runtime = None
         self._prev_chunk_output: dict = None
         # Last logit row of the previous chunk, used to score cross-chunk prompt tokens.
         self._prev_chunk_last_logit: torch.Tensor | None = None
@@ -449,6 +494,7 @@ class BaseModelAgent:
         """Discard request-local decode and chunk state after sleep cancels
         sessions."""
         self.step_inputs = self.strategy_factory.build_step_inputs()
+        self.compact_runtime = None
         self._prev_chunk_output = None
         self._prev_chunk_last_logit = None
         self.spec_agent.reset_runtime_state()
@@ -517,6 +563,7 @@ class BaseModelAgent:
 
     def warmup(self):
         """warmup."""
+        self._check_compact_weights_ready()
         from lmdeploy.pytorch.envs import skip_warmup
         if skip_warmup:
             if self.rank == 0:
@@ -818,10 +865,17 @@ class BaseModelAgent:
         self,
         delta: ModelInputsDelta,
         sampling_inputs: SamplingInputs,
+        *, compact_decode_ids: torch.Tensor | None = None,
     ):
         """Get inputs from delta."""
         self.step_inputs.reindex(delta)
         inputs = self.step_inputs.model_inputs
+        if compact_decode_ids is not None and (delta.compact_bank_ids is None or delta.max_q_seqlen != 1):
+            raise ValueError('Compact decode checkpoint binding requires a single-token bank delta.')
+        if delta.compact_bank_ids is not None:
+            if inputs.compact_state is None:
+                raise ValueError('Compact bank delta requires retained compact model inputs.')
+            inputs.compact_state = inputs.compact_state.rebind(delta.compact_bank_ids, decode_ids=compact_decode_ids)
         extra_inputs = self.step_inputs.extra_inputs
         stopping_criteria = self.step_inputs.stopping_criteria
         sampling_inputs.update_delta(self.step_inputs.sampling_delta)
@@ -831,6 +885,7 @@ class BaseModelAgent:
         self,
         inputs: ModelInputs,
         delta: ModelInputsDelta,
+        *, compact_source_ids: torch.Tensor | None = None, compact_prefill=None,
     ):
         """Prepare prefill inputs."""
 
@@ -842,8 +897,25 @@ class BaseModelAgent:
         if inputs.is_first_chunk:
             self._prev_chunk_output = None
 
+        runtime = getattr(self, 'compact_runtime', None)
+        if compact_source_ids is not None and (runtime is None or inputs.compact_state is None):
+            raise ValueError('Explicit compact source binding requires the worker current-ID runtime.')
+        if runtime is not None and inputs.compact_state is not None:
+            inputs.compact_state = runtime.bind(inputs.compact_state, inputs.state_offsets,
+                                                inputs.history_lengths, compact_source_ids, prefill=compact_prefill)
+
+        if (inputs.is_chunk and not inputs.is_first_chunk and inputs.compact_state is not None
+                and self._prev_chunk_output is None):
+            raise ValueError('Compact continuation requires the preceding chunk output.')
+
         # check long context
         if inputs.is_chunk and self._prev_chunk_output is not None:
+            previous = self._prev_chunk_output.get('compact_state')
+            if (inputs.compact_state is None) != (previous is None):
+                raise ValueError('Compact state mode cannot change between prefill chunks.')
+            if previous is not None and runtime is None:
+                inputs.compact_state = inputs.compact_state.continue_prefill(
+                    previous, self._prev_chunk_output['seq_length'])
             # update model metas
             model_metas = self._prev_chunk_output.get('model_metas')
             inputs.model_metas = model_metas
@@ -978,6 +1050,9 @@ class BaseModelAgent:
         need_broadcast_next = (tp > 1)
         dp = dist_config.dp
         need_update_inputs = False
+        compact_access_id = cache_inputs.compact_access_id if cache_inputs is not None else None
+        if compact_access_id is not None and inputs is None and delta is None:
+            raise ValueError('Compact access completion requires model work, not a connector-only step.')
         # Connector metadata can describe either work for this forward or a
         # polling-only step. Its presence also tells distributed executors to
         # collect connector progress from every TP worker.
@@ -1006,13 +1081,27 @@ class BaseModelAgent:
             ) = self._get_inputs_from_delta(
                 delta,
                 sampling_inputs,
+                **(dict(compact_decode_ids=cache_inputs.compact_decode_ids)
+                   if cache_inputs is not None and cache_inputs.compact_decode_ids is not None else {}),
             )
+            if cache_inputs is not None and cache_inputs.compact_decode_ids is not None:
+                cache_inputs = replace(cache_inputs, compact_decode_ids=None)
         elif not inputs.is_dummy:
             # prefill step
-            inputs = self._prepare_inputs_prefill(
-                inputs,
-                delta,
-            )
+            source_ids = cache_inputs.compact_source_ids if cache_inputs is not None else None
+            prefill = cache_inputs.compact_prefill if cache_inputs is not None else None
+            if source_ids is None and (prefill is None or prefill.checkpoint_ids is None):
+                inputs = self._prepare_inputs_prefill(inputs, delta)
+            else:
+                inputs = self._prepare_inputs_prefill(inputs, delta, compact_source_ids=source_ids,
+                                                       compact_prefill=prefill)
+                cache_inputs = replace(cache_inputs, compact_source_ids=None)
+
+        if compact_access_id is not None:
+            if inputs.is_dummy or inputs.compact_state is None:
+                raise ValueError('Compact access identity requires real compact model inputs.')
+        elif not inputs.is_dummy and inputs.compact_state is not None:
+            raise ValueError('Compact model work requires an owner access identity on every dispatch.')
 
         if dp > 1:
             # update inputs for dp
@@ -1073,6 +1162,9 @@ class BaseModelAgent:
         # logprob rows, and falling through would wrongly run sampling /
         # sequence-update on a max_tokens=0 request.
         if prefill_input_logprobs:
+            runtime = getattr(self, 'compact_runtime', None)
+            if runtime is not None and inputs.compact_state is not None:
+                runtime.advance(inputs.compact_state, inputs.state_offsets, (inputs.seq_length > 0).long(), width=1)
             # Scoring-only forwards do not run the speculative model.  Record
             # the target KV writes here instead of waiting for a postprocess
             # hook that is intentionally skipped on this path.
@@ -1082,12 +1174,15 @@ class BaseModelAgent:
             if self.need_output:
                 output = self._get_outputs_with_logprobs(output.get('logits'), inputs,
                                                          sampling_inputs.max_num_logprobs, model_metas)
+            else:
+                output = BatchedOutputs(next_token_ids=None, stopped=None)
+            if self.need_output or connector_output is not None or compact_access_id is not None:
                 output.kv_connector_output = connector_output
+                output.compact_access_id = compact_access_id
                 self._push_output(output)
-            elif connector_output is not None:
-                self._push_output(BatchedOutputs.connector_only(connector_output))
             if inputs.is_chunk and not inputs.is_last_chunk:
-                self._prev_chunk_output = {'model_metas': model_metas}
+                self._prev_chunk_output = dict(model_metas=model_metas, compact_state=inputs.compact_state,
+                                              seq_length=inputs.seq_length)
 
             return
 
@@ -1105,43 +1200,56 @@ class BaseModelAgent:
             else:
                 all_routed_experts = None
 
-            (
+            postprocess = self._step_postprocess_with_output(
+                last_logits,
+                logits,
                 inputs,
-                extra_inputs,
+                sampling_inputs,
                 stopping_criteria,
-                extra_outputs,
-                next_token_ids,
-                batched_output,
-            ) = await asyncio.shield(
-                self._step_postprocess_with_output(
-                    last_logits,
-                    logits,
-                    inputs,
-                    sampling_inputs,
-                    stopping_criteria,
-                    model_metas,
-                    need_broadcast_next,
-                    return_logits=return_logits,
-                    return_ce_loss=return_ce_loss,
-                    seq_length=seq_length,
-                    all_routed_experts=all_routed_experts,
-                    extra_inputs=extra_inputs,
-                ))
+                model_metas,
+                need_broadcast_next,
+                return_logits=return_logits,
+                return_ce_loss=return_ce_loss,
+                seq_length=seq_length,
+                all_routed_experts=all_routed_experts,
+                extra_inputs=extra_inputs,
+            )
         else:
-            batched_output = None
-            (
+            postprocess = self._step_postprocess_without_output(
                 inputs,
-                next_token_ids,
+                last_logits,
                 extra_inputs,
-                extra_outputs,
-            ) = await asyncio.shield(
-                self._step_postprocess_without_output(
-                    inputs,
-                    last_logits,
-                    extra_inputs,
-                    sampling_inputs,
-                    need_broadcast_next,
-                ))
+                sampling_inputs,
+                need_broadcast_next,
+            )
+
+        # shield already creates a child Task. Retain that same task in compact
+        # mode so canceled parents cannot hide a producer from teardown.
+        compact = getattr(self, 'compact_runtime', None) is not None
+        if compact:
+            postprocess = self._compact_postprocess_task = asyncio.ensure_future(postprocess)
+        try:
+            result = await asyncio.shield(postprocess)
+        except asyncio.CancelledError:
+            if compact:
+                # Keep the background stream/distributed contexts alive while
+                # its shielded child can still enqueue work. Repeated stop
+                # notifications must not tear down those contexts either.
+                while not postprocess.done():
+                    try:
+                        await asyncio.shield(postprocess)
+                    except asyncio.CancelledError:
+                        continue
+            raise
+        finally:
+            if compact and postprocess.done():
+                self._compact_postprocess_task = None
+        if self.need_output:
+            (inputs, extra_inputs, stopping_criteria, extra_outputs,
+             next_token_ids, batched_output) = result
+        else:
+            inputs, next_token_ids, extra_inputs, extra_outputs = result
+            batched_output = None
 
         # Partial checkpoints share logical block IDs across target and MTP.
         # Copy the MTP rows only after its prefill writes have completed.
@@ -1164,11 +1272,13 @@ class BaseModelAgent:
         # connector output together; other TP ranks emit a connector-only
         # envelope so the executor can wait for all-rank completion.
         connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
+        if batched_output is None and (connector_output is not None or compact_access_id is not None):
+            batched_output = BatchedOutputs(next_token_ids=None, stopped=None)
         if batched_output is not None:
             batched_output.kv_connector_output = connector_output
-            self._push_output(batched_output)
-        elif connector_output is not None:
-            self._push_output(BatchedOutputs.connector_only(connector_output))
+            batched_output.compact_access_id = compact_access_id
+            if compact_access_id is None:
+                self._push_output(batched_output)
 
         sampling_delta = sampling_inputs.get_delta()
         if need_update_inputs:
@@ -1182,8 +1292,13 @@ class BaseModelAgent:
                 extra_outputs,
             )
         elif inputs.is_chunk and not inputs.is_last_chunk:
-            # _prev_chunk_output is used to update model metas
-            self._prev_chunk_output = output
+            runtime = getattr(self, 'compact_runtime', None)
+            if runtime is not None and inputs.compact_state is not None:
+                runtime.advance(inputs.compact_state, inputs.state_offsets, (inputs.seq_length > 0).long(), width=1)
+            # Retain only continuation metadata, not logits/hidden activations.
+            # Unit ownership must independently survive actual GPU completion.
+            self._prev_chunk_output = dict(model_metas=model_metas, compact_state=inputs.compact_state,
+                                          seq_length=inputs.seq_length)
         elif self.cache_config.role != EngineRole.Prefill:
             self.step_inputs.merge_prefill(
                 inputs,
@@ -1194,6 +1309,14 @@ class BaseModelAgent:
                 model_metas,
                 extra_outputs,
             )
+        elif inputs.compact_state is not None and self.compact_runtime is not None:
+            self.compact_runtime.advance(inputs.compact_state, inputs.state_offsets,
+                                         (inputs.seq_length > 0).long(), width=1)
+
+        if compact_access_id is not None and batched_output is not None:
+            # Include current-ID writes in the completion event before the host
+            # may recycle this auxiliary slot for another request.
+            self._push_output(batched_output)
 
     async def _async_loop_background(self, forward_event: asyncio.Event = None):
         """Async loop background."""
@@ -1201,6 +1324,7 @@ class BaseModelAgent:
 
             # for dp
             input_maker = build_inputs_maker(self)
+            compact_idle = getattr(self, '_compact_forward_idle', None)
 
             while True:
                 forward_inputs = await input_maker.get()
@@ -1210,12 +1334,18 @@ class BaseModelAgent:
                     self.stream.wait_event(h2d_transfer.event)
                     _record_forward_input_stream(forward_inputs, self.stream)
 
+                if compact_idle is not None:
+                    compact_idle.clear()
                 await self._async_step(**forward_inputs, )
                 if forward_event is not None:
                     forward_event.set()
 
                 input_maker.step()
                 self._release_completed_h2d_transfers()
+                if compact_idle is not None:
+                    # Not a finally block: cancellation may leave shielded
+                    # postprocessing alive. It cannot certify quiescence.
+                    compact_idle.set()
 
     def _keep_h2d_transfer(self, transfer: _H2DTransfer | None):
         """Keep H2D source refs alive until their async copies finish."""
@@ -1269,6 +1399,17 @@ class BaseModelAgent:
         self._pre_in_que = asyncio.Queue()
         self._in_que = asyncio.Queue()
         self._out_que = asyncio.Queue()
+
+        # DP already parks at the collective to_sleep/to_wakeup handshake.
+        # TP/uni needs CPU coroutine quiescence as well as GPU completion:
+        # shielded postprocess can enqueue work after an earlier GPU sync.
+        self._compact_forward_idle = None
+        self._compact_postprocess_task = None
+        self._compact_shutdown_started = False
+        self._compact_shutdown_complete = False
+        if getattr(self, 'compact_runtime', None) is not None and self.dist_config.dp == 1:
+            self._compact_forward_idle = asyncio.Event()
+            self._compact_forward_idle.set()
 
         # forward task
         logger.debug('Create task ModelAgentLoop.')
@@ -1342,8 +1483,43 @@ class BaseModelAgent:
         if self.guided_decoding_manager:
             self.guided_decoding_manager.clear()
 
+    async def drain_compact(self):
+        """Prove CPU/GPU/I/O quiescence before releasing compact caches.
+
+        Unlike stop, this awaits shielded postprocess and is valid on every DP rank. The driver must call every worker
+        and require every acknowledgment. Cancellation, a failed GPU sync or failed connector shutdown leaves the
+        completion flag false and physical ownership intact.
+        """
+        if getattr(self, '_compact_shutdown_complete', False):
+            return
+        self._compact_shutdown_started = True
+        tasks = tuple(self.tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            # wait does not recancel children when the drain RPC times out.
+            # Their contexts and physical holds must survive that timeout.
+            await asyncio.wait(tasks)
+            for task in tasks:
+                if not task.cancelled():
+                    task.exception()
+        postprocess = getattr(self, '_compact_postprocess_task', None)
+        if postprocess is not None:
+            try:
+                await asyncio.shield(postprocess)
+            except Exception:
+                # A completed CPU exception is not a GPU completion. Finish
+                # draining below; CUDA/connector errors must still propagate.
+                logger.exception('Compact postprocess failed during teardown.')
+            self._compact_postprocess_task = None
+        self.shutdown_kv_connector()
+        self._compact_shutdown_complete = True
+
     def set_forward_inputs(self, inputs):
         """Set forward inputs."""
+        if getattr(self, '_compact_shutdown_started', False):
+            raise RuntimeError('Compact worker is shutting down; new forward work is rejected.')
         assert self._pre_in_que is not None, ('Please start backendground task before forward.')
         self._pre_in_que.put_nowait(inputs)
 
@@ -1424,10 +1600,15 @@ class BaseModelAgent:
                 self.memdecode_agent.build_model(self.misc_config.empty_init, build_model_ctx=self.build_model_ctx)
 
     def build_cache_plans(self, cache_config: CacheConfig,
-                          spec_cache_config: CacheConfig | None = None) -> tuple[int, int, int]:
+                          spec_cache_config: CacheConfig | None = None) -> tuple[int, ...]:
         """Build worker-local plans and return target/spec/memory block
         bytes."""
         with self.all_context():
+            from lmdeploy.pytorch.engine.cache_engine.state import CompactStatePlan
+
+            capacity = cache_config.compact_state_capacity
+            self.compact_state_plan = (CompactStatePlan.from_model_config(self.model_config, capacity)
+                                       if capacity is not None else None)
             tp = self.dist_config.attn_tp
             cache_request_model = self.patched_model
             # Ray may recollect plans after the model has been graph-wrapped.
@@ -1446,6 +1627,9 @@ class BaseModelAgent:
             if self.memdecode_agent is not None:
                 memory_nbytes = self.memdecode_agent.build_cache_plan(cache_config)
             self._cache_plan_block_nbytes = (target_nbytes, spec_nbytes)
+            if self.compact_state_plan is not None:
+                state_nbytes = sum(self.compact_state_plan.get_nbytes()) + 8 * capacity.request_slots
+                return target_nbytes, spec_nbytes, memory_nbytes, state_nbytes
             return target_nbytes, spec_nbytes, memory_nbytes
 
     def build_graph_runner(self):
@@ -1520,8 +1704,45 @@ class BaseModelAgent:
             connector_caches[f'{_MTP_CACHE_PREFIX}{name}'] = cache
         return connector_caches
 
+    def _get_compact_store_schema(self) -> str | None:
+        """Derive worker-local wire identity from retained plans and weights.
+
+        Explicit immutable identities are required for this internal opt-in; model_name and local filesystem paths are
+        not revision attestations. Rebuilds derive the same value rather than appending namespace suffixes.
+        """
+        cache = self.cache_config
+        if cache.compact_state_capacity is None or not cache.use_mooncake_store:
+            return None
+        import json
+
+        from lmdeploy.pytorch.kv_connector.mooncake.store.data import build_compact_store_schema
+
+        extra = cache.kv_transfer_config.kv_connector_extra_config
+        model_identity = extra.get('compact_model_identity')
+        if not isinstance(model_identity, str) or not model_identity.strip():
+            raise ValueError('Compact Store requires compact_model_identity naming immutable weights/revision '
+                             '(including any adapters), not model_name.')
+        spec = self.spec_agent.specdecode_config
+        plans = [self.block_cache_plan]
+        contract = dict(target_config=self.model_config.hf_config.to_dict(),
+                        target_dtype=str(self.model_config.dtype), method='ar')
+        if spec is not None:
+            draft_identity = extra.get('compact_draft_identity')
+            if not isinstance(draft_identity, str) or not draft_identity.strip():
+                raise ValueError('Compact Store MTP requires compact_draft_identity naming immutable draft weights.')
+            contract.update(method=spec.method, width=spec.num_speculative_tokens,
+                            draft_identity=draft_identity, draft_config=spec.model_config.hf_config.to_dict(),
+                            draft_dtype=str(spec.model_config.dtype))
+            plans.append(self.spec_agent.cache_engine.block_cache_plan)
+        spec_identity = json.dumps(contract, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+        return build_compact_store_schema(self.state_cache_engine.compact_plan.unit_specs, block_plans=plans,
+                                           model_identity=model_identity, spec_identity=spec_identity,
+                                           tp_size=self.dist_config.attn_tp, block_size=cache.block_size,
+                                           quant_policy=cache.quant_policy)
+
     def build_cache_engine(self):
         """Build cache engine."""
+        self._check_compact_weights_ready()
         with self.all_context():
             self._validate_mtp_parallel_config()
             self._shutdown_kv_connector()
@@ -1530,13 +1751,28 @@ class BaseModelAgent:
             tp = dist_cfg.attn_tp
             tp_rank = dist_ctx.attn_tp_group.rank
 
+            plan = getattr(self, 'compact_state_plan', None)
+            capacity = self.cache_config.compact_state_capacity
+            if (plan is None) != (capacity is None) or (plan is not None and plan.capacity != capacity):
+                raise ValueError('Compact allocation requires the exact retained worker sizing plan.')
+            if plan is not None and tuple(self.model_config.state_cache_specs) != plan.model_declarations:
+                raise ValueError('Compact allocation model declarations changed after worker sizing.')
+
             self.cache_engine = CacheEngine(self.cache_config,
                                             rank=self.rank,
                                             tp_rank=tp_rank,
                                             cache_stream=self.cache_stream,
                                             block_cache_plan=self.block_cache_plan)
-            self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config)
+            self.state_cache_engine = StateCacheEngine(self.cache_config, self.model_config, compact_plan=plan)
+            plan = getattr(self.state_cache_engine, 'compact_plan', None)
+            if plan is not None and plan.unit_specs:
+                from lmdeploy.pytorch.compact_state import CompactStateRuntime
+                self.compact_runtime = CompactStateRuntime(plan.capacity.request_slots, self.device)
+                self.step_inputs.compact_runtime = self.compact_runtime
+                self.make_dummy_meta.compact_bank_width = plan.capacity.bank_width
+                self.make_dummy_meta.compact_allow_input_alias = plan.capacity.allow_input_alias
             self.spec_agent.build_cache_engine(self.cache_stream)
+            schema = self._get_compact_store_schema()
 
             self.kv_connector = build_kv_connector(
                 KVConnectorRole.WORKER,
@@ -1550,6 +1786,7 @@ class BaseModelAgent:
                 self.kv_connector.register_kv_caches(
                     self._get_connector_kv_caches(),
                     state_cache_pools=self.state_cache_engine.connector_state_cache_pools,
+                    **({'state_cache_schema': schema} if schema is not None else {}),
                 )
 
             if self.memdecode_agent is not None:
@@ -1601,16 +1838,71 @@ class BaseModelAgent:
             if self.memdecode_agent is not None:
                 self.memdecode_agent.reset_graph_runner()
 
+    def _check_compact_weights_ready(self):
+        if getattr(self, '_compact_weight_reload', None) is not None:
+            raise RuntimeError('Compact Store weights require a successful full reload and finalization before '
+                               'cache registration, warmup or resume.')
+
+    def _prepare_compact_weight_reload(self, request):
+        """Validate after transport receive, but before the first mutation."""
+        if self.cache_config.compact_state_capacity is None or not self.cache_config.use_mooncake_store:
+            return
+        identity = request.compact_store_identity
+        if identity is None or not identity.model_identity.strip():
+            raise RuntimeError('Compact Store updates require a new immutable namespace attestation '
+                               '(compact_store_identity) on every bucket.')
+        if self.spec_agent.specdecode_config is not None and (
+                identity.draft_identity is None or not identity.draft_identity.strip()):
+            raise RuntimeError('Compact Store MTP reload requires an immutable draft_identity.')
+        if (not self.state.is_sleeping or self.cache_engine is not None or self.state_cache_engine is not None
+                or self.kv_connector is not None):
+            raise RuntimeError('Compact Store reload requires sleep/drain and no registered cache buffers.')
+        for model in filter(None, [self.patched_model.get_model(), self.spec_agent.get_model()]):
+            if any(p.device.type != 'cuda' for p in model.parameters()):
+                raise RuntimeError('Compact Store reload requires wakeup(weights) on CUDA first.')
+        reload = getattr(self, '_compact_weight_reload', None)
+        if reload is None:
+            reload = self._compact_weight_reload = _CompactWeightReload()
+        if reload.failed:
+            raise RuntimeError('Compact Store weight reload previously failed; discard this instance.')
+        if reload.identity is not None and reload.identity != identity:
+            raise RuntimeError('Compact Store weight identity changed within one reload.')
+        reload.identity = identity
+
+    def _fail_compact_weight_reload(self):
+        reload = getattr(self, '_compact_weight_reload', None)
+        if reload is not None:
+            reload.failed = True
+
+    def _commit_compact_weight_reload(self):
+        """Publish local identity only after finalization and transport
+        success.
+
+        Engine additionally gates cache wakeup on all-worker success.
+        """
+        reload = getattr(self, '_compact_weight_reload', None)
+        if reload is None:
+            return
+        assert reload.identity is not None and not reload.failed
+        extra = self.cache_config.kv_transfer_config.kv_connector_extra_config
+        extra['compact_model_identity'] = reload.identity.model_identity
+        extra['compact_draft_identity'] = reload.identity.draft_identity
+        self._compact_weight_reload = None
+
     def _split_updated_weights(self, weights: list[tuple[str, torch.Tensor]]):
         """Route HF-named update tensors before model-specific renaming."""
+        if self.cache_config.compact_state_capacity is not None and self.cache_config.use_mooncake_store:
+            reload = getattr(self, '_compact_weight_reload', None)
+            if reload is None or reload.identity is None or reload.failed:
+                raise RuntimeError('Compact Store updates require a new immutable namespace and prepared reload.')
         return self.spec_agent.split_updated_weights(weights)
 
     def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):
         """Load one externally supplied bucket into the target and draft
         models."""
+        main_weights, draft_weights = self._split_updated_weights(weights)
         model = self.patched_model.get_model() if self.patched_model is not None else None
         spec_model = self.spec_agent.get_model()
-        main_weights, draft_weights = self._split_updated_weights(weights)
         for target, target_weights, tag in [(model, main_weights, 'main'),
                                             (spec_model, draft_weights, 'draft')]:
             if target is None or not target_weights:
@@ -1618,11 +1910,19 @@ class BaseModelAgent:
             renamed = list(ModelWeightLoader._rename_weights_iterator(target_weights, target))
             logger.info(f'{op_name}: {tag}_num_tensors={len(renamed)}')
             target.load_weights(iter(renamed))
+            reload = getattr(self, '_compact_weight_reload', None)
+            if reload is not None:
+                reload.loaded_models.add(tag)
 
     def _finalize_updated_weights(self):
         """Finalize module-specific weights and invalidate captured graphs."""
         model = self.patched_model.get_model() if self.patched_model is not None else None
         spec_model = self.spec_agent.get_model()
+        reload = getattr(self, '_compact_weight_reload', None)
+        if reload is not None:
+            required = {tag for tag, target in [('main', model), ('draft', spec_model)] if target is not None}
+            if reload.failed or reload.identity is None or not required.issubset(reload.loaded_models):
+                raise RuntimeError('Compact Store finalize requires actual weights for every local target/draft model.')
         for target in filter(None, [model, spec_model]):
             process_weights_after_loading(target)
             torch.cuda.synchronize()
@@ -1658,7 +1958,9 @@ class BaseModelAgent:
             except Exception as e:  # noqa: BLE001
                 import_error = str(e)
 
-            ready = import_error is None and devices == {'cuda'} and self.memdecode_agent is None
+            reload = getattr(self, '_compact_weight_reload', None)
+            reload_failed = reload is not None and reload.failed
+            ready = import_error is None and devices == {'cuda'} and self.memdecode_agent is None and not reload_failed
             if import_error is not None:
                 message = ('checkpoint-engine is unavailable; install '
                            "'checkpoint-engine==0.4.2': " + import_error)
@@ -1666,6 +1968,8 @@ class BaseModelAgent:
                 message = 'checkpoint-engine weight updates do not support MemDecode.'
             elif devices != {'cuda'}:
                 message = f'model weights must be on CUDA before IPC update, got {sorted(devices)}'
+            elif reload_failed:
+                message = 'Compact Store weight reload previously failed; discard this instance.'
             else:
                 message = 'checkpoint-engine worker is ready.'
             return {
@@ -1701,9 +2005,13 @@ class BaseModelAgent:
                 def _load_weights(weights: list[tuple[str, torch.Tensor]]):
                     if reject_reason is not None:
                         raise RuntimeError(reject_reason)
+                    self._prepare_compact_weight_reload(request)
                     self._load_updated_weight_bucket(weights, 'update_weights_from_ipc')
 
                 def _post_hook():
+                    if reject_reason is not None:
+                        raise RuntimeError(reject_reason)
+                    self._prepare_compact_weight_reload(request)
                     self._finalize_updated_weights()
 
                 worker.update_weights_from_ipc(
@@ -1714,8 +2022,10 @@ class BaseModelAgent:
                     post_hook=_post_hook,
                 )
                 torch.cuda.empty_cache()
+                self._commit_compact_weight_reload()
                 return True, 'Succeeded to update weights from checkpoint-engine IPC.'
             except Exception as e:  # noqa: BLE001
+                self._fail_compact_weight_reload()
                 msg = (f'Failed to update weights from checkpoint-engine IPC: {e}. '
                        'The model weights may be partially updated; discard this instance and reload it.')
                 logger.exception(msg)
@@ -1724,6 +2034,7 @@ class BaseModelAgent:
     @torch.inference_mode()
     def update_params(self, request: UpdateParamsRequest):
         """Update params."""
+        consumed_event = None
 
         # modified from https://github.com/vllm-project/vllm/blob/v0.8.5/examples/offline_inference/rlhf_utils.py#L82
         def _construct(item, require_clone: bool = True):
@@ -1734,11 +2045,22 @@ class BaseModelAgent:
             return ipc_tensor.clone() if require_clone else ipc_tensor
 
         def _deserialize_weights(serialized_data):
+            nonlocal consumed_event
             weights = ForkingPickler.loads(pybase64.b64decode(serialized_data))
             if request.load_format == 'flattened_bucket':
                 metadata: list[FlattenedTensorMetadata] = weights['metadata']
                 if not metadata:
                     return []
+                if 'event_ipc_handle' in weights and hasattr(torch.cuda.Event, 'from_ipc_handle'):
+                    self._update_params_ipc_event = torch.cuda.Event.from_ipc_handle(
+                        device=torch.cuda.current_device(),
+                        handle=weights['event_ipc_handle'],
+                    )
+                if self._update_params_ipc_event is not None:
+                    self._update_params_ipc_event.wait()
+                    consumed_event = self._update_params_ipc_event
+                # A clone also reads producer storage. Order it after the same
+                # readiness event as direct model loads, including first use.
                 if 'flattened_tensor' in weights:
                     # Determine if clone is required
                     require_clone = weights.get('require_clone', True)
@@ -1751,14 +2073,7 @@ class BaseModelAgent:
                     raise ValueError(
                         'flattened_tensor is not provided in weights and no cached ipc tensor is available. '
                         'Please provide flattened_tensor on the first update_params call.')
-                if 'event_ipc_handle' in weights and hasattr(torch.cuda.Event, 'from_ipc_handle'):
-                    self._update_params_ipc_event = torch.cuda.Event.from_ipc_handle(
-                        device=torch.cuda.current_device(),
-                        handle=weights['event_ipc_handle'],
-                    )
                 flattened_tensor: torch.Tensor = self._update_params_ipc_tensor
-                if self._update_params_ipc_event is not None:
-                    self._update_params_ipc_event.wait()
                 bucket = FlattenedTensorBucket(flattened_tensor=flattened_tensor, metadata=metadata)
                 return list(bucket.reconstruct_tensors())
             return [(k, _construct(v)) for k, v in weights]
@@ -1776,29 +2091,46 @@ class BaseModelAgent:
             model = self.patched_model.get_model()
             spec_model = self.spec_agent.get_model()
 
-            weights = _deserialize_weights(serialized_data)
-            main_weights, draft_weights = self._split_updated_weights(weights)
+            failed = True
+            try:
+                weights = _deserialize_weights(serialized_data)
+                self._prepare_compact_weight_reload(request)
+                self._load_updated_weight_bucket(weights, 'Update_params')
 
-            for m, w, tag in [(model, main_weights, 'main'), (spec_model, draft_weights, 'draft')]:
-                if m is None or not w:
-                    continue
+                if request.finished:
+                    if getattr(self, '_compact_weight_reload', None) is not None:
+                        self._finalize_updated_weights()
+                    else:
+                        for m in filter(None, [model, spec_model]):
+                            process_weights_after_loading(m)
+                failed = False
+            except BaseException:
+                self._fail_compact_weight_reload()
+                raise
+            finally:
+                # One acknowledgment covers every consumer, including partial
+                # loads and fail-closed rejection. It grants buffer reuse, not
+                # model readiness: the original exception still reaches RPC.
+                try:
+                    if consumed_event is not None:
+                        consumed_event.record()
+                    if request.finished or failed:
+                        # Never drop IPC storage while queued reads may reference
+                        # it. If synchronization fails, retain handles for teardown.
+                        torch.cuda.synchronize()
+                        self._update_params_ipc_event = None
+                        self._update_params_ipc_tensor = None
+                except BaseException:
+                    self._fail_compact_weight_reload()
+                    raise
 
-                w = list(ModelWeightLoader._rename_weights_iterator(w, m))
-                logger.debug(f'Update_params: {tag}_num_tensors={len(w)}')
-                m.load_weights(iter(w))
-
-                if self._update_params_ipc_event is not None:
-                    self._update_params_ipc_event.record()
-
-            if request.finished:
-                for m in filter(None, [model, spec_model]):
-                    process_weights_after_loading(m)
-
-                    torch.cuda.synchronize()
-                    self._update_params_ipc_event = None
-                    self._update_params_ipc_tensor = None
-
-            torch.cuda.empty_cache()
+            try:
+                torch.cuda.empty_cache()
+                if request.finished:
+                    self._commit_compact_weight_reload()
+            except BaseException:
+                self._fail_compact_weight_reload()
+                raise
 
     def init_weights_update_group(self, request: InitWeightsUpdateGroupRequest):
         """Create a NCCL process group with an external trainer for the
@@ -1868,14 +2200,18 @@ class BaseModelAgent:
                 else:
                     weights = []
 
+                self._prepare_compact_weight_reload(request)
                 self._load_updated_weight_bucket(weights, 'update_weights_from_distributed')
 
                 if request.finished:
                     self._finalize_updated_weights()
 
                 torch.cuda.empty_cache()
+                if request.finished:
+                    self._commit_compact_weight_reload()
                 return True, 'Succeeded to update parameter online.'
             except Exception as e:
+                self._fail_compact_weight_reload()
                 msg = (f'Failed to update parameter online: {e}. The model weights are partially updated; '
                        'please discard them and reload.')
                 logger.exception(msg)
@@ -1899,11 +2235,22 @@ class BaseModelAgent:
     @torch.inference_mode()
     async def sleep(self, level: int = 1):
         """Sleep."""
+        self._check_compact_weights_ready()
         if self.memdecode_agent is not None:
             raise NotImplementedError('MemDecode sleep/wakeup is not supported yet.')
         self.state.is_sleeping = True
         if self.dist_config.dp > 1:
             await self.state.to_sleep.wait()
+        elif getattr(self, '_compact_forward_idle', None) is not None:
+            # Scheduling is paused. Discard queued work before waiting so the
+            # current coroutine is the last producer, including postprocess and
+            # its output. shutdown_kv_connector below drains that late output
+            # and crosses the existing GPU completion boundary afterwards.
+            self._drain_queues()
+            while not self._compact_forward_idle.is_set():
+                if self._background_task.done():
+                    raise RuntimeError('Compact worker stopped without proving forward quiescence.')
+                await asyncio.sleep(.001)
         device = 'cpu' if level == 1 else 'meta'
         # Stop producers of GPU work and wait for queued work before closing the
         # connector threads that still reference registered cache addresses.
@@ -1911,6 +2258,9 @@ class BaseModelAgent:
         self.cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()
+        if (level != 1 and self.cache_config.compact_state_capacity is not None
+                and self.cache_config.use_mooncake_store):
+            self._compact_weight_reload = _CompactWeightReload()
         self.patched_model.get_model().to(device=device, non_blocking=True)
 
         spec_model = self.spec_agent.get_model()
@@ -1933,7 +2283,7 @@ class BaseModelAgent:
         self.misc_config.empty_init = True
         try:
             self.build_model()
-            target_nbytes, spec_nbytes, _ = self.build_cache_plans(
+            target_nbytes, spec_nbytes, *_ = self.build_cache_plans(
                 self.cache_config,
                 self.spec_agent.cache_config,
             )
@@ -1953,6 +2303,8 @@ class BaseModelAgent:
             raise NotImplementedError('MemDecode sleep/wakeup is not supported yet.')
         if tags is None:
             tags = ['weights', 'kv_cache']
+        if 'kv_cache' in tags:
+            self._check_compact_weights_ready()
 
         if 'weights' in tags:
             device = next(self.patched_model.get_model().parameters()).device
@@ -1977,6 +2329,10 @@ class BaseModelAgent:
 
     def release(self):
         """release."""
+        if (getattr(self, 'compact_runtime', None) is not None
+                and getattr(self, '_background_task', None) is not None
+                and not getattr(self, '_compact_shutdown_complete', False)):
+            raise RuntimeError('Compact cache release requires completed worker drain.')
         self._shutdown_kv_connector()
         self.reset_graph_runner()
         if self._checkpoint_engine_zmq_ctx is not None:
@@ -1988,4 +2344,7 @@ class BaseModelAgent:
         self.cache_engine = None
         self.block_cache_plan = None
         self.state_cache_engine = None
+        self.compact_state_plan = None
+        self.compact_runtime = None
+        self.step_inputs = None
         torch.cuda.empty_cache()

@@ -118,6 +118,9 @@ def build_executor(
     if distributed_executor_backend is None:
         distributed_executor_backend = get_distributed_executor_backend(world_size, dp, device_type, logger)
 
+    if cache_config.compact_state_capacity is not None and distributed_executor_backend == 'mp':
+        raise NotImplementedError('Compact state completion is not supported by the deprecated MP executor.')
+
     if dp > 1:
         assert distributed_executor_backend == 'ray', (
             'dp>1 requires distributed_executor_backend="ray", ',

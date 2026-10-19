@@ -58,6 +58,8 @@ def register(router: APIRouter, server_context) -> None:
                       raw_request: Request = None):
         """Update weights for the model."""
         server_context.async_engine.engine.update_params(request)
+        if request.finished and request.compact_store_identity is not None:
+            server_context.async_engine.complete_weights_update()
         return JSONResponse(content=None)
 
     def _check_pytorch_backend_for_disagg_weight_update():

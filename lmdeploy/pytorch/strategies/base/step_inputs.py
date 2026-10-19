@@ -8,6 +8,7 @@ import torch
 from .model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 
 if TYPE_CHECKING:
+    from lmdeploy.pytorch.compact_state import CompactStateRuntime
     from lmdeploy.pytorch.engine.logits_process import SamplingInputsDelta
     from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 
@@ -32,6 +33,7 @@ class StepInputs(ABC):
     extra_inputs: ExtraInputs = None
     stopping_criteria: StoppingCriteria = None
     sampling_delta: 'SamplingInputsDelta' = None
+    compact_runtime: 'CompactStateRuntime | None' = None
 
     @abstractmethod
     def merge_prefill(

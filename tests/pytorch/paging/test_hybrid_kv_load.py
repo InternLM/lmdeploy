@@ -133,6 +133,7 @@ def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary
     # Build the next forward's real copy plans: the earlier local checkpoint
     # must not overwrite the state that was just loaded at H.
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
     maker.spec_decoding = mtp
     maker.state_checkpoints = scheduler.state_checkpoints

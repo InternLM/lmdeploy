@@ -12,6 +12,7 @@ from torch.profiler import record_function
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.compact_state import CompactStateInputs, CompactStatePrefill
 from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig, QuantizationConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.utils import CtxMgrBase, singleton
@@ -165,6 +166,9 @@ class ModelInputsDelta:
     is_decoding: bool = True
     # sliding window
     num_ignored_history: torch.Tensor | None = None
+    # This forward's owner-held write permissions, in post-reindex row order.
+    # Current boundary IDs remain device-owned; no host acceptance readback.
+    compact_bank_ids: torch.Tensor | None = None
 
     @property
     def seq_length(self):
@@ -242,7 +246,10 @@ class ModelInputs:
     # mrope, shape(3, sum_seqlens)
     mrope_pos_ids: torch.Tensor | None = None
 
-    def step(self, input_ids: torch.Tensor, step_seqlens: torch.Tensor = None):
+    # Persistent unit IDs; auxiliary slot identity stays in state_offsets.
+    compact_state: CompactStateInputs | None = None
+
+    def step(self, input_ids: torch.Tensor, step_seqlens: torch.Tensor = None, *, compact_runtime=None):
         """Update input ids."""
         assert self.is_decoding
         if step_seqlens is None:
@@ -256,6 +263,10 @@ class ModelInputs:
             mrope_pos_ids = mrope_pos_ids.unflatten(1, (-1, self.max_q_seqlen)) + step_seqlens[None, :, None]
             mrope_pos_ids = mrope_pos_ids.flatten(1, 2)
 
+        compact_state = self.compact_state
+        if compact_state is not None:
+            compact_state = (compact_state.advance(step_seqlens) if compact_runtime is None else
+                             compact_runtime.advance(compact_state, self.state_offsets, step_seqlens))
         return self.clone(
             input_ids=input_ids,
             history_lengths=self.history_lengths + step_seqlens,
@@ -264,6 +275,7 @@ class ModelInputs:
             logits_indices=None,
             seq_logit_length=None,
             mrope_pos_ids=mrope_pos_ids,
+            compact_state=compact_state,
         )
 
     @torch.inference_mode()
@@ -275,7 +287,7 @@ class ModelInputs:
             v = getattr(self, k)
             if isinstance(v, torch.Tensor):
                 v = v.to(device, non_blocking=non_blocking)
-            elif isinstance(v, VisionModelInputs):
+            elif isinstance(v, (VisionModelInputs, CompactStateInputs)):
                 v = v.to_device(device, non_blocking=non_blocking)
             out_dict[k] = v
 
@@ -288,7 +300,7 @@ class ModelInputs:
             if isinstance(value, torch.Tensor):
                 if value.is_cuda:
                     value.record_stream(stream)
-            elif isinstance(value, VisionModelInputs):
+            elif isinstance(value, (VisionModelInputs, CompactStateInputs)):
                 value.record_stream(stream)
 
     def build_dp_meta(self, num_tokens: list[int]):
@@ -366,6 +378,9 @@ class StepContext:
     is_first_chunk: bool = False
     is_last_chunk: bool = False
 
+    compact_state: CompactStateInputs | None = None
+    compact_prefill: CompactStatePrefill | None = None
+
     @classmethod
     def new(
         cls,
@@ -375,6 +390,7 @@ class StepContext:
         kv_caches: list | None = None,
         state_caches: list | None = None,
         kv_quant_policy: QuantPolicy = QuantPolicy.NONE,
+        compact_prefill: CompactStatePrefill | None = None,
     ):
         """Build step context.
 
@@ -430,6 +446,8 @@ class StepContext:
             enable_microbatch=inputs.enable_microbatch,
             state_caches=state_caches,
             state_offsets=inputs.state_offsets,
+            compact_state=inputs.compact_state,
+            compact_prefill=compact_prefill,
             target_hidden_states=inputs.target_hidden_states,
             target_inputs_embeds=inputs.target_inputs_embeds,
             mrope_position_ids=inputs.mrope_pos_ids,
@@ -561,6 +579,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
         kv_caches: list | None = None,
         state_caches: list | None = None,
         kv_quant_policy: QuantPolicy = QuantPolicy.NONE,
+        compact_prefill: CompactStatePrefill | None = None,
     ):
         """Build context."""
         return StepContext.new(
@@ -570,6 +589,7 @@ class StepContextManager(CtxMgrBase[StepContext]):
             kv_caches,
             state_caches,
             kv_quant_policy,
+            compact_prefill=compact_prefill,
         )
 
 
