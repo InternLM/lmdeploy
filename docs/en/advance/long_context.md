@@ -89,7 +89,7 @@ This test takes approximately 364 seconds per round when conducted on A100-80G G
 
 ### Needle In A Haystack
 
-[OpenCompass](https://github.com/open-compass/opencompass) offers very useful tools to perform needle-in-a-haystack evaluation. For specific instructions, please refer to the [guide](https://github.com/open-compass/opencompass/blob/main/docs/en/advanced_guides/needleinahaystack_eval.md).
+[OpenCompass](https://github.com/open-compass/opencompass) offers very useful tools to perform needle-in-a-haystack evaluation. For specific instructions, please refer to the [guide](https://github.com/open-compass/opencompass/blob/main/docs/en/faq/needleinahaystack_eval.md).
 
 ### Perplexity
 
