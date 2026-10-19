@@ -346,3 +346,60 @@ def test_flush_raw_history_is_immutable_until_all_consumers_finish(channelwise):
         torch.cuda.synchronize()
         torch.testing.assert_close(s.checkpoint, expected, atol=2e-6, rtol=2e-5)
         torch.testing.assert_close(graph_out, reference, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required')
+@pytest.mark.parametrize('gate_scale', [0.2, 0.001])
+def test_kda_history_changing_graph_inputs_and_partial_acceptance(gate_scale):
+    from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import (
+        commit_gdn_replayssm_spec_cursor,
+        fold_gdn_replayssm_mtp_history,
+        fused_recurrent_gdn_replayssm_spec,
+        make_gdn_replayssm_spec_workspace,
+    )
+
+    torch.manual_seed(5219)
+    batch, heads, dim, tmax, ring = 3, 2, 128, 6, 16
+    state = _make_state(batch, heads, heads, dim, dim, ring, tmax, torch.bfloat16, True)
+    state.checkpoint.normal_(std=0.02)
+    initial = state.checkpoint.clone()
+    truth = initial.clone()
+    ids = torch.arange(batch, device='cuda')
+    lengths = torch.full((batch,), tmax, device='cuda', dtype=torch.int32)
+    rejected = torch.zeros_like(lengths)
+    q, k, v, _, beta = _step(batch, tmax, heads, heads, dim, dim, torch.bfloat16, 5219)
+    # Match prepare_kda_replay_gates and retain this FP32 buffer across Graph replays.
+    beta = torch.rand_like(beta, dtype=torch.float32)
+    q, k, v = [x.permute(0, 2, 3, 1).contiguous().permute(0, 3, 1, 2) for x in (q, k, v)]
+    gate = -torch.rand(batch, tmax, heads, dim, device='cuda') * gate_scale
+    workspace = make_gdn_replayssm_spec_workspace(state, batch)
+
+    def step():
+        out, _ = fused_recurrent_gdn_replayssm_spec(
+            q, k, v, gate, beta, state, ids, lengths, workspace=workspace)
+        commit_gdn_replayssm_spec_cursor(state.cursor.packed_cursor, ids, lengths, rejected, ring, tmax)
+        return out
+
+    step()
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        actual = step()
+    # Capturing must not become part of the independent accepted-input history.
+    state.checkpoint.copy_(initial)
+    state.cursor.packed_cursor.zero_()
+    for name in ('d_ring', 'k_ring', 'g_ring', 'raw_v_ring', 'raw_k_ring', 'beta_ring'):
+        getattr(state, name).zero_()
+    for index in range(64):
+        for tensor in (q, k, v):
+            tensor.normal_()
+        gate.uniform_(-gate_scale, 0)
+        beta.uniform_(0, 1)
+        accepted = ((ids + index) % (tmax + 1)).int()
+        rejected.copy_(lengths - accepted)
+        expected, _ = _reference(q, k, v, gate, beta, truth, lengths)
+        _, truth = _reference(q, k, v, gate, beta, truth, accepted)
+        graph.replay()
+        torch.testing.assert_close(actual, expected, atol=2e-3, rtol=5e-3)
+    fold_gdn_replayssm_mtp_history(state, ids)
+    torch.testing.assert_close(state.checkpoint, truth, atol=1e-4, rtol=1e-4)

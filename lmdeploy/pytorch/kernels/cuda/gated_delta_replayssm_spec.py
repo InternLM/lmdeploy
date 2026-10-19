@@ -273,18 +273,20 @@ def gdn_replayssm_spec_circular_kernel(
         cache_valid = o_c < stored_write_pos
         phys_c = (stored_cache_base + o_c) & (R - 1)
         if CHANNELWISE_G:
-            gates = tl.load(g_ring + state_idx * stride_g_ring_slot
-                            + (i_hv * R + phys_c[:, None]) * K + o_k[None, :],
-                            mask=cache_valid[:, None] & mask_k[None, :], other=0.0)
-            total = tl.sum(gates, axis=0)
-            decay = tl.exp(total[None, :] - tl.cumsum(gates, axis=0))
-            d_hist = tl.load(d_ring + state_idx * stride_d_slot
-                             + (i_hv * R + phys_c[None, :]) * V + o_v[:, None],
-                             mask=mask_v[:, None] & cache_valid[None, :], other=0.0).to(tl.float32)
-            k_hist = tl.load(k_ring + state_idx * stride_k_ring_slot
-                             + (i_h * R + phys_c[:, None]) * K + o_k[None, :],
-                             mask=cache_valid[:, None] & mask_k[None, :], other=0.0).to(tl.float32)
-            h = h * tl.exp(total)[None, :] + tl.dot(d_hist, k_hist * decay, input_precision='ieee')
+            # Reconstruct only the committed prefix from FP32 corrections.
+            # This changes association, not the raw exact-fold authority.
+            for history_index in range(stored_write_pos):
+                history_slot = (stored_cache_base + history_index) & (R - 1)
+                gate_hist = tl.load(g_ring + state_idx * stride_g_ring_slot
+                                    + (i_hv * R + history_slot) * K + o_k,
+                                    mask=mask_k, other=0.0).to(tl.float32)
+                delta_hist = tl.load(d_ring + state_idx * stride_d_slot
+                                     + (i_hv * R + history_slot) * V + o_v,
+                                     mask=mask_v, other=0.0).to(tl.float32)
+                key_hist = tl.load(k_ring + state_idx * stride_k_ring_slot
+                                   + (i_h * R + history_slot) * K + o_k,
+                                   mask=mask_k, other=0.0).to(tl.float32)
+                h = h * tl.exp(gate_hist)[None, :] + delta_hist[:, None] * key_hist[None, :]
         else:
             gates = tl.load(g_ring + state_idx * stride_g_ring_slot
                             + i_hv * R + phys_c,
