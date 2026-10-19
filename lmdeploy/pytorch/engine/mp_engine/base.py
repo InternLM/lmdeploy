@@ -2,6 +2,7 @@
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Any
 
 from lmdeploy.messages import EngineOutput, ResponseType
@@ -32,6 +33,11 @@ class MPEngine(EngineBase):
         self.session_states = defaultdict(SessionState)
         self.engine_config = self._collective_rpc('get_engine_config')
         self.pending_cancel_sessions = set()
+
+    @cached_property
+    def vocab_size(self) -> int:
+        """Fetch the worker's output vocabulary size once for validation."""
+        return self._collective_rpc('get_vocab_size')
 
     def _collective_rpc(self, func, *args, **kwargs):
         """Collective rpc call."""
@@ -128,6 +134,9 @@ class MPEngineInstance(EngineInstanceBase):
     def __init__(self, engine: MPEngine):
         self.engine = engine
         self.session_states = engine.session_states
+
+    async def trim_routed_experts(self, key: str, num_rows: int) -> str:
+        return await self.engine._collective_rpc_async('trim_routed_experts', key, num_rows)
 
     async def async_end(self, session_id: int):
         """End the given session."""

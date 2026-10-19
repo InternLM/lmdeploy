@@ -300,9 +300,8 @@ class FusedMoE(FusedMoEBase):
             if (state['recv_hidden_states'][0]
                     if isinstance(state['recv_hidden_states'], tuple) else state['recv_hidden_states']).shape[0] > 0:
                 state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
-                                                                                 self.gate_up.weight_scale_inv,
                                                                                  self.down.weight,
-                                                                                 self.down.weight_scale_inv)
+                                                                                 act_func=self.act_func)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
                 'hidden_states': state['recv_hidden_states'],
@@ -311,9 +310,8 @@ class FusedMoE(FusedMoEBase):
             }
         elif moe_type == MoeType.DSAsyncDecode:
             state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
-                                                                             self.gate_up.weight_scale_inv,
                                                                              self.down.weight,
-                                                                             self.down.weight_scale_inv)
+                                                                             act_func=self.act_func)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
                 'hidden_states': state['recv_hidden_states'],

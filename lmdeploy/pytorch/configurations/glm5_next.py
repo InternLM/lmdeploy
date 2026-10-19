@@ -1,10 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """PyTorch engine configuration for GLM-5.3-Flash."""
 
-from functools import partial
-
 import torch
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.pytorch.consts import (
     GLM5_KDA_CONV_STATE,
@@ -22,11 +21,12 @@ from .qwen3_next import _check_env_qwen3_next
 _GLM5_LINEAR_LAYER_TYPE = 'linear_attention'
 _GLM5_FULL_LAYER_TYPES = frozenset({
     'deepseek_sparse_attention',
+    'indexed_attention',
     'full_attention',
 })
 
 
-def update_cache_config(cache_config, token_lookahead=0):
+def update_cache_config(cache_config):
     """Keep the 64-token MLA / 16-entry KPool owner under one allocator
     reference."""
     if cache_config.role != EngineRole.Hybrid:
@@ -38,9 +38,6 @@ def update_cache_config(cache_config, token_lookahead=0):
     cache_config.block_size = 64
     cache_config.kernel_block_size = 64
     cache_config.prefix_cache_block_aligned = True
-    cache_config.prefix_cache_token_lookahead = token_lookahead
-    if token_lookahead and cache_config.prefix_cache_decode_state_interval:
-        raise ValueError('GLM-5.3 MTP prefix caching only publishes prefill checkpoints.')
     if cache_config.prefix_cache_decode_state_interval % 64:
         raise ValueError('GLM-5.3 prefix_cache_decode_state_interval must be a multiple of 64.')
 
@@ -82,7 +79,7 @@ def _set_layer_ids_compat(text_config, name: str,
 def _resolve_glm5_linear_config(text_config):
     """Normalize official and legacy GLM-5.3 hybrid-layer schemas.
 
-    Transformers 5.16 represents the hybrid layout with ``layer_types`` and
+    Transformers 5.17+ represents the hybrid layout with ``layer_types`` and
     linear-attention geometry with scalar fields.  Older checkpoints and the
     LMDeploy fallback config expose ``linear_attn_config`` plus convenience
     layer-id properties.  Keep ``layer_types`` authoritative when present and
@@ -104,7 +101,7 @@ def _resolve_glm5_linear_config(text_config):
         if invalid_types:
             raise ValueError(
                 'GLM-5.3 layer_types only supports linear_attention, '
-                'deepseek_sparse_attention, or full_attention, but got '
+                'deepseek_sparse_attention, indexed_attention, or full_attention, but got '
                 f'{invalid_types}.')
         linear_layer_ids = [
             layer_idx for layer_idx, layer_type in enumerate(layer_types)
@@ -233,6 +230,13 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         if text_config.index_kpool != 4:
             raise ValueError('GLM-5.3 currently requires index_kpool=4 for its 64-token cache owner.')
         quant_config = getattr(hf_config, 'quantization_config', None)
+        if (_envs.fp8_moe_only and quant_config is not None
+                and quant_config.get('quant_method') == 'fp8'
+                and quant_config.get('lmdeploy_patched', False)):
+            quant_config['fp8_quant_scope'] = 'moe_only'
+            get_logger('lmdeploy').info(
+                'Enable fp8_quant_scope=moe_only for glm5_next because LMDEPLOY_FP8_MOE_ONLY=1 '
+                'and the FP8 quantization config is LMDeploy-synthesized.')
         if quant_config is not None:
             text_config.quantization_config = quant_config
 
@@ -262,17 +266,20 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         config.num_layers = num_full_layers
         # GLM owns KPool selection in the model adapter, rather than the
         # DeepSeek-V3.2 token indexer selected by mla_index_topk.  Keeping this
-        # unset also preserves the BF16 latent MLA cache policy.
+        # unset avoids selecting the generic token indexer.
         config.mla_index_topk = None
+        config.supports_mla_fp8_cache = True
         config.reserve_dsa_score_workspace = True
         config.k_head_dim = text_config.kv_lora_rank
-        # Reuse Qwen3.5's token ring for convolution; recurrent/KPool states
-        # keep a complete checkpoint after each verified token.
-        ring_shape = (num_spec_tokens + 1,) if num_spec_tokens else ()
+        # CUDA stores exact-boundary KDA units; KPool remains request-private.
+        # Store resumes on 64-token boundaries, where the KPool tail is empty.
+        config.state_cache_is_indexed = kwargs.get('device_type', 'cuda') in ('cuda', 'auto')
+        ring_shape = ((num_spec_tokens + 1,) if num_spec_tokens else ()) if not config.state_cache_is_indexed else ()
         config.state_cache_specs = [
             StateCacheSpec(
                 GLM5_KDA_CONV_STATE,
-                (num_linear_layers, conv_dim, conv_kernel_size + num_spec_tokens),
+                (num_linear_layers, conv_dim,
+                 conv_kernel_size - 1 if config.state_cache_is_indexed else conv_kernel_size + num_spec_tokens),
                 torch.bfloat16,
             ),
             StateCacheSpec(
@@ -285,12 +292,19 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
                 (num_full_layers, text_config.index_kpool + 1 + num_spec_tokens,
                  text_config.index_head_dim),
                 torch.bfloat16,
+                store_cacheable=False,
+                # Prefix checkpoints are 64-token aligned and index_kpool=4:
+                # the incomplete pool is empty at restore. Keep the runtime
+                # raw ring for chunk continuation and speculative rejection.
+                prefix_checkpoint=False,
             ),
             StateCacheSpec(
                 GLM5_KPOOL_TAIL_SCORE_STATE,
                 (num_full_layers, text_config.index_kpool + 1 + num_spec_tokens,
                  text_config.index_head_dim),
                 torch.bfloat16,
+                store_cacheable=False,
+                prefix_checkpoint=False,
             ),
         ]
         # Scheduler compatibility: named specs own allocation, while this
@@ -300,8 +314,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             for spec in config.state_cache_specs
         ]
         config.is_gated_delta = True
-        config.update_cache_config_func = (partial(update_cache_config, token_lookahead=1)
-                                           if num_spec_tokens else update_cache_config)
+        config.update_cache_config_func = update_cache_config
         if kwargs.get('spec_method') not in (None, 'deepseek_mtp'):
             config.prefix_caching_unsupported_reason = (
                 'GLM-5.3 prefix caching supports AR and deepseek_mtp only.')
@@ -315,6 +328,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             if hasattr(hf_config, 'auto_map'):
                 del hf_config.auto_map
             config.num_layers = 1
+            config.state_cache_is_indexed = False
             config.state_cache_specs = []
             config.states_shapes = []
             config.is_gated_delta = False

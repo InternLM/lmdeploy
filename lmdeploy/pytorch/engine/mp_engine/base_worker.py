@@ -169,6 +169,10 @@ class EngineWorkerBase:
         """Get engine config."""
         return self.engine.get_engine_config()
 
+    def get_vocab_size(self) -> int:
+        """Get the loaded model's output vocabulary size."""
+        return self.engine.vocab_size
+
     def get_schedule_metrics(self):
         """Get schedule metrics."""
         return self.engine.get_schedule_metrics()
@@ -232,6 +236,10 @@ class EngineWorkerBase:
     def close(self) -> None:
         """Close engine worker."""
         self.engine.close()
+
+    async def trim_routed_experts(self, key: str, num_rows: int) -> str:
+        from ..engine_instance import EngineInstance
+        return await EngineInstance.trim_routed_experts(key, num_rows)
 
     async def instance_async_end(self, session_id: int):
         """End the given session."""

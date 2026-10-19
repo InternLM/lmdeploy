@@ -165,7 +165,7 @@ class CacheEngine:
 
         connector_caches: dict[str, torch.Tensor] = {}
         for pool_index, pool in enumerate(allocation.pools):
-            if pool.nbytes == 0:
+            if pool.nbytes == 0 or pool.transfer_ranges == ():
                 continue
             if pool.entry_axis != 1:
                 raise ValueError(

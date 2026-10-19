@@ -194,6 +194,36 @@ class DeepGemmLinearBlockedF8Impl(CudaLinearBlockedF8Impl):
         return out[:x.size(0)]
 
 
+class HopperSmallMLinearBlockedF8Impl(DeepGemmLinearBlockedF8Impl):
+    """Avoid a padded DeepGEMM tile for the validated small dense-MLP shape."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from lmdeploy.pytorch.kernels.cuda.blocked_fp8_gemm_gluon import fp8_gemm_nt
+
+        self._fp8_gemm_nt = fp8_gemm_nt
+        manager = get_warmup_manager()
+        key = f'small_m_gluon_{self.in_features}_{self.out_features}'
+        if key not in manager:
+            manager[key] = self._warmup_small
+
+    def _gemm(self, x: torch.Tensor, weight: torch.Tensor, scale: torch.Tensor):
+        if 0 < x.size(0) <= 32 and self.scale_fmt is None:
+            return GluonLinearBlockedF8Impl._gemm(self, x, weight, scale)
+        return super()._gemm(x, weight, scale)
+
+    def _warmup_small(self, meta: WarmupMeta):
+        if meta.max_num_tokens <= 0:
+            return
+        weight = torch.empty(self.out_features, self.in_features, dtype=self.fp8_dtype, device='cuda')
+        scale = torch.empty(self.out_features // 128, self.in_features // 128, device='cuda')
+        # The normal DeepGEMM registration handles larger prefills. Warm only
+        # the reachable small-M Gluon schedules in this extra registration.
+        for m in sorted({min(m, meta.max_num_tokens) for m in (1, 16, 32)}):
+            x = torch.empty(m, self.in_features, dtype=self.out_dtype, device='cuda')
+            self._gemm(x, weight, scale)
+
+
 @functools.lru_cache
 def _has_deep_gemm() -> bool:
     try:
@@ -236,6 +266,10 @@ def _build_linear_blocked_f8(spec: LinearBlockedF8BuildSpec) -> LinearBlockedF8I
     if provider == 'auto':
         if _supports_deep_gemm(spec.block_size, spec.output_dtype, spec.fp8_dtype):
             impl_cls = DeepGemmLinearBlockedF8Impl
+            if (spec.in_features == 4096 and spec.out_features == 24576 and spec.scale_fmt is None
+                    and _supports_gluon(spec.in_features, spec.out_features, spec.block_size,
+                                        spec.output_dtype, spec.fp8_dtype)):
+                impl_cls = HopperSmallMLinearBlockedF8Impl
         elif _supports_gluon(spec.in_features, spec.out_features, spec.block_size, spec.output_dtype, spec.fp8_dtype):
             impl_cls = GluonLinearBlockedF8Impl
         else:

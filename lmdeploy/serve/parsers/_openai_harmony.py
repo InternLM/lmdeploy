@@ -11,11 +11,13 @@ import shortuuid
 from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
 
 from lmdeploy.serve.openai.protocol import (
+    AllowedToolChoice,
     DeltaFunctionCall,
     DeltaMessage,
     DeltaToolCall,
     FunctionCall,
     ToolCall,
+    ToolChoice,
 )
 from lmdeploy.utils import get_logger
 
@@ -43,21 +45,23 @@ class GptOssResponseParser(ResponseParser):
     tool_parser_cls = object()  # API server checks `is not None` for tool support.
     supports_required_tool_choice = True
 
+    @classmethod
+    def render_tools(cls, request: ChatCompletionRequest) -> list[dict] | None:
+        """GPT-OSS templates read `tool.function`, so keep the wrappers."""
+        if request.tools is None or request.tool_choice == 'none':
+            return None
+        if getattr(request.tool_choice, 'type', None) == 'function':
+            # ToolChoice (type='function'): keep only the selected tool.
+            return [
+                item.model_dump() for item in request.tools
+                if item.function.name == request.tool_choice.function.name
+            ]
+        # auto/required/allowed_tools: keep all tools.
+        return [item.model_dump() for item in request.tools]
+
     def __init__(self, request: ChatCompletionRequest):
         if hasattr(request, 'tools') and hasattr(request, 'tool_choice'):
-            # GPT-OSS templates expect full tool wrappers.
-            if request.tools is None or request.tool_choice == 'none':
-                rendered_tools = None
-            elif getattr(request.tool_choice, 'type', None) == 'function':
-                # ToolChoice (type='function'): keep only the selected tool.
-                rendered_tools = [
-                    item.model_dump() for item in request.tools
-                    if item.function.name == request.tool_choice.function.name
-                ]
-            else:
-                # auto/required/allowed_tools: keep all tools.
-                rendered_tools = [item.model_dump() for item in request.tools]
-            self.request = request.model_copy(update={'tools': rendered_tools})
+            self.request = request.model_copy(update={'tools': type(self).render_tools(request)})
         else:
             # Unit tests may inject a lightweight sentinel request object.
             self.request = request
@@ -93,7 +97,8 @@ class GptOssResponseParser(ResponseParser):
           the Harmony final channel (``<|channel|>final<|message|> ...
           <|end|>``), optionally preceded by an analysis block.
 
-        Required tool calls reject the request if grammar construction fails.
+        Required tool calls, named functions, and required allowed-tool choices
+        reject the request if grammar construction fails.
         For other modes, a failed grammar construction injects the
         ``response_format`` into the system prompt as a ``# Response Formats``
         section and clears it, matching the Harmony-native fallback.
@@ -109,8 +114,9 @@ class GptOssResponseParser(ResponseParser):
             if grammar is not None:
                 self._set_response_format(grammar)
                 return
-            if tool_choice == 'required':
-                raise ValueError('Failed to build the grammar for `tool_choice="required"` in GPT-OSS.')
+            if (tool_choice == 'required' or isinstance(tool_choice, ToolChoice)
+                    or (isinstance(tool_choice, AllowedToolChoice) and tool_choice.allowed_tools.mode == 'required')):
+                raise ValueError('Failed to build the grammar for the required tool choice in GPT-OSS.')
             # tool grammar failed — fall back to prompt injection so the
             # original response_format (if any) is not left intact to
             # conflict with Harmony tool-call constraints downstream.

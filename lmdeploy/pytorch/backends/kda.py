@@ -35,3 +35,4 @@ class KdaImpl(ABC):
 @dataclass(frozen=True)
 class KdaBuildSpec(BuildSpec[KdaImpl]):
     """Request a device-specific KDA implementation."""
+    indexed_state: bool = False

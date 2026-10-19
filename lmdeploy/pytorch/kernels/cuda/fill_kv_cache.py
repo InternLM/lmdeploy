@@ -19,13 +19,15 @@ Q_POLICY_INT8 = tl.constexpr(8)
 Q_POLICY_TURBO = tl.constexpr(42)
 
 
+# Page-table width and row stride vary with live request lengths; keep both
+# runtime to avoid compiling a scatter variant for every context length.
 @triton.jit
 def _fill_indexed_key_cache_kernel(
     Keys, Scales, GroupIds, Valid, RequestIds, BlockOffsets, KeyCache, ScaleCache,
-    BATCH: tl.constexpr, COLUMNS: tl.constexpr, PAGE: tl.constexpr,
+    BATCH: tl.constexpr, COLUMNS, PAGE: tl.constexpr,
     PAGE_STEP: tl.constexpr, WIDTH: tl.constexpr,
     stride_kr: tl.constexpr, stride_kd: tl.constexpr,
-    stride_sr: tl.constexpr, stride_br: tl.constexpr, stride_bc: tl.constexpr,
+    stride_sr: tl.constexpr, stride_br, stride_bc: tl.constexpr,
     stride_kcb: tl.constexpr, stride_kcs: tl.constexpr, stride_kcd: tl.constexpr,
     stride_scb: tl.constexpr, stride_scs: tl.constexpr,
     BLOCK_D: tl.constexpr, HAS_REQUEST_IDS: tl.constexpr,
@@ -1135,6 +1137,7 @@ def _fill_kv_cache_blocked_fp8_kernel(
     VCaches,
     KSCaches,
     VSCaches,
+    ZeroCache,
     cu_seqlen_q_ptr,
     KVSeqLens,
     BlockOffsets,
@@ -1166,6 +1169,10 @@ def _fill_kv_cache_blocked_fp8_kernel(
     stride_vsch: tl.constexpr,
     stride_vscd: tl.constexpr,
     stride_boff,
+    stride_zcn: tl.constexpr,
+    stride_zcb: tl.constexpr,
+    stride_zch: tl.constexpr,
+    ZERO_DIM: tl.constexpr,
     ROUND_SCALE: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
     DCP_SIZE: tl.constexpr,
@@ -1242,6 +1249,11 @@ def _fill_kv_cache_blocked_fp8_kernel(
     kc, kcs = _quant_blocked_fp8(k, fp8_min, fp8_max, KCaches.dtype.element_ty, GROUP_SIZE, ROUND_SCALE)
     tl.store(kc_ptrs, kc, mask=mask_kc)
     tl.store(ksc_ptrs, kcs, mask=kv_mask[:, None] & (ds_off[None, :] < tl.cdiv(head_dim, GROUP_SIZE)))
+    if ZERO_DIM > 0:
+        zero_offs = tl.arange(0, triton.next_power_of_2(ZERO_DIM))
+        zero_ptrs = (ZeroCache + block_off * stride_zcn + head_id * stride_zch
+                     + page_offs[:, None] * stride_zcb + zero_offs[None, :])
+        tl.store(zero_ptrs, 0, mask=kv_mask[:, None] & (zero_offs[None, :] < ZERO_DIM))
     if BLOCK_DV > 0:
         vc, vcs = _quant_blocked_fp8(v, fp8_min, fp8_max, VCaches.dtype.element_ty, GROUP_SIZE, ROUND_SCALE)
         tl.store(vc_ptrs, vc, mask=mask_vc)
@@ -1262,7 +1274,8 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
                               kv_layout: str = 'bshd',
                               scale_fmt: str | None = None,
                               dcp_size: int = 1,
-                              dcp_rank: int = 0):
+                              dcp_rank: int = 0,
+                              zero_fill_cache: Tensor | None = None):
     """Fill key/value state to cache for paged attention with fp8 quantization.
 
     Args:
@@ -1294,6 +1307,9 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
             scaling factors are stored/interpreted using the UE8M0 fp8 scale
             format; when ``None``, the default scale layout for this kernel
             is used.
+        zero_fill_cache (Tensor | None): Optional cache view with contiguous
+            last dimension to clear at exactly the written token slots. Used
+            for the BF16 RoPE tail of NoPE packed MLA rows.
     """
     assert scale_fmt in (None, 'ue8m0'), f'Unsupported scale format: {scale_fmt}.'
 
@@ -1336,6 +1352,11 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
     grid = (num_heads, max_num_blocks, batch_size)
     ROUND_SCALE = 1 if scale_fmt == 'ue8m0' else 0
     is_decoding = max_q_seqlen == 1
+    zero_dim = 0 if zero_fill_cache is None else zero_fill_cache.size(d_dim)
+    if zero_fill_cache is None:
+        zero_fill_cache = k_caches
+    else:
+        assert zero_fill_cache.stride(d_dim) == 1
     _fill_kv_cache_blocked_fp8_kernel[grid](
         k_states,
         v_states,
@@ -1343,6 +1364,7 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
         v_caches,
         ks_caches,
         vs_caches,
+        zero_fill_cache,
         cu_seqlen_q,
         kv_seqlens,
         block_offsets,
@@ -1374,6 +1396,10 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
         stride_vsch=vs_caches.stride(h_dim),
         stride_vscd=vs_caches.stride(d_dim),
         stride_boff=block_offsets.stride(0),
+        stride_zcn=zero_fill_cache.stride(b_dim),
+        stride_zcb=zero_fill_cache.stride(s_dim),
+        stride_zch=zero_fill_cache.stride(h_dim),
+        ZERO_DIM=zero_dim,
         ROUND_SCALE=ROUND_SCALE,
         GROUP_SIZE=group_size,
         DCP_SIZE=dcp_size,

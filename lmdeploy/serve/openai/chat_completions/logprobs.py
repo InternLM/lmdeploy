@@ -35,7 +35,11 @@ def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
                                           top_logprobs=[])
         for top_id, prob in tops.items():
             token = tokenizer.convert_ids_to_tokens(top_id)
-            if isinstance(token, bytes):
+            if token is None:
+                # The LM head can contain padded IDs outside the tokenizer.
+                token = f'token_id:{top_id}'
+                _bytes = None
+            elif isinstance(token, bytes):
                 _bytes = list(token)
                 token = token.decode('utf-8', errors='backslashreplace')
             else:

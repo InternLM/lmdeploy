@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch import distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.backends.cuda.attention.sparse_mla import FlashMLASparseImpl
 from lmdeploy.pytorch.backends.cuda.kpool import (
     CudaKPoolAttention,
@@ -22,6 +23,7 @@ from lmdeploy.pytorch.backends.cuda.kpool import (
     kpool_expand_groups_cuda,
     kpool_gather_token_tail_cuda,
     kpool_prefill_metadata,
+    kpool_prefill_metadata_cuda,
     kpool_prefill_update_cuda,
     kpool_raw_decode_update_cuda,
     kpool_rotate_query_cuda,
@@ -42,6 +44,7 @@ from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_t
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest
 from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_masked_post_quant_fwd
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
+from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.nn import (
     ApplyRotaryEmb,
     FlashAttention,
@@ -556,10 +559,7 @@ class Glm5NextMoE(DeepseekV2MoE):
         hidden_states: torch.Tensor,
         all_routed_experts: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if all_routed_experts is not None:
-            raise RuntimeError(
-                'GLM-5.3 routed-expert capture is not supported.')
-        out = super().forward(hidden_states, all_routed_experts=None)
+        out = super().forward(hidden_states, all_routed_experts=all_routed_experts)
         if self._fp32_tp_reduce:
             output_dtype = out.dtype
             out = out.float()
@@ -818,6 +818,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         dense_mla_impl = self.attn_fwd.impl
         self.decode_attn_fwd = FlashMLASparseImpl(
             mla_index_topk=self.index_topk,
+            mla_index_tail=self.index_kpool - 1,
             num_heads=dense_mla_impl.num_heads,
             head_size=dense_mla_impl.head_size,
             scale=dense_mla_impl.scale,
@@ -994,8 +995,12 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         if is_owner:
             query = self.indexer.project_query(q_lora)[0]
             rotate = kpool_rotate_query_cuda if query.is_cuda else kpool_rotate_query
-            query = rotate(query)
-            query_fp8, query_scale = self.indexer.quantize_fp8(query)
+            if self.indexer.cache_dtype == torch.bfloat16:
+                query_fp8 = query.to(self.indexer.cache_dtype)
+                query_scale = torch.ones((*query.shape[:-1], 1), device=query.device, dtype=torch.float32)
+            else:
+                query = rotate(query)
+                query_fp8, query_scale = self.indexer.quantize_fp8(query)
             head_gate = self.indexer.project_head_gate(hidden_states)[0]
             query_weight = (head_gate * query_scale.squeeze(-1)
                             * self.indexer.softmax_scale)
@@ -1027,6 +1032,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                     indexer_k_cache,
                     attn_metadata,
                     return_groups=broadcast_groups,
+                    kpool_metadata=kpool_metadata,
                 )
         else:
             logical_indices = torch.empty(
@@ -1042,9 +1048,13 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             dist.broadcast(logical_indices, src=source_rank, group=group)
         if broadcast_groups:
             if not attn_metadata.is_decoding:
-                _, _, seq_lens, group_lengths, _, _ = kpool_prefill_metadata(
-                    attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
-                    total_rows, self.index_kpool)
+                if kpool_metadata is not None:
+                    seq_lens = kpool_metadata.seq_lens
+                    group_lengths = kpool_metadata.group_lengths
+                else:
+                    _, _, seq_lens, group_lengths, _, _ = kpool_prefill_metadata(
+                        attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
+                        total_rows, self.index_kpool)
             expand = kpool_expand_groups_cuda if logical_indices.is_cuda else kpool_expand_selected_groups
             logical_indices = expand(logical_indices, group_lengths,
                                      self.index_kpool, self.index_topk, seq_lens=seq_lens)
@@ -1058,6 +1068,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         attn_metadata: Any,
         *,
         return_groups: bool = False,
+        kpool_metadata: Any = None,
     ) -> torch.Tensor:
         """Select request-local pooled history for chunked prefill."""
         if query_fp8.is_cuda:
@@ -1065,7 +1076,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                 query_fp8, query_weight, indexer_k_cache,
                 attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
                 attn_metadata.block_offsets, attn_metadata.kv_flatten_size,
-                self.index_kpool, self.index_topk, return_groups=return_groups)
+                self.index_kpool, self.index_topk, return_groups=return_groups, metadata=kpool_metadata)
         q_seqlens = attn_metadata.q_seqlens.tolist()
         kv_seqlens = attn_metadata.kv_seqlens.tolist()
         logical_parts = []
@@ -1095,6 +1106,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                 attn_metadata.block_offsets[batch_idx],
                 num_groups,
                 self.index_kpool,
+                head_dim=self.indexer.head_dim,
             )
             logits = kpool_score_contiguous_cuda(
                 query_slice,
@@ -1232,7 +1244,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         nope_size = self.kv_lora_rank
         kpool_tail_state = None if tail_k is None else (tail_k, tail_score)
         if not attn_metadata.is_decoding:
-            use_sparse = int(attn_metadata.max_kv_seqlen) > self.index_topk
+            use_sparse = (envs.mla_disable_dense_prefill
+                          or int(attn_metadata.max_kv_seqlen) > self.index_topk)
             logical_indices = self._kpool_indices(
                 hidden_states,
                 q_lora,
@@ -1381,12 +1394,30 @@ class Glm5NextDecoderLayer(nn.Module):
                                                      dtype=torch.float32,
                                                      device=device),
                                          requires_grad=False)
+        self.register_buffer('hc_attn_projection', None, persistent=False)
+        self.register_buffer('hc_ffn_projection', None, persistent=False)
+
+    def update_weights(self):
+        # Keep these derived layouts out of checkpoints. Updating them in place
+        # preserves pointers already referenced by captured CUDA graphs.
+        for kind in ('attn', 'ffn'):
+            name = f'hc_{kind}_projection'
+            prepared = self.hc_prepost.prepare_projection_weight(getattr(self, f'hc_{kind}_fn'))
+            current = getattr(self, name)
+            if (current is not None and prepared is not None
+                    and current.shape == prepared.shape and current.dtype == prepared.dtype
+                    and current.device == prepared.device):
+                current.copy_(prepared)
+            else:
+                setattr(self, name, prepared)
 
     def _hc_pre(self, hidden_states: torch.Tensor, fn: torch.Tensor,
                 scale: torch.Tensor, base: torch.Tensor, norm: RMSNorm,
-                x_fp32: torch.Tensor | None = None):
+                x_fp32: torch.Tensor | None = None,
+                projection_weight: torch.Tensor | None = None):
         return self.hc_prepost.pre(
-            hidden_states, fn, scale, base, norm.eps, norm_weight=norm.weight, x_fp32=x_fp32)
+            hidden_states, fn, scale, base, norm.eps, norm_weight=norm.weight, x_fp32=x_fp32,
+            projection_weight=projection_weight)
 
     def _hc_post(self, hidden_states: torch.Tensor, residual: torch.Tensor,
                  post: torch.Tensor, comb: torch.Tensor, prepare_fp32: bool):
@@ -1401,7 +1432,8 @@ class Glm5NextDecoderLayer(nn.Module):
                 state_ids: torch.Tensor | None = None,
                 kpool_metadata: Any = None,
                 hc_input_fp32: torch.Tensor | None = None,
-                prepare_hc_fp32: bool = False) -> tuple[torch.Tensor, torch.Tensor | None]:
+                prepare_hc_fp32: bool = False,
+                all_routed_experts: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor | None]:
         residual = hidden_states
         hidden_states, post, comb = self._hc_pre(
             hidden_states,
@@ -1410,6 +1442,7 @@ class Glm5NextDecoderLayer(nn.Module):
             self.hc_attn_base,
             self.input_layernorm,
             x_fp32=hc_input_fp32,
+            projection_weight=self.hc_attn_projection,
         )
         if self.is_linear_attention:
             hidden_states = self.self_attn(hidden_states,
@@ -1433,8 +1466,12 @@ class Glm5NextDecoderLayer(nn.Module):
             self.hc_ffn_base,
             self.post_attention_layernorm,
             x_fp32=hc_input_fp32,
+            projection_weight=self.hc_ffn_projection,
         )
-        hidden_states = self.mlp(hidden_states)
+        if isinstance(self.mlp, Glm5NextMoE):
+            hidden_states = self.mlp(hidden_states, all_routed_experts=all_routed_experts)
+        else:
+            hidden_states = self.mlp(hidden_states)
         return self._hc_post(hidden_states, residual, post, comb, prepare_hc_fp32)
 
 
@@ -1472,6 +1509,7 @@ class Glm5NextModel(nn.Module):
         attn_metadata: Any,
         state_ids: torch.Tensor,
         inputs_embeds: torch.Tensor | None = None,
+        all_routed_experts: torch.Tensor | None = None,
     ) -> torch.Tensor:
         del position_ids  # GLM-5.3 text attention has qk_rope_head_dim == 0.
         if state_ids is None:
@@ -1489,12 +1527,19 @@ class Glm5NextModel(nn.Module):
                 f'GLM-5.3 expects {len(self.layers)} layer caches, got {len(past_key_values)}.'
             )
         kpool_metadata = None
-        if hidden_states.is_cuda and attn_metadata.is_decoding:
+        if hidden_states.is_cuda and (attn_metadata.is_decoding
+                                      or attn_metadata.max_kv_seqlen > self.config.index_topk):
             first_full_layer = next(layer for layer in self.layers if not layer.is_linear_attention)
             page_size = first_full_layer.self_attn.indexer.get_block_cache().size(1)
-            kpool_metadata = kpool_decode_metadata_cuda(
-                attn_metadata, hidden_states.size(1), self.config.index_kpool,
-                get_tp_world_rank('attn')[1] == 0, page_size=page_size)
+            if attn_metadata.is_decoding:
+                kpool_metadata = kpool_decode_metadata_cuda(
+                    attn_metadata, hidden_states.size(1), self.config.index_kpool,
+                    get_tp_world_rank('attn')[1] == 0, page_size=page_size)
+            else:
+                kpool_metadata = kpool_prefill_metadata_cuda(
+                    attn_metadata.q_seqlens, attn_metadata.kv_seqlens,
+                    attn_metadata.block_offsets, hidden_states.size(1),
+                    self.config.index_kpool, page_size=page_size)
         hc_input_fp32 = None
         prepare_hc_fp32 = hidden_states.is_cuda and hidden_states.size(0) * hidden_states.size(1) <= 32
         for layer, past_key_value in zip(self.layers, past_key_values):
@@ -1509,7 +1554,8 @@ class Glm5NextModel(nn.Module):
                                   state_ids=state_ids,
                                   kpool_metadata=kpool_metadata,
                                   hc_input_fp32=hc_input_fp32,
-                                  prepare_hc_fp32=prepare_hc_fp32)
+                                  prepare_hc_fp32=prepare_hc_fp32,
+                                  all_routed_experts=all_routed_experts)
         hidden_states = hidden_states.mean(dim=2)
         return self.norm(hidden_states)
 
@@ -1534,6 +1580,7 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None):
         nn.Module.__init__(self)
+        self.enable_return_routed_experts = get_build_model_context().enable_return_routed_experts
         self.mm_config = config
         self.config = config.text_config
         self.quantization_config = getattr(config, 'quantization_config', None)
@@ -1606,16 +1653,31 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
                 scatter_mask, vision_embeddings.to(inputs_embeds))
         if return_input_embeds and inputs_embeds is None:
             inputs_embeds = self.get_input_embeddings()(input_ids)
+        all_routed_experts = None
+        if self.enable_return_routed_experts:
+            num_tokens = inputs_embeds.size(1) if inputs_embeds is not None else input_ids.size(1)
+            # Capture logical expert ids before EP dispatch. Dense layers keep
+            # the same sentinel as other models' router-replay outputs.
+            all_routed_experts = input_ids.new_full(
+                (num_tokens, self.config.num_hidden_layers, self.config.num_experts_per_tok),
+                torch.iinfo(torch.uint16).max,
+                dtype=torch.uint16,
+            )
         hidden_states = self.model(input_ids=input_ids,
                           position_ids=position_ids,
                           past_key_values=past_key_values,
                           attn_metadata=attn_metadata,
                           inputs_embeds=inputs_embeds,
-                          state_ids=state_ids)
+                          state_ids=state_ids,
+                          all_routed_experts=all_routed_experts)
+        if all_routed_experts is None and not return_input_embeds:
+            return hidden_states
+        outputs = dict(hidden_states=hidden_states)
+        if all_routed_experts is not None:
+            outputs['all_routed_experts'] = all_routed_experts
         if return_input_embeds:
-            return dict(hidden_states=hidden_states,
-                        target_inputs_embeds=inputs_embeds)
-        return hidden_states
+            outputs['target_inputs_embeds'] = inputs_embeds
+        return outputs
 
     def get_input_embeddings(self):
         return self.model.get_input_embeddings()
@@ -1946,11 +2008,14 @@ class Glm5NextMTPAttention(Glm5NextSparseAttention):
     _TOKEN_CACHE = 'glm5_mtp_kpool_tokens'
 
     def get_block_cache_requests(self, context):
+        # Store resumes at a full 64-token owner. Its first draft forward
+        # needs no earlier raw tail and rebuilds this cache from new tokens.
         return (BlockCacheRequest(
             name=self._TOKEN_CACHE,
             shape=(context.geometry.kernel_block_size, 2, self.indexer.head_dim),
             dtype=torch.bfloat16,
-            per_row_contiguous=True),)
+            per_row_contiguous=True,
+            store_cacheable=False),)
 
     def bind_block_cache(self, binding):
         if binding.cache_name != self._TOKEN_CACHE:

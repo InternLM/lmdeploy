@@ -94,6 +94,13 @@ class ToolChoiceToolParam(BaseModel):
 ToolChoiceParam = ToolChoiceAutoParam | ToolChoiceAnyParam | ToolChoiceToolParam
 
 
+class ThinkingConfig(BaseModel):
+    """Thinking mode; separate ``budget_tokens`` enforcement is unsupported."""
+
+    type: Literal['enabled', 'disabled', 'adaptive']
+    budget_tokens: int | None = Field(default=None, gt=0)
+
+
 class MessagesRequest(BaseModel):
     """Request body for ``POST /v1/messages``."""
 
@@ -109,10 +116,17 @@ class MessagesRequest(BaseModel):
     temperature: float | None = None
     top_p: float | None = None
     top_k: int | None = None
+    thinking: ThinkingConfig | None = None
     metadata: dict[str, Any] | None = None
     tools: list[ToolParam] | None = None
     tool_choice: ToolChoiceParam | Literal['auto', 'any'] | None = None
     service_tier: Literal['auto', 'standard_only'] | None = None
+    # LMDeploy-compatible generation extensions.
+    repetition_penalty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    media_io_kwargs: dict[str, Any] | None = Field(
+        default=None, description='Media loading options, keyed by modality.')
+    mm_processor_kwargs: dict[str, Any] | None = Field(
+        default=None, description='HF processor options, keyed by modality.')
     # Extended input fields from /generate endpoint.
     # input_ids and image_data are fallback inputs — they are only used when
     # messages is empty. When messages is non-empty, it takes priority.
@@ -131,6 +145,10 @@ class MessagesRequest(BaseModel):
     return_routed_experts: bool | None = Field(
         default=False,
         description=('Whether to return MoE routed expert indices in the response.'),
+    )
+    routed_experts_start_len: int = Field(
+        default=0, ge=0, strict=True,
+        description='Absolute start position of returned routing rows; does not limit prefix caching.',
     )
     return_token_ids: bool | None = Field(
         default=False,
@@ -170,17 +188,36 @@ class MessageToolUseBlock(BaseModel):
     input: dict[str, Any]
 
 
+class MessageOutputTokensDetails(BaseModel):
+    """LMDeploy extension reporting the parser's thinking token count."""
+
+    thinking_tokens: int = 0
+
+
 class MessageUsage(BaseModel):
     """Token usage in Anthropic style."""
 
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    output_tokens_details: MessageOutputTokensDetails = Field(default_factory=MessageOutputTokensDetails)
+
+    @classmethod
+    def build(cls, input_tokens: int, output_tokens: int, cached_tokens: int = 0,
+              thinking_tokens: int | None = None) -> MessageUsage:
+        return cls(
+            input_tokens=input_tokens - cached_tokens,
+            output_tokens=output_tokens,
+            cache_read_input_tokens=cached_tokens,
+            output_tokens_details=MessageOutputTokensDetails(thinking_tokens=thinking_tokens or 0),
+        )
 
 
 class MessageDeltaUsage(BaseModel):
     """Cumulative token usage carried by ``message_delta`` stream events."""
 
     output_tokens: int = 0
+    output_tokens_details: MessageOutputTokensDetails = Field(default_factory=MessageOutputTokensDetails)
 
 
 class MessagesResponse(BaseModel):
@@ -355,6 +392,7 @@ class CountTokensRequest(BaseModel):
     messages: list[MessageParam]
     system: str | list[ContentBlockParam] | None = None
     tools: list[ToolParam] | None = None
+    thinking: ThinkingConfig | None = None
 
     @field_validator('messages')
     @classmethod

@@ -80,6 +80,17 @@ class SubCliServe:
                             type=str,
                             default=None,
                             help='Exact hostnames allowed for HTTP(S) media URLs.')
+        parser.add_argument('--task',
+                            choices=['intern-decision'],
+                            default=None,
+                            help='Enable Intern-Decision scoring on the PyTorch backend. '
+                            'Resolve calibration from an explicit override, checkpoint metadata, '
+                            'or a known model path; otherwise fail startup.')
+        parser.add_argument('--decision-temperature',
+                            type=float,
+                            default=None,
+                            help='Finite positive decision calibration temperature. Requires --task intern-decision '
+                            'and overrides checkpoint metadata and known model-path calibration.')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -120,6 +131,10 @@ class SubCliServe:
         ArgumentHelper.kernel_block_size(pt_group)
         ArgumentHelper.prefix_cache_state_budget(pt_group)
         ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
+        ArgumentHelper.prefix_cache_decode_save_first(pt_group)
+        ArgumentHelper.prefill_save_alignment(pt_group)
+        ArgumentHelper.prefill_save_last_only(pt_group)
+        ArgumentHelper.mooncake_state_save_slots(pt_group)
 
         # common engine args
         language_model_only = ArgumentHelper.language_model_only(pt_group)
@@ -237,6 +252,9 @@ class SubCliServe:
         max_batch_size = args.max_batch_size if args.max_batch_size \
             else get_max_batch_size(args.device)
         backend = args.backend
+        if args.task is not None:
+            # task protocols score through input logprobs, which only the PyTorch engine provides
+            backend = 'pytorch'
         if backend != 'pytorch':
             # set auto backend mode
             backend = autoget_backend(args.model_path, trust_remote_code=args.trust_remote_code)
@@ -265,6 +283,10 @@ class SubCliServe:
                 enable_prefix_caching=args.enable_prefix_caching,
                 prefix_cache_state_budget=args.prefix_cache_state_budget,
                 prefix_cache_decode_state_interval=args.prefix_cache_decode_state_interval,
+                prefix_cache_decode_save_first=args.prefix_cache_decode_save_first,
+                prefill_save_alignment=args.prefill_save_alignment,
+                prefill_save_last_only=args.prefill_save_last_only,
+                mooncake_state_save_slots=args.mooncake_state_save_slots,
                 device_type=args.device,
                 quant_policy=args.quant_policy,
                 eager_mode=args.eager_mode,
@@ -353,6 +375,8 @@ class SubCliServe:
                 speculative_config=speculative_config,
                 allowed_media_domains=args.allowed_media_domains,
                 generation_config=args.generation_config,
+                task=args.task,
+                decision_temperature=args.decision_temperature,
             )
         else:
             from lmdeploy.serve.openai.launch_server import launch_server
@@ -387,6 +411,8 @@ class SubCliServe:
                 speculative_config=speculative_config,
                 allowed_media_domains=args.allowed_media_domains,
                 generation_config=args.generation_config,
+                task=args.task,
+                decision_temperature=args.decision_temperature,
             )
 
     @staticmethod

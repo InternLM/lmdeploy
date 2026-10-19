@@ -4,18 +4,14 @@
 [![PyPI](https://img.shields.io/pypi/v/lmdeploy)](https://pypi.org/project/lmdeploy)
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/lmdeploy)
 [![license](https://img.shields.io/github/license/InternLM/lmdeploy.svg)](https://github.com/InternLM/lmdeploy/tree/main/LICENSE)
-[![issue resolution](https://img.shields.io/github/issues-closed-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
-[![open issues](https://img.shields.io/github/issues-raw/InternLM/lmdeploy)](https://github.com/InternLM/lmdeploy/issues)
+[![issue resolution](https://img.shields.io/github/issues-closed/InternLM/lmdeploy.svg)](https://github.com/InternLM/lmdeploy/issues?q=is%3Aissue%20is%3Aclosed)
+[![open issues](https://img.shields.io/github/issues/InternLM/lmdeploy.svg)](https://github.com/InternLM/lmdeploy/issues?q=is%3Aissue%20is%3Aopen)
 
 [📘Documentation](https://lmdeploy.readthedocs.io/en/latest/) |
 [🛠️Quick Start](https://lmdeploy.readthedocs.io/en/latest/get_started/get_started.html) |
 [🤔Reporting Issues](https://github.com/InternLM/lmdeploy/issues/new/choose)
 
 English | [简体中文](README_zh-CN.md) | [日本語](README_ja.md)
-
-👋 join us on [![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=wechat&label=WeChat)](https://cdn.vansin.top/internlm/lmdeploy.jpg)
-[![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=twitter&label=Twitter)](https://twitter.com/intern_lm)
-[![Static Badge](https://img.shields.io/badge/-grey?style=social&logo=discord&label=Discord)](https://discord.gg/xa29JuW87d)
 
 </div>
 
@@ -197,6 +193,7 @@ LMDeploy is a toolkit for compressing, deploying, and serving LLM, developed by 
   <li>Phi-3.5-vision (4.2B)</li>
   <li>GLM-4V (9B)</li>
   <li>GLM-4.1V-Thinking (9B)</li>
+  <li>GLM-5.3-Flash (320B-A18B)</li>
   <li>Molmo (7B-D,72B)</li>
   <li>Gemma3 (1B - 27B)</li>
   <li>Llama4 (Scout, Maverick)</li>

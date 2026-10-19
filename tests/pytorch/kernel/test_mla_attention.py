@@ -375,7 +375,9 @@ def test_bf16_mla_flatten_uses_shared_k_latent_as_value():
     assert flatten_v.untyped_storage().data_ptr() == flatten_k.untyped_storage().data_ptr()
 
 
-def test_sparse_mla_prefill_routes_by_kv_length(monkeypatch):
+@pytest.mark.parametrize('disable_dense', [False, True])
+def test_sparse_mla_prefill_routes_by_kv_length(monkeypatch, disable_dense):
+    monkeypatch.setattr(sparse_mla_module.envs, 'mla_disable_dense_prefill', disable_dense)
     dense_output = object()
     sparse_output = object()
     dense_prefill = Mock(return_value=dense_output)
@@ -392,16 +394,19 @@ def test_sparse_mla_prefill_routes_by_kv_length(monkeypatch):
                                   k_cache,
                                   v_cache,
                                   SimpleNamespace(max_kv_seqlen=2048),
-                                  nsa_indices=None)
+                                  nsa_indices=nsa_indices if disable_dense else None)
     sparse = impl._forward_prefill(query,
                                    k_cache,
                                    v_cache,
                                    SimpleNamespace(max_kv_seqlen=2049),
                                    nsa_indices=nsa_indices)
 
-    assert dense is dense_output
+    assert dense is (sparse_output if disable_dense else dense_output)
     assert sparse is sparse_output
-    assert dense_prefill.call_args.kwargs['nsa_indices'] is None
+    assert dense_prefill.call_count == int(not disable_dense)
+    assert impl._prefill_sparse.call_count == 1 + int(disable_dense)
+    if not disable_dense:
+        assert dense_prefill.call_args.kwargs['nsa_indices'] is None
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')

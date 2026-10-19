@@ -39,6 +39,9 @@ class SchedulerStats:
         num_waiting_reqs: Engine core, requests queued waiting for execution.
         gpu_cache_usage: Fraction of GPU KV cache utilized (0.0 to 1.0).
         prefix_cache_hit_rate: Prefix caching hit rate.
+        external_prefix_cache_hit_rate: Cumulative external lookup hit rate; None when disabled.
+        external_prefix_cache_queries: Cumulative queried tokens after excluding local prefixes.
+        external_prefix_cache_hits: Cumulative externally matched tokens at admission.
     """
 
     # api server
@@ -54,6 +57,9 @@ class SchedulerStats:
     num_waiting_reqs: int = 0
     gpu_cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0.0
+    external_prefix_cache_hit_rate: float | None = None
+    external_prefix_cache_queries: int = 0
+    external_prefix_cache_hits: int = 0
 
     @property
     def num_failed_reqs(self) -> int:
@@ -85,6 +91,9 @@ class SchedulerStats:
                 f'  num_waiting_reqs={self.num_waiting_reqs},\n'
                 f'  gpu_cache_usage={self.gpu_cache_usage:.6f},\n'
                 f'  prefix_cache_hit_rate={self.prefix_cache_hit_rate:.6f},\n'
+                f'  external_prefix_cache_hit_rate={self.external_prefix_cache_hit_rate},\n'
+                f'  external_prefix_cache_queries={self.external_prefix_cache_queries},\n'
+                f'  external_prefix_cache_hits={self.external_prefix_cache_hits},\n'
                 ')')
 
     def update_from_schedule_metrics(self, scheduled_metrics: ScheduleMetrics):
@@ -92,6 +101,9 @@ class SchedulerStats:
         self.num_waiting_reqs = scheduled_metrics.waiting_seqs
         self.gpu_cache_usage = scheduled_metrics.cache_usage
         self.prefix_cache_hit_rate = scheduled_metrics.prefix_cache_hit_rate
+        self.external_prefix_cache_hit_rate = scheduled_metrics.external_prefix_cache_hit_rate
+        self.external_prefix_cache_queries = scheduled_metrics.external_prefix_cache_queries
+        self.external_prefix_cache_hits = scheduled_metrics.external_prefix_cache_hits
 
 
 class RequestStats:

@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Any
 
 from transformers.configuration_utils import PretrainedConfig
-from transformers.models.glm_ocr.configuration_glm_ocr import GlmOcrVisionConfig
 
 _GLM5_NEXT_TOP_LEVEL_CONFIG_KEYS = (
     'architectures',
@@ -336,14 +335,51 @@ class Glm5NextTextConfig(PretrainedConfig):
         ]
 
 
-class Glm5NextVisionConfig(GlmOcrVisionConfig):
-    """GLM-OCR vision configuration with clamped SwiGLU."""
+class Glm5NextVisionConfig(PretrainedConfig):
+    """Local GLM-OCR vision configuration with clamped SwiGLU.
+
+    Keep the GLM-OCR defaults without requiring its newer Transformers module.
+    """
 
     model_type = 'glm5_next_vision'
+    base_config_key = 'vision_config'
 
-    def __init__(self, swiglu_limit: float = 10.0, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self,
+                 swiglu_limit: float = 10.0,
+                 *,
+                 depth: int = 24,
+                 hidden_size: int = 1024,
+                 hidden_act: str = 'silu',
+                 attention_bias: bool = True,
+                 attention_dropout: float = 0.0,
+                 num_heads: int = 16,
+                 in_channels: int = 3,
+                 image_size: int | list[int] | tuple[int, int] = 336,
+                 patch_size: int | list[int] | tuple[int, int] = 14,
+                 rms_norm_eps: float = 1e-5,
+                 spatial_merge_size: int = 2,
+                 temporal_patch_size: int | list[int] | tuple[int, int] = 2,
+                 out_hidden_size: int = 1536,
+                 intermediate_size: int = 4096,
+                 initializer_range: float = 0.02,
+                 **kwargs):
+        self.depth = depth
+        self.hidden_size = hidden_size
+        self.hidden_act = hidden_act
+        self.attention_bias = attention_bias
+        self.attention_dropout = attention_dropout
+        self.num_heads = num_heads
+        self.in_channels = in_channels
+        self.image_size = image_size
+        self.patch_size = patch_size
+        self.rms_norm_eps = rms_norm_eps
+        self.spatial_merge_size = spatial_merge_size
+        self.temporal_patch_size = temporal_patch_size
+        self.out_hidden_size = out_hidden_size
+        self.intermediate_size = intermediate_size
+        self.initializer_range = initializer_range
         self.swiglu_limit = swiglu_limit
+        super().__init__(**kwargs)
 
 
 class Glm5NextConfig(PretrainedConfig):
@@ -400,3 +436,9 @@ class Glm5NextConfig(PretrainedConfig):
             if (key not in _GLM5_NEXT_OUTER_ONLY_CONFIG_KEYS
                     and hasattr(self.text_config, key)):
                 setattr(self, key, getattr(self.text_config, key))
+
+    def to_diff_dict(self) -> dict[str, Any]:
+        # Older Transformers recursively diff every sub_config, including None.
+        if self.vision_config is None:
+            return self.to_dict()
+        return super().to_diff_dict()

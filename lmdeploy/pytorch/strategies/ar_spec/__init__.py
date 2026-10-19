@@ -57,7 +57,8 @@ class ARSpecStrategyFactory(StrategyFactoryBase):
 
     def build_sequence_strategy(self) -> SequenceStrategy:
         from .sequence import ARSpecSequenceStrategy
-        return ARSpecSequenceStrategy()
+        return ARSpecSequenceStrategy(
+            prefill_input_shift=0 if self.specdecode_config.method in ('dflash', 'dspark') else 1)
 
     def build_step_inputs(self) -> 'StepInputs':
         """Build step inputs for the decoding loop."""

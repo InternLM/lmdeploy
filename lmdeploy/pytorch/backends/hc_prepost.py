@@ -10,6 +10,21 @@ from .base import BuildSpec
 class HCPrePostImpl(ABC):
     """Backend interface for DeepSeek-V4 hyper-connection reductions."""
 
+    def prepare_projection_weight(self, weight: torch.Tensor) -> torch.Tensor | None:
+        """Prepare an optional projection layout after loading model
+        weights."""
+        return None
+
+    def try_project_mixes(self, x_fp32: torch.Tensor, weight: torch.Tensor) -> torch.Tensor | None:
+        """Project with a prepared backend layout, or use the ordinary
+        linear."""
+        return None
+
+    def try_scale_mixes(self, mixes: torch.Tensor, x_fp32: torch.Tensor, eps: float) -> torch.Tensor | None:
+        """Optionally fuse projection scaling; return None for the existing RMS
+        path."""
+        return None
+
     @abstractmethod
     def pre(
         self,

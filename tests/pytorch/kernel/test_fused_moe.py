@@ -1,3 +1,5 @@
+from functools import partial
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -797,3 +799,92 @@ class TestFusedMoeBlockedFP8Compact:
                                                 out_dtype=torch.bfloat16)
 
         torch.testing.assert_close(compact, regular, atol=3e-2, rtol=3e-2)
+
+
+def _clamped_swiglu_reference(x):
+    gate, up = x.float().chunk(2, dim=-1)
+    return (F.silu(gate.clamp(max=10)) * up.clamp(-10, 10)).to(x.dtype)
+
+
+@pytest.fixture
+def deep_gemm_bf16():
+    if not torch.cuda.is_available():
+        pytest.skip('CUDA required for DeepGEMM BF16 grouped GEMM')
+    # These BF16 kernels currently dispatch to SM90 implementations only.
+    if torch.cuda.get_device_capability()[0] != 9:
+        pytest.skip('DeepGEMM BF16 grouped GEMM requires SM90')
+    deep_gemm = pytest.importorskip('deep_gemm')
+    for name in ('m_grouped_bf16_gemm_nt_contiguous', 'm_grouped_bf16_gemm_nt_masked'):
+        if not callable(getattr(deep_gemm, name, None)):
+            pytest.skip(f'Installed DeepGEMM does not provide {name}')
+
+
+@pytest.mark.parametrize('fp32_acc', [False, True])
+@pytest.mark.parametrize('output_scale', [1.0, 2.5])
+@pytest.mark.parametrize('custom_act', [False, True])
+def test_bf16_ep_normal_experts(deep_gemm_bf16, fp32_acc, output_scale, custom_act):
+    from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul
+    from lmdeploy.pytorch.kernels.cuda.moe.ep import fused_moe_v3
+
+    torch.manual_seed(81)
+    n, k, f, experts = 16, 1024, 256, 4
+    x = torch.randn(n, k, device='cuda', dtype=torch.bfloat16)
+    up = torch.randn(experts, 2 * f, k, device='cuda', dtype=torch.bfloat16) * 0.5
+    down = torch.randn(experts, k, f, device='cuda', dtype=torch.bfloat16) * 0.01
+    ids = (torch.arange(n, device='cuda')[:, None] + torch.arange(2, device='cuda')) % experts
+    # Include missing/non-local experts as returned by DeepEP Normal.
+    ids[::3, 1] = -1
+    weights = torch.rand(n, 2, device='cuda')
+    weights /= weights.sum(-1, keepdim=True)
+    act = partial(silu_and_mul, swiglu_limit=10.0, precise_mul=True) if custom_act else None
+    out = fused_moe_v3(x, ids, weights, up, down, [128] * experts,
+                       act_func=act, fp32_acc=fp32_acc, output_scale=output_scale)
+    expert_out = []
+    for e in range(experts):
+        gate_up = (x.float() @ up[e].float().T).bfloat16()
+        if custom_act:
+            activated = _clamped_swiglu_reference(gate_up)
+        else:
+            gate, value = gate_up.chunk(2, dim=-1)
+            activated = F.silu(gate.float()).bfloat16() * value
+        expert_out.append((activated.float() @ down[e].float().T).bfloat16())
+    ref = torch.zeros_like(x, dtype=torch.float32 if fp32_acc else x.dtype)
+    for slot in range(2):
+        eid = ids[:, slot]
+        valid = eid >= 0
+        val = torch.stack(expert_out)[eid.clamp_min(0), torch.arange(n, device='cuda')]
+        if fp32_acc:
+            term = val.float() * weights[:, slot, None]
+        else:
+            # Triton computes the product/add in FP32, rounding after each add.
+            term = val.float() * weights[:, slot, None].bfloat16().float()
+        ref = (ref.float() + term * valid[:, None]).to(ref.dtype)
+    ref = (ref.float() * output_scale).bfloat16()
+    torch.testing.assert_close(out, ref, atol=0.5 if not custom_act else 0.08, rtol=0.025)
+    assert ((out.float() - ref.float()).norm() / ref.float().norm()).item() < 0.01
+
+
+@pytest.mark.parametrize('custom_act', [False, True])
+def test_bf16_ep_masked_experts(deep_gemm_bf16, custom_act):
+    from lmdeploy.pytorch.backends.cuda.moe.default import FusedMoELowLatency
+    from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul
+
+    torch.manual_seed(82)
+    e, m, k, f = 4, 128, 1024, 256
+    x = torch.randn(e, m, k, device='cuda', dtype=torch.bfloat16)
+    up = torch.randn(e, 2 * f, k, device='cuda', dtype=torch.bfloat16) * 0.5
+    down = torch.randn(e, k, f, device='cuda', dtype=torch.bfloat16) * 0.01
+    counts = [0, 1, 17, 128]
+    masked_m = torch.tensor(counts, device='cuda', dtype=torch.int32)
+    act = partial(silu_and_mul, swiglu_limit=10.0, precise_mul=True) if custom_act else None
+    moe = FusedMoELowLatency.__new__(FusedMoELowLatency)
+    out = moe.experts(x, up, down, masked_m, 64, act_func=act)
+    for idx, count in enumerate(counts):
+        gate_up = (x[idx, :count].float() @ up[idx].float().T).bfloat16()
+        if custom_act:
+            activated = _clamped_swiglu_reference(gate_up)
+        else:
+            gate, value = gate_up.chunk(2, dim=-1)
+            activated = F.silu(gate.float()).bfloat16() * value
+        ref = (activated.float() @ down[idx].float().T).bfloat16()
+        torch.testing.assert_close(out[idx, :count], ref, atol=0.5 if not custom_act else 0.08, rtol=0.025)

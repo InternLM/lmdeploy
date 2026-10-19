@@ -2,6 +2,34 @@ import pytest
 import torch
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+@pytest.mark.parametrize('max_batch', [1, 17])
+def test_deepep_masked_capacity_keeps_expert_tma_stores_disjoint(monkeypatch, max_batch):
+    pytest.importorskip('deep_gemm')
+    if torch.cuda.get_device_capability()[0] < 9:
+        pytest.skip('DeepGEMM requires Hopper or newer')
+    from lmdeploy.pytorch.model_inputs import BuildModelContext
+    from lmdeploy.pytorch.third_party.deep_gemm import m_grouped_fp8_gemm_nt_masked
+
+    monkeypatch.setattr('lmdeploy.pytorch.distributed.get_ep_world_rank', lambda: (4, 0))
+    capacity = BuildModelContext(max_batch_size=max_batch).deep_ep_max_tokens_per_rank * 4
+    groups, n, k = 8, 128, 128
+    aq = torch.ones((groups, capacity, k), device='cuda', dtype=torch.float8_e4m3fn)
+    bq = torch.arange(1, groups + 1, device='cuda', dtype=torch.float32)[:, None, None]
+    bq = bq.expand(groups, n, k).contiguous().to(torch.float8_e4m3fn)
+    asc = torch.ones((groups, 1, capacity), device='cuda').transpose(1, 2)
+    bsc = torch.ones((groups, 1, 1), device='cuda')
+    valid_rows = max_batch * 4
+    masked_m = torch.full((groups,), valid_rows, device='cuda', dtype=torch.int32)
+    expected = torch.arange(1, groups + 1, device='cuda')[:, None, None]
+    expected = expected.expand(groups, valid_rows, n).float() * k
+    for _ in range(3):
+        out = torch.empty((groups, capacity, n), device='cuda', dtype=torch.bfloat16)
+        m_grouped_fp8_gemm_nt_masked((aq, asc), (bq, bsc), out, masked_m, 1)
+        # Compare valid rows only, including a partially filled final TMA tile.
+        torch.testing.assert_close(out[:, :valid_rows].float(), expected, rtol=0, atol=0)
+
+
 def _make_A(M, K, group_size, out_dtype, device='cuda'):
     quant_A = torch.rand(M, K // group_size, group_size, dtype=torch.float32, device=device)
     # -1 ~ 1

@@ -25,6 +25,9 @@ class HcPrePost(nn.Module):
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
+    def prepare_projection_weight(self, weight: torch.Tensor) -> torch.Tensor | None:
+        return self.impl.prepare_projection_weight(weight)
+
     def pre(
         self,
         x: torch.Tensor,
@@ -34,6 +37,7 @@ class HcPrePost(nn.Module):
         norm_eps: float,
         norm_weight: torch.Tensor | None = None,
         x_fp32: torch.Tensor | None = None,
+        projection_weight: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         from lmdeploy.pytorch.nn.norm import rms_scale
         hidden_states, dtype = x, x.dtype
@@ -45,13 +49,19 @@ class HcPrePost(nn.Module):
             x = x_fp32.flatten(2)
         else:
             x = _cast_fp32(x) if x.is_contiguous() and x.size(0) * x.size(1) >= 8192 else x.float()
-        if self.avoid_gemv and x.size(0) == 1 and x.size(1) == 1:
-            # Single-token decode otherwise selects GEMV, whose reduction
-            # order can differ from multi-token speculative verification.
-            mixes = F.linear(F.pad(x, (0, 0, 0, 1)), hc_fn)[:, :1].contiguous()
-        else:
-            mixes = F.linear(x, hc_fn)
-        mixes = rms_scale(mixes, x, eps=norm_eps)
+        single_token = x.size(0) == 1 and x.size(1) == 1
+        mixes = None
+        if projection_weight is not None and (not single_token or self.avoid_gemv):
+            mixes = self.impl.try_project_mixes(x, projection_weight)
+        if mixes is None:
+            if self.avoid_gemv and single_token:
+                # Single-token decode otherwise selects GEMV, whose reduction
+                # order can differ from multi-token speculative verification.
+                mixes = F.linear(F.pad(x, (0, 0, 0, 1)), hc_fn)[:, :1].contiguous()
+            else:
+                mixes = F.linear(x, hc_fn)
+        scaled_mixes = self.impl.try_scale_mixes(mixes, x, norm_eps)
+        mixes = scaled_mixes if scaled_mixes is not None else rms_scale(mixes, x, eps=norm_eps)
         return self.impl.pre(hidden_states, mixes, hc_scale, hc_base, dtype,
                              norm_weight=norm_weight, norm_eps=norm_eps)
 

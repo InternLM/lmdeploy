@@ -90,13 +90,16 @@ class GenerationConfig:
             nucleus sampling, where the model considers the results of the
             tokens with top_p probability mass
         top_k: An alternative to sampling with temperature, where
-            the model considers the top_k tokens with the highest probability
+            the model considers the top_k tokens with the highest probability.
+            Defaults to 0, which disables top-k filtering.
+            Set to 0 or -1 to disable top-k filtering; -1 is normalized to 0.
         min_p: Minimum token probability, which will be scaled by the
             probability of the most likely token. It must be a value between
             0 and 1. Typical values are in the 0.01-0.2 range, comparably
             selective as setting `top_p` in the 0.99-0.8 range (use the
             opposite of normal `top_p` values)
-        temperature: Sampling temperature
+        temperature: Sampling temperature. Defaults to 1.0, which leaves
+            the logits unscaled. Set to 0.8 to retain the previous default.
         repetition_penalty: Penalty to prevent the model from
             generating repeated words or phrases. A value larger than
             1 discourages repetition
@@ -121,6 +124,11 @@ class GenerationConfig:
             model-processed input after multimodal expansion. Rows are returned
             for tokens after this boundary. ``-1`` disables input logprobs
             while preserving generated-token logprobs.
+        logprob_extra_token_ids: Extra token ids whose logprobs are returned in
+            every input-logprob row, in addition to the target and top-k
+            entries. Requires ``logprob_start_len >= 0``. Useful for scoring a
+            fixed candidate set (e.g. answer symbols) at prompt positions.
+            PyTorch engine only.
         response_format: Generate responses according to given formatting.
             Examples:
 
@@ -169,6 +177,13 @@ class GenerationConfig:
                     }
                 }
 
+        return_routed_experts: Whether to return MoE routed expert indices.
+            Requires routed-expert collection in the PyTorch backend.
+        routed_experts_start_len: Absolute, zero-based start position of returned
+            routing rows in the current processed prompt. Defaults to 0 (full
+            history). Must be a non-negative integer no greater than the prompt
+            length. Only slices returned rows; does not limit prefix-cache
+            matching or internal routed-expert storage.
         logits_processors: Custom logit processors.
         repetition_ngram_size: The size of n-grams to consider for repetition early stop.
             Must be non-negative; values below 0 are treated as 0.
@@ -180,9 +195,9 @@ class GenerationConfig:
     max_new_tokens: int = 512
     do_sample: bool = False
     top_p: float = 1.0
-    top_k: int = 50
+    top_k: int = 0
     min_p: float = 0.0
-    temperature: float = 0.8
+    temperature: float = 1.0
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
@@ -195,6 +210,7 @@ class GenerationConfig:
     spaces_between_special_tokens: bool = True
     logprobs: int = None
     logprob_start_len: int = -1
+    logprob_extra_token_ids: list[int] | None = None
     response_format: dict | None = None
     logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
@@ -211,6 +227,9 @@ class GenerationConfig:
 
     # router replay
     return_routed_experts: bool = False
+    # Returned routing rows cover [start_len, prompt_tokens + output_tokens - 1).
+    # This does not limit prefix-cache matching or routed-expert storage.
+    routed_experts_start_len: int = 0
 
     # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
     repetition_ngram_size: int = 0
@@ -260,14 +279,23 @@ class GenerationConfig:
         """Check input validation."""
         assert type(self.n) is int and self.n > 0, 'n is not a positive integer'
         assert self.top_p >= 0 and self.top_p <= 1  # [0, 1]
-        assert self.top_k >= 0, 'top_k can not be a negative integer'
+        assert self.top_k >= -1, 'top_k must be -1, 0, or a positive integer'
+        if self.top_k == -1:
+            self.top_k = 0
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        if type(self.routed_experts_start_len) is not int or self.routed_experts_start_len < 0:
+            raise ValueError('routed_experts_start_len must be a non-negative integer')
         if self.logprob_start_len < -1:
             raise ValueError('logprob_start_len must be greater than or equal to -1')
         if self.logprob_start_len >= 0 and (self.logprobs is None or self.logprobs < 0):
             raise ValueError('logprobs must be non-negative when logprob_start_len is non-negative')
+        if self.logprob_extra_token_ids is not None:
+            if self.logprob_start_len < 0:
+                raise ValueError('logprob_extra_token_ids requires logprob_start_len >= 0')
+            if not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in self.logprob_extra_token_ids):
+                raise ValueError('logprob_extra_token_ids must be a list of non-negative ints')
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
             self.repetition_ngram_size = 0
             self.repetition_ngram_threshold = 0
@@ -494,13 +522,28 @@ class PytorchEngineConfig:
             prefix-cache checkpoints. 0 adds no extra slots, but SSM
             checkpoints may still borrow idle runtime state slots.
         prefix_cache_decode_state_interval: Token interval for SSM decode
-            state checkpoints. 0 disables decode-state checkpoint saves; prefill
-            and chunk checkpoints may still be saved. Keep 0 unless the workload
-            has long SSM decoding and repeated continuations that can reuse
-            decode checkpoints. Smaller positive values create more hit points
-            but use more checkpoint memory and copy work; larger values reduce
-            overhead but make decode-prefix hits less likely. Positive values
-            must be multiples of the cache block size.
+            checkpoints. With prefix_cache_decode_save_first, count from the
+            last successfully saved decode checkpoint; otherwise use absolute token positions.
+            0 disables periodic saves. Positive values must be multiples of the
+            actual cache block size, but need not be multiples of prefill_save_alignment.
+            Applies to local prefix caching and Mooncake Store.
+        prefix_cache_decode_save_first: Save at the first safe
+            prefill_save_alignment boundary at or after each prompt, once the
+            accepted decode history satisfies its dependencies. Defaults to
+            False. With interval 0, save only this first decode checkpoint.
+        prefill_save_alignment: Token alignment for prefill state checkpoints,
+            also used for the first decode checkpoint with prefix_cache_decode_save_first.
+            Shared by local prefix caching and Mooncake Store. Defaults to
+            1024 and must be a positive multiple of block_size. Only applies
+            to models with linear-attention state caches; full-attention-only
+            models ignore it. Intermediate aligned positions may be skipped.
+        prefill_save_last_only: Save local prefix checkpoints and Mooncake
+            caches only at the last safe aligned boundary before the end of
+            each prefill. Leaves at least one input token for prefix reuse.
+            Defaults to False. Only applies to linear-attention state caches.
+        mooncake_state_save_slots: Number of temporary hybrid state snapshots
+            reserved for asynchronous Mooncake saves. Defaults to 8. A full
+            snapshot pool skips the save without blocking inference.
         device_type: The inference device type, options ['cuda']
         eager_mode: Enable "eager" mode or not
         custom_module_map: nn module map customized by users. Once
@@ -570,6 +613,10 @@ class PytorchEngineConfig:
     enable_prefix_caching: bool = False
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
+    prefix_cache_decode_save_first: bool = False
+    prefill_save_alignment: int = 1024
+    prefill_save_last_only: bool = False
+    mooncake_state_save_slots: int = 8
     device_type: str = 'cuda'
     eager_mode: bool = False
     custom_module_map: dict[str, str] = None
@@ -626,6 +673,8 @@ class PytorchEngineConfig:
         assert self.num_gpu_blocks >= 0, 'invalid num_gpu_blocks'
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
+        assert self.prefill_save_alignment > 0, 'invalid prefill_save_alignment'
+        assert self.mooncake_state_save_slots > 0, 'invalid mooncake_state_save_slots'
         try:
             self.quant_policy = QuantPolicy(self.quant_policy)
         except ValueError as e:
@@ -810,6 +859,11 @@ class ScheduleMetrics:
     cache_usage: float = 0.0
     prefix_cache_hit_rate: float = 0
     scheduler_tick: int = 0
+    # None means external prefix caching is disabled. Counts are cumulative
+    # snapshots; polling metrics must not consume them.
+    external_prefix_cache_hit_rate: float | None = None
+    external_prefix_cache_queries: int = 0
+    external_prefix_cache_hits: int = 0
 
 
 @dataclass
@@ -864,9 +918,21 @@ class VisionConfig:
         thread_safe: Specifies whether the engine instance is
             thread-safe. Please set it to True when using the pipeline
             in a multi-threaded environment.
+        image_cache_max_bytes: Per-frontend-process budget for supported image
+            preprocessing caches. Zero disables reuse. Currently used by GLM-5.
+            None uses ``LMDEPLOY_IMAGE_CACHE_MAX_BYTES`` set before startup,
+            which defaults to 4 GiB. Explicit values override the environment.
+            This limits retained cache entries, not in-flight request memory.
+            Cached images are also limited to 256 entries or one quarter of
+            the process FD soft limit, whichever is smaller.
     """
     max_batch_size: int = 1
     thread_safe: bool = False
+    image_cache_max_bytes: int | None = None
+
+    def __post_init__(self):
+        if self.image_cache_max_bytes is not None and self.image_cache_max_bytes < 0:
+            raise ValueError('image_cache_max_bytes must be non-negative')
 
 
 @dataclass
@@ -887,7 +953,7 @@ class SpeculativeConfig:
     dflash_block_size: int | None = None
 
     def __post_init__(self):
-        """Resolve the DFlash block-size override."""
+        """Validate method-specific options and resolve the draft window."""
         if self.dflash_block_size is not None:
             if self.method != 'dflash':
                 raise ValueError('dflash_block_size is supported only when method="dflash".')

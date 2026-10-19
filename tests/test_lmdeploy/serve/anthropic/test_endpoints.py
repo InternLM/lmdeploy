@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
 import asyncio
@@ -5,8 +6,11 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from lmdeploy.serve.anthropic.protocol import CountTokensRequest, MessagesRequest
@@ -14,6 +18,7 @@ from lmdeploy.serve.anthropic.router import create_anthropic_router
 from lmdeploy.serve.anthropic.streaming import stream_messages_response
 from lmdeploy.serve.core.chat_runner import ChatStreamChunk
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
+from lmdeploy.serve.openai.api_server import validation_exception_handler
 from lmdeploy.serve.openai.protocol import (
     ChatCompletionRequest,
     DeltaFunctionCall,
@@ -22,10 +27,12 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
+from lmdeploy.serve.parsers.gpt_oss_response_parser import GptOssResponseParser
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 from lmdeploy.serve.parsers.tool_parser.interns2preview_tool_parser import InternS2PreviewToolParser
 from lmdeploy.serve.parsers.tool_parser.qwen3_tool_parser import Qwen3ToolParser
+from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
@@ -96,6 +103,24 @@ class _SystemFirstChatTemplate(_FakeChatTemplate):
         return '\n'.join(parts)
 
 
+class _ThinkingChatTemplate(_FakeChatTemplate):
+    """Renders a suffix per ``enable_thinking``, like Qwen-style templates that
+    open or close the ``<think>`` block of the assistant turn.
+
+    The template default (no kwarg) keeps thinking on; disabling adds one
+    extra token, mirroring the closed ``</think>`` prefix.
+    """
+
+    def messages2prompt(self, messages, **kwargs):
+        prompt = super().messages2prompt(messages)
+        enable_thinking = kwargs.get('enable_thinking')
+        if enable_thinking is None:
+            return f'{prompt} <think>'
+        if enable_thinking:
+            return f'{prompt} <think>'
+        return f'{prompt} <think> </think>'
+
+
 class _FakeEngine:
 
     def __init__(
@@ -116,7 +141,7 @@ class _FakeEngine:
 
     async def preprocess(self, *args, **kwargs):
         self.preprocess_calls.append((args, kwargs))
-        return SimpleNamespace(args=args, kwargs=kwargs)
+        return SimpleNamespace(args=args, kwargs=kwargs, inputs={'input_ids': list(range(8))})
 
     def generate(self, request, **kwargs):
         self.generate_calls.append((request, kwargs))
@@ -342,6 +367,22 @@ def _messages_payload(**overrides):
     return payload
 
 
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('raw_input', [False, True])
+def test_messages_forward_media_processing_kwargs(stream, raw_input):
+    client, context = _make_client(return_context=True)
+    mm_kwargs = {'image': {'min_image_tokens': 64, 'max_image_tokens': 64}}
+    io_kwargs = {'video': {'fps': 1, 'num_frames': 2}}
+    payload = _messages_payload(stream=stream, mm_processor_kwargs=mm_kwargs, media_io_kwargs=io_kwargs)
+    if raw_input:
+        payload.update(messages=[], input_ids=[1, 2], image_data='data:image/png;base64,AA==')
+    response = client.post('/v1/messages', headers=ANTHROPIC_HEADERS, json=payload)
+    assert response.status_code == 200
+    _, kwargs = context.async_engine.preprocess_calls[-1]
+    assert kwargs['mm_processor_kwargs'] == mm_kwargs
+    assert kwargs['media_io_kwargs'] == io_kwargs
+
+
 def _validation_error_response(path: str, exc: ValidationError):
     first_error = next(iter(exc.errors()), {})
     location = '.'.join(str(part) for part in first_error.get('loc', ()))
@@ -365,6 +406,31 @@ def test_messages_non_stream():
     assert len(context.session_mgr.removed) == 1
 
 
+@pytest.mark.parametrize('stream', [False, True])
+def test_http_unknown_extension_block_is_preserved_as_text(stream):
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    block = dict(type='unsupported_probe', payload='Preserve this extension')
+    payload = _messages_payload(messages=[dict(role='user', content=[block])], stream=stream)
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', json=payload, headers=ANTHROPIC_HEADERS)
+
+    assert response.status_code == 200, response.text
+    if stream:
+        assert 'event: message_stop' in response.text
+    assert len(context.async_engine.preprocess_calls) == 1
+    args, _ = context.async_engine.preprocess_calls[0]
+    content = args[0][0]['content']
+    # Anthropic deliberately accepts beta/extension blocks and renders them
+    # as text. Unlike the Chat bug, their contents must not disappear.
+    converted = json.loads(content)
+    assert converted['type'] == block['type']
+    assert converted['payload'] == block['payload']
+    assert len(context.async_engine.generate_calls) == 1
+    assert len(context.session_mgr.removed) == 1
+
+
 @pytest.mark.parametrize(
     ('field_name', 'value'),
     [
@@ -372,7 +438,8 @@ def test_messages_non_stream():
         pytest.param('temperature', 1.1, id='temperature-above-range'),
         pytest.param('top_p', -0.1, id='top-p-below-range'),
         pytest.param('top_p', 1.1, id='top-p-above-range'),
-        pytest.param('top_k', -1, id='negative-top-k'),
+        pytest.param('top_k', -2, id='top-k-below-minus-one'),
+        pytest.param('repetition_penalty', 'invalid', id='repetition-penalty-invalid-number'),
     ],
 )
 def test_messages_rejects_invalid_sampling_parameter(field_name, value):
@@ -382,6 +449,185 @@ def test_messages_rejects_invalid_sampling_parameter(field_name, value):
     data = response.json()
     assert data['type'] == 'error'
     assert field_name in data['error']['message']
+
+
+@pytest.mark.parametrize('top_k', [-1, 0, 20])
+def test_messages_normalizes_top_k_override(top_k):
+    client, context = _make_client(return_context=True)
+    context.default_gen_config = {'top_k': 10}
+    response = _post_messages(client, top_k=top_k)
+
+    assert response.status_code == 200
+    config = context.async_engine.preprocess_calls[0][1]['gen_config']
+    assert config.top_k == max(0, top_k)
+    assert config.temperature == 1.0
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('raw_tokens', [False, True])
+@pytest.mark.parametrize(
+    ('overrides', 'defaults', 'expected'),
+    [
+        pytest.param({}, {}, 1.0, id='generation-default'),
+        pytest.param({}, {'repetition_penalty': 1.3}, 1.3, id='server-default'),
+        pytest.param({'repetition_penalty': None}, {'repetition_penalty': 1.3}, 1.3, id='null-uses-server-default'),
+        pytest.param({'repetition_penalty': 0.8}, {'repetition_penalty': 1.3}, 0.8, id='encourage-repetition'),
+        pytest.param({'repetition_penalty': 1.0}, {'repetition_penalty': 1.3}, 1.0, id='disable-server-penalty'),
+        pytest.param({'repetition_penalty': 2.01}, {'repetition_penalty': 1.3}, 2.01, id='above-two'),
+    ],
+)
+def test_http_messages_repetition_penalty_reaches_engine(stream, raw_tokens, overrides, defaults, expected):
+    context = _FakeServerContext()
+    context.default_gen_config = defaults
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    payload = _messages_payload(stream=stream, **overrides)
+    if raw_tokens:
+        payload.update(messages=[], input_ids=[1, 2, 3])
+
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', json=payload, headers=ANTHROPIC_HEADERS)
+
+    assert response.status_code == 200, response.text
+    if stream:
+        assert 'event: message_stop' in response.text
+    else:
+        assert response.json()['stop_reason'] == 'end_turn'
+    assert len(context.async_engine.preprocess_calls) == 1
+    config = context.async_engine.preprocess_calls[0][1]['gen_config']
+    assert config.repetition_penalty == expected
+    assert len(context.async_engine.generate_calls) == 1
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('raw_tokens', [False, True])
+@pytest.mark.parametrize(
+    'repetition_penalty',
+    [
+        pytest.param(0, id='zero'),
+        pytest.param(-0.5, id='negative'),
+        pytest.param('NaN', id='nan-string'),
+        pytest.param('Infinity', id='infinity-string'),
+        pytest.param('-Infinity', id='negative-infinity-string'),
+        pytest.param('1e309', id='overflow-string'),
+        pytest.param(float('nan'), id='nan'),
+        pytest.param(float('inf'), id='infinity'),
+        pytest.param(float('-inf'), id='negative-infinity'),
+    ],
+)
+def test_http_messages_rejects_invalid_repetition_penalty(stream, raw_tokens, repetition_penalty):
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    payload = _messages_payload(stream=stream, repetition_penalty=repetition_penalty)
+    if raw_tokens:
+        payload.update(messages=[], input_ids=[1, 2, 3])
+
+    with TestClient(app) as client:
+        # Send non-finite literals through the server's JSON parser as well as strings.
+        response = client.post('/v1/messages', content=json.dumps(payload),
+                               headers={**ANTHROPIC_HEADERS, 'content-type': 'application/json'})
+
+    assert response.status_code == 400, response.text
+    data = response.json()
+    assert data['type'] == 'error'
+    assert data['error']['type'] == 'invalid_request_error'
+    assert 'repetition_penalty' in data['error']['message']
+    assert context.async_engine.preprocess_calls == []
+    assert context.async_engine.generate_calls == []
+    assert context.session_mgr.next_session_id == 0
+
+
+def test_messages_count_tokens_counts_declared_tools(hf_media_template):
+    # A real chat template renders the whole tool schema into the prompt, so a
+    # count that ignores `tools` is not the count the same request produces.
+    # The template is also what rejects protocol objects, so the schemas have
+    # to reach it dumped, exactly as the generation path dumps them.
+    client = _make_client(server_context=_FakeServerContext(chat_template=hf_media_template('qwen3_vl')))
+    described = {**SEARCH_TOOL, 'description': 'Search the public web and return ranked result snippets.'}
+    two_parameters = {
+        **SEARCH_TOOL,
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'query': {
+                    'type': 'string'
+                },
+                'limit': {
+                    'type': 'integer'
+                },
+            },
+            'required': ['query'],
+        },
+    }
+
+    without_tools = _post_count_tokens(client)
+    with_tools = _post_count_tokens(client, tools=[SEARCH_TOOL])
+    with_description = _post_count_tokens(client, tools=[described])
+    with_parameter = _post_count_tokens(client, tools=[two_parameters])
+
+    for response in (without_tools, with_tools, with_description, with_parameter):
+        assert response.status_code == 200
+    declared = with_tools.json()['input_tokens']
+    assert declared > without_tools.json()['input_tokens']
+    # Descriptions and parameter schemas reach the prompt, not just names.
+    assert with_description.json()['input_tokens'] > declared
+    assert with_parameter.json()['input_tokens'] > declared
+
+
+@pytest.mark.skipif(GptOssResponseParser is None, reason='openai_harmony is not installed')
+def test_messages_count_tokens_renders_gpt_oss_tool_wrappers(hf_media_template):
+    # Templates disagree on the tool shape: GPT-OSS reads `tool.function`, so
+    # the dumped function schema every other template expects raises
+    # UndefinedError and turns a valid request into HTTP 500 (PR review).
+    # Counting has to render tools the way this model's generation path does.
+    template = hf_media_template('gpt_oss')
+    context = _FakeServerContext(chat_template=template, response_parser_cls=GptOssResponseParser)
+    client = _make_client(server_context=context)
+
+    without_tools = _post_count_tokens(client)
+    with_tools = _post_count_tokens(client, tools=[SEARCH_TOOL])
+
+    assert without_tools.status_code == 200
+    assert with_tools.status_code == 200, with_tools.text
+
+    # the wrapper shape GPT-OSS generation renders, spelled out here so the
+    # assertion does not lean on the code under test
+    wrapped = [{
+        'type': 'function',
+        'function': {
+            'name': SEARCH_TOOL['name'],
+            'description': SEARCH_TOOL['description'],
+            'parameters': SEARCH_TOOL['input_schema'],
+        },
+    }]
+    expected_prompt = template.messages2prompt(DEFAULT_MESSAGES, tools=wrapped)
+    expected = len(context.async_engine.tokenizer.encode(expected_prompt, add_bos=True))
+    assert with_tools.json()['input_tokens'] == expected
+    assert expected > without_tools.json()['input_tokens']
+
+
+def test_messages_count_tokens_combines_tools_and_thinking(hf_media_template):
+    # Tools and the thinking switch travel to the template in one call, so
+    # neither may swallow the other (PR review).
+    client = _make_client(server_context=_FakeServerContext(chat_template=hf_media_template('qwen3_omni')))
+
+    def count(**overrides):
+        response = _post_count_tokens(client, **overrides)
+        assert response.status_code == 200, response.text
+        return response.json()['input_tokens']
+
+    plain = count(thinking={'type': 'enabled'})
+    no_thinking = count(thinking={'type': 'disabled'})
+    with_tools = count(tools=[SEARCH_TOOL], thinking={'type': 'enabled'})
+    with_both = count(tools=[SEARCH_TOOL], thinking={'type': 'disabled'})
+
+    assert with_tools > plain
+    assert no_thinking > plain  # a disabled think block is rendered, not dropped
+    # each switch contributes the same amount whatever the other one is
+    assert with_both - with_tools == no_thinking - plain
+    assert with_both - no_thinking == with_tools - plain
 
 
 def test_messages_count_tokens_rejects_empty_messages():
@@ -692,8 +938,10 @@ def test_messages_streaming_usage_matches_anthropic_event_spec():
     assert message_start['message']['usage'] == {
         'input_tokens': 8,
         'output_tokens': 1,
+        'cache_read_input_tokens': 0,
+        'output_tokens_details': {'thinking_tokens': 0},
     }
-    assert message_delta['usage'] == {'output_tokens': 2}
+    assert message_delta['usage'] == {'output_tokens': 2, 'output_tokens_details': {'thinking_tokens': 0}}
     assert len(context.session_mgr.removed) == 1
 
 
@@ -1104,27 +1352,48 @@ def test_messages_image_data_preserves_input_ids_in_multimodal_content():
     assert kwargs['input_ids'] is None
 
 
-def test_messages_rejects_tools_with_input_ids():
-    context = _FakeServerContext(response_parser_cls=_ToolAndReasoningParser)
-    client = _make_client(server_context=context)
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('choice', [{'type': 'auto'}, {'type': 'tool', 'name': 'search'}])
+def test_messages_raw_tokens_preserve_tool_parsing(stream, choice):
+    class Parser(BaseResponseParser):
+        tool_parser_cls = Qwen3CoderToolParser
+
+    context = _FakeServerContext(response_parser_cls=Parser)
+
+    async def generate(*args, **kwargs):
+        fragments = ['<tool_call><function=search>', '<parameter=query>hi</parameter>',
+                     '</function></tool_call>']
+        for index, fragment in enumerate(fragments):
+            yield SimpleNamespace(
+                response=fragment, token_ids=[101 + index], input_token_len=3,
+                generate_token_len=index + 1, finish_reason='stop' if index == 2 else None,
+                cached_tokens=0, cache_block_ids=None, routed_experts=None, logprobs=None,
+            )
+
+    context.async_engine.generate = generate
     response = _post_messages(
-        client,
-        messages=[],
-        input_ids=[1, 2, 3],
-        tools=[{
-            'name': 'search',
-            'description': 'demo',
-            'input_schema': {
-                'type': 'object',
-                'properties': {},
-            },
-        }],
-        tool_choice={
-            'type': 'auto',
-        },
+        _make_client(server_context=context), messages=[], input_ids=[1, 2, 3],
+        tools=[SEARCH_TOOL], tool_choice=choice, stream=stream,
     )
-    assert response.status_code == 400
-    assert 'tools cannot be used when input_ids is set' in response.json()['error']['message']
+    assert response.status_code == 200
+    args, kwargs = context.async_engine.preprocess_calls[-1]
+    assert args[0] is None
+    assert kwargs['input_ids'] == [1, 2, 3]
+    assert kwargs['tools'][0]['name'] == 'search'
+    if stream:
+        events = [json.loads(line[6:]) for line in response.iter_lines() if line.startswith('data: ')]
+        starts = [e['content_block'] for e in events if e['type'] == 'content_block_start']
+        assert starts[0]['type'] == 'tool_use'
+        assert starts[0]['name'] == 'search'
+        arguments = ''.join(e['delta']['partial_json'] for e in events
+                            if e['type'] == 'content_block_delta' and e['delta']['type'] == 'input_json_delta')
+        assert json.loads(arguments) == {'query': 'hi'}
+        assert next(e for e in events if e['type'] == 'message_delta')['delta']['stop_reason'] == 'tool_use'
+    else:
+        data = response.json()
+        assert data['stop_reason'] == 'tool_use'
+        assert data['content'][0]['name'] == 'search'
+        assert data['content'][0]['input'] == {'query': 'hi'}
 
 
 def test_anthropic_model_listing():
@@ -1150,3 +1419,281 @@ def test_messages_rejects_logprobs_when_engine_logprobs_mode_disabled():
     response = _post_messages(client, messages=[{'role': 'user', 'content': 'Hi'}], return_logprob=True)
     assert response.status_code == 400
     assert 'return_logprob' in response.json()['error']['message']
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('thinking_type', [None, 'enabled', 'disabled', 'adaptive'])
+def test_messages_forwards_thinking_to_template_and_parser(stream, thinking_type):
+    client, context = _make_client(return_context=True)
+    options = {} if thinking_type is None else {'thinking': {'type': thinking_type}}
+    if stream:
+        status, _ = _stream_messages_body(client, **options)
+    else:
+        status = _post_messages(client, **options).status_code
+    assert status == 200
+    expected = None if thinking_type is None else {'enable_thinking': thinking_type != 'disabled'}
+    assert context.async_engine.preprocess_calls[0][1]['chat_template_kwargs'] == expected
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('stop_sequence', [None, '6'])
+def test_messages_preserves_usage_and_matched_stop(stream, stop_sequence):
+    class Parser(_BasicParser):
+        def __init__(self, request):
+            super().__init__(request)
+            self.reasoning_tokens = 1
+
+    client, context = _make_client(Parser, return_context=True)
+    original_generate = context.async_engine.generate
+
+    def generate(request, **kwargs):
+        async def results():
+            async for result in original_generate(request, **kwargs):
+                result.cached_tokens = 4
+                result.stop_sequence = stop_sequence if result.finish_reason else None
+                yield result
+        return results()
+
+    context.async_engine.generate = generate
+    options = {'stop_sequences': ['6']}
+    if stream:
+        status, body = _stream_messages_body(client, **options)
+        assert status == 200
+        events = _sse_payloads(body)
+        start = next(e['message'] for e in events if e['type'] == 'message_start')
+        final = next(e for e in events if e['type'] == 'message_delta')
+        usage = start['usage']
+        output_usage = final['usage']
+        result = final['delta']
+        assert events[-1]['type'] == 'message_stop'
+    else:
+        response = _post_messages(client, **options)
+        assert response.status_code == 200
+        result = response.json()
+        usage = output_usage = result['usage']
+    assert usage['input_tokens'] == 4
+    assert usage['cache_read_input_tokens'] == 4
+    assert output_usage['output_tokens'] == 2
+    assert output_usage['output_tokens_details']['thinking_tokens'] == 1
+    assert result['stop_reason'] == ('end_turn' if stop_sequence is None else 'stop_sequence')
+    assert result['stop_sequence'] == stop_sequence
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('thinking_type', ['enabled', 'disabled'])
+@pytest.mark.parametrize('max_tokens', [64, 512])
+def test_messages_thinking_mode_with_real_parser(stream, thinking_type, max_tokens):
+    class Parser(BaseResponseParser):
+        reasoning_parser_cls = ReasoningParserManager.get('default')
+        tool_parser_cls = None
+        tokenizer = SimpleNamespace(get_vocab=lambda: {'<think>': 1, '</think>': 2})
+
+    client, context = _make_client(Parser, return_context=True)
+    original_generate = context.async_engine.generate
+
+    def generate(request, **kwargs):
+        enabled = request.kwargs['chat_template_kwargs']['enable_thinking']
+        assert request.kwargs['gen_config'].max_new_tokens == max_tokens
+
+        async def results():
+            async for index, result in _enumerate_async(original_generate(request, **kwargs)):
+                if enabled:
+                    result.response = 'analysis' if index == 0 else '</think>ok'
+                    result.token_ids = [101] if index == 0 else [2, 102]
+                    result.generate_token_len = 1 if index == 0 else 3
+                else:
+                    result.response = 'o' if index == 0 else 'k'
+                yield result
+        return results()
+
+    context.async_engine.generate = generate
+    options = {'thinking': {'type': thinking_type}, 'max_tokens': max_tokens}
+    if stream:
+        status, body = _stream_messages_body(client, **options)
+        assert status == 200
+        events = _sse_payloads(body)
+        block_types = [e['content_block']['type'] for e in events if e['type'] == 'content_block_start']
+        text = ''.join(e.get('delta', {}).get('text', '') for e in events)
+        usage = next(e['usage'] for e in events if e['type'] == 'message_delta')
+    else:
+        response = _post_messages(client, **options)
+        assert response.status_code == 200
+        data = response.json()
+        block_types = [b['type'] for b in data['content']]
+        text = ''.join(b.get('text', '') for b in data['content'])
+        usage = data['usage']
+    assert block_types == (['thinking', 'text'] if thinking_type == 'enabled' else ['text'])
+    assert text == 'ok'
+    assert usage['output_tokens_details']['thinking_tokens'] == (1 if thinking_type == 'enabled' else 0)
+
+
+async def _enumerate_async(results):
+    index = 0
+    async for result in results:
+        yield index, result
+        index += 1
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_http_tool_result_images_keep_their_ids_and_content_order(stream):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    messages = [
+        dict(role='user', content='Read both screenshots.'),
+        dict(role='assistant', content=[dict(type='tool_use', id=identifier, name='screenshot', input={})
+                                        for identifier in ('first', 'second')]),
+        dict(role='user', content=[dict(type='tool_result', tool_use_id=identifier, content=[
+            dict(type='text', text='before'),
+            dict(type='image', source=dict(type='url', url=f'https://example.com/{identifier}.png')),
+            dict(type='text', text='after'),
+        ]) for identifier in ('second', 'first')]),
+    ]
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', headers=ANTHROPIC_HEADERS,
+                               json=_messages_payload(messages=messages, stream=stream))
+    assert response.status_code == 200
+    if stream:
+        assert 'event: message_stop' in response.text
+    else:
+        assert response.json()['stop_reason'] == 'end_turn'
+    forwarded = context.async_engine.preprocess_calls[0][0][0]
+    assert [m['role'] for m in forwarded] == ['user', 'assistant', 'tool', 'tool']
+    for message, identifier in zip(forwarded[2:], ('second', 'first')):
+        assert message['tool_call_id'] == identifier
+        assert message['content'] == [dict(type='text', text='before'),
+                                      dict(type='image_url', image_url=dict(url=f'https://example.com/{identifier}.png')),
+                                      dict(type='text', text='after')]
+    assert len(context.session_mgr.removed) == 1
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('raw_tokens', [False, True])
+@pytest.mark.parametrize('fields, expected', [({}, 0), ({'routed_experts_start_len': 0}, 0),
+                                           ({'routed_experts_start_len': 2}, 2)])
+def test_http_messages_routed_experts_start_reaches_engine(stream, raw_tokens, fields, expected):
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    payload = _messages_payload(stream=stream, return_routed_experts=True, **fields)
+    if raw_tokens:
+        payload.update(messages=[], input_ids=[1, 2, 3])
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', json=payload, headers=ANTHROPIC_HEADERS)
+    assert response.status_code == 200, response.text
+    config = context.async_engine.preprocess_calls[0][1]['gen_config']
+    assert config.return_routed_experts is True
+    assert config.routed_experts_start_len == expected
+    assert len(context.async_engine.generate_calls) == 1
+
+
+@pytest.mark.parametrize('bad', [-1, 1.5, True, '2'])
+def test_http_messages_rejects_invalid_routed_experts_start(bad):
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', headers=ANTHROPIC_HEADERS,
+                               json=_messages_payload(routed_experts_start_len=bad))
+    assert response.status_code == 400, response.text
+    assert response.json()['error']['type'] == 'invalid_request_error'
+    assert 'routed_experts_start_len' in response.json()['error']['message']
+    assert context.async_engine.preprocess_calls == []
+    assert context.async_engine.generate_calls == []
+
+
+def test_count_tokens_applies_thinking_switch_like_generation():
+    """count_tokens must apply the request's ``thinking`` config through the
+    same chat template switch the messages endpoint uses, so the count never
+    drifts from the generated usage (regression: a thinking default change on
+    /v1/messages left count_tokens counting the other suffix)."""
+    context = _FakeServerContext(chat_template=_ThinkingChatTemplate())
+    client = _make_client(server_context=context)
+
+    default_count = _post_count_tokens(client).json()['input_tokens']
+    enabled_count = _post_count_tokens(client, thinking={'type': 'enabled'}).json()['input_tokens']
+    disabled_count = _post_count_tokens(client, thinking={'type': 'disabled'}).json()['input_tokens']
+
+    assert enabled_count == default_count  # template default keeps thinking on
+    assert disabled_count == default_count + 1  # closing the think block adds a token
+
+    # lockstep: for every thinking state, the messages endpoint hands the
+    # engine the same switch that count_tokens applied to the template
+    expected_kwargs = [
+        (None, None),
+        ({'type': 'enabled'}, {'enable_thinking': True}),
+        ({'type': 'disabled'}, {'enable_thinking': False}),
+    ]
+    for thinking, expected in expected_kwargs:
+        context.async_engine.preprocess_calls.clear()
+        response = _post_messages(client, thinking=thinking)
+        assert response.status_code == 200, response.text
+        (_, kwargs), = context.async_engine.preprocess_calls
+        assert kwargs['chat_template_kwargs'] == expected
+
+
+def test_count_tokens_keeps_assistant_reasoning_structured():
+    """Regression (PR review): with thinking enabled, a history ending in an
+    assistant message with thinking+text blocks used to 500 on deepseek-style
+    templates -- the count path flattened the thinking block into plain text,
+    losing ``reasoning_content``, and the template's structural assert escaped
+    the endpoint's ``except ValueError``.
+    """
+    from lmdeploy.model import DeepseekV32ChatTemplate
+    from lmdeploy.serve.anthropic.adapter import to_lmdeploy_messages
+
+    context = _FakeServerContext(chat_template=DeepseekV32ChatTemplate())
+    client = _make_client(server_context=context)
+    messages = [
+        {'role': 'user', 'content': 'hi'},
+        {'role': 'assistant', 'content': [
+            {'type': 'thinking', 'thinking': 'let me think', 'signature': 'sig'},
+            {'type': 'text', 'text': 'hello!'},
+        ]},
+    ]
+
+    response = _post_count_tokens(client, messages=messages, thinking={'type': 'enabled'})
+
+    assert response.status_code == 200, response.text
+    assert response.json()['input_tokens'] > 0
+
+    lm_messages = to_lmdeploy_messages(CountTokensRequest(model='fake-model', messages=messages))
+    assert lm_messages[-1]['reasoning_content'] == 'let me think'
+    assert lm_messages[-1]['content'] == 'hello!'
+
+
+def test_count_tokens_keeps_assistant_tool_calls_structured():
+    """Regression (PR review): with thinking enabled, a history ending in an
+    assistant message with tool_use blocks (and no thinking text) used to be
+    rejected by deepseek-style templates -- the count path flattened the blocks
+    into ``[tool_use ...]`` text and dropped ``tool_calls``."""
+    import json
+
+    from lmdeploy.model import DeepseekV32ChatTemplate
+    from lmdeploy.serve.anthropic.adapter import to_lmdeploy_messages
+
+    context = _FakeServerContext(chat_template=DeepseekV32ChatTemplate())
+    client = _make_client(server_context=context)
+    messages = [
+        {'role': 'user', 'content': 'weather?'},
+        {'role': 'assistant', 'content': [
+            {'type': 'text', 'text': 'checking'},
+            {'type': 'tool_use', 'id': 't1', 'name': 'get_weather',
+             'input': {'city': 'Beijing'}},
+        ]},
+    ]
+
+    response = _post_count_tokens(client, messages=messages, thinking={'type': 'enabled'})
+
+    assert response.status_code == 200, response.text
+    assert response.json()['input_tokens'] > 0
+
+    lm_messages = to_lmdeploy_messages(CountTokensRequest(model='fake-model', messages=messages))
+    (tool_call, ) = lm_messages[-1]['tool_calls']
+    assert tool_call['function']['name'] == 'get_weather'
+    assert json.loads(tool_call['function']['arguments']) == {'city': 'Beijing'}
+    assert lm_messages[-1]['content'] == 'checking'

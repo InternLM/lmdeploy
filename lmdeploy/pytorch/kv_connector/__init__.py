@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .base import (
+    KVCachePool,
     KVConnectorBase,
     KVConnectorMetadata,
     KVConnectorOutput,
@@ -14,6 +15,7 @@ from .base import (
 from .factory import build_kv_connector, prepare_kv_connector_config
 
 __all__ = [
+    'KVCachePool',
     'KVConnectorBase',
     'KVConnectorMetadata',
     'KVConnectorOutput',

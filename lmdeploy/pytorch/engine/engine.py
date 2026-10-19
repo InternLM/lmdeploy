@@ -3,6 +3,7 @@ import asyncio
 import ctypes
 import gc
 import os
+import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -457,7 +458,7 @@ class Engine(EngineBase):
 
             input_ids = result.input_ids
             input_multimodals = result.input_multimodals
-            if self.cache_config.enable_prefix_caching:
+            if self.cache_config.needs_prefix_cache_identity:
                 input_multimodals = ensure_multimodal_content_hashes(input_multimodals)
 
             req_data['token_ids'] = input_ids
@@ -524,6 +525,11 @@ class Engine(EngineBase):
         """Model config."""
         return self.executor.model_config
 
+    @property
+    def vocab_size(self) -> int:
+        """Output vocabulary size from the resolved model configuration."""
+        return self.model_config.vocab_size
+
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.engine_conn.p2p_initialize(init_request)
 
@@ -537,8 +543,16 @@ class Engine(EngineBase):
         """Finally process for dist."""
         logger.info('Cleanup executor.')
         self.migration_event = None
-        self.scheduler.shutdown()
-        self.executor.release()
+        try:
+            self.scheduler.shutdown()
+        except BaseException:
+            try:
+                self.executor.release()
+            except BaseException:
+                logger.exception('Executor release also failed after scheduler shutdown failure.')
+            raise
+        else:
+            self.executor.release()
 
     def update_params(self, request: Any):
         """Update params."""
@@ -623,7 +637,7 @@ class Engine(EngineBase):
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
         await self.executor.sleep(level)
-        self.scheduler.finish_kv_transfers_after_worker_drain()
+        self.scheduler.reset_cache_after_worker_drain()
         if self._engine_loop is not None:
             self._engine_loop.reset_runtime_state()
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
@@ -674,10 +688,32 @@ class Engine(EngineBase):
             raise
         finally:
             logger.debug('Engine main loop finally cleanup.')
-            if engine_loop is not None:
-                engine_loop.stop()
-            self._engine_loop = None
-            self._loop_finally()
+            original_error = sys.exc_info()[1]
+            try:
+                try:
+                    if engine_loop is not None:
+                        engine_loop.stop()
+                    if (self.cache_config.compact_state_capacity is not None
+                            and self.cache_config.use_mooncake_store):
+                        self._block_new_inputs()
+                        self._cancel_and_end_all_sessions()
+                        await self.executor.drain_for_shutdown()
+                        self.scheduler.finish_kv_transfers_after_worker_drain()
+                except BaseException:
+                    # Do not turn a failed drain into a terminal ownership proof.
+                    try:
+                        self._loop_finally()
+                    except BaseException:
+                        logger.exception('Additional cleanup failure after shutdown drain failed.')
+                    raise
+                else:
+                    self._loop_finally()
+            except BaseException:
+                if original_error is None:
+                    raise
+                logger.exception('Cleanup failed; preserving the original engine loop error.')
+            finally:
+                self._engine_loop = None
 
     def close(self):
         if self.executor.device_type == 'cuda':

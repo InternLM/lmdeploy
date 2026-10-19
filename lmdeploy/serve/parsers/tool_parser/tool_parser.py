@@ -14,7 +14,11 @@ from lmdeploy.serve.openai.protocol import (
 )
 
 if TYPE_CHECKING:
-    from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool
+    from transformers import PreTrainedTokenizerBase
+
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool, ToolChoice
+
+    from ..token_id_buffer import BoundaryView
 
 ToolParserManager = Registry('tool_parser', locations=['lmdeploy.serve.parsers.tool_parser'])
 
@@ -84,6 +88,8 @@ class ToolParser:
     has forced it closed, so the response parser may leave tool mode.
     """
 
+    # Opt in per tag; unlisted structural tags retain string matching.
+    token_id_terminals: ClassVar[tuple[str, ...]] = ()
     structural_tag_model: ClassVar[str | None] = None
     reasoning_structural_tag_model: ClassVar[str | None] = None
     # Proper close-marker prefixes that end at decoded-token boundaries.
@@ -91,6 +97,7 @@ class ToolParser:
     tool_close_prefixes: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self):
+        self._active_boundaries: BoundaryView | None = None
         self._close_tag: str | None = None
         self._active_tool_call_id: str = ''
         self._name_emitted: bool = False
@@ -108,19 +115,41 @@ class ToolParser:
         return request
 
     @classmethod
+    def build_auto_response_format(
+        cls, tools: list[Tool], *, tokenizer: PreTrainedTokenizerBase | None,
+    ) -> dict[str, Any] | None:
+        """Optionally constrain auto tool calls without requiring a call."""
+        return None
+
+    @classmethod
     def build_required_response_format(cls, tools: list[Tool], *, reasoning: bool) -> dict[str, Any]:
         """Build the XGrammar structural-tag format for required tool calls."""
+        return cls._build_tool_choice_response_format(tools, tool_choice='required', reasoning=reasoning)
+
+    @classmethod
+    def build_named_response_format(cls, tools: list[Tool], tool_choice: ToolChoice,
+                                    *, reasoning: bool,
+                                    tokenizer: PreTrainedTokenizerBase | None = None) -> dict[str, Any]:
+        """Force exactly one call to the selected function."""
+        return cls._build_tool_choice_response_format(
+            tools, tool_choice=tool_choice.model_dump(mode='json'), reasoning=reasoning)
+
+    @classmethod
+    def _build_tool_choice_response_format(cls, tools: list[Tool], *, tool_choice: str | dict,
+                                          reasoning: bool) -> dict[str, Any]:
+        """Build a mandatory tool grammar for the model's native format."""
         structural_tag_model = cls.structural_tag_model
         if reasoning and cls.reasoning_structural_tag_model is not None:
             structural_tag_model = cls.reasoning_structural_tag_model
         if structural_tag_model is None:
-            raise ValueError(f'Tool parser {cls.__name__!r} does not support `tool_choice="required"`.')
+            mode = '`tool_choice="required"`' if tool_choice == 'required' else 'named tool_choice'
+            raise ValueError(f'Tool parser {cls.__name__!r} does not support {mode}.')
         import xgrammar as xgr
 
         return xgr.get_model_structural_tag(
             structural_tag_model,
             [tool.model_dump(mode='json') for tool in tools],
-            tool_choice='required',
+            tool_choice=tool_choice,
             reasoning=reasoning,
         ).model_dump(mode='json')
 
@@ -170,7 +199,25 @@ class ToolParser:
         self._output_index = _PENDING_INDEX
         self._pending_arguments.clear()
 
-    def feed_tool_block(self, text: str, deltas: list[DeltaToolCall], *, final: bool) -> int:
+    def _uses_token_ids(self, tag: str) -> bool:
+        return self._active_boundaries is not None and tag in self._active_boundaries.token_id_terminals
+
+    def _find_structure(self, text: str, tag: str, start: int = 0) -> int:
+        if self._uses_token_ids(tag):
+            assert self._active_boundaries is not None
+            return self._active_boundaries.find(tag, start)
+        return text.find(tag, start)
+
+    def feed_tool_block(self, text: str, deltas: list[DeltaToolCall], *, final: bool,
+                        boundaries: BoundaryView | None = None) -> int:
+        """Scope optional token boundaries to this exact payload view."""
+        self._active_boundaries = boundaries
+        try:
+            return self._feed_tool_block(text, deltas, final=final)
+        finally:
+            self._active_boundaries = None
+
+    def _feed_tool_block(self, text: str, deltas: list[DeltaToolCall], *, final: bool) -> int:
         """Consume a buffered prefix of an open streamed tool block.
 
         ``text`` begins immediately after the outer opening marker and may
@@ -203,13 +250,19 @@ class ToolParser:
                 self._close_tool_block()
                 return consumed
 
-            close_at = text.find(close_tag, consumed)
+            close_at = self._find_structure(text, close_tag, consumed)
             if close_at >= 0:
                 self._close_tool_block()
                 return close_at + len(close_tag)
             if final:
                 self._close_tool_block()
                 return len(text)
+            if self._active_boundaries is not None:
+                if self._uses_token_ids(close_tag):
+                    return len(text)
+                # Unlisted tags can be ordinary IDs split at any character.
+                prefixes = tuple(close_tag[:i] for i in range(1, len(close_tag)))
+                return self._stable_prefix_end(text, prefixes, consumed)
             if not self.tool_close_prefixes:
                 return len(text)
             return self._stable_prefix_end(text, self.tool_close_prefixes, consumed)

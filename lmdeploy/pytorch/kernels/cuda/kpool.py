@@ -197,9 +197,12 @@ def _prefill_offsets_kernel(Q, KV, Counts, Starts, QEnds,
     tl.store(QEnds + request, tl.cumsum(q), request < BATCH)
 
 
+# Request-dependent row/page counts and page-table row strides stay runtime
+# throughout these kernels. Only tile geometry and fixed model dimensions
+# need constexpr specialization; otherwise each new context can trigger JIT.
 @triton.jit
 def _prefill_query_metadata_kernel(KV, QEnds, Starts, Seq, Lengths, QueryStarts, QueryEnds,
-                                   ROWS: tl.constexpr, BATCH: tl.constexpr, POOL: tl.constexpr,
+                                   ROWS, BATCH: tl.constexpr, POOL: tl.constexpr,
                                    BLOCK: tl.constexpr):
     row = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     low = tl.full((BLOCK,), 0, tl.int32)
@@ -335,7 +338,7 @@ def _normalized_hadamard(value, WIDTH: tl.constexpr, LEVELS: tl.constexpr):
 
 
 @triton.jit
-def _rotate_kpool_query_kernel(Query, Out, ROWS: tl.constexpr, WIDTH: tl.constexpr,
+def _rotate_kpool_query_kernel(Query, Out, ROWS, WIDTH: tl.constexpr,
                               LEVELS: tl.constexpr, BLOCK_M: tl.constexpr):
     rows = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     offsets = rows[:, None] * WIDTH + tl.arange(0, WIDTH)[None, :]
@@ -361,7 +364,7 @@ def rotate_kpool_query(query: torch.Tensor) -> torch.Tensor:
 
 @triton.jit
 def _compress_kpool_kernel(K, S, A, O, Scale, Valid, HAS_VALID: tl.constexpr, WIDTH: tl.constexpr, POOL: tl.constexpr,
-                    ONLINE: tl.constexpr, ROUND: tl.constexpr, LEVELS: tl.constexpr):
+                    ONLINE: tl.constexpr, ROUND: tl.constexpr, LEVELS: tl.constexpr, BF16: tl.constexpr = False):
     row = tl.program_id(0)
     if HAS_VALID:
         if not tl.load(Valid + row):
@@ -389,25 +392,31 @@ def _compress_kpool_kernel(K, S, A, O, Scale, Valid, HAS_VALID: tl.constexpr, WI
         denominator = denominator + probability
         accumulator = accumulator + key * probability
     value = tl.div_rn(accumulator, denominator).to(tl.bfloat16).to(tl.float32)
-    value = _normalized_hadamard(value, WIDTH, LEVELS).to(tl.bfloat16).to(tl.float32)
-    scale = tl.maximum(tl.max(tl.abs(value), 0), 1e-4) * (1.0 / 448.0)
-    if ROUND:
-        scale = libdevice.exp2(libdevice.ceil(libdevice.log2(scale)))
-    quant = tl.minimum(tl.maximum(tl.div_rn(value, scale), -448.0), 448.0)
-    tl.store(O + row * WIDTH + d, quant.to(tl.float8e4nv))
-    tl.store(Scale + row, scale)
+    if BF16:
+        tl.store(O + row * WIDTH + d, value.to(tl.bfloat16))
+        tl.store(Scale + row, 1.0)
+    else:
+        value = _normalized_hadamard(value, WIDTH, LEVELS).to(tl.bfloat16).to(tl.float32)
+        scale = tl.maximum(tl.max(tl.abs(value), 0), 1e-4) * (1.0 / 448.0)
+        if ROUND:
+            scale = libdevice.exp2(libdevice.ceil(libdevice.log2(scale)))
+        quant = tl.minimum(tl.maximum(tl.div_rn(value, scale), -448.0), 448.0)
+        tl.store(O + row * WIDTH + d, quant.to(tl.float8e4nv))
+        tl.store(Scale + row, scale)
 
 
 def compress_kpool(keys: torch.Tensor, scores: torch.Tensor, ape: torch.Tensor,
                    *, mode: str, round_scale: bool,
-                   valid: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
-    """Fuse weighted pooling, BF16 Hadamard rotation and one-block FP8
-    quantization.
+                   valid: torch.Tensor | None = None,
+                   out_dtype: torch.dtype = torch.float8_e4m3fn) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compress pools to unrotated BF16 or rotated, block-quantized FP8.
 
     The online/two-pass reduction order and both BF16 round trips match the reference KPool operation. Precise libdevice
-    functions and disabled FMA fusion preserve its FP32 arithmetic boundaries. Invalid rows are left unwritten and must
-    be masked by the cache writer.
+    functions and disabled FMA fusion preserve its FP32 arithmetic boundaries. BF16 output skips rotation/quantization
+    and has unit scales. Invalid rows are left unwritten and must be masked by the cache writer.
     """
+    if out_dtype not in (torch.float8_e4m3fn, torch.bfloat16):
+        raise ValueError(f'Unsupported KPool value dtype: {out_dtype}')
     if mode not in ('extend', 'decode'):
         raise ValueError(f'Unsupported pool compression mode: {mode}')
     if keys.ndim != 3 or scores.shape != keys.shape or ape.shape != keys.shape[1:]:
@@ -419,12 +428,13 @@ def compress_kpool(keys: torch.Tensor, scores: torch.Tensor, ape: torch.Tensor,
         valid = valid.contiguous()
     if width <= 0 or width & (width - 1):
         raise ValueError('Pool width must be a positive power of two.')
-    out = torch.empty(groups, width, device=keys.device, dtype=torch.float8_e4m3fn)
+    out = torch.empty(groups, width, device=keys.device, dtype=out_dtype)
     scale = torch.empty(groups, 1, device=keys.device, dtype=torch.float32)
     if groups:
         _compress_kpool_kernel[(groups,)](
             keys.contiguous(), scores.contiguous(), ape.contiguous(), out, scale, valid, valid is not None, width, pool,
-            mode == 'extend', round_scale, width.bit_length() - 1, num_warps=4, enable_fp_fusion=False)
+            mode == 'extend', round_scale, width.bit_length() - 1, out_dtype == torch.bfloat16,
+            num_warps=4, enable_fp_fusion=False)
     return out, scale
 
 
@@ -504,10 +514,15 @@ def write_raw_ring(keys, scores, new_keys, new_scores, state_ids, history, lengt
 @triton.jit
 def _score_pages(Q, W, Cache, Lengths, Table, Out,
                  QS0: tl.constexpr, QS1: tl.constexpr,
-                 WS0: tl.constexpr, TS0: tl.constexpr,
+                 WS0: tl.constexpr, TS0,
                  PAGE_STRIDE: tl.constexpr, PAGE: tl.constexpr,
-                 HEADS: tl.constexpr, DIM: tl.constexpr, WIDTH: tl.constexpr,
-                 H: tl.constexpr, D: tl.constexpr, TILE: tl.constexpr):
+                 HEADS: tl.constexpr, DIM: tl.constexpr, WIDTH,
+                 H: tl.constexpr, D: tl.constexpr, TILE: tl.constexpr,
+                 WIDTH_BOUND: tl.constexpr, BF16: tl.constexpr = False):
+    # Keep the exact width dynamic while preserving bounded loop-index analysis.
+    # The launcher derives this bound from the actual (possibly padded) page table.
+    tl.assume(WIDTH > 0)
+    tl.assume(WIDTH <= WIDTH_BOUND)
     row = tl.program_id(0)
     heads = tl.arange(0, H)
     ds = tl.arange(0, D)
@@ -517,14 +532,20 @@ def _score_pages(Q, W, Cache, Lengths, Table, Out,
         valid = groups < length
         pages = tl.load(Table + row * TS0 + groups // PAGE, valid, 0)
         slots = groups % PAGE
-        ptr = Cache + pages[None, :] * PAGE_STRIDE + slots[None, :] * DIM + ds[:, None]
-        key = tl.load(ptr, valid[None, :] & (ds[:, None] < DIM), 0).to(tl.float8e4nv, bitcast=True)
+        if BF16:
+            ptr = (Cache + pages[None, :] * PAGE_STRIDE).to(tl.pointer_type(tl.bfloat16))
+            ptr = ptr + slots[None, :] * DIM + ds[:, None]
+            key = tl.load(ptr, valid[None, :] & (ds[:, None] < DIM), 0)
+        else:
+            ptr = Cache + pages[None, :] * PAGE_STRIDE + slots[None, :] * DIM + ds[:, None]
+            key = tl.load(ptr, valid[None, :] & (ds[:, None] < DIM), 0).to(tl.float8e4nv, bitcast=True)
         query = tl.load(Q + row * QS0 + heads[:, None] * QS1 + ds[None, :],
                         (heads[:, None] < HEADS) & (ds[None, :] < DIM), 0.)
         dot = tl.dot(query, key, max_num_imprecise_acc=0)
         weight = tl.load(W + row * WS0 + heads, heads < HEADS, 0)
         logits = tl.sum(tl.maximum(dot, 0.) * weight[:, None], axis=0)
-        scale_ptr = (Cache + pages * PAGE_STRIDE + PAGE * DIM + slots * 4).to(tl.pointer_type(tl.float32))
+        scale_offset = pages * PAGE_STRIDE + PAGE * DIM * (2 if BF16 else 1) + slots * 4
+        scale_ptr = (Cache + scale_offset).to(tl.pointer_type(tl.float32))
         scale = tl.load(scale_ptr, valid, 0)
         tl.store(Out + row * WIDTH + groups, logits * scale, valid)
 
@@ -541,13 +562,15 @@ def score_paged(query, weight, cache, lengths, table):
     result = torch.empty((rows, width), dtype=torch.float32, device=query.device)
     if not rows or not width:
         return result
+    width_bound = triton.next_power_of_2(width)
     workers = min(triton.cdiv(width, 64),
                   triton.cdiv(torch.cuda.get_device_properties(query.device).multi_processor_count * 2, rows))
     _score_pages[(rows, workers)](
         query, weight, cache, lengths, table, result,
         query.stride(0), query.stride(1), weight.stride(0), table.stride(0),
         cache.stride(0), cache.size(1), heads, dim, width,
-        max(16, triton.next_power_of_2(heads)), triton.next_power_of_2(dim), 64)
+        max(16, triton.next_power_of_2(heads)), triton.next_power_of_2(dim), 64,
+        WIDTH_BOUND=width_bound, BF16=query.dtype == torch.bfloat16)
     return result
 
 
@@ -555,8 +578,8 @@ def score_paged(query, weight, cache, lengths, table):
 def _gather_token_tail_kernel(Cache, Blocks, Q, KV, Keys, Scores, StateIds,
                               stride_cb: tl.constexpr, stride_ct: tl.constexpr,
                               stride_cs: tl.constexpr, stride_cd: tl.constexpr,
-                              stride_bb: tl.constexpr, stride_bp: tl.constexpr,
-                              PAGES: tl.constexpr, PAGE_SIZE: tl.constexpr,
+                              stride_bb, stride_bp: tl.constexpr,
+                              PAGES, PAGE_SIZE: tl.constexpr,
                               POOL: tl.constexpr, WIDTH: tl.constexpr,
                               BLOCK_D: tl.constexpr):
     request = tl.program_id(0)
@@ -596,10 +619,10 @@ def gather_kpool_token_tail(cache, block_offsets, q_seqlens, kv_seqlens, pool_si
 def _write_token_cache_kernel(Cache, Blocks, Q, KV, Starts, Keys, Scores,
                                stride_cb: tl.constexpr, stride_ct: tl.constexpr,
                                stride_cs: tl.constexpr, stride_cd: tl.constexpr,
-                               stride_bb: tl.constexpr, stride_bp: tl.constexpr,
+                               stride_bb, stride_bp: tl.constexpr,
                                stride_kt: tl.constexpr, stride_kd: tl.constexpr,
                                stride_st: tl.constexpr, stride_sd: tl.constexpr,
-                               BATCH: tl.constexpr, PAGES: tl.constexpr,
+                               BATCH: tl.constexpr, PAGES,
                                PAGE_SIZE: tl.constexpr, WIDTH: tl.constexpr,
                                BLOCK_B: tl.constexpr, BLOCK_D: tl.constexpr):
     row = tl.program_id(0)
@@ -633,8 +656,8 @@ def write_kpool_token_cache(cache, keys, scores, block_offsets, q_seqlens,
 
 @triton.jit
 def _decode_metadata_kernel(Q, KV, Blocks, Seq, Groups, Context, ScheduleLengths, Table,
-                            STEPS: tl.constexpr, POOL: tl.constexpr, PAGES: tl.constexpr, PAGE_STEP: tl.constexpr,
-                            stride_bb: tl.constexpr, stride_bp: tl.constexpr,
+                            STEPS: tl.constexpr, POOL: tl.constexpr, PAGES, PAGE_STEP: tl.constexpr,
+                            stride_bb, stride_bp: tl.constexpr,
                             BLOCK: tl.constexpr):
     row = tl.program_id(0)
     tile = tl.program_id(1)
