@@ -8,11 +8,12 @@ import asyncio
 import base64
 import copy
 import itertools
+import re
 from io import BytesIO
 from types import SimpleNamespace
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageColor
 
 from lmdeploy.model import BaseChatTemplate, HFChatTemplate
 from lmdeploy.serve.anthropic.adapter import to_openai_messages
@@ -36,41 +37,79 @@ def _image(color):
     return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode()
 
 
-def _messages(protocol, order, two_images=False):
-    calls = [dict(id=call_id, type='function', function=dict(name='screenshot', arguments='{}'))
-             for call_id in CALL_IDS]
+def _tagged_images(call_id, colors):
+    parts = []
+    for i, color in enumerate(colors):
+        parts += [dict(type='text', text=f'[[{call_id}_{i}:before]]'),
+                  dict(type='image_url', image_url=dict(url=_image(color))),
+                  dict(type='text', text=f'[[{call_id}_{i}:after]]')]
+    return parts
+
+
+def _tool_round(protocol, call_ids, contents, order):
+    """Build wire-format fixtures; convert only after the entire history
+    exists."""
+    if protocol == 'chat':
+        calls = [dict(id=call_id, type='function', function=dict(name='screenshot', arguments='{}'))
+                 for call_id in call_ids]
+        return [dict(role='assistant', content=None, tool_calls=calls)] + [
+            dict(role='tool', tool_call_id=call_ids[i], content=contents[i]) for i in order]
+    if protocol == 'messages':
+        uses = [dict(type='tool_use', id=call_id, name='screenshot', input={}) for call_id in call_ids]
+        results = []
+        for i in order:
+            parts = contents[i]
+            if isinstance(parts, list):
+                parts = [dict(type='image', source=dict(type='url', url=p['image_url']['url']))
+                         if p['type'] == 'image_url' else p for p in parts]
+            results.append(dict(type='tool_result', tool_use_id=call_ids[i], content=parts))
+        return [dict(role='assistant', content=uses), dict(role='user', content=results)]
+    items = [dict(type='function_call', call_id=call_id, name='screenshot', arguments='{}') for call_id in call_ids]
+    for i in order:
+        parts = contents[i]
+        if isinstance(parts, list):
+            parts = [dict(type='input_image', image_url=p['image_url']['url']) if p['type'] == 'image_url'
+                     else dict(type='input_text', text=p['text']) for p in parts]
+        items.append(dict(type='function_call_output', call_id=call_ids[i], output=parts))
+    return items
+
+
+def _convert_history(protocol, history):
+    before = copy.deepcopy(history)
+    if protocol == 'messages':
+        messages = to_openai_messages(MessagesRequest(model='fake-model', max_tokens=32, messages=history))
+    elif protocol == 'responses':
+        messages = messages_from_input(ResponsesRequest(model='fake-model', input=history))
+    else:
+        messages = history
+    result = normalize_chat_request(ChatCompletionRequest(model='fake-model', messages=messages)).messages
+    assert history == before
+    return result
+
+
+def _messages(protocol, order, two_images=False, tagged=False):
     contents = []
-    for color in COLORS:
+    for call_id, color in zip(CALL_IDS, COLORS):
         parts = [dict(type='text', text='before'), dict(type='image_url', image_url=dict(url=_image(color))),
                  dict(type='text', text='after')]
         if two_images:
             parts += [dict(type='image_url', image_url=dict(url=_image('white')))]
+        if tagged:
+            parts = _tagged_images(call_id, [color, 'white'] if two_images else [color])
         contents.append(parts)
-    messages = [dict(role='user', content='Read the screenshots.'),
-                dict(role='assistant', content=None, tool_calls=calls)]
-    messages += [dict(role='tool', tool_call_id=CALL_IDS[i], content=contents[i]) for i in order]
-    if protocol == 'chat':
-        return normalize_chat_request(ChatCompletionRequest(model='fake-model', messages=messages)).messages
-    if protocol == 'messages':
-        uses = [dict(type='tool_use', id=call_id, name='screenshot', input={}) for call_id in CALL_IDS]
-        results = []
-        for i in order:
-            parts = [dict(type='image', source=dict(type='url', url=p['image_url']['url']))
-                     if p['type'] == 'image_url' else p for p in contents[i]]
-            results.append(dict(type='tool_result', tool_use_id=CALL_IDS[i], content=parts))
-        request = MessagesRequest(model='fake-model', max_tokens=32, messages=[messages[0],
-                                  dict(role='assistant', content=uses), dict(role='user', content=results)])
-        return normalize_chat_request(ChatCompletionRequest(model='fake-model',
-                                                           messages=to_openai_messages(request))).messages
-    items = [messages[0]]
-    items += [dict(type='function_call', call_id=call_id, name='screenshot', arguments='{}') for call_id in CALL_IDS]
-    for i in order:
-        parts = [dict(type='input_image', image_url=p['image_url']['url']) if p['type'] == 'image_url'
-                 else dict(type='input_text', text=p['text']) for p in contents[i]]
-        items.append(dict(type='function_call_output', call_id=CALL_IDS[i], output=parts))
-    return normalize_chat_request(ChatCompletionRequest(model='fake-model', messages=messages_from_input(
-        ResponsesRequest(model='fake-model', input=items)))).messages
+    history = [dict(role='user', content='Read the screenshots.')]
+    history += _tool_round(protocol, CALL_IDS, contents, order)
+    return _convert_history(protocol, history)
 
+
+def _assert_rendered_media_order(prompt, token, items, expected):
+    # Every marker is unique to one image. Checking the complete marker/token
+    # sequence catches misplaced placeholders even when their total is correct.
+    actual = re.findall(r'\[\[[a-z0-9_:]+\]\]|' + re.escape(token), prompt)
+    assert actual == [part for label, _ in expected
+                      for part in (f'[[{label}:before]]', token, f'[[{label}:after]]')]
+    assert [image.getpixel((0, 0)) for _, image, _ in items] == [
+        ImageColor.getrgb(color) for _, color in expected]
 
 
 def _template(glm=True):
@@ -85,7 +124,7 @@ def _template(glm=True):
 @pytest.mark.parametrize('backend', ['pytorch', 'turbomind'])
 def test_parallel_tool_images_keep_ownership_through_shared_processor(protocol, order, two_images, backend,
                                                                      hf_media_template):
-    messages = _messages(protocol, order, two_images)
+    messages = _messages(protocol, order, two_images, tagged=True)
     before = copy.deepcopy(messages)
     assert [m['tool_call_id'] for m in messages[2:]] == [CALL_IDS[i] for i in order]
     assert [call['id'] for call in messages[1]['tool_calls']] == CALL_IDS
@@ -99,8 +138,10 @@ def test_parallel_tool_images_keep_ownership_through_shared_processor(protocol, 
 
     async def preprocess(messages, input_prompt, **kwargs):
         assert messages is seen['rendered']
-        assert input_prompt.count('<|image|>') == (6 if two_images else 3)
         seen['collected'] = VisionModel.collect_multimodal_items(messages)
+        expected = [(f'{call_id}_{i}', color) for call_id, first_color in zip(CALL_IDS, COLORS)
+                    for i, color in enumerate([first_color, 'white'] if two_images else [first_color])]
+        _assert_rendered_media_order(input_prompt, '<|image|>', seen['collected'], expected)
         return messages
 
     encoder = SimpleNamespace(_uses_new_preprocess=True, model=SimpleNamespace(get_input_prompt=get_input_prompt),
@@ -113,8 +154,8 @@ def test_parallel_tool_images_keep_ownership_through_shared_processor(protocol, 
     assert pixels == expected
     for message in result[2:]:
         assert [part['type'] for part in message['content']][:3] == ['text', 'image', 'text']
-        assert message['content'][0]['text'] == 'before'
-        assert message['content'][2]['text'] == 'after'
+        assert message['content'][0]['text'] == f"[[{message['tool_call_id']}_0:before]]"
+        assert message['content'][2]['text'] == f"[[{message['tool_call_id']}_0:after]]"
     assert messages == before
 
 
@@ -202,48 +243,73 @@ def test_responses_does_not_merge_calls_across_rounds_or_messages():
 
 
 @pytest.mark.parametrize('protocol', ['chat', 'messages', 'responses'])
-def test_mixed_tool_results_across_rounds(protocol, hf_media_template):
-    first = _messages(protocol, (2, 1, 0))
-    first[3]['content'] = 'plain text result'
-    messages = first + [dict(role='user', content=[
-        dict(type='image_url', image_url=dict(url=_image('white'))),
-        dict(type='text', text='next round'),
-    ])] + _messages(protocol, (1, 2, 0), two_images=True)
+@pytest.mark.parametrize('scenario', ['multiround', 'mixed'])
+def test_complete_tool_histories_preserve_ownership(protocol, scenario, hf_media_template):
+    first_ids = ['round1_z', 'round1_a']
+    first_contents = [_tagged_images(first_ids[0], ['red']),
+                      'plain result from round one' if scenario == 'mixed' else _tagged_images(first_ids[1], ['blue'])]
+    history = [dict(role='user', content='Read the screenshots.')]
+    history += _tool_round(protocol, first_ids, first_contents, (1, 0))
+    expected_calls = [first_ids]
+    expected_results = [first_ids[1], first_ids[0]]
+    expected_media = [('round1_z_0', 'red')]
+    if scenario == 'multiround':
+        # Consecutive tool rounds, with distinct IDs, labels, and pixels. Do not
+        # convert rounds separately: adapters must preserve the whole history.
+        second_ids = ['round2_m', 'round2_b']
+        history += _tool_round(protocol, second_ids,
+                               [_tagged_images(second_ids[0], ['lime', 'white']),
+                                _tagged_images(second_ids[1], ['yellow'])], (1, 0))
+        expected_calls.append(second_ids)
+        expected_results += [second_ids[1], second_ids[0]]
+        expected_media += [('round1_a_0', 'blue'), ('round2_m_0', 'lime'),
+                           ('round2_m_1', 'white'), ('round2_b_0', 'yellow')]
+    messages = _convert_history(protocol, history)
+    assert [m['role'] for m in messages] == ['user'] + ['assistant', 'tool', 'tool'] * len(expected_calls)
+    assert [[c['id'] for c in m['tool_calls']] for m in messages if m['role'] == 'assistant'] == expected_calls
+    results = [m for m in messages if m['role'] == 'tool']
+    assert [m['tool_call_id'] for m in results] == expected_results
+    expected_contents = [first_contents[1], first_contents[0]]
+    if scenario == 'multiround':
+        expected_contents += [_tagged_images('round2_b', ['yellow']), _tagged_images('round2_m', ['lime', 'white'])]
+    assert [m['content'] for m in results] == expected_contents
     parsed = asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))
     template = hf_media_template()
-    parsed = template.prepare_multimodal_messages(parsed)
-    prompt = VisionModel.get_input_prompt(parsed, template)
-    items = VisionModel.collect_multimodal_items(parsed)
-    assert prompt.count('<|image|>') == len(items)
-    assert [image.getpixel((0, 0)) for _, image, _ in items] == [
-        PIXELS[0], PIXELS[2], (255, 255, 255),
-        PIXELS[0], (255, 255, 255), PIXELS[1], (255, 255, 255), PIXELS[2], (255, 255, 255),
-    ]
+    prepared = template.prepare_multimodal_messages(parsed)
+    assert [m['tool_call_id'] for m in prepared if m['role'] == 'tool'] == [
+        call_id for calls in expected_calls for call_id in calls]
+    prompt = VisionModel.get_input_prompt(prepared, template)
+    _assert_rendered_media_order(prompt, '<|image|>', VisionModel.collect_multimodal_items(prepared), expected_media)
+    if scenario == 'mixed':
+        assert prepared[3]['content'] == 'plain result from round one'
+        assert prompt.count('plain result from round one') == 1
+        assert prompt.index('[[round1_z_0:after]]') < prompt.index('plain result from round one')
 
 
 @pytest.mark.parametrize('protocol', ['chat', 'messages', 'responses'])
 @pytest.mark.parametrize('name', ['qwen3_vl', 'qwen2_5_vl', 'qwen3_omni'])
 def test_other_templates_keep_their_own_tool_rendering_order(protocol, name, hf_media_template):
     messages = asyncio.run(MultimodalProcessor.async_parse_multimodal_item(
-        _messages(protocol, (2, 0, 1), two_images=True)))
+        _messages(protocol, (2, 0, 1), two_images=True, tagged=True)))
     prompt = VisionModel.get_input_prompt(messages, hf_media_template(name),
                                          chat_template_kwargs={'add_vision_id': True})
     items = VisionModel.collect_multimodal_items(messages)
-    assert prompt.count('<|image_pad|>') == len(items)
-    assert [image.getpixel((0, 0)) for _, image, _ in items] == [
-        PIXELS[2], (255, 255, 255), PIXELS[0], (255, 255, 255), PIXELS[1], (255, 255, 255),
-    ]
+    expected = [(f'{CALL_IDS[i]}_{j}', color) for i in (2, 0, 1)
+                for j, color in enumerate([COLORS[i], 'white'])]
+    _assert_rendered_media_order(prompt, '<|image_pad|>', items, expected)
 
 
 @pytest.mark.parametrize('protocol', ['chat', 'messages', 'responses'])
 @pytest.mark.parametrize('name', ['internvl3', 'internvl3_5'])
 def test_internvl_tool_image_placeholders_across_protocols(protocol, name, hf_media_template):
     messages = asyncio.run(MultimodalProcessor.async_parse_multimodal_item(
-        _messages(protocol, (2, 0, 1), two_images=True)))
+        _messages(protocol, (2, 0, 1), two_images=True, tagged=True)))
     model = InternVLVisionModel.__new__(InternVLVisionModel)
     model.image_token = '<IMG_CONTEXT>'
     prompt, token = model.proc_messages(messages, hf_media_template(name))
-    assert prompt.count(token) == len(VisionModel.collect_multimodal_items(messages)) == 6
+    expected = [(f'{CALL_IDS[i]}_{j}', color) for i in (2, 0, 1)
+                for j, color in enumerate([COLORS[i], 'white'])]
+    _assert_rendered_media_order(prompt, token, VisionModel.collect_multimodal_items(messages), expected)
 
 
 @pytest.mark.parametrize('protocol', ['chat', 'messages', 'responses'])
