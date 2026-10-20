@@ -133,6 +133,53 @@ response = pipe.infer("Hello, how are you?", max_new_tokens=30)
 print(response.text)
 ```
 
+## GLM-5.3-Flash FP8 MLA cache
+
+The PyTorch backend supports an optional packed FP8 MLA cache for
+GLM-5.3-Flash, including its MTP draft model:
+
+```shell
+lmdeploy serve api_server /path/to/GLM-5.3-Flash --backend pytorch \
+    --tp 8 --quant-policy fp8 --model-name glm53
+```
+
+Use `--quant-policy none` (the default) for the BF16 baseline. The Python
+equivalent is `PytorchEngineConfig(quant_policy=16)`. This choice only
+quantizes the MLA latent cache; KPool and KDA states retain their original
+formats. Each latent row uses 656 bytes instead of 1024 bytes: 512 FP8
+values, four FP32 scales, and a zero-filled 64-element BF16 tail. This is
+a 35.9% reduction in latent-cache payload, not total GPU memory.
+
+The implementation follows the NoPE approach in
+[vLLM #59246](https://github.com/vllm-project/vllm/pull/59246).
+Decode pads the query to 576 dimensions while preserving the model's
+attention scale. Prefill dequantizes to the logical 512 dimensions and
+retains the short-prompt dense MHA path. KPool tail tokens are retained
+when aligning sparse indices. FP8 introduces quantization error, so
+evaluate accuracy and speed for your workload before enabling it.
+
+The H200 test environment uses FlashMLA `1.0.0+ba89a34`, with its
+656-byte sparse-cache format and Hopper support. Use a compatible
+FlashMLA build; a version with a different packed-cache format is not
+interchangeable.
+
+To reproduce the original PR's serving workloads, start each policy with
+the same TP8 configuration, MTP disabled, a session length of at least
+16640, and a maximum batch size of at least 32. Then run:
+
+```shell
+python benchmark/benchmark_glm53_fp8_mla.py \
+    --vllm-python /path/to/vllm-env/bin/python \
+    --base-url http://127.0.0.1:23333 --model glm53 \
+    --tokenizer /path/to/GLM-5.3-Flash --output-dir results/fp8
+```
+
+The client uses fixed random lengths (vLLM's `--random-range-ratio 0`),
+`--ignore-eos`, 1k/128 and 16k/256 input/output tokens, and concurrency
+1/8/32 with 16/32/128 measured requests. Warmup requests are excluded.
+Compare LMDeploy BF16 against FP8; the original PR compares two FP8
+backends, so its speedups are not directly comparable.
+
 ## Evaluation
 
 We apply kv quantization of LMDeploy to several LLM models and utilize OpenCompass to evaluate the inference accuracy. The results are shown in the table below:
