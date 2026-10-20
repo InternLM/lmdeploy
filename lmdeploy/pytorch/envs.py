@@ -231,6 +231,8 @@ with set_envs():
     # qwen3.5 recurrent_state dtype
     fp32_mamba_ssm_dtype = env_to_bool('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', False)
 
+    kda_prefill_backend = env_to_choice('LMDEPLOY_KDA_PREFILL_BACKEND', 'fla', {'fla', 'flash_kda'})
+
     # DSA indexer fusion
     disable_dsa_indexer_fusion = env_to_bool('LMDEPLOY_DISABLE_DSA_INDEXER_FUSION', False)
 

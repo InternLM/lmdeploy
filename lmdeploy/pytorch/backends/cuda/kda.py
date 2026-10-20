@@ -12,6 +12,7 @@ from typing import Any
 
 import torch
 
+from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.backends.kda import KdaImpl
 
 from .gated_delta_rule import GatedDeltaStepMetaUpdater, _state_scatter, _state_select
@@ -52,6 +53,11 @@ class CudaKdaImpl(KdaImpl):
         self.causal_conv1d_fwd = causal_conv1d_fwd
         self.causal_conv1d_update = causal_conv1d_update
         self.chunk_kda = chunk_kda
+        self.flash_prefill = None
+        if envs.kda_prefill_backend == 'flash_kda':
+            from .flash_kda import check_flash_kda, flash_kda_prefill
+            check_flash_kda()
+            self.flash_prefill = flash_kda_prefill
         from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_update as shared_conv_update
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
         self.shared_conv_update = shared_conv_update
@@ -292,6 +298,10 @@ class CudaKdaImpl(KdaImpl):
                 state_v_first=True,
             )
             output = output.flatten(0, 1).unsqueeze(0)
+        elif self.flash_prefill is not None:
+            output, final_state = self.flash_prefill(
+                q, k, v, raw_gate, raw_beta, a_log, dt_bias, selected_state,
+                metadata.cu_seqlens, lower_bound)
         else:
             output, final_state = self.chunk_kda(
                 q=q.contiguous(),
