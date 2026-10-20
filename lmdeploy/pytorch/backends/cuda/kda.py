@@ -7,6 +7,7 @@ state-ring kernel with gated-delta rule for both AR and MTP decode.
 """
 
 from copy import copy
+from dataclasses import replace
 from functools import partial
 from typing import Any
 
@@ -106,17 +107,27 @@ class CudaKdaImpl(KdaImpl):
         self.forward = piecewise_forward
 
     def _forward_spec(self, mixed_qkv, raw_gate, raw_beta, conv_state,
-                      recurrent_state, metadata, **kwargs):
+                      recurrent_state, metadata, checkpoint=None, **kwargs):
         """Checkpoint every verified token at its accepted-history ring slot.
 
         State is addressed by accepted history length, not the last proposed length. The ring therefore also handles
         zero/partial acceptance and request reordering without a scheduler-side rollback hook.
         """
         if metadata.is_decoding:
+            if checkpoint is not None:
+                raise ValueError('Internal checkpoints are only supported during prefill.')
             return self._forward_spec_decode(mixed_qkv, raw_gate, raw_beta,
                                              conv_state, recurrent_state, metadata, **kwargs)
         history = metadata.cache_seqlens.long()
         ring_size = metadata.num_spec_tokens + 1
+        if checkpoint is not None:
+            if (metadata.state_ids.numel() != 1 or checkpoint.step is None
+                    or checkpoint.step < checkpoint.offset
+                    or checkpoint.recurrent_state_out.shape != (1, *recurrent_state.shape[1:])
+                    or checkpoint.conv_state_out.shape != (1, *conv_state.shape[1:])):
+                raise ValueError('MTP IC requires one checkpoint ring and an absolute save step.')
+            checkpoint = replace(checkpoint,
+                                 recurrent_state_out=checkpoint.recurrent_state_out[:, checkpoint.step % ring_size])
         ids = torch.where(metadata.valid_state, metadata.state_ids, -1).long()
         read_slot = history.remainder(ring_size)
         # FLA prefill consumes a chronological window; the persistent cache
@@ -139,7 +150,7 @@ class CudaKdaImpl(KdaImpl):
 
         output = self.forward(mixed_qkv, raw_gate, raw_beta,
                               conv_state=conv, recurrent_state=recurrent,
-                              metadata=local, **kwargs)
+                              metadata=local, checkpoint=checkpoint, **kwargs)
         lengths = history + metadata.cu_seqlens.diff()
         write_offsets = (lengths[:, None] + offsets).remainder(conv_state.size(-1))
         conv_cache.scatter_(2, write_offsets[:, None].expand(-1, conv_cache.size(1), -1), conv)
@@ -254,11 +265,9 @@ class CudaKdaImpl(KdaImpl):
         checkpoint: KdaPrefillCheckpoint | None = None,
     ) -> torch.Tensor:
         if (getattr(metadata, 'num_spec_tokens', 0) or 0) > 0:
-            if checkpoint is not None:
-                raise ValueError('MTP internal checkpoints are not supported.')
             return self._forward_spec(
                 mixed_qkv, raw_gate, raw_beta, conv_state, recurrent_state,
-                metadata, conv_weight=conv_weight, conv_bias=conv_bias,
+                metadata, checkpoint=checkpoint, conv_weight=conv_weight, conv_bias=conv_bias,
                 a_log=a_log, dt_bias=dt_bias, num_heads=num_heads,
                 head_dim=head_dim, lower_bound=lower_bound)
         if checkpoint is not None:
@@ -273,7 +282,17 @@ class CudaKdaImpl(KdaImpl):
                     or not checkpoint.recurrent_state_out.is_contiguous()):
                 raise ValueError('Invalid native KDA checkpoint output layout.')
             window = mixed_qkv[:, checkpoint.offset - width:checkpoint.offset].transpose(1, 2)
-            checkpoint.conv_state_out.copy_(window)
+            destination = checkpoint.conv_state_out
+            if destination.size(-1) == width:
+                destination.copy_(window)
+            else:
+                if destination.size(-1) < width or checkpoint.step is None:
+                    raise ValueError('KDA IC convolution ring requires an absolute save step.')
+                start = (checkpoint.step - width) % destination.size(-1)
+                first = min(width, destination.size(-1) - start)
+                destination[..., start:start + first].copy_(window[..., :first])
+                if first < width:
+                    destination[..., :width - first].copy_(window[..., first:])
         batch_size = metadata.state_ids.numel()
         if metadata.is_decoding:
             query_length = mixed_qkv.size(1) // batch_size

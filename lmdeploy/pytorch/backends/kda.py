@@ -16,6 +16,7 @@ class KdaPrefillCheckpoint:
     offsets: torch.Tensor
     conv_state_out: torch.Tensor
     recurrent_state_out: torch.Tensor
+    step: int | None = None
 
 
 class KdaImpl(ABC):

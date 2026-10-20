@@ -45,11 +45,11 @@ def update_cache_config(cache_config, token_lookahead=0):
     if cache_config.prefix_cache_decode_state_interval % 64:
         raise ValueError('GLM-5.3 prefix_cache_decode_state_interval must be a multiple of 64.')
     if envs.internal_prefill_checkpoint:
-        if (token_lookahead != 0 or cache_config.kv_transfer_config is not None
+        if (token_lookahead not in (0, 1) or cache_config.kv_transfer_config is not None
                 or not cache_config.enable_prefix_caching or cache_config.device_type != 'cuda'
                 or cache_config.prefill_save_alignment % 64
                 or envs.kda_prefill_backend != 'flash_kda'):
-            raise ValueError('GLM IC requires CUDA, local prefix caching, non-MTP AR without a connector, '
+            raise ValueError('GLM IC requires CUDA, local prefix caching, AR/deepseek_mtp without a connector, '
                              '64-aligned prefill_save_alignment and the native FlashKDA backend.')
         from lmdeploy.pytorch.backends.cuda.flash_kda import check_flash_kda
         check_flash_kda()

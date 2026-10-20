@@ -45,7 +45,7 @@ def make_task(start=0, end=8256, step=8192, budget=16384, reserve=True, mtp=Fals
     return task, result
 
 
-@pytest.mark.parametrize('mtp', [False])
+@pytest.mark.parametrize('mtp', [False, True])
 @pytest.mark.parametrize(('start', 'end', 'step'), [(0, 8193, 8192), (0, 8256, 8192), (0, 10000, 8192),
                                                    (8192, 20000, 16384)])
 def test_internal_capture_preserves_one_reservation_and_restore(start, end, step, mtp):
@@ -135,7 +135,22 @@ def test_completed_tracked_sequence_does_not_block_capture_or_drop_cleanup_delta
     assert result.cache_inputs.state_capture == PrefillStateCapture(8192, 20000, 16384, 1, 3)
 
 
-def test_non_mtp_ic_config_rejects_mtp(monkeypatch):
+def test_mtp_can_merge_aligned_end_without_losing_an_endpoint_checkpoint():
+    task, result = make_task(end=16384, mtp=True)
+    assert task._try_internal_prefill(result)
+    assert result.cache_inputs.state_capture == PrefillStateCapture(0, 16384, 8192, 1, 3)
+    assert result.cache_inputs.state_save_plan is None
+
+
+def test_mtp_capacity_failure_preserves_pending_checkpoint():
+    task, result = make_task(end=16384, mtp=True, reserve=False)
+    original = result.cache_inputs
+    assert not task._try_internal_prefill(result)
+    assert result.cache_inputs is original
+    task.maker.long_context_chunker.clear.assert_not_called()
+
+
+def test_mtp_ic_config_accepts_lookahead_without_enabling_decode_saves(monkeypatch):
     from lmdeploy.pytorch import envs
     from lmdeploy.pytorch.backends.cuda import flash_kda
     from lmdeploy.pytorch.config import CacheConfig
@@ -146,9 +161,11 @@ def test_non_mtp_ic_config_rejects_mtp(monkeypatch):
     monkeypatch.setattr(flash_kda, 'check_flash_kda', Mock())
     config = CacheConfig(max_batches=32, block_size=64, num_cpu_blocks=0, num_gpu_blocks=64,
                          enable_prefix_caching=True, prefill_save_alignment=8192)
-    update_cache_config(config)
+    update_cache_config(config, token_lookahead=1)
     assert config.enable_internal_prefill_checkpoint
-    with pytest.raises(ValueError, match='non-MTP AR'):
+    assert config.prefix_cache_token_lookahead == 1
+    config.prefix_cache_decode_state_interval = 64
+    with pytest.raises(ValueError, match='only publishes prefill'):
         update_cache_config(config, token_lookahead=1)
 
 

@@ -670,8 +670,8 @@ class _ForwardInputsTask:
         step = start + result.inputs.max_q_seqlen
         alignment = seq._seq_meta.prefill_save_alignment
         lookahead = seq._seq_meta.prefix_cache_token_lookahead
-        if (maker.spec_decoding or lookahead
-                or not alignment or end % alignment == 0 or step % alignment
+        if ((maker.spec_decoding and lookahead != 1)
+                or not alignment or (not lookahead and end % alignment == 0) or step % alignment
                 or step + lookahead > end
                 or not start < step < end or step - start < 64 or (step - start) % 16
                 or end - start != seq.num_token_ids or end - start > maker.config.max_prefill_token_num

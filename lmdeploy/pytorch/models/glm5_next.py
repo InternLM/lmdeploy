@@ -1526,7 +1526,8 @@ class Glm5NextModel(nn.Module):
                     offset=state_capture.checkpoint_step - state_capture.input_start,
                     offsets=capture_offsets,
                     conv_state_out=past_key_value[0][target:target + 1],
-                    recurrent_state_out=past_key_value[1][target:target + 1])
+                    recurrent_state_out=past_key_value[1][target:target + 1],
+                    step=state_capture.checkpoint_step)
             kpool_tail_state = None
             if not layer.is_linear_attention:
                 past_key_value, kpool_tail_state = past_key_value[:-2], past_key_value[-2:]
