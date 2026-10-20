@@ -9,6 +9,7 @@ import copy
 from io import BytesIO
 
 import pytest
+import requests
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from openai.types.responses import ResponseInputImage
@@ -148,7 +149,8 @@ def test_invalid_images_return_http_400_before_preprocessing(responses_endpoint,
 
 
 @pytest.mark.parametrize('stream', [False, True])
-def test_http_images_reach_preprocessor_in_order(responses_endpoint, stream):
+@pytest.mark.parametrize('scenario', ['multiple', 'image_only', 'multiturn', 'remote'])
+def test_http_images_reach_preprocessor_in_order(responses_endpoint, monkeypatch, stream, scenario):
     _, context = responses_endpoint
     original_preprocess = context.async_engine.preprocess
     decoded = []
@@ -161,8 +163,37 @@ def test_http_images_reach_preprocessor_in_order(responses_endpoint, stream):
     app = FastAPI()
     app.include_router(create_responses_router(context))
     parts = [dict(type='input_text', text='Colors in order?'), _image(), _image('blue')]
+    payload = _request(parts, stream=stream)
+    expected_types = [['text', 'image', 'image']]
+    expected_colors = [(255, 0, 0), (0, 0, 255)]
+    if scenario == 'image_only':
+        payload = _request([_image()], stream=stream)
+        expected_types = [['image']]
+        expected_colors = [(255, 0, 0)]
+    elif scenario == 'multiturn':
+        payload['input'] = [
+            dict(role='user', content=[_image()]),
+            dict(role='assistant', content='First image received.'),
+            dict(role='user', content=[parts[0], _image('blue')]),
+        ]
+        expected_types = [['image'], None, ['text', 'image']]
+    elif scenario == 'remote':
+        url = 'http://93.184.216.34/red.png'
+        image_bytes = base64.b64decode(_image()['image_url'].split(',', 1)[1])
+        fetched = []
+
+        def fetch(_session, requested_url, **kwargs):
+            fetched.append(requested_url)
+            response = requests.Response()
+            response.status_code = 200
+            response._content = image_bytes
+            return response
+
+        # Use a public IP for URL validation; replace only the HTTP transport.
+        monkeypatch.setattr(requests.Session, 'get', fetch)
+        parts[1] = dict(type='input_image', image_url=url)
     with TestClient(app) as client:
-        response = client.post('/v1/responses', json=_request(parts, stream=stream))
+        response = client.post('/v1/responses', json=payload)
 
     assert response.status_code == 200
     if stream:
@@ -172,9 +203,22 @@ def test_http_images_reach_preprocessor_in_order(responses_endpoint, stream):
     else:
         assert response.json()['status'] == 'completed'
         assert response.json()['output_text'] == 'ok'
-    content = decoded[0]['content']
-    assert [part['type'] for part in content] == ['text', 'image', 'image']
-    assert content[0]['text'] == 'Colors in order?'
-    assert [part['data'].getpixel((0, 0)) for part in content[1:]] == [(255, 0, 0), (0, 0, 255)]
+    assert [message['role'] for message in decoded] == [message['role'] for message in payload['input']]
+    assert len(decoded) == len(expected_types)
+    colors = []
+    for message, types in zip(decoded, expected_types):
+        if types is None:
+            assert message['content'] == 'First image received.'
+            continue
+        assert [part['type'] for part in message['content']] == types
+        for part in message['content']:
+            if part['type'] == 'text':
+                assert part['text'] == 'Colors in order?'
+            else:
+                assert part['data'].size == (32, 32)
+                colors.append(part['data'].getpixel((0, 0)))
+    assert colors == expected_colors
+    if scenario == 'remote':
+        assert fetched == [url]
     assert context.async_engine.preprocess_kwargs['do_preprocess'] is True
     assert context.async_engine.session_mgr.removed == context.sessions
