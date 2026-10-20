@@ -497,6 +497,15 @@ def test_has_multimodal_input_detects_all_supported_types():
     assert not processor._has_multimodal_input([{'role': 'user', 'content': [{'type': 'text', 'text': 'hello'}]}])
 
 
+@pytest.mark.parametrize('role', ['user', 'assistant', 'system', 'developer', 'tool'])
+def test_unknown_blocks_are_rejected_before_text_rendering(role):
+    processor = MultimodalProcessor(tokenizer=None, chat_template=None)
+    messages = [dict(role=role, content=[dict(type='unsupported_probe')])]
+
+    with pytest.raises(ValueError, match=r'unsupported_probe.*messages\[0\]\.content\[0\]\.type'):
+        _run_async(processor.get_prompt_input(messages, do_preprocess=True))
+
+
 @pytest.mark.parametrize(
     'msg,expected_content',
     [
