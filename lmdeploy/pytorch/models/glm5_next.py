@@ -31,6 +31,7 @@ from lmdeploy.pytorch.backends.cuda.kpool import (
     kpool_select_prefill_cuda,
     kpool_write_token_cache_cuda,
 )
+from lmdeploy.pytorch.backends.kda import KdaPrefillCheckpoint
 from lmdeploy.pytorch.configurations.glm5_next import is_glm5_kda_layer
 from lmdeploy.pytorch.consts import (
     GLM5_KDA_CONV_STATE,
@@ -40,6 +41,7 @@ from lmdeploy.pytorch.consts import (
 )
 from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest
+from lmdeploy.pytorch.engine.cache_inputs import PrefillStateCapture
 from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_masked_post_quant_fwd
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.models.patch import get_build_model_context
@@ -723,7 +725,8 @@ class Glm5NextLinearAttention(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor,
                 past_key_value: Sequence[torch.Tensor],
-                kda_metadata: GatedDeltaMeta) -> torch.Tensor:
+                kda_metadata: GatedDeltaMeta,
+                checkpoint: KdaPrefillCheckpoint | None = None) -> torch.Tensor:
         mixed_qkv = self.qkv_proj(hidden_states)
         raw_beta = self.b_proj(hidden_states)
         raw_gate, norm_gate = self.fg_b_proj(self.fg_a_proj(hidden_states))
@@ -742,6 +745,7 @@ class Glm5NextLinearAttention(nn.Module):
             num_heads=self.local_num_heads,
             head_dim=self.head_dim,
             lower_bound=self.lower_bound,
+            checkpoint=checkpoint,
         )
         norm_gate = norm_gate.unflatten(-1,
                                         (self.local_num_heads, self.head_dim))
@@ -1400,7 +1404,8 @@ class Glm5NextDecoderLayer(nn.Module):
                 kpool_metadata: Any = None,
                 hc_input_fp32: torch.Tensor | None = None,
                 prepare_hc_fp32: bool = False,
-                all_routed_experts: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor | None]:
+                all_routed_experts: torch.Tensor | None = None,
+                kda_checkpoint: KdaPrefillCheckpoint | None = None) -> tuple[torch.Tensor, torch.Tensor | None]:
         residual = hidden_states
         hidden_states, post, comb = self._hc_pre(
             hidden_states,
@@ -1413,7 +1418,8 @@ class Glm5NextDecoderLayer(nn.Module):
         if self.is_linear_attention:
             hidden_states = self.self_attn(hidden_states,
                                            past_key_value=past_key_value,
-                                           kda_metadata=kda_metadata)
+                                           kda_metadata=kda_metadata,
+                                           checkpoint=kda_checkpoint)
         else:
             hidden_states = self.self_attn(hidden_states,
                                            past_key_value=past_key_value,
@@ -1475,6 +1481,7 @@ class Glm5NextModel(nn.Module):
         state_ids: torch.Tensor,
         inputs_embeds: torch.Tensor | None = None,
         all_routed_experts: torch.Tensor | None = None,
+        state_capture: PrefillStateCapture | None = None,
     ) -> torch.Tensor:
         del position_ids  # GLM-5.3 text attention has qk_rope_head_dim == 0.
         if state_ids is None:
@@ -1487,6 +1494,14 @@ class Glm5NextModel(nn.Module):
         kda_metadata = self.gated_delta_meta_builder(hidden_states.size(1),
                                       self.config.linear_conv_kernel_dim,
                                       state_ids, attn_metadata)
+        capture_offsets = None
+        if state_capture is not None:
+            if (attn_metadata.is_decoding or state_ids.numel() != 1
+                    or hidden_states.size(1) != state_capture.input_end - state_capture.input_start):
+                raise ValueError('GLM IC requires an exclusive prefill matching the capture interval.')
+            capture_offsets = torch.tensor(
+                [state_capture.checkpoint_step - state_capture.input_start],
+                dtype=kda_metadata.cu_seqlens.dtype, device=hidden_states.device)
         if len(past_key_values) != len(self.layers):
             raise RuntimeError(
                 f'GLM-5.3 expects {len(self.layers)} layer caches, got {len(past_key_values)}.'
@@ -1500,7 +1515,18 @@ class Glm5NextModel(nn.Module):
                 get_tp_world_rank('attn')[1] == 0, page_size=page_size)
         hc_input_fp32 = None
         prepare_hc_fp32 = hidden_states.is_cuda and hidden_states.size(0) * hidden_states.size(1) <= 32
+        captured_layers = 0
         for layer, past_key_value in zip(self.layers, past_key_values):
+            kda_checkpoint = None
+            if state_capture is not None and layer.is_linear_attention:
+                target = state_capture.target_slot
+                if max(target, state_capture.source_slot) >= past_key_value[0].size(0):
+                    raise ValueError('GLM IC slot is outside the allocated state cache.')
+                kda_checkpoint = KdaPrefillCheckpoint(
+                    offset=state_capture.checkpoint_step - state_capture.input_start,
+                    offsets=capture_offsets,
+                    conv_state_out=past_key_value[0][target:target + 1],
+                    recurrent_state_out=past_key_value[1][target:target + 1])
             kpool_tail_state = None
             if not layer.is_linear_attention:
                 past_key_value, kpool_tail_state = past_key_value[:-2], past_key_value[-2:]
@@ -1513,7 +1539,11 @@ class Glm5NextModel(nn.Module):
                                   kpool_metadata=kpool_metadata,
                                   hc_input_fp32=hc_input_fp32,
                                   prepare_hc_fp32=prepare_hc_fp32,
-                                  all_routed_experts=all_routed_experts)
+                                  all_routed_experts=all_routed_experts,
+                                  kda_checkpoint=kda_checkpoint)
+            captured_layers += kda_checkpoint is not None
+        if state_capture is not None and captured_layers != len(self.config.linear_layer_ids):
+            raise RuntimeError('GLM IC did not submit all KDA checkpoint writes.')
         hidden_states = hidden_states.mean(dim=2)
         return self.norm(hidden_states)
 
@@ -1574,6 +1604,7 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
         vision_prompt_order: list[int] | None = None,
         multimodal_mask: torch.Tensor | None = None,
         return_input_embeds: bool = False,
+        state_capture: PrefillStateCapture | None = None,
         **kwargs,
     ) -> torch.Tensor:
         if inputs_embeds is None and (vision_groups or
@@ -1627,7 +1658,8 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
                           attn_metadata=attn_metadata,
                           inputs_embeds=inputs_embeds,
                           state_ids=state_ids,
-                          all_routed_experts=all_routed_experts)
+                          all_routed_experts=all_routed_experts,
+                          state_capture=state_capture)
         if all_routed_experts is None and not return_input_embeds:
             return hidden_states
         outputs = dict(hidden_states=hidden_states)
@@ -1837,6 +1869,7 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
                     attn_metadata=context.attn_metadata,
                     inputs_embeds=inputs_embeds,
                     state_ids=context.state_offsets,
+                    state_capture=context.state_capture,
                     pixel_values=pixel_values,
                     grid_thw=grid_thw,
                     vision_groups=vision_groups,

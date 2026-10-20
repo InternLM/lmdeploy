@@ -10,7 +10,7 @@ import torch
 import lmdeploy.pytorch.engine.engine_loop as engine_loop_module
 import lmdeploy.pytorch.engine.inputs_maker as inputs_maker_module
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
+from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs, PrefillStateCapture
 from lmdeploy.pytorch.engine.engine_loop import EngineLoop, RunableEventAsync
 from lmdeploy.pytorch.engine.inputs_maker import (
     InputsMakerAsync,
@@ -361,7 +361,8 @@ def _fake_model_inputs(is_chunk: bool = False):
                            seq_length=torch.tensor([1]))
 
 
-def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
+@pytest.mark.parametrize('internal', [False, True])
+def test_engine_loop_keeps_state_save_pinned_until_output_boundary(internal):
     events = []
 
     class _StateCheckpoints:
@@ -405,7 +406,8 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     loop.executor = _Executor(state_checkpoints)
     loop._sleep_requested = False
     model_inputs = SimpleNamespace()
-    cache_inputs = CacheCheckpointInputs(state_save_plan=((0, ), (1, )))
+    cache_inputs = (CacheCheckpointInputs(state_capture=PrefillStateCapture(0, 8256, 8192, 0, 1))
+                    if internal else CacheCheckpointInputs(state_save_plan=((0, ), (1, ))))
     forward_inputs = dict(inputs=model_inputs, delta=None, cache_inputs=cache_inputs)
 
     forward_inputs, next_running = asyncio.run(loop._main_loop_get_outputs([object()], forward_inputs))

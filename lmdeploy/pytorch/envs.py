@@ -232,6 +232,7 @@ with set_envs():
     fp32_mamba_ssm_dtype = env_to_bool('LMDEPLOY_FP32_MAMBA_SSM_DTYPE', False)
 
     kda_prefill_backend = env_to_choice('LMDEPLOY_KDA_PREFILL_BACKEND', 'fla', {'fla', 'flash_kda'})
+    internal_prefill_checkpoint = env_to_bool('LMDEPLOY_INTERNAL_PREFILL_CHECKPOINT', False)
 
     # DSA indexer fusion
     disable_dsa_indexer_fusion = env_to_bool('LMDEPLOY_DISABLE_DSA_INDEXER_FUSION', False)

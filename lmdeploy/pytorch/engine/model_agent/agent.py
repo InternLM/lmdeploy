@@ -247,6 +247,8 @@ def model_forward(
         # Attach operator-owned block caches and configured state caches.
         context.block_caches = cache_engine.block_caches
         context.named_state_caches = state_cache_engine.named_state_caches
+        if cache_inputs is not None and not inputs.is_dummy:
+            context.state_capture = cache_inputs.state_capture
 
         with ctx_mgr.context(context):
             # Some backends synchronize while building context. Queue restore

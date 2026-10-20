@@ -17,6 +17,7 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 
 if TYPE_CHECKING:
+    from lmdeploy.pytorch.engine.cache_inputs import PrefillStateCapture
     from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 
 
@@ -355,6 +356,7 @@ class StepContext:
     # named views for operator-owned block caches and configured state caches
     block_caches: Mapping[str, torch.Tensor] | None = None
     named_state_caches: Mapping[str, torch.Tensor] | None = None
+    state_capture: 'PrefillStateCapture | None' = None
 
     # mrope
     mrope_position_ids: torch.Tensor | None = None

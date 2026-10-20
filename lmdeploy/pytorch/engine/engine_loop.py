@@ -496,7 +496,8 @@ class EngineLoop:
         if has_model_work:
             self.inputs_maker.update_running_seqs(running, model_inputs)
         has_state_checkpoint_save = (cache_inputs is not None
-                                     and cache_inputs.state_save_plan is not None)
+                                     and (cache_inputs.state_save_plan is not None
+                                          or cache_inputs.state_capture is not None))
 
         # ModelAgent executes queued forwards in send order.  Once the current
         # input is queued, matched checkpoints can be published before waiting

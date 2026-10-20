@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 from lmdeploy.pytorch.backends import get_backend
-from lmdeploy.pytorch.backends.kda import KdaBuildSpec
+from lmdeploy.pytorch.backends.kda import KdaBuildSpec, KdaPrefillCheckpoint
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
 
@@ -34,6 +34,7 @@ class Kda(nn.Module):
         num_heads: int,
         head_dim: int,
         lower_bound: float,
+        checkpoint: KdaPrefillCheckpoint | None = None,
     ) -> torch.Tensor:
         return self.impl.forward(
             mixed_qkv=mixed_qkv,
@@ -49,4 +50,5 @@ class Kda(nn.Module):
             num_heads=num_heads,
             head_dim=head_dim,
             lower_bound=lower_bound,
+            checkpoint=checkpoint,
         )

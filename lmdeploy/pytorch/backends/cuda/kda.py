@@ -13,7 +13,7 @@ from typing import Any
 import torch
 
 from lmdeploy.pytorch import envs
-from lmdeploy.pytorch.backends.kda import KdaImpl
+from lmdeploy.pytorch.backends.kda import KdaImpl, KdaPrefillCheckpoint
 
 from .gated_delta_rule import GatedDeltaStepMetaUpdater, _state_scatter, _state_select
 from .step_metadata import register_step_metadata_impl
@@ -251,13 +251,29 @@ class CudaKdaImpl(KdaImpl):
         num_heads: int,
         head_dim: int,
         lower_bound: float,
+        checkpoint: KdaPrefillCheckpoint | None = None,
     ) -> torch.Tensor:
         if (getattr(metadata, 'num_spec_tokens', 0) or 0) > 0:
+            if checkpoint is not None:
+                raise ValueError('MTP internal checkpoints are not supported.')
             return self._forward_spec(
                 mixed_qkv, raw_gate, raw_beta, conv_state, recurrent_state,
                 metadata, conv_weight=conv_weight, conv_bias=conv_bias,
                 a_log=a_log, dt_bias=dt_bias, num_heads=num_heads,
                 head_dim=head_dim, lower_bound=lower_bound)
+        if checkpoint is not None:
+            if (self.flash_prefill is None or metadata.is_decoding
+                    or metadata.state_ids.numel() != 1):
+                raise ValueError('KDA IC requires native FlashKDA and a single prefill sequence.')
+            width = conv_weight.size(-1)
+            if not width <= checkpoint.offset < mixed_qkv.size(1) or checkpoint.offset % 16:
+                raise ValueError('KDA IC offset must contain the conv window and align to 16 tokens.')
+            if (checkpoint.offsets.shape != (1,) or checkpoint.offsets.dtype != metadata.cu_seqlens.dtype
+                    or checkpoint.recurrent_state_out.dtype != torch.float32
+                    or not checkpoint.recurrent_state_out.is_contiguous()):
+                raise ValueError('Invalid native KDA checkpoint output layout.')
+            window = mixed_qkv[:, checkpoint.offset - width:checkpoint.offset].transpose(1, 2)
+            checkpoint.conv_state_out.copy_(window)
         batch_size = metadata.state_ids.numel()
         if metadata.is_decoding:
             query_length = mixed_qkv.size(1) // batch_size
@@ -301,7 +317,7 @@ class CudaKdaImpl(KdaImpl):
         elif self.flash_prefill is not None:
             output, final_state = self.flash_prefill(
                 q, k, v, raw_gate, raw_beta, a_log, dt_bias, selected_state,
-                metadata.cu_seqlens, lower_bound)
+                metadata.cu_seqlens, lower_bound, checkpoint)
         else:
             output, final_state = self.chunk_kda(
                 q=q.contiguous(),

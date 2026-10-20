@@ -8,6 +8,23 @@ StateCacheCopyPlan = tuple[tuple[int, ...], tuple[int, ...]]
 
 
 @dataclass(frozen=True)
+class PrefillStateCapture:
+    """One internal checkpoint produced during an exclusive prefill."""
+
+    input_start: int
+    input_end: int
+    checkpoint_step: int
+    source_slot: int
+    target_slot: int
+
+    def __post_init__(self):
+        if not 0 <= self.input_start < self.checkpoint_step < self.input_end:
+            raise ValueError('Internal checkpoint must lie inside the input interval.')
+        if min(self.source_slot, self.target_slot) < 0 or self.source_slot == self.target_slot:
+            raise ValueError('Internal checkpoint requires distinct allocated state slots.')
+
+
+@dataclass(frozen=True)
 class CacheCheckpointInputs:
     """Cache-copy plans consumed by exactly one model forward.
 
@@ -25,6 +42,11 @@ class CacheCheckpointInputs:
     kv_save_plan: torch.Tensor | None = None
     state_restore_plan: StateCacheCopyPlan | None = None
     state_save_plan: StateCacheCopyPlan | None = None
+    state_capture: PrefillStateCapture | None = None
+
+    def __post_init__(self):
+        if self.state_capture is not None and (self.state_save_plan is not None or self.kv_save_plan is not None):
+            raise ValueError('Internal capture cannot share a forward with an endpoint checkpoint save.')
 
     @torch.inference_mode()
     def to_device(self, device: str, non_blocking: bool = False):
@@ -41,6 +63,7 @@ class CacheCheckpointInputs:
             kv_save_plan=kv_save_plan,
             state_restore_plan=self.state_restore_plan,
             state_save_plan=self.state_save_plan,
+            state_capture=self.state_capture,
         )
 
     def record_stream(self, stream: torch.cuda.Stream) -> None:

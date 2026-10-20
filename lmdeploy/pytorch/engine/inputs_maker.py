@@ -30,7 +30,7 @@ from lmdeploy.pytorch.messages import MessageStatus
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, VisionModelInputs
 from lmdeploy.utils import get_logger
 
-from .cache_inputs import CacheCheckpointInputs, StateCacheCopyPlan
+from .cache_inputs import CacheCheckpointInputs, PrefillStateCapture, StateCacheCopyPlan
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.adapter.adapter import AdapterManager
@@ -135,6 +135,8 @@ class InputsMakerConfig:
     enable_chunked_prefill: bool = False
     use_mrope: bool = False
     prefill_interval: int = 16
+    enable_internal_prefill_checkpoint: bool = False
+    prefill_graph_max_tokens: int = 0
 
     @staticmethod
     def from_engine(engine: 'Engine'):
@@ -142,6 +144,8 @@ class InputsMakerConfig:
         model_config = engine.model_config
         prefill_interval = engine.engine_config.prefill_interval
         kwargs = dict()
+        if _envs.internal_prefill_checkpoint and not cache_config.enable_internal_prefill_checkpoint:
+            raise ValueError('This model does not support internal prefill checkpoints.')
         if prefill_interval is not None:
             if not isinstance(prefill_interval, int) or prefill_interval <= 0:
                 raise ValueError('engine.engine_config.prefill_interval must be a positive int '
@@ -161,6 +165,8 @@ class InputsMakerConfig:
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
             use_mrope=model_config.use_mrope,
+            enable_internal_prefill_checkpoint=cache_config.enable_internal_prefill_checkpoint,
+            prefill_graph_max_tokens=(engine.engine_config.piecewise_cudagraph_max_tokens or 0),
             **kwargs,
         )
 
@@ -610,6 +616,7 @@ class _ForwardInputsTask:
                  result.cache_inputs) = self._build_chunk_inputs(running, chunk_size, multimodals)
                 result.inputs.is_first_chunk = True
                 result.inputs.is_chunk_multimodal = maker.long_context_chunker.has_multimodal
+                self._try_internal_prefill(result)
                 maker._short_prefill_turns_since_long_chunk = 0
         elif len(running) > 0:
             (result.inputs, result.delta, result.extra_inputs,
@@ -637,11 +644,59 @@ class _ForwardInputsTask:
         inputs.is_first_chunk = False
         inputs.is_chunk_multimodal = is_chunk_multimodal
         maker._short_prefill_turns_since_long_chunk = 0
-        return _ForwardInputsResult(running=running,
-                                    inputs=inputs,
-                                    delta=delta,
-                                    cache_inputs=cache_inputs,
-                                    extra_inputs=extra_inputs)
+        result = _ForwardInputsResult(running=running,
+                                      inputs=inputs,
+                                      delta=delta,
+                                      cache_inputs=cache_inputs,
+                                      extra_inputs=extra_inputs)
+        if not is_last_chunk:
+            self._try_internal_prefill(result)
+        return result
+
+    def _try_internal_prefill(self, result: _ForwardInputsResult) -> bool:
+        """Expand an admitted final split without changing its pending save."""
+        maker = self.maker
+        if not getattr(maker.config, 'enable_internal_prefill_checkpoint', False):
+            return False
+        if (any(seq.status == MessageStatus.RUNNING for seq in maker.running_seqs)
+                or self.scheduler.has_kv_connector()
+                or len(result.running) != 1 or result.delta is not None):
+            return False
+        seq = result.running[0]
+        if (seq.logprob_start_pos >= 0 or seq.return_logits or seq.return_ce_loss or seq.return_routed_experts
+                or seq.history_embeddings or seq.history_multimodals.multimodals):
+            return False
+        start, end = seq.num_history_ids, seq.input_end_pos
+        step = start + result.inputs.max_q_seqlen
+        alignment = seq._seq_meta.prefill_save_alignment
+        lookahead = seq._seq_meta.prefix_cache_token_lookahead
+        if (maker.spec_decoding or lookahead
+                or not alignment or end % alignment == 0 or step % alignment
+                or step + lookahead > end
+                or not start < step < end or step - start < 64 or (step - start) % 16
+                or end - start != seq.num_token_ids or end - start > maker.config.max_prefill_token_num
+                or end - start <= maker.config.prefill_graph_max_tokens):
+            return False
+        cache_inputs = result.cache_inputs
+        if (cache_inputs is None or cache_inputs.kv_save_plan is not None
+                or cache_inputs.state_save_plan is None or len(cache_inputs.state_save_plan[0]) != 1):
+            return False
+        source, target = cache_inputs.state_save_plan
+        capture = PrefillStateCapture(start, end, step, source[0], target[0])
+        if not self._reserve_chunk(seq, end - start, is_last_chunk=True):
+            return False
+        cache_inputs = replace(cache_inputs, state_save_plan=None, state_capture=capture)
+        was_first = result.inputs.is_first_chunk
+        result.inputs, result.delta, result.extra_inputs, result.cache_inputs = self._build_prefill_inputs(
+            result.running, cache_inputs=cache_inputs)
+        result.inputs.is_chunk = True
+        result.inputs.is_first_chunk = was_first
+        result.inputs.is_last_chunk = True
+        maker.long_context_chunker.clear()
+        logger.debug('Internal prefill checkpoint: session_id=%s seq_id=%s start=%s end=%s step=%s '
+                     'source_slot=%s target_slot=%s',
+                     seq.session_id, seq.seq_id, start, end, step, source[0], target[0])
+        return True
 
     def _reserve_chunk(self,
                        seq: 'SchedulerSequence',
@@ -659,12 +714,13 @@ class _ForwardInputsTask:
                                                          prealloc_size=prealloc_size,
                                                          is_last_chunk=is_last_chunk)
 
-    def _build_prefill_inputs(self, seqs: 'SeqList'):
+    def _build_prefill_inputs(self, seqs: 'SeqList', cache_inputs: CacheCheckpointInputs | None = None):
         assert all(seq.kv_token_limit is None for seq in seqs), (
             'Non-final chunks must use exclusive chunk inputs, not full prefill')
         maker = self.maker
         inputs = maker.create_model_inputs(seqs, True)
-        cache_inputs = maker._prepare_prefill_cache_inputs(seqs)
+        if cache_inputs is None:
+            cache_inputs = maker._prepare_prefill_cache_inputs(seqs)
         delta, valid_seqs, _ = maker.create_model_inputs_delta_valid_only()
         maker.running_seqs = valid_seqs
         extra_inputs = maker.model_agent_strategy.make_extra_inputs(seqs, inputs)

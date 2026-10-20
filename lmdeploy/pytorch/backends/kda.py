@@ -8,6 +8,16 @@ import torch
 from .base import BuildSpec
 
 
+@dataclass(frozen=True)
+class KdaPrefillCheckpoint:
+    """Single-sequence prefill outputs, separate from the live state."""
+
+    offset: int
+    offsets: torch.Tensor
+    conv_state_out: torch.Tensor
+    recurrent_state_out: torch.Tensor
+
+
 class KdaImpl(ABC):
     """Backend interface for Kimi Delta Attention inference."""
 
@@ -27,6 +37,7 @@ class KdaImpl(ABC):
         num_heads: int,
         head_dim: int,
         lower_bound: float,
+        checkpoint: KdaPrefillCheckpoint | None = None,
     ) -> torch.Tensor:
         """Run short convolution followed by the KDA recurrence."""
         raise NotImplementedError
