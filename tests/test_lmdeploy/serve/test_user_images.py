@@ -2,14 +2,14 @@
 """User-image HTTP regressions across Chat, Messages, and Responses.
 
 Generation and the remote HTTP transport are simulated; protocol conversion, HTTP/SSE handling, media loading, and image
-decoding use production code.
+decoding use production code. Use representative PNG scenarios here; codec coverage and protocol-specific validation
+remain in the endpoint suites.
 """
 import asyncio
 import base64
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -97,37 +97,31 @@ def image_endpoints():
         yield client, engine, sessions, removed
 
 
-@pytest.fixture(scope='module')
-def image_sources():
+@pytest.fixture
+def image_sources(monkeypatch):
     encoded = {}
-    for image_format, mime in [('PNG', 'png'), ('JPEG', 'jpeg'), ('WEBP', 'webp')]:
-        for color in ('red', 'blue'):
-            buffer = BytesIO()
-            Image.new('RGB', (32, 32), color).save(buffer, format=image_format)
-            encoded[f'/{color}.{image_format}'] = (f'image/{mime}', buffer.getvalue())
+    for color in ('red', 'blue'):
+        buffer = BytesIO()
+        Image.new('RGB', (32, 32), color).save(buffer, format='PNG')
+        # A public IP exercises URL validation without external DNS.
+        encoded[f'http://93.184.216.34/{color}.png'] = buffer.getvalue()
 
     def fetch(_session, url, **kwargs):
-        parsed = urlparse(url)
-        # A public IP exercises the normal URL validation without external DNS.
-        # No network request is made: only the requests transport is replaced.
-        assert parsed.netloc == '93.184.216.34'
-        mime, data = encoded[parsed.path]
         response = requests.Response()
         response.status_code = 200
-        response.headers['Content-Type'] = mime
-        response._content = data
+        response.headers['Content-Type'] = 'image/png'
+        response._content = encoded[url]
         return response
 
-    def source(color, image_format, source_type):
-        path = f'/{color}.{image_format}'
+    def source(color, source_type):
+        url = f'http://93.184.216.34/{color}.png'
         if source_type == 'http':
-            return f'http://93.184.216.34{path}'
-        mime, data = encoded[path]
-        return f'data:{mime};base64,{base64.b64encode(data).decode()}'
+            return url
+        return f'data:image/png;base64,{base64.b64encode(encoded[url]).decode()}'
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(requests.Session, 'get', fetch)
-        yield source
+    # No network request is made: only the requests transport is replaced.
+    monkeypatch.setattr(requests.Session, 'get', fetch)
+    return source
 
 
 def _history(scenario):
@@ -135,10 +129,9 @@ def _history(scenario):
     before, between, after = [dict(type='text', text=text) for text in ('before', 'between', 'after')]
     if scenario == 'image_only':
         return [dict(role='user', content=[red])]
-    if scenario == 'single':
-        return [dict(role='user', content=[before, red, after])]
     if scenario == 'multiple':
         return [dict(role='user', content=[before, red, between, blue, after])]
+    assert scenario == 'multiturn'
     return [dict(role='user', content=[before, red, after]),
             dict(role='assistant', content='First image received.'),
             dict(role='user', content=[before, blue, after])]
@@ -183,14 +176,16 @@ def _convert(protocol, payload):
 
 @pytest.mark.parametrize('protocol', PATHS)
 @pytest.mark.parametrize('stream', [False, True])
-@pytest.mark.parametrize('image_format', ['PNG', 'JPEG', 'WEBP'])
-@pytest.mark.parametrize('source_type', ['data', 'http'])
-@pytest.mark.parametrize('scenario', ['single', 'image_only', 'multiple', 'multiturn'])
+@pytest.mark.parametrize('scenario, source_type', [
+    pytest.param('image_only', 'data', id='image-only-data'),
+    pytest.param('multiple', 'http', id='interleaved-images-http'),
+    pytest.param('multiturn', 'data', id='multiturn-data'),
+])
 def test_user_images_through_all_http_endpoints(image_endpoints, image_sources, protocol, stream,
-                                               image_format, source_type, scenario):
+                                               scenario, source_type):
     client, engine, sessions, removed = image_endpoints
     history = _history(scenario)
-    payload = _payload(protocol, history, lambda color: image_sources(color, image_format, source_type))
+    payload = _payload(protocol, history, lambda color: image_sources(color, source_type))
     response = client.post(PATHS[protocol], json=dict(payload, stream=stream),
                            headers={'anthropic-version': '2023-06-01'})
     assert response.status_code == 200, response.text
@@ -223,7 +218,7 @@ def test_user_images_through_all_http_endpoints(image_endpoints, image_sources, 
                 image = actual_part['data']
                 assert image.size == (32, 32)
                 target = (255, 0, 0) if expected_part['color'] == 'red' else (0, 0, 255)
-                assert all(abs(a - b) < 10 for a, b in zip(image.getpixel((0, 0)), target))
+                assert image.getpixel((0, 0)) == target
     assert len(sessions) == 1
     assert removed == sessions
 
@@ -238,7 +233,7 @@ def test_corrupt_images_are_not_silently_dropped(protocol):
 
 @pytest.mark.parametrize('protocol', PATHS)
 def test_text_only_model_rejects_images_for_every_protocol(protocol):
-    payload = _payload(protocol, _history('single'), lambda _: 'https://example.com/image.png')
+    payload = _payload(protocol, _history('image_only'), lambda _: 'https://example.com/image.png')
     messages = _convert(protocol, payload)
     processor = MultimodalProcessor(None, BaseChatTemplate(), vl_encoder=None)
     with pytest.raises(ValueError, match='Multimodal input is not supported'):
