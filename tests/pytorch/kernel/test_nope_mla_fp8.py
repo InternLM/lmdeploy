@@ -149,9 +149,10 @@ def test_nope_sparse_decode_matches_dequantized_reference(heads, query_len, head
     torch.manual_seed(31)
     impl = _impl(heads, head_dim)
     # Exercise page mapping and all 2051 KPool indices, including live tail.
-    length, batch = 2051, 2
-    blocks = torch.randperm(66, device='cuda', dtype=torch.int32).reshape(2, 33)
-    cache = torch.empty(66, 64, 1, 656, device='cuda', dtype=torch.float8_e4m3fn)
+    length, batch = (2051 if head_dim == 512 else 2048), 2
+    pages = (length + 63) // 64
+    blocks = torch.randperm(batch * pages, device='cuda', dtype=torch.int32).reshape(batch, pages)
+    cache = torch.empty(batch * pages, 64, 1, 656, device='cuda', dtype=torch.float8_e4m3fn)
     key = torch.randn(batch * length, 1, head_dim, device='cuda', dtype=torch.bfloat16)
     prefill = _metadata([length] * batch, [length] * batch, blocks)
     impl._fill_kv_cache_impl(key, key[..., :512], cache, cache[..., :0], prefill, length)
@@ -172,8 +173,9 @@ def test_nope_sparse_decode_matches_dequantized_reference(heads, query_len, head
         refs.append(torch.softmax(scores, dim=-1) @ k[:, :512])
         torch.testing.assert_close(lse[row], torch.logsumexp(scores, dim=-1), atol=0.02, rtol=0.01)
     torch.testing.assert_close(result.float(), torch.stack(refs), atol=0.003, rtol=0.03)
-    assert meta.tile_scheduler_metadata.config.topk == 2112
-    assert impl.get_step_metadata_provider().index_topk == (2112 if head_dim == 512 else 2048)
+    expected_width = 2112 if head_dim == 512 else 2048
+    assert meta.tile_scheduler_metadata.config.topk == expected_width
+    assert impl.get_step_metadata_provider().index_topk == expected_width
     # Warmup followed by capture and replay uses the same padded geometry.
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
