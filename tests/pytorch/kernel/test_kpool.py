@@ -95,3 +95,40 @@ def test_aligned_store_resume_rebuilds_target_and_mtp_tails():
         for keys, scores in (target, draft[:2]):
             torch.testing.assert_close(keys, expected_keys, rtol=0, atol=0)
             torch.testing.assert_close(scores, expected_scores, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+@pytest.mark.parametrize('depth', [0, 3, 5])
+def test_aligned_prefix_resume_ignores_stale_raw_ring(depth):
+    from lmdeploy.pytorch.kernels.cuda.kpool import read_raw_tail, update_raw_kpool
+
+    torch.manual_seed(42)
+    steps, width = depth + 1, 16
+    # Strided layer views, mixed query lengths and a previously used state row.
+    keys = torch.randn(2 * steps, width, device='cuda', dtype=torch.bfloat16)
+    scores = torch.randn_like(keys)
+    ids = torch.tensor([2, 1], device='cuda')
+    history = torch.tensor([64, 128], device='cuda')
+    lengths = torch.tensor([steps, 1], device='cuda')
+    starts = torch.tensor([0, steps], device='cuda')
+    results = []
+    for fill in (0., float('nan')):
+        raw_k = torch.full((4, 2, depth + 5, width), fill, device='cuda', dtype=keys.dtype)[:, 1]
+        raw_s = torch.full_like(raw_k, fill)
+        for tail in read_raw_tail(raw_k, raw_s, ids, history):
+            assert torch.count_nonzero(tail) == 0
+        closed_k, closed_s, groups, valid = update_raw_kpool(
+            keys, scores, raw_k, raw_s, ids, lengths, history + lengths, starts, 4)
+        results.append((closed_k[valid], closed_s[valid], groups[valid]))
+        # Rejection may resume at any accepted prefix, not at the trial end.
+        for accepted in range(steps + 1):
+            accepted_history = history + torch.tensor([accepted, min(accepted, 1)], device='cuda')
+            tails = read_raw_tail(raw_k, raw_s, ids, accepted_history)
+            for tail, projected in zip(tails, (keys, scores)):
+                for row, (start, count) in enumerate(((0, accepted), (steps, min(accepted, 1)))):
+                    n = count % 4
+                    torch.testing.assert_close(tail[row, :n], projected[start + count - n:start + count],
+                                               rtol=0, atol=0)
+                    assert torch.count_nonzero(tail[row, n:]) == 0
+    for zero, poisoned in zip(*results):
+        torch.testing.assert_close(zero, poisoned, rtol=0, atol=0)

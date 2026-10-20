@@ -79,11 +79,13 @@ fi
 
 if [[ "${CUDA_VERSION_SHORT}" == cu13* ]]; then
     pip install nvidia-nvshmem-cu13==3.4.5
+    pip install mooncake-transfer-engine-cuda13==0.3.12.post1
 else
     pip install nvidia-nvshmem-cu12==3.4.5
+    pip install mooncake-transfer-engine==0.3.12.post1
 fi
 
-for package in deep_ep deep_gemm flash_attn_3; do
+for package in deep_ep deep_gemm flash_attn_3 lmdeploy_router; do
     if ! compgen -G "/wheels/${package}-*.whl" >/dev/null; then
         echo "${package} wheel is missing from /wheels" >&2
         exit 1

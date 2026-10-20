@@ -176,7 +176,7 @@ ChatCompletion(id='2', choices=[Choice(finish_reason='tool_calls', index=0, logp
 
 ### Llama 3.1
 
-Meta announces in [Llama3's official user guide](https://llama.meta.com/docs/model-cards-and-prompt-formats/llama3_1) that,
+Meta announces in [Llama3's official user guide](https://github.com/meta-llama/llama-models/blob/main/models/llama3_1/prompt_format.md) that,
 
 > There are three built-in tools (brave_search, wolfram_alpha, and code interpreter) can be turned on using the system prompt:
 >

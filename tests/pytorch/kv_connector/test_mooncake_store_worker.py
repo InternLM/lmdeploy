@@ -941,6 +941,7 @@ def test_hybrid_sender_reads_frozen_snapshot_across_all_pool_rows(put_result):
     engine.cache_config = SimpleNamespace(num_state_caches=4)
     engine._cache_tensors = [conv, recurrent]
     engine._slot_tensors = ((conv, 0), (recurrent, 1))
+    engine._checkpoint_slot_tensors = engine._slot_tensors
     _save_cache_checkpoint(SimpleNamespace(is_dummy=False),
                            CacheCheckpointInputs(state_save_plan=((1,), (3,))), None, engine)
     conv[1].fill_(99)

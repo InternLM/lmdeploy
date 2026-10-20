@@ -206,7 +206,7 @@ def _restore_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpoint
     if cache_inputs.kv_restore_plan is not None:
         cache_engine.copy_logical_blocks(cache_inputs.kv_restore_plan)
     if cache_inputs.state_restore_plan is not None:
-        state_cache_engine.copy_slots(*cache_inputs.state_restore_plan)
+        state_cache_engine.copy_slots(*cache_inputs.state_restore_plan, checkpoint_only=True)
 
 
 def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInputs | None,
@@ -218,7 +218,7 @@ def _save_cache_checkpoint(inputs: ModelInputs, cache_inputs: CacheCheckpointInp
     if cache_inputs.kv_save_plan is not None:
         cache_engine.copy_logical_blocks(cache_inputs.kv_save_plan)
     if cache_inputs.state_save_plan is not None:
-        state_cache_engine.copy_slots(*cache_inputs.state_save_plan)
+        state_cache_engine.copy_slots(*cache_inputs.state_save_plan, checkpoint_only=True)
 
 
 @torch.inference_mode()
