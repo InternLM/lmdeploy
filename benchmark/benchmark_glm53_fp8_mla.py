@@ -40,8 +40,10 @@ def main():
             with (args.output_dir / f'{name}.log').open('w') as log:
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
             result = json.loads((args.output_dir / f'{name}.json').read_text())
-            if result['completed'] != prompts or result['total_output_tokens'] != prompts * output_len:
-                raise RuntimeError(f'Incomplete requests/output lengths: {name}')
+            if (result['completed'] != prompts
+                    or result['total_input_tokens'] != prompts * input_len
+                    or result['total_output_tokens'] != prompts * output_len):
+                raise RuntimeError(f'Unexpected requests/input/output lengths: {name}')
             row = dict(case=name, **{key: result[key] for key in (
                 'completed', 'total_input_tokens', 'total_output_tokens',
                 'output_throughput', 'mean_tpot_ms', 'mean_ttft_ms')})
