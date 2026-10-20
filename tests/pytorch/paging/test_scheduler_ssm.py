@@ -110,6 +110,8 @@ def test_ssm_runtime_state_waits_when_only_checkpoint_slot_is_pinned():
 def test_ssm_same_batch_duplicate_checkpoint_save_has_unique_dst_offsets():
     scheduler = _make_ssm_scheduler(max_batch_size=2, prefix_cache_state_budget=2)
     block_size = scheduler.seq_meta.block_size
+    scheduler.cache_config.prefill_save_alignment = block_size * 2
+    scheduler.seq_meta.prefill_save_alignment = block_size * 2
     token_ids = [1] * block_size * 2
 
     seq_a = scheduler.add_session(100).add_sequence(token_ids)

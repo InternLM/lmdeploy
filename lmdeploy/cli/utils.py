@@ -646,7 +646,9 @@ class ArgumentHelper:
                                    default=8192,
                                    help='Token alignment for linear-attention prefill state checkpoints, shared by '
                                    'local prefix caching and Mooncake Store. Must be a positive multiple of cache '
-                                   'block size; intermediate aligned positions may be skipped. '
+                                   'block size. Both internal and prompt-end checkpoints require an aligned absolute '
+                                   'prefix length and must pass model safety checks. Also guides prefill chunking; '
+                                   'aligned positions may be skipped. Decode checkpoint intervals are unchanged. '
                                    'Ignored by full-attention-only models. '
                                    'Only used by the PyTorch engine.')
 

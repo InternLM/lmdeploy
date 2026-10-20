@@ -103,13 +103,19 @@ class StateCheckpointLifecycle:
         seqs: list[SchedulerSequence],
         steps: tuple[int, ...] | None = None,
     ) -> CheckpointCopyPlan:
-        """Reserve prefill checkpoints and expose their logical copy pairs."""
+        """Reserve aligned prefill checkpoints and expose their copy pairs."""
         if steps is not None and len(steps) != len(seqs):
             raise ValueError('steps must have one entry per prefill sequence.')
         if steps is None:
-            state_offsets = [self.reserve_save(seq) for seq in seqs]
-        else:
-            state_offsets = [self.reserve_save(seq, step=step) for seq, step in zip(seqs, steps)]
+            steps = tuple(seq.num_valid_ids for seq in seqs)
+        state_offsets = []
+        for seq, step in zip(seqs, steps):
+            alignment = seq._seq_meta.prefill_save_alignment
+            if alignment and step % alignment:
+                self.discard_save(seq)
+                state_offsets.append(-1)
+                continue
+            state_offsets.append(self.reserve_save(seq, step=step))
 
         state_pairs = []
         kv_block_pairs = []

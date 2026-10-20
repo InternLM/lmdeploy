@@ -519,7 +519,8 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert not seq.prefix_cache.restore.is_selected
         assert checkpoint.pin_count == 0
 
-    def test_reserve_prefill_save_batch_owns_partial_checkpoint_copy_pairs(self, ssm_scheduler):
+    def test_reserve_prefill_save_batch_owns_partial_copy_pairs_without_alignment(self, ssm_scheduler):
+        ssm_scheduler.seq_meta.prefill_save_alignment = 0
         block_mgr = ssm_scheduler.block_manager
         block_trie = ssm_scheduler.block_trie
         state_manager = ssm_scheduler.state_manager
