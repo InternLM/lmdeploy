@@ -44,31 +44,6 @@ KPool 尾部 token。FP8 存在量化误差，需要在实际任务上验证精�
 H200 测试使用 FlashMLA `1.0.0+ba89a34`，其支持 Hopper 和 656B cache 格式。
 请使用兼容版本，不要替换为采用不同 packed-cache 格式的构建。
 
-复现原 PR 的性能负载时，两组服务使用相同 TP8 配置，关闭 MTP，
-`--session-len` 至少 16640，`--max-batch-size` 至少 32，仅切换 cache policy：
-
-```shell
-python benchmark/benchmark_glm53_fp8_mla.py \
-    --vllm-python /path/to/vllm-env/bin/python \
-    --base-url http://127.0.0.1:23333 --model glm53 \
-    --tokenizer /path/to/GLM-5.3-Flash --output-dir results/fp8
-```
-
-脚本使用固定随机长度、`--ignore-eos`、1k/128 与 16k/256 输入输出长度，
-并发 1/8/32，对应 16/32/128 个测量请求，预热不计入结果。
-本地对比基线是 LMDeploy BF16；原 PR 对比的是两个 FP8 backend，不能直接套用其加速比。
-
-复现 GSM8K 精度设置时，两组均使用 TP8、MTP5，并在 vLLM 客户端环境运行：
-
-```shell
-python benchmark/eval_glm53_fp8_mla.py --vllm-checkout /path/to/vllm \
-    --base-url http://127.0.0.1:23333 --model glm53 --output-dir results/fp8-gsm8k
-```
-
-脚本复用 vLLM 的 prompt 构建和评分函数，测试全部 1319 题、5-shot、
-temperature 0、最多输出 256 tokens，保存原始响应及 prompt hash。
-实测报告记录使用的 vLLM 客户端版本。
-
 ## TurboQuant 量化
 
 LMDeploy 支持基于 [Google Research 的 TurboQuant 技术](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/)（将在 ICLR 2026 发表）实现的 KV 量化方案，通过 K=4bit QJL4 + V=2bit MSE 的组合，实现更高的压缩率和几乎无损的精度。

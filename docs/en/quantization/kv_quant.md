@@ -163,35 +163,6 @@ The H200 test environment uses FlashMLA `1.0.0+ba89a34`, with its
 FlashMLA build; a version with a different packed-cache format is not
 interchangeable.
 
-To reproduce the original PR's serving workloads, start each policy with
-the same TP8 configuration, MTP disabled, a session length of at least
-16640, and a maximum batch size of at least 32. Then run:
-
-```shell
-python benchmark/benchmark_glm53_fp8_mla.py \
-    --vllm-python /path/to/vllm-env/bin/python \
-    --base-url http://127.0.0.1:23333 --model glm53 \
-    --tokenizer /path/to/GLM-5.3-Flash --output-dir results/fp8
-```
-
-The client uses fixed random lengths (vLLM's `--random-range-ratio 0`),
-`--ignore-eos`, 1k/128 and 16k/256 input/output tokens, and concurrency
-1/8/32 with 16/32/128 measured requests. Warmup requests are excluded.
-Compare LMDeploy BF16 against FP8; the original PR compares two FP8
-backends, so its speedups are not directly comparable.
-
-For the PR's GSM8K accuracy setup, start each cache policy with TP8 and
-MTP5, then run this client in a vLLM environment:
-
-```shell
-python benchmark/eval_glm53_fp8_mla.py --vllm-checkout /path/to/vllm \
-    --base-url http://127.0.0.1:23333 --model glm53 --output-dir results/fp8-gsm8k
-```
-
-It uses vLLM's prompt builder and scorer for all 1319 questions, 5-shot,
-temperature 0, and 256 output tokens, saving every response and prompt hash.
-The measured report records the vLLM client revision.
-
 ## Evaluation
 
 We apply kv quantization of LMDeploy to several LLM models and utilize OpenCompass to evaluate the inference accuracy. The results are shown in the table below:
