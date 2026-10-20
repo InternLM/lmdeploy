@@ -30,7 +30,7 @@ lmdeploy serve api_server /path/to/GLM-5.3-Flash --backend pytorch \
     --tp 8 --quant-policy fp8 --model-name glm53
 ```
 
-默认的 `--quant-policy none` 使用 BF16。Python 接口对应
+默认的 `--quant-policy none` 使用 BF16。在 Python 中启用 FP8 时使用
 `PytorchEngineConfig(quant_policy=16)`。该选项只量化 MLA latent cache，
 KPool 和 KDA state 保持原有格式。每个 latent token 从 1024B 降为 656B：
 512B FP8 数据、16B FP32 scale 和 128B 全零 BF16 尾部，payload 减少约 35.9%，
@@ -57,6 +57,17 @@ python benchmark/benchmark_glm53_fp8_mla.py \
 脚本使用固定随机长度、`--ignore-eos`、1k/128 与 16k/256 输入输出长度，
 并发 1/8/32，对应 16/32/128 个测量请求，预热不计入结果。
 本地对比基线是 LMDeploy BF16；原 PR 对比的是两个 FP8 backend，不能直接套用其加速比。
+
+复现 GSM8K 精度设置时，两组均使用 TP8、MTP5，并在 vLLM 客户端环境运行：
+
+```shell
+python benchmark/eval_glm53_fp8_mla.py --vllm-checkout /path/to/vllm \
+    --base-url http://127.0.0.1:23333 --model glm53 --output-dir results/fp8-gsm8k
+```
+
+脚本复用 vLLM 的 prompt 构建和评分函数，测试全部 1319 题、5-shot、
+temperature 0、最多输出 256 tokens，保存原始响应及 prompt hash。
+实测报告记录使用的 vLLM 客户端版本。
 
 ## TurboQuant 量化
 
