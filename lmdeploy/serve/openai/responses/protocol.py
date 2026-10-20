@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias
 
 import shortuuid
 from openai.types.responses import (
@@ -49,7 +49,12 @@ class ResponsesRequest(BaseModel):
         ]
         | None
     ) = None
-    input: str | list[ResponseInputOutputItem | dict[str, Any]] | None = None
+    # Keep raw JSON dictionaries intact: SDK TypedDict validation can discard
+    # model-specific image parameters before the adapter sees them. SDK model
+    # objects remain supported by the second union branch.
+    input: str | list[
+        Annotated[dict[str, Any] | ResponseInputOutputItem, Field(union_mode='left_to_right')]
+    ] | None = None
     instructions: str | None = None
     max_output_tokens: int | None = Field(default=None, gt=0)
     max_tool_calls: int | None = None
