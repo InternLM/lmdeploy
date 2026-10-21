@@ -51,9 +51,8 @@ class LinearWeightsW8A8(LinearWeights):
     def convert_weight_to_nz(self):
         """Convert one loaded expert matrix to the NZ layout in-place.
 
-        The checkpoint loader writes expert shards into the ordinary ND
-        tensor. Moving that tensor to host memory before allocating the
-        final NZ tensor avoids a second full HBM copy during model loading.
+        The checkpoint loader writes expert shards into the ordinary ND tensor. Moving that tensor to host memory before
+        allocating the final NZ tensor avoids a second full HBM copy during model loading.
         """
         if self._weight_nz or self.weight.device.type != 'npu':
             return

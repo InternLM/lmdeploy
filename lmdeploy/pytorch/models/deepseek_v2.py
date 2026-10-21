@@ -375,6 +375,22 @@ class DeepseekV2BMM(nn.Module):
 
     def forward(self, x: torch.Tensor, output: torch.Tensor):
         """forward."""
+        ascend_ops = getattr(torch.ops, '_C_ascend', None)
+        fused_bmm = getattr(ascend_ops, 'batch_matmul_transpose', None)
+        if (
+            fused_bmm is not None
+            and x.device.type == 'npu'
+            and x.dtype in (torch.float16, torch.bfloat16)
+            and x.dim() == 3
+            and x.shape[1] == self.weight.shape[0]
+            and x.shape[0] <= 1024
+            and output.is_contiguous()
+        ):
+            try:
+                fused_bmm(x, self.weight, output)
+                return
+            except (AttributeError, NotImplementedError):
+                pass
         torch.bmm(x.transpose(0, 1), self.weight, out=output.transpose(0, 1))
 
 

@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from lmdeploy.pytorch.consts import DSA_INDEXER_K_CACHE_NAME
@@ -146,6 +147,38 @@ class DlinferNSAIndexBF16(NSAIndexFP8Impl):
             meta = self.get_step_metadata(attn_metadata)
         return self._forward_index(q, k, weights, indexer_k_cache, meta)
 
+    @staticmethod
+    def _rotate_partial(x: Tensor, cos: Tensor, sin: Tensor, rope_dim: int,
+                        interleaved: bool) -> Tensor:
+        """Rotate the leading RoPE slice with the Ascend custom op."""
+        x = x.contiguous()
+        op = getattr(getattr(torch.ops, "_C_ascend", None),
+                     "inplace_partial_rotary_mul", None)
+        if op is not None and x.dtype in (torch.bfloat16, torch.float16):
+            view = x.unsqueeze(1) if x.ndim == 3 else x.unsqueeze(1).unsqueeze(1)
+            rope_cos = cos.reshape(cos.shape[0], 1, 1, cos.shape[-1])
+            rope_sin = sin.reshape(sin.shape[0], 1, 1, sin.shape[-1])
+            op(view, rope_cos, rope_sin,
+               rotary_mode="interleave" if interleaved else "half",
+               partial_slice=[0, rope_dim])
+            return x
+
+        rope = x[..., :rope_dim]
+        tail = x[..., rope_dim:]
+        if interleaved:
+            even = rope[..., 0::2]
+            odd = rope[..., 1::2]
+            c = cos[..., :even.shape[-1]]
+            ss = sin[..., :even.shape[-1]]
+            rotated = torch.stack((even * c - odd * ss,
+                                   even * ss + odd * c), dim=-1).flatten(-2)
+        else:
+            half = rope.shape[-1] // 2
+            first, second = rope[..., :half], rope[..., half:]
+            rotated = torch.cat((-second, first), dim=-1) * sin
+            rotated = torch.cat((first, second), dim=-1) * cos + rotated
+        return torch.cat((rotated, tail), dim=-1)
+
     def forward_fused(
         self,
         q: Tensor,
@@ -162,8 +195,24 @@ class DlinferNSAIndexBF16(NSAIndexFP8Impl):
         attn_metadata=None,
         meta: DlinferNSAIndexMeta | None = None,
     ) -> Tensor:
-        raise NotImplementedError(
-            'DSA indexer fused preprocessing is not supported on Ascend.')
+        """Run fused projection outputs through Ascend indexer preparation."""
+        if q.ndim != 3 or k.ndim != 2 or weights.ndim != 2:
+            raise ValueError(
+                f"Unexpected fused indexer shapes q={tuple(q.shape)}, "
+                f"k={tuple(k.shape)}, weights={tuple(weights.shape)}")
+        if cos.ndim != 2 or sin.shape != cos.shape:
+            raise ValueError("Fused indexer RoPE metadata must be 2-D and matched")
+        if q.shape[0] != k.shape[0] or q.shape[0] != weights.shape[0]:
+            raise ValueError("Fused indexer token dimensions do not match")
+        k = F.layer_norm(k.float(), (k.shape[-1],), norm_weight, norm_bias,
+                          norm_eps).to(dtype=k.dtype)
+        rope_dim = cos.shape[-1]
+        q = self._rotate_partial(q, cos, sin, rope_dim, rope_interleaved)
+        k = self._rotate_partial(k, cos, sin, rope_dim, rope_interleaved)
+        if meta is None:
+            meta = self.get_step_metadata(attn_metadata)
+        return self._forward_index(q, k, weights * head_gate_scale,
+                                   indexer_k_cache, meta)
 
 
 def _build_nsa_index_fp8(spec: NSAIndexFP8BuildSpec) -> NSAIndexFP8Impl:
