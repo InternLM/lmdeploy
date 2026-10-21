@@ -822,6 +822,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         dense_mla_impl = self.attn_fwd.impl
         self.decode_attn_fwd = FlashMLASparseImpl(
             mla_index_topk=self.index_topk,
+            mla_index_tail=self.index_kpool - 1,
             num_heads=dense_mla_impl.num_heads,
             head_size=dense_mla_impl.head_size,
             scale=dense_mla_impl.scale,

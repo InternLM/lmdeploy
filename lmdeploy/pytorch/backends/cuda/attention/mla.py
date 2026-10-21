@@ -60,8 +60,8 @@ def _build_flash_mla_metadata(kv_seqlens,
             decoding_query_len = 1
         else:
             kv_seqlens = get_dcp_local_seq_lens(kv_seqlens, dcp_world_rank)
-    num_attention_heads *= decoding_query_len
     num_heads_q = None if index_topk is None else num_attention_heads
+    num_attention_heads *= decoding_query_len
     tile_scheduler_metadata, num_splits = flash_mla.get_mla_metadata(
         kv_seqlens.to(torch.int32),
         num_attention_heads,
@@ -484,6 +484,7 @@ class FlashMLAImpl(TritonAttentionImpl):
                 out_size=out_size,
                 out_dtype=out_dtype,
                 flatten_kv_layout=kv_layout,
+                head_dim=self.head_size,
             )
             flatten_v = flatten_k[..., :self._MLA_NOPE_SIZE]
         else:
@@ -687,7 +688,10 @@ class FlashMLAImpl(TritonAttentionImpl):
             scale_fmt='ue8m0',
             dcp_size=self.dcp_world_size,
             dcp_rank=self.dcp_rank,
+            zero_fill_cache=k_cache_pe if key.size(-1) == self._MLA_NOPE_SIZE else None,
         )
+        if key.size(-1) == self._MLA_NOPE_SIZE:
+            return
         self.fill_kv_cache(
             key[..., self._MLA_NOPE_SIZE:],
             None,
