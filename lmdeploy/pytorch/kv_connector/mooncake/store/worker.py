@@ -148,6 +148,19 @@ class MooncakeStoreWorker:
         factory = store_factory if store_factory is not None else _load_mooncake_store_factory()
         self.store: Any | None = self._create_store(factory)
         self._setup_store(self.store, local_hostname)
+        # Put placement is left to the master (or a caller-supplied policy).
+        # Cross-segment transfers are handled natively by fabric-mem mode
+        # (ASCEND_ENABLE_USE_FABRIC_MEM=1), the only supported Ascend path: the
+        # HIXL fabric segment is reachable from every process, so a put landing
+        # on another worker's segment no longer needs the CANN RTS IPC + HCCL
+        # device-memory export that fails on this stack.  The earlier
+        # per-worker preferred_segment pin is therefore removed; caller-supplied
+        # replicate policies are still respected untouched.
+        if getattr(self._transfer_backend, 'use_fabric_mem', False):
+            logger.info(
+                'Mooncake Store fabric-mem mode active (HIXL fabric segments); '
+                'master placement is unrestricted and cross-segment transfers '
+                'use the fabric path')
 
     def _rank_fields(self) -> tuple[int, int, int]:
         return self.global_rank, self.tp_rank, self.tp_size

@@ -297,6 +297,24 @@ class KVCacheStoreSendingThread(threading.Thread):
             total_bytes,
             (time.perf_counter() - start) * 1000,
         )
+        # INFO summary so net-new store saves are visible at the default log
+        # level. Saves whose owned blocks all already exist never reach this
+        # point (the caller skips the put), so every line here means this rank
+        # actually persisted blocks to the store.
+        logger.info(
+            'Mooncake Store SAVE: status=%s global_rank=%d tp_rank=%d tp_size=%d '
+            'save_id=%d request_id=%s stored=%d failed=%d bytes=%d elapsed_ms=%.3f',
+            'ok' if not failed else 'partial_failure',
+            self.global_rank,
+            self.tp_rank,
+            self.tp_size,
+            request.save_id,
+            request.request_id,
+            len(missing_keys) - len(failed),
+            len(failed),
+            total_bytes,
+            (time.perf_counter() - start) * 1000,
+        )
         return not failed
 
     def _save(self, task: _SaveTask) -> bool:
@@ -500,6 +518,23 @@ class KVCacheStoreRecvingThread(threading.Thread):
             self.tp_size,
             request.request_id,
             'ok' if not failed_blocks else 'partial_failure',
+            len(keys),
+            len(failed_blocks),
+            total_bytes,
+            (time.perf_counter() - start) * 1000,
+        )
+        # INFO summary so store loads are visible at the default log level.
+        # Loads are only enqueued when the scheduler found store blocks beyond
+        # what the local block trie already covers, so every line here is a
+        # real "load KV from Mooncake" event.
+        logger.info(
+            'Mooncake Store LOAD: status=%s global_rank=%d tp_rank=%d tp_size=%d '
+            'request_id=%s blocks=%d failed=%d bytes=%d elapsed_ms=%.3f',
+            'ok' if not failed_blocks else 'partial_failure',
+            self.global_rank,
+            self.tp_rank,
+            self.tp_size,
+            request.request_id,
             len(keys),
             len(failed_blocks),
             total_bytes,
