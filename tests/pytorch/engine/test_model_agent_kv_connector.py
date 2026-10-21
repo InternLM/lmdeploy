@@ -79,7 +79,6 @@ def test_factory_forwards_worker_rank_context(monkeypatch):
         'tp_rank': 3,
         'tp_size': 8,
         'kv_head_replica_num': 1,
-        'cache_generation': '',
     }
 
 
@@ -89,7 +88,6 @@ def _bare_model_agent():
     agent = BaseModelAgent.__new__(BaseModelAgent)
     agent.all_context = nullcontext
     agent.cache_config = _enabled_config()
-    agent._kv_cache_generation = 'post-sleep-generation'
     agent.model_config = SimpleNamespace(num_replicate_key_value_heads=4)
     agent.rank = 7
     agent.cache_stream = object()
@@ -174,7 +172,6 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
         'tp_rank': 3,
         'tp_size': 8,
         'kv_head_replica_num': 4,
-        'cache_generation': 'post-sleep-generation',
     }
     assert events[5] == (
         'register', {
@@ -328,8 +325,7 @@ def test_build_cache_engine_rejects_mismatched_mtp_parallel_config(monkeypatch):
     assert agent.kv_connector is None
 
 
-@pytest.mark.parametrize('level', [1, 2])
-def test_sleep_shuts_down_connector_before_dropping_cache(monkeypatch, level):
+def test_sleep_shuts_down_connector_before_dropping_cache(monkeypatch):
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
     events = []
@@ -345,8 +341,7 @@ def test_sleep_shuts_down_connector_before_dropping_cache(monkeypatch, level):
     agent.kv_connector = _Connector()
     agent.cache_engine = cache_engine
     agent.state_cache_engine = object()
-    agent.rank = 0
-    agent.dist_config = SimpleNamespace(dp=1, world_size=1)
+    agent.dist_config = SimpleNamespace(dp=1)
     agent.state = SimpleNamespace(is_sleeping=False,
                                   to_sleep=SimpleNamespace(clear=lambda: events.append('sleep-clear')))
     model = SimpleNamespace(to=lambda **kwargs: events.append('model-to'))
@@ -362,22 +357,13 @@ def test_sleep_shuts_down_connector_before_dropping_cache(monkeypatch, level):
     monkeypatch.setattr(agent_module.torch.cuda, 'synchronize', lambda: events.append('cuda-sync'))
     monkeypatch.setattr(agent_module.torch.cuda, 'empty_cache', lambda: events.append('empty-cache'))
 
-    def new_generation():
-        assert events[-1] == 'shutdown'
-        assert agent.cache_engine is cache_engine
-        events.append('new-generation')
-        return SimpleNamespace(hex='fresh-generation')
-
-    monkeypatch.setattr(agent_module, 'uuid4', new_generation)
-    asyncio.run(agent.sleep(level))
-    assert agent._kv_cache_generation == 'fresh-generation'
+    asyncio.run(agent.sleep())
 
     assert events == [
         'drain',
         'cuda-sync',
         'release-h2d',
         'shutdown',
-        'new-generation',
         'reset-graph',
         'model-to',
         'spec-model-to',
@@ -737,32 +723,3 @@ def test_wakeup_rebuilds_connector_with_kv_cache():
 
     assert events == ['build-cache', 'warmup']
     assert agent.state.is_sleeping is False
-
-
-def test_cache_generation_is_shared_across_workers_and_changes_each_cycle(monkeypatch):
-    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
-
-    group = object()
-    shared = []
-    agents = [_bare_model_agent() for _ in range(4)]
-    for rank, agent in enumerate(agents):
-        agent.rank = rank
-        agent.dist_config = SimpleNamespace(world_size=4)
-        agent.dist_ctx = SimpleNamespace(cpu_group=group)
-
-    def broadcast(values, src, group):
-        assert src == 0 and group is agents[0].dist_ctx.cpu_group
-        if values[0] is not None:
-            shared[:] = values
-        else:
-            values[:] = shared
-
-    monkeypatch.setattr(agent_module.dist, 'broadcast_object_list', broadcast)
-    generations = set()
-    for _ in range(3):
-        for agent in agents:
-            agent._advance_kv_cache_generation()
-        generation = agents[0]._kv_cache_generation
-        assert generation and generation not in generations
-        assert all(agent._kv_cache_generation == generation for agent in agents)
-        generations.add(generation)

@@ -38,7 +38,6 @@ class MooncakeStoreConnector(KVConnectorBase):
         tp_rank: int = 0,
         tp_size: int = 1,
         kv_head_replica_num: int = 1,
-        cache_generation: str = '',
     ) -> None:
         super().__init__(role)
 
@@ -63,7 +62,6 @@ class MooncakeStoreConnector(KVConnectorBase):
                 tp_rank=tp_rank,
                 tp_size=tp_size,
                 kv_head_replica_num=kv_head_replica_num,
-                cache_generation=cache_generation,
             )
 
     def _require_scheduler(self) -> MooncakeStoreScheduler:

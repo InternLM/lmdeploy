@@ -10,7 +10,6 @@ from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
 from typing import Any
-from uuid import uuid4
 
 import numpy as np
 import pybase64
@@ -385,7 +384,6 @@ class BaseModelAgent:
         self._cache_plan_block_nbytes: tuple[int, int]
         self.state_cache_engine = None
         self.kv_connector = None
-        self._kv_cache_generation = ''
         self.profiler: AgentProfiler = None
         try:
             self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
@@ -1470,19 +1468,6 @@ class BaseModelAgent:
         self._release_completed_h2d_transfers()
         self._shutdown_kv_connector()
 
-    def _advance_kv_cache_generation(self):
-        """Isolate post-sleep remote KV from any previous weights or writes.
-
-        All DP/TP workers use the same fresh namespace. Keep it on the agent so rebuilding models or connectors during
-        staged wakeup cannot lose it. Old Store objects are left for eviction, not deleted from shared storage.
-        """
-        generation = [uuid4().hex if self.rank == 0 else None]
-        if self.dist_config.world_size > 1:
-            dist.broadcast_object_list(generation, src=0, group=self.dist_ctx.cpu_group)
-        self._kv_cache_generation = generation[0]
-        logger.info('Reset external KV cache generation: rank=%d generation=%s',
-                    self.rank, self._kv_cache_generation)
-
     def _shutdown_kv_connector(self):
         """Shutdown the connector before releasing its registered caches."""
         if self.kv_connector is None:
@@ -1560,7 +1545,6 @@ class BaseModelAgent:
                 tp_rank=tp_rank,
                 tp_size=tp,
                 kv_head_replica_num=self.model_config.num_replicate_key_value_heads,
-                cache_generation=self._kv_cache_generation,
             )
             if self.kv_connector is not None:
                 self.kv_connector.register_kv_caches(
@@ -1923,10 +1907,7 @@ class BaseModelAgent:
         device = 'cpu' if level == 1 else 'meta'
         # Stop producers of GPU work and wait for queued work before closing the
         # connector threads that still reference registered cache addresses.
-        had_kv_connector = self.kv_connector is not None
         self.shutdown_kv_connector()
-        if had_kv_connector:
-            self._advance_kv_cache_generation()
         self.cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()

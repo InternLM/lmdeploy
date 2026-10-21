@@ -785,8 +785,7 @@ def test_registration_rejects_non_cuda_noncontiguous_and_empty_rows(tmp_path):
     worker.shutdown()
 
 
-@pytest.mark.parametrize('cache_generation', ['', 'after-sleep'])
-def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path, cache_generation):
+def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path):
     path = write_store_config(tmp_path)
     store = FakeStore(get_results=[0, -1])
     worker = MooncakeStoreWorker(
@@ -795,7 +794,6 @@ def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path
         tp_rank=5,
         tp_size=8,
         kv_head_replica_num=4,
-        cache_generation=cache_generation,
         store_factory=lambda: store,
     )
     worker.register_kv_caches({
@@ -878,12 +876,8 @@ def test_async_load_writes_target_and_mtp_cache_rows(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('fa_exists', [False, True])
-@pytest.mark.parametrize('cache_generation', ['', 'after-sleep'])
-def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(
-        tmp_path, monkeypatch, fa_exists, cache_generation):
-    metadata = MooncakeStoreKeyMetadata('model', 'prefix', 8, 64, kv_head_replica_num=4,
-                                        cache_generation=cache_generation)
-    namespace = 'prefix@model' + (f'@generation:{cache_generation}' if cache_generation else '')
+def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(tmp_path, monkeypatch, fa_exists):
+    metadata = MooncakeStoreKeyMetadata('model', 'prefix', 8, 64, kv_head_replica_num=4)
     hashes = build_prefix_block_hashes(range(512), 64)
     request = MooncakeStoreSaveRequest(1, 2, 0, tuple(range(8)), tuple(range(8)), hashes,
                                       state=MooncakeStoreStateSave(1, 3, 512))
@@ -896,7 +890,7 @@ def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(
             row_block_sizes=(64,), num_gpu_blocks=8, key_metadata=metadata, global_rank=rank, tp_rank=rank,
             tp_size=8, completion_callback=completed.append, replicate_config=object(),
             state_registrations=(MooncakeStoreStateRegistration('state', 0x2000, 64, 4, 16),))
-        state_key = f'{namespace}@tp_rank:{rank}@group:1@{hashes[-1].hex()}'
+        state_key = f'prefix@model@tp_rank:{rank}@group:1@{hashes[-1].hex()}'
         entries = sender._owned_entries(request)
         # Exercise both orders: a state entry need not follow the FA entries.
         if rank % 2:
@@ -914,7 +908,7 @@ def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(
         written.extend(keys)
     expected_states = {build_store_key(metadata, rank, hashes[-1], group_id=1) for rank in range(8)}
     expected_fa = set() if fa_exists else {
-        f'{namespace}@tp_rank:{rank}@group:0@{block_hash.hex()}' for rank in range(2) for block_hash in hashes}
+        f'prefix@model@tp_rank:{rank}@group:0@{block_hash.hex()}' for rank in range(2) for block_hash in hashes}
     assert len(written) == len(expected_states | expected_fa)
     assert set(written) == expected_states | expected_fa
 
@@ -924,7 +918,7 @@ def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(
     config = replace(make_cache_config(write_store_config(tmp_path)),
                      states_shapes=[((2,), torch.float32)], prefill_save_alignment=512)
     config.kv_transfer_config.kv_connector_extra_config.update(model_name='model', cache_prefix='prefix')
-    worker = MooncakeStoreWorker(config, tp_size=8, kv_head_replica_num=4, cache_generation=cache_generation,
+    worker = MooncakeStoreWorker(config, tp_size=8, kv_head_replica_num=4,
                                 store_factory=lambda: FakeStore(existing_keys=existing_keys))
     assert worker.lookup(512, hashes) == 512
     worker.shutdown()
@@ -974,11 +968,9 @@ def test_hybrid_sender_reads_frozen_snapshot_across_all_pool_rows(put_result):
     assert store.put_calls[0][2] == [[6, 5, 5]]
 
 
-@pytest.mark.parametrize('cache_generation', ['', 'after-sleep'])
 def test_async_save_waits_for_forward_and_writes_only_owned_missing_blocks(
     tmp_path,
     monkeypatch,
-    cache_generation,
 ):
     path = write_store_config(tmp_path)
     event = FakeCudaEvent()
@@ -998,7 +990,6 @@ def test_async_save_waits_for_forward_and_writes_only_owned_missing_blocks(
         tp_rank=3,
         tp_size=4,
         kv_head_replica_num=2,
-        cache_generation=cache_generation,
         store_factory=lambda: store,
         replicate_config=replicate_config,
     )
@@ -1093,28 +1084,6 @@ def test_shutdown_is_idempotent_and_propagates_close_error(tmp_path):
 
     assert store.close_calls == 1
     assert worker.store is None
-
-
-def test_cache_generation_invalidates_remote_hits_without_deleting_shared_objects(tmp_path):
-    # Store storage outlives workers. Even delayed writes to an old generation
-    # cannot be mistaken for KV produced after a sleep/weight update.
-    keys = {'another-tenant-key'}
-    store = FakeStore()
-    store.batch_is_exist = lambda batch: [int(key in keys) for key in batch]
-    hashes = build_prefix_block_hashes(range(128), 64)
-    old_keys = set()
-    for generation in ['', 'first-wakeup', 'second-wakeup']:
-        worker, _ = make_worker(tmp_path, store=store, cache_generation=generation)
-        keys.update(old_keys)
-        assert worker.lookup(128, hashes) == 0
-        current = {build_store_key(worker.key_metadata, 0, h) for h in hashes}
-        assert not current.intersection(old_keys)
-        keys.update(current)
-        assert worker.lookup(128, hashes) == 128
-        worker.shutdown()
-        old_keys.update(current)
-    assert old_keys <= keys
-    assert 'another-tenant-key' in keys
 
 
 class BytesStore(FakeStore):

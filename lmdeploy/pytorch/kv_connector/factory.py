@@ -74,7 +74,6 @@ def build_kv_connector(
     tp_rank: int = 0,
     tp_size: int = 1,
     kv_head_replica_num: int = 1,
-    cache_generation: str = '',
 ) -> KVConnectorBase | None:
     """Build the configured connector without importing optional backends
     eagerly."""
@@ -94,7 +93,6 @@ def build_kv_connector(
             tp_rank=tp_rank,
             tp_size=tp_size,
             kv_head_replica_num=kv_head_replica_num,
-            cache_generation=cache_generation,
         )
 
     raise ValueError(f'Unsupported KV connector: {connector_name!r}')
