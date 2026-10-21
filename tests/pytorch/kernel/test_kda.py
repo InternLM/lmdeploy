@@ -124,14 +124,20 @@ def test_restored_kda_checkpoint_survives_partial_mtp_acceptance(model_type):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
 @pytest.mark.parametrize('seqlen_dtype', [torch.int32, torch.int64])
-def test_flash_kda_internal_checkpoint_matches_prefix_and_resume(seqlen_dtype):
+@pytest.mark.parametrize('offsets', [(16, 64), (0, 64)])
+def test_flash_kda_internal_checkpoint_matches_prefix_and_resume(seqlen_dtype, offsets, monkeypatch):
     from lmdeploy.pytorch.backends.cuda.kda import CudaKdaImpl
 
     if torch.cuda.get_device_capability() != (9, 0) or torch.version.hip is not None:
         pytest.skip('direct GLM-5.3 FlashKDA deployment requires SM90')
     impl = CudaKdaImpl(model_type='glm5_next')
+
+    def reject_wrapper(*args, **kwargs):
+        pytest.fail('GLM-5.3 prefill must not call the public FlashKDA wrapper')
+
+    monkeypatch.setattr('flash_kda.fwd', reject_wrapper)
     torch.manual_seed(42)
-    lengths, offsets, heads, dim = (65, 129), (16, 64), 2, 128
+    lengths, heads, dim = (65, 129), 2, 128
     values = {name: torch.randn(1, sum(lengths), heads, dim, device='cuda', dtype=torch.bfloat16) / 4
               for name in ('q', 'k', 'v', 'g')}
     values['beta'] = torch.randn(1, sum(lengths), heads, device='cuda', dtype=torch.bfloat16)
@@ -149,6 +155,10 @@ def test_flash_kda_internal_checkpoint_matches_prefix_and_resume(seqlen_dtype):
         torch.testing.assert_close(merged_final, plain_final, rtol=0, atol=0)
         start = 0
         for index, (length, offset) in enumerate(zip(lengths, offsets)):
+            if offset == 0:
+                assert torch.isnan(checkpoint[index]).all()
+                start += length
+                continue
             prefix = {name: value[:, start:start + offset].contiguous() for name, value in values.items()}
             _, prefix_state = impl._prefill_recurrent(
                 **prefix, **params, initial_state=initial[index:index + 1],

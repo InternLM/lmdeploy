@@ -3,13 +3,12 @@
 
 KDA is distinct from LMDeploy's gated-delta rule, but its CUDA implementation does not need copied GLM kernels. This
 adapter owns only LMDeploy cache/state semantics, reuses FLA convolution and FlashKDA prefill on supported GLM-5.3
-deployments (FLA prefill elsewhere), and shares the TileLang recurrent state-ring kernel with gated-delta rule for
-both AR and MTP decode.
+deployments (FLA prefill elsewhere), and shares the TileLang recurrent state-ring kernel with gated-delta rule for both
+AR and MTP decode.
 """
 
 from copy import copy
 from functools import cached_property, partial
-from inspect import signature
 from typing import Any
 
 import torch
@@ -74,19 +73,25 @@ class CudaKdaImpl(KdaImpl):
 
     @cached_property
     def _flash_kda_fwd(self):
-        """Require the public checkpoint API for both ordinary and IC prefill."""
+        """Load the native checkpoint operator for both ordinary and IC
+        prefill."""
         try:
-            from flash_kda import fwd
+            from flash_kda import _C  # noqa: F401
         except ImportError as exc:
-            raise ImportError('GLM-5.3 SM90 prefill requires FlashKDA with the public checkpoint API. '
+            raise ImportError('GLM-5.3 SM90 prefill requires FlashKDA with native checkpoint support. '
                               'See docs/en/advance/flash_kda.md.') from exc
-        if not {'checkpoint_state', 'checkpoint_offsets'} <= signature(fwd).parameters.keys():
-            raise RuntimeError('flash_kda.fwd must expose checkpoint_state and checkpoint_offsets. '
+        try:
+            fwd = torch.ops.flash_kda.fwd.default
+        except AttributeError as exc:
+            raise RuntimeError('FlashKDA did not register torch.ops.flash_kda.fwd. '
+                               'See docs/en/advance/flash_kda.md.') from exc
+        if not {'checkpoint_state', 'checkpoint_offsets'} <= {arg.name for arg in fwd._schema.arguments}:
+            raise RuntimeError('torch.ops.flash_kda.fwd must support checkpoint_state and checkpoint_offsets. '
                                'Install the FlashKDA version described in docs/en/advance/flash_kda.md.')
         return fwd
 
     def _get_prefill_fwd(self, q, initial_state, lower_bound, checkpoint_state, checkpoint_offsets):
-        """Resolve the public API before mutating any live cache state."""
+        """Resolve the native operator before mutating any live cache state."""
         if (checkpoint_state is None) != (checkpoint_offsets is None):
             raise ValueError('checkpoint_state and checkpoint_offsets must be provided together.')
         if self._use_flash_kda(q, initial_state, lower_bound):
@@ -98,18 +103,23 @@ class CudaKdaImpl(KdaImpl):
 
     def _prefill_recurrent(self, q, k, v, g, beta, A_log, dt_bias, initial_state,
                           cu_seqlens, lower_bound, *, checkpoint_state=None, checkpoint_offsets=None):
-        """Run one full prefill, optionally exporting a sequence-relative state.
+        """Run one full prefill, optionally exporting a sequence-relative
+        state.
 
-        Checkpoint buffers use [N, H, V, K] layout. Offsets are token counts within each sequence, aligned to 16,
-        with the same integer dtype as cu_seqlens. The caller owns checkpoint allocation and publication, including
-        the corresponding convolution snapshot; this method only computes recurrent states.
+        Checkpoint buffers use [N, H, V, K] layout. Offsets are token counts within each sequence, aligned to 16, with
+        the same integer dtype as cu_seqlens. The caller owns checkpoint allocation and publication, including the
+        corresponding convolution snapshot; this method only computes recurrent states.
         """
         fwd = self._get_prefill_fwd(q, initial_state, lower_bound, checkpoint_state, checkpoint_offsets)
         if fwd is not None:
             output = torch.empty_like(v, memory_format=torch.contiguous_format)
             final_state = torch.empty_like(initial_state, memory_format=torch.contiguous_format)
+            batch, tokens, heads = q.shape[:3]
+            num_sequences = cu_seqlens.numel() - 1 if cu_seqlens is not None else batch
+            workspace = torch.empty(torch.ops.flash_kda.get_workspace_size(batch * tokens, heads, num_sequences),
+                                    dtype=torch.uint8, device=q.device)
             fwd(q=q.contiguous(), k=k.contiguous(), v=v.contiguous(), g=g.contiguous(), beta=beta,
-                scale=q.size(-1) ** -0.5, out=output, A_log=A_log.contiguous(),
+                scale=q.size(-1) ** -0.5, out=output, workspace=workspace, A_log=A_log.contiguous(),
                 dt_bias=dt_bias.reshape(q.size(2), q.size(3)).contiguous(), lower_bound=lower_bound,
                 initial_state=initial_state.contiguous(), final_state=final_state, cu_seqlens=cu_seqlens,
                 checkpoint_state=checkpoint_state, checkpoint_offsets=checkpoint_offsets)

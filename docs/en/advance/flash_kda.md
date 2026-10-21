@@ -1,44 +1,51 @@
 # GLM-5.3 FlashKDA prefill
 
-GLM-5.3 uses the public `flash_kda.fwd()` API for KDA prefill recurrent computation on the deployment configuration below. Ordinary prefill passes `None` for both checkpoint arguments; a caller requesting an internal recurrent checkpoint supplies both buffers to the same API. Each call processes the complete prefill interval.
+GLM-5.3 uses the native `torch.ops.flash_kda.fwd()` operator for KDA prefill recurrent computation on the deployment configuration below. Ordinary prefill passes `None` for both checkpoint arguments; a caller requesting an internal recurrent checkpoint supplies both buffers to the same operator. Each call processes the complete prefill interval.
 
 ```text
-Kda → CudaKdaImpl → flash_kda.fwd → torch.ops.flash_kda.fwd
+Kda → CudaKdaImpl._prefill_recurrent → torch.ops.flash_kda.fwd
 ```
 
 ## Deployment scope
 
-| Property | Direct FlashKDA path |
-|---|---|
-| Model | GLM-5.3 (`glm5_next` KDA layers) |
-| GPU | NVIDIA Hopper, compute capability 9.0 |
-| Inputs | BF16 Q, K, V, raw gate and raw beta |
-| Head dimensions | K = V = 128 |
-| Recurrent cache | FP32, value-first `[N, H, V, K]` |
-| Gate | FP32 `A_log` / `dt_bias`, lower bound in `[-5, 0]` |
+| Property        | Direct FlashKDA path                               |
+| --------------- | -------------------------------------------------- |
+| Model           | GLM-5.3 (`glm5_next` KDA layers)                   |
+| GPU             | NVIDIA Hopper, compute capability 9.0              |
+| Inputs          | BF16 Q, K, V, raw gate and raw beta                |
+| Head dimensions | K = V = 128                                        |
+| Recurrent cache | FP32, value-first `[N, H, V, K]`                   |
+| Gate            | FP32 `A_log` / `dt_bias`, lower bound in `[-5, 0]` |
 
 Model and device properties select this path automatically. There is no FLA/native prefill switch. `FLA_FLASH_KDA` does not control the direct path. Other models and configurations retain their existing FLA prefill dispatch. FLA 0.5.2 remains required for convolution and gate operations. AR decode and MTP verification retain the shared TileLang recurrence and their existing state-ring behavior.
 
 ## FlashKDA dependency
 
-Install a FlashKDA build whose public `flash_kda.fwd()` exposes `checkpoint_state` and `checkpoint_offsets` and forwards them to a native operator supporting both arguments. LMDeploy relies on this dependency contract and does not carry a FlashKDA patch.
+Install a FlashKDA build whose native `torch.ops.flash_kda.fwd` schema includes `checkpoint_state` and `checkpoint_offsets`. LMDeploy loads the installed `flash_kda._C` extension to register the operator, then calls it directly for both ordinary and checkpoint-enabled prefill. The public Python wrapper does not need to expose these arguments. No FlashKDA source changes or patches are required.
 
-The native checkpoint ABI was validated at FlashKDA commit `ee0be888cd0e972f9409bf53756f8c38c6652173`, but that commit's Python wrapper omits these arguments. Installing that unmodified commit alone does not satisfy the public API requirement. A compatible FlashKDA build must provide the Python API extension separately.
+The native checkpoint ABI was validated at the unmodified upstream [FlashKDA commit `ee0be888cd0e972f9409bf53756f8c38c6652173`](https://github.com/MoonshotAI/FlashKDA/commit/ee0be888cd0e972f9409bf53756f8c38c6652173). Its Python wrapper omits these arguments, which does not affect this path. Pin that revision when installing for the deployment configuration above:
 
-That native revision uses the PyTorch stable extension API and requires PyTorch 2.10 or newer, CUDA Toolkit 12.9 or newer, and a compatible C++ compiler. Check the public API in the environment used by the LMDeploy workers:
+```bash
+FLASH_KDA_CUDA_ARCHS=90a python -m pip install --no-build-isolation --no-deps \
+    'git+https://github.com/MoonshotAI/FlashKDA.git@ee0be888cd0e972f9409bf53756f8c38c6652173'
+```
+
+That native revision uses the PyTorch stable extension API and requires PyTorch 2.10 or newer, CUDA Toolkit 12.9 or newer, and a compatible C++ compiler. Set `CUDA_HOME` to the toolkit location when needed. Check the native schema in the environment used by every LMDeploy worker:
 
 ```bash
 python - <<'PY'
-import inspect
-import flash_kda
+import torch
+from flash_kda import _C  # Load the extension and register its operators.
 
 required = {'checkpoint_state', 'checkpoint_offsets'}
-assert required <= inspect.signature(flash_kda.fwd).parameters.keys(), \
-    'FlashKDA must expose the public checkpoint API'
+schema = torch.ops.flash_kda.fwd.default._schema
+assert required <= {argument.name for argument in schema.arguments}, \
+    'FlashKDA must provide native checkpoint support'
+print(schema)
 PY
 ```
 
-LMDeploy checks the public function signature before modifying a prefill cache. A missing package or an older wrapper produces an actionable error. It does not bypass the wrapper with a private operator call or silently switch implementations on an in-scope deployment.
+LMDeploy checks the native schema before modifying a prefill cache. A missing extension or an operator without checkpoint support produces an actionable error; there is no silent implementation fallback on an in-scope deployment. `CudaKdaImpl` allocates a contiguous uint8 workspace using `torch.ops.flash_kda.get_workspace_size()`, taking over the allocation normally performed by the Python wrapper. Output and final-state buffers are allocated in the same method; the caller owns checkpoint buffers.
 
 ## Recurrent checkpoint contract
 
@@ -61,4 +68,4 @@ python -m pytest tests/pytorch/test_kda_prefill.py -q
 python -m pytest tests/pytorch/kernel/test_kda.py -q
 ```
 
-The CPU tests cover dispatch scope, public API compatibility, optional buffer forwarding, unchanged FLA flags and MTP ring addressing. CUDA tests cover ordinary versus checkpoint-enabled full prefill, exported state versus a prefix forward, resumed suffixes, restored short prefills and partial MTP acceptance. Numerical tests require a compatible GPU and FlashKDA build; API contract tests alone do not establish model-level accuracy or performance.
+The CPU tests cover dispatch scope, native schema compatibility, workspace allocation, optional buffer forwarding, unchanged FLA flags and MTP ring addressing. CUDA tests cover ordinary versus checkpoint-enabled full prefill, exported state versus a prefix forward, disabled capture at offset zero, resumed suffixes, restored short prefills and partial MTP acceptance. The checkpoint tests reject calls to the public Python wrapper. Numerical tests require a compatible GPU and FlashKDA build; API contract tests alone do not establish model-level accuracy or performance.

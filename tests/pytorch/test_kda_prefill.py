@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Public FlashKDA dispatch and recurrent checkpoint buffer contracts."""
+"""Native FlashKDA dispatch and recurrent checkpoint buffer contracts."""
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -61,7 +61,7 @@ def test_dispatch_scope(impl, monkeypatch, model_type, capability, dtype, dim, s
 
 
 @pytest.fixture
-def public_api(impl, monkeypatch):
+def native_api(impl, monkeypatch):
     calls = []
 
     def fwd(*, checkpoint_state=None, checkpoint_offsets=None, **kwargs):
@@ -71,24 +71,31 @@ def public_api(impl, monkeypatch):
         if checkpoint_state is not None:
             checkpoint_state.fill_(7)
 
-    monkeypatch.setitem(sys.modules, 'flash_kda', SimpleNamespace(fwd=fwd))
+    fwd._schema = torch._C.parse_schema('fwd(Tensor? checkpoint_state=None, Tensor? checkpoint_offsets=None) -> ()')
+    wrapper = Mock(side_effect=AssertionError('unexpected Python wrapper call'))
+    monkeypatch.setitem(sys.modules, 'flash_kda', SimpleNamespace(_C=object(), fwd=wrapper))
+    monkeypatch.setattr(torch.ops, 'flash_kda', SimpleNamespace(fwd=SimpleNamespace(default=fwd),
+                                                             get_workspace_size=Mock(return_value=257)))
     monkeypatch.setattr(impl, '_use_flash_kda', lambda *args: True)
-    monkeypatch.setattr(torch.ops.flash_kda, 'fwd', Mock(side_effect=AssertionError('private operator bypass')),
-                        raising=False)
     return calls
 
 
 @pytest.mark.parametrize('capture', [False, True])
 @pytest.mark.parametrize('seqlen_dtype', [torch.int32, torch.int64])
-def test_one_public_call_for_ordinary_and_checkpoint_prefill(impl, inputs, public_api, capture, seqlen_dtype,
-                                                            monkeypatch):
+@pytest.mark.parametrize('varlen', [False, True])
+def test_one_native_call_for_ordinary_and_checkpoint_prefill(impl, inputs, native_api, capture, seqlen_dtype,
+                                                            varlen, monkeypatch):
     monkeypatch.setenv('FLA_FLASH_KDA', '0')
-    inputs['cu_seqlens'] = inputs['cu_seqlens'].to(seqlen_dtype)
+    inputs['cu_seqlens'] = inputs['cu_seqlens'].to(seqlen_dtype) if varlen else None
+    if not varlen:
+        for name in ('q', 'k', 'v', 'g', 'beta'):
+            value = inputs[name]
+            inputs[name] = value.reshape(2, 24, *value.shape[2:])
     state = torch.empty_like(inputs['initial_state']) if capture else None
     offsets = torch.tensor([16, 16], dtype=seqlen_dtype) if capture else None
     output, final = impl._prefill_recurrent(**inputs, checkpoint_state=state, checkpoint_offsets=offsets)
-    assert len(public_api) == 1
-    call = public_api[0]
+    assert len(native_api) == 1
+    call = native_api[0]
     assert call['checkpoint_state'] is state
     assert call['checkpoint_offsets'] is offsets
     assert call['cu_seqlens'] is inputs['cu_seqlens']
@@ -96,6 +103,12 @@ def test_one_public_call_for_ordinary_and_checkpoint_prefill(impl, inputs, publi
     assert call['dt_bias'].shape == (2, 128)
     assert call['scale'] == 128 ** -0.5
     assert call['lower_bound'] == -5.0
+    torch.ops.flash_kda.get_workspace_size.assert_called_once_with(48, 2, 2)
+    assert call['workspace'].dtype == torch.uint8
+    assert call['workspace'].shape == (257,)
+    assert call['workspace'].device == inputs['q'].device
+    assert call['workspace'].is_contiguous()
+    sys.modules['flash_kda'].fwd.assert_not_called()
     for name in ('q', 'k', 'v', 'g', 'beta'):
         torch.testing.assert_close(call[name], inputs[name], rtol=0, atol=0)
     for name in ('q', 'k', 'v', 'g', 'out', 'initial_state', 'final_state'):
@@ -126,22 +139,30 @@ def test_outside_scope_preserves_fla_contract(impl, inputs, monkeypatch):
 
 
 @pytest.mark.parametrize('only_state', [False, True])
-def test_checkpoint_arguments_must_be_paired(impl, inputs, public_api, only_state):
+def test_checkpoint_arguments_must_be_paired(impl, inputs, native_api, only_state):
     kwargs = dict(checkpoint_state=torch.empty_like(inputs['initial_state'])) if only_state else dict(
         checkpoint_offsets=torch.tensor([16, 16], dtype=torch.int32))
     with pytest.raises(ValueError, match='provided together'):
         impl._prefill_recurrent(**inputs, **kwargs)
-    assert not public_api
+    assert not native_api
 
 
-@pytest.mark.parametrize('missing', [False, True])
-def test_incompatible_dependency_fails_before_cache_update(impl, monkeypatch, missing):
-    module = None if missing else SimpleNamespace(fwd=lambda **kwargs: None)
+@pytest.mark.parametrize('failure', ['package', 'extension', 'operator', 'checkpoint'])
+@pytest.mark.parametrize('spec', [0, 3])
+def test_incompatible_dependency_fails_before_cache_update(impl, monkeypatch, failure, spec):
+    module = None if failure == 'package' else SimpleNamespace(fwd=lambda **kwargs: None)
+    if failure in ('operator', 'checkpoint'):
+        module._C = object()
+    namespace = SimpleNamespace()
+    if failure == 'checkpoint':
+        namespace.fwd = SimpleNamespace(default=SimpleNamespace(_schema=torch._C.parse_schema('fwd(Tensor q) -> ()')))
+    monkeypatch.setattr(torch.ops, 'flash_kda', namespace)
     monkeypatch.setitem(sys.modules, 'flash_kda', module)
     monkeypatch.setattr(impl, '_use_flash_kda', lambda *args: True)
     impl._conv = Mock(side_effect=AssertionError('cache modified before dependency check'))
-    with pytest.raises(ImportError if missing else RuntimeError, match='FlashKDA|flash_kda.fwd'):
-        impl.forward(**forward_inputs())
+    error = ImportError if failure in ('package', 'extension') else RuntimeError
+    with pytest.raises(error, match='FlashKDA|flash_kda.fwd'):
+        impl.forward(**forward_inputs(spec))
     impl._conv.assert_not_called()
     impl.chunk_kda.assert_not_called()
 
@@ -163,7 +184,7 @@ def forward_inputs(spec=0, decode=False):
 
 @pytest.mark.parametrize('spec', [0, 1, 3, 5])
 @pytest.mark.parametrize('capture', [False, True])
-def test_forward_and_mtp_prefill_use_public_api(impl, public_api, monkeypatch, spec, capture):
+def test_forward_and_mtp_prefill_use_native_api(impl, native_api, monkeypatch, spec, capture):
     args = forward_inputs(spec)
     before = args['recurrent_state'].clone()
     monkeypatch.setattr(kda_module, '_state_select', lambda state, ids, slots: state[ids, slots].clone())
@@ -185,8 +206,8 @@ def test_forward_and_mtp_prefill_use_public_api(impl, public_api, monkeypatch, s
     offsets = torch.tensor([16]) if capture else None
     out = impl.forward(**args, checkpoint_state=checkpoint, checkpoint_offsets=offsets)
     assert out.shape == (1, 48, 1, 128)
-    assert len(public_api) == 1
-    assert public_api[0]['checkpoint_state'] is checkpoint
+    assert len(native_api) == 1
+    assert native_api[0]['checkpoint_state'] is checkpoint
     if capture:
         assert torch.all(checkpoint == 7)
         for slot in range(spec + 1):
