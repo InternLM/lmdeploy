@@ -19,21 +19,23 @@ Kda → CudaKdaImpl → flash_kda.fwd → torch.ops.flash_kda.fwd
 
 Model and device properties select this path automatically. There is no FLA/native prefill switch. `FLA_FLASH_KDA` does not control the direct path. Other models and configurations retain their existing FLA prefill dispatch. FLA 0.5.2 remains required for convolution and gate operations. AR decode and MTP verification retain the shared TileLang recurrence and their existing state-ring behavior.
 
-## Install the public checkpoint API
+## FlashKDA dependency
 
-The native checkpoint ABI is available in FlashKDA commit `ee0be888cd0e972f9409bf53756f8c38c6652173`, but that commit's Python wrapper omits the checkpoint arguments. Apply the accompanying [public API patch](../../../requirements/patches/flash_kda_checkpoint_api.patch) before building it. The patch only extends the Python wrapper, its documentation and CPU contract tests; CUDA/C++ sources remain unchanged.
+Install a FlashKDA build whose public `flash_kda.fwd()` exposes `checkpoint_state` and `checkpoint_offsets` and forwards them to a native operator supporting both arguments. LMDeploy relies on this dependency contract and does not carry a FlashKDA patch.
 
-This revision uses the PyTorch stable extension API and requires PyTorch 2.10 or newer, CUDA Toolkit 12.9 or newer, and a compatible C++ compiler. Run the installation in the environment used by the LMDeploy workers:
+The native checkpoint ABI was validated at FlashKDA commit `ee0be888cd0e972f9409bf53756f8c38c6652173`, but that commit's Python wrapper omits these arguments. Installing that unmodified commit alone does not satisfy the public API requirement. A compatible FlashKDA build must provide the Python API extension separately.
+
+That native revision uses the PyTorch stable extension API and requires PyTorch 2.10 or newer, CUDA Toolkit 12.9 or newer, and a compatible C++ compiler. Check the public API in the environment used by the LMDeploy workers:
 
 ```bash
-# Set this to the absolute path of the LMDeploy checkout containing this patch.
-LMDEPLOY_SRC=/path/to/lmdeploy
-git clone https://github.com/MoonshotAI/FlashKDA.git
-cd FlashKDA
-git checkout ee0be888cd0e972f9409bf53756f8c38c6652173
-git apply "$LMDEPLOY_SRC/requirements/patches/flash_kda_checkpoint_api.patch"
-git submodule update --init --recursive
-FLASH_KDA_CUDA_ARCHS=90a pip install --no-build-isolation --no-deps .
+python - <<'PY'
+import inspect
+import flash_kda
+
+required = {'checkpoint_state', 'checkpoint_offsets'}
+assert required <= inspect.signature(flash_kda.fwd).parameters.keys(), \
+    'FlashKDA must expose the public checkpoint API'
+PY
 ```
 
 LMDeploy checks the public function signature before modifying a prefill cache. A missing package or an older wrapper produces an actionable error. It does not bypass the wrapper with a private operator call or silently switch implementations on an in-scope deployment.
@@ -54,12 +56,9 @@ The `main` baseline for this change does not include the IC scheduler from [PR #
 ## Verification
 
 ```bash
-# From the LMDeploy checkout, with the patched FlashKDA installed:
+# From the LMDeploy checkout, with a compatible FlashKDA build installed:
 python -m pytest tests/pytorch/test_kda_prefill.py -q
 python -m pytest tests/pytorch/kernel/test_kda.py -q
-
-# From the patched FlashKDA checkout (does not require a GPU):
-python -m pytest tests/test_public_api.py -q
 ```
 
-The CPU tests cover dispatch scope, public API compatibility, optional buffer forwarding, unchanged FLA flags and MTP ring addressing. CUDA tests cover ordinary versus checkpoint-enabled full prefill, exported state versus a prefix forward, resumed suffixes, restored short prefills and partial MTP acceptance. Numerical tests require a compatible GPU and the patched extension; API contract tests alone do not establish model-level accuracy or performance.
+The CPU tests cover dispatch scope, public API compatibility, optional buffer forwarding, unchanged FLA flags and MTP ring addressing. CUDA tests cover ordinary versus checkpoint-enabled full prefill, exported state versus a prefix forward, resumed suffixes, restored short prefills and partial MTP acceptance. Numerical tests require a compatible GPU and FlashKDA build; API contract tests alone do not establish model-level accuracy or performance.
