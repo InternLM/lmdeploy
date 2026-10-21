@@ -23,7 +23,6 @@ from lmdeploy.pytorch.models.qwen3_dflash import (
     _resolve_dflash_layer_attention,
 )
 from lmdeploy.pytorch.spec_decode.dflash_utils import (
-    build_target_layer_ids,
     parse_dflash_config,
     validate_dflash_cache_config,
     validate_dflash_dist_config,
@@ -66,6 +65,33 @@ def _parse_dflash(draft_config, num_speculative_tokens, target_num_layers=None):
 
 def test_parse_dflash_config_valid():
     target_layer_ids, mask_token_id = _parse_dflash(_draft_config(), num_speculative_tokens=3)
+
+    assert target_layer_ids == (1, 5, 9, 13)
+    assert mask_token_id == 32001
+
+
+def test_parse_dflash_config_top_level_checkpoint_layout():
+    """Original z-lab DFlash checkpoints (e.g. Qwen3-4B-DFlash-b16) keep
+    block_size at the top level of config.json and nest only mask_token_id and
+    target_layer_ids inside dflash_config."""
+    config = _draft_config(block_size=4,
+                           dflash_config=dict(
+                               mask_token_id=32001,
+                               target_layer_ids=[1, 5, 9, 13],
+                           ))
+    target_layer_ids, mask_token_id = _parse_dflash(config, num_speculative_tokens=3)
+
+    assert target_layer_ids == (1, 5, 9, 13)
+    assert mask_token_id == 32001
+
+
+def test_parse_dflash_config_top_level_mask_token_id():
+    """mask_token_id resolves from the top level of the draft config when
+    dflash_config does not carry it, same fallback order as block_size."""
+    config = _draft_config(block_size=4,
+                           mask_token_id=32001,
+                           dflash_config=dict(target_layer_ids=[1, 5, 9, 13], ))
+    target_layer_ids, mask_token_id = _parse_dflash(config, num_speculative_tokens=3)
 
     assert target_layer_ids == (1, 5, 9, 13)
     assert mask_token_id == 32001
@@ -171,29 +197,32 @@ def test_parse_dflash_config_requires_mask_token_id():
 
 @pytest.mark.parametrize('num_speculative_tokens', [3, 7, 15])
 def test_parse_dflash_config_allows_runtime_query_up_to_checkpoint_block_size(num_speculative_tokens):
-    draft_config = _draft_config(dflash_config=dict(block_size=16, mask_token_id=32001))
+    draft_config = _draft_config(
+        dflash_config=dict(block_size=16, mask_token_id=32001, target_layer_ids=[1, 5, 9, 13]))
 
     target_layer_ids, mask_token_id = _parse_dflash(draft_config,
                                                     num_speculative_tokens=num_speculative_tokens)
 
-    assert target_layer_ids == build_target_layer_ids(16, 4)
+    assert target_layer_ids == (1, 5, 9, 13)
     assert mask_token_id == 32001
 
 
 def test_parse_dflash_config_rejects_query_above_checkpoint_block_size():
-    draft_config = _draft_config(dflash_config=dict(block_size=16, mask_token_id=32001))
+    draft_config = _draft_config(
+        dflash_config=dict(block_size=16, mask_token_id=32001, target_layer_ids=[1, 5, 9, 13]))
 
     with pytest.raises(ValueError, match='must not exceed.*block_size'):
         _parse_dflash(draft_config, num_speculative_tokens=16)
 
 
-def test_parse_dflash_config_resolves_target_layers_from_num_target_layers():
+def test_parse_dflash_config_requires_target_layer_ids():
+    """The tap layers are a training-time choice baked into the checkpoint, so
+    a missing key must fail loudly instead of falling back to a guessed layer
+    list that can silently read the wrong target layers (z-lab/dflash#156)."""
     draft_config = _draft_config(dflash_config=dict(block_size=4, mask_token_id=32001))
 
-    target_layer_ids, mask_token_id = _parse_dflash(draft_config, num_speculative_tokens=3)
-
-    assert target_layer_ids == build_target_layer_ids(16, 4)
-    assert mask_token_id == 32001
+    with pytest.raises(ValueError, match='target_layer_ids'):
+        _parse_dflash(draft_config, num_speculative_tokens=3)
 
 
 def test_parse_dflash_config_rejects_non_increasing_target_layers():
@@ -887,3 +916,43 @@ def test_dflash_prefill_materialize_context_uses_full_block_without_ragged_slice
     assert captured['context_inputs'].input_ids.tolist() == [[10, 11, 12, 20, 21]]
     assert captured['context_inputs'].seq_length.tolist() == [3, 2]
     assert captured['target_hidden'].tolist() == extra_inputs.target_hidden_states.tolist()
+
+
+class TestDFlashDraftModelMixedDtype:
+    """The draft ingests two target-side tensors (shared embeddings and aux
+    hidden states) that may arrive in the target dtype, e.g. a float16 AWQ
+    target with a bfloat16 draft checkpoint.
+
+    Both ingestion boundaries must cast to the draft dtype; running everything in float16 instead is not an option
+    because Qwen3 hidden state outliers overflow float16 during feature fusion (acceptance collapses to near zero).
+    """
+
+    def _make_model(self):
+        from lmdeploy.pytorch.models.qwen3_dflash import DFlashDraftModel
+
+        # bypass __init__: it requires a full engine build context, while
+        # the dtype contract lives entirely in these two methods
+        model = DFlashDraftModel.__new__(DFlashDraftModel)
+        torch.nn.Module.__init__(model)
+        model.dtype = torch.bfloat16
+        return model
+
+    def test_embed_input_ids_casts_to_draft_dtype(self):
+        model = self._make_model()
+        model.embed_tokens = torch.nn.Embedding(8, 4, dtype=torch.float16)
+        model.has_separate_mask_embedding = False
+        model.mask_token_id = None
+
+        embeds = model.embed_input_ids(torch.tensor([[0, 1, 2]]))
+
+        assert embeds.dtype == torch.bfloat16
+
+    def test_project_target_hidden_casts_to_draft_dtype(self):
+        model = self._make_model()
+        model.fc = torch.nn.Linear(8, 4, bias=False, dtype=torch.bfloat16)
+        model.hidden_norm = torch.nn.Identity()
+        model.num_context_features = 2
+
+        out = model.project_target_hidden(torch.randn(3, 8, dtype=torch.float16))
+
+        assert out.dtype == torch.bfloat16
