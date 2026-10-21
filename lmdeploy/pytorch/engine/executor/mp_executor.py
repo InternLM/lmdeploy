@@ -6,6 +6,8 @@ import os
 import pickle
 import signal
 import struct
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager
 from multiprocessing.context import SpawnContext
 from typing import Any
@@ -58,13 +60,12 @@ class Notifier:
         self._update_event_id()
 
     async def set_async(self):
-        # not safe if we might launch multiple reqs
         event_loop = asyncio.get_event_loop()
         self.events[self._event_id].set()
         if self._event_id == NUM_SHARED_BLOCK - 1:
             await event_loop.run_in_executor(None, self.bar.wait)
             [event.clear() for event in self.events]
-            self.bar.wait()
+            await event_loop.run_in_executor(None, self.bar.wait)
         self._update_event_id()
 
     @contextmanager
@@ -82,8 +83,8 @@ class Notifier:
         await event_loop.run_in_executor(None, self.events[self._event_id].wait)
         yield
         if self._event_id == NUM_SHARED_BLOCK - 1:
-            self.bar.wait()
-            self.bar.wait()
+            await event_loop.run_in_executor(None, self.bar.wait)
+            await event_loop.run_in_executor(None, self.bar.wait)
         self._update_event_id()
 
     def close(self):
@@ -112,6 +113,10 @@ class SharedBuffer:
             self.proc_mask = 0
 
         self.is_closed = False
+        # Both external sync callers and async RPCs submit whole messages to
+        # this writer. No ring/barrier wait runs on the model event loop.
+        self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix='mp-buffer-writer')
+        self._writer_state_lock = threading.Lock()
 
     @contextmanager
     def acquire_buf(self):
@@ -119,15 +124,17 @@ class SharedBuffer:
         assert buf is not None
         buf_start = self._buf_id * SHARED_BLOCK_REAL_SIZE
         out_buf = buf[buf_start:buf_start + SHARED_BLOCK_REAL_SIZE]
-        yield out_buf
+        try:
+            yield out_buf
+        finally:
+            out_buf.release()
         self._buf_id = (self._buf_id + 1) % NUM_SHARED_BLOCK
 
     def name(self):
         return self.shm.name
 
-    def pack_data(self, data, receiver_mask):
-        """Pack data."""
-        dumped_data = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+    def pack_data(self, dumped_data: bytes, receiver_mask):
+        """Pack serialized data on the single writer thread."""
         data_size = len(dumped_data)
 
         num_packs = get_num_packages(data_size)
@@ -139,17 +146,34 @@ class SharedBuffer:
                 packed_data = head + dumped_data[:pac_size]
                 buf[:HEAD_SIZE + pac_size] = packed_data
                 dumped_data = dumped_data[pac_size:]
-                yield buf
+                yield
 
-    def send(self, data, receiver_mask: int = 0xff):
-        """Pack data."""
-        for _ in self.pack_data(data, receiver_mask):
+    def _send_serialized(self, dumped_data: bytes, receiver_mask: int):
+        for _ in self.pack_data(dumped_data, receiver_mask):
             self.notifier.set()
 
+    def _submit_send(self, data, receiver_mask: int):
+        # Keep tensor/IPC serialization on the caller's thread, as before.
+        dumped_data = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+        with self._writer_state_lock:
+            if self.is_closed:
+                raise RuntimeError('SharedBuffer is closed')
+            return self._writer.submit(self._send_serialized, dumped_data, receiver_mask)
+
+    def send(self, data, receiver_mask: int = 0xff):
+        """Blocking send for setup and external synchronous callers."""
+        self._submit_send(data, receiver_mask).result()
+
     async def send_async(self, data, receiver_mask: int = 0xff):
-        """Async pack data."""
-        for _ in self.pack_data(data, receiver_mask):
-            await self.notifier.set_async()
+        """Submit an atomic message without blocking the event loop.
+
+        Once submitted, cancellation of the waiter does not retract a message: it may already be partly published.
+        close() aborts outstanding work.
+        """
+        pending = asyncio.wrap_future(self._submit_send(data, receiver_mask))
+        # A cancelled waiter must not leave a later close/abort exception unobserved.
+        pending.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        await asyncio.shield(pending)
 
     def _receive_step0(self):
         """step0."""
@@ -192,16 +216,27 @@ class SharedBuffer:
         """Async receive data."""
         async with self.notifier.wait_async():
             dumped_data, is_receiver, remain_size = self._receive_step0()
-        return self._receive_step1(dumped_data, is_receiver, remain_size)
+        while remain_size > 0:
+            async with self.notifier.wait_async():
+                with self.acquire_buf() as buf:
+                    pac_size = min(remain_size, SHARED_BLOCK_SIZE)
+                    remain_size -= pac_size
+                    if is_receiver:
+                        dumped_data += buf[HEAD_SIZE:HEAD_SIZE + pac_size]
+        return pickle.loads(dumped_data) if is_receiver else None
 
     def close(self):
-        if self.is_closed:
-            return
+        with self._writer_state_lock:
+            if self.is_closed:
+                return
+            self.is_closed = True
+        # Wake a writer blocked on ring reclamation before joining it. Drain
+        # the active writer before unmapping memory; queued messages are cancelled.
+        self.notifier.close()
+        self._writer.shutdown(wait=True, cancel_futures=True)
         self.shm.close()
         if self.is_create:
             self.shm.unlink()
-        self.notifier.close()
-        self.is_closed = True
 
 
 class MPExecutor(ExecutorBase):
@@ -326,7 +361,7 @@ class MPExecutor(ExecutorBase):
             args = list()
         if kwargs is None:
             kwargs = dict()
-        self.comm_buf.send(
+        await self.comm_buf.send_async(
             dict(
                 method=method,
                 args=args,
@@ -624,4 +659,4 @@ class ExecutorProc:
             else:
                 ret = func(*args, **kwargs)
                 if need_return:
-                    ret_buf.send(ret)
+                    await ret_buf.send_async(ret)
