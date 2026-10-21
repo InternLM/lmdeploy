@@ -2,12 +2,14 @@
 """CUDA KDA backend composed from FLA and shared LMDeploy operators.
 
 KDA is distinct from LMDeploy's gated-delta rule, but its CUDA implementation does not need copied GLM kernels. This
-adapter owns only LMDeploy cache/state semantics, reuses FLA convolution/prefill, and shares the TileLang recurrent
-state-ring kernel with gated-delta rule for both AR and MTP decode.
+adapter owns only LMDeploy cache/state semantics, reuses FLA convolution and FlashKDA prefill on supported GLM-5.3
+deployments (FLA prefill elsewhere), and shares the TileLang recurrent state-ring kernel with gated-delta rule for
+both AR and MTP decode.
 """
 
 from copy import copy
-from functools import partial
+from functools import cached_property, partial
+from inspect import signature
 from typing import Any
 
 import torch
@@ -35,9 +37,10 @@ def _store_state(state: torch.Tensor, value: torch.Tensor,
 
 
 class CudaKdaImpl(KdaImpl):
-    """FLA prefill and shared channelwise gated-delta decode."""
+    """FlashKDA/FLA prefill and shared channelwise gated-delta decode."""
 
-    def __init__(self):
+    def __init__(self, model_type: str | None = None):
+        self.model_type = model_type
         try:
             from fla.modules.conv.triton.ops import (
                 causal_conv1d_fwd,
@@ -60,6 +63,62 @@ class CudaKdaImpl(KdaImpl):
         self.fused_recurrent_kda = self._decode_recurrent
         self._piecewise_forward = None
         register_step_metadata_impl(self)
+
+    def _use_flash_kda(self, q, initial_state, lower_bound):
+        """Limit direct FlashKDA to the GLM-5.3 deployment contract."""
+        return (self.model_type == 'glm5_next' and q.is_cuda and torch.version.hip is None
+                and q.dtype == torch.bfloat16 and q.size(-1) == 128
+                and initial_state.dtype == torch.float32
+                and lower_bound is not None and -5.0 <= lower_bound <= 0.0
+                and torch.cuda.get_device_capability(q.device) == (9, 0))
+
+    @cached_property
+    def _flash_kda_fwd(self):
+        """Require the public checkpoint API for both ordinary and IC prefill."""
+        try:
+            from flash_kda import fwd
+        except ImportError as exc:
+            raise ImportError('GLM-5.3 SM90 prefill requires FlashKDA with the public checkpoint API. '
+                              'See docs/en/advance/flash_kda.md.') from exc
+        if not {'checkpoint_state', 'checkpoint_offsets'} <= signature(fwd).parameters.keys():
+            raise RuntimeError('flash_kda.fwd must expose checkpoint_state and checkpoint_offsets. '
+                               'Install the FlashKDA version described in docs/en/advance/flash_kda.md.')
+        return fwd
+
+    def _get_prefill_fwd(self, q, initial_state, lower_bound, checkpoint_state, checkpoint_offsets):
+        """Resolve the public API before mutating any live cache state."""
+        if (checkpoint_state is None) != (checkpoint_offsets is None):
+            raise ValueError('checkpoint_state and checkpoint_offsets must be provided together.')
+        if self._use_flash_kda(q, initial_state, lower_bound):
+            return self._flash_kda_fwd
+        if checkpoint_state is not None:
+            raise ValueError('KDA checkpoint export requires GLM-5.3 on SM90 with BF16 inputs, '
+                             'D=128, FP32 state and a gate lower bound in [-5, 0].')
+        return None
+
+    def _prefill_recurrent(self, q, k, v, g, beta, A_log, dt_bias, initial_state,
+                          cu_seqlens, lower_bound, *, checkpoint_state=None, checkpoint_offsets=None):
+        """Run one full prefill, optionally exporting a sequence-relative state.
+
+        Checkpoint buffers use [N, H, V, K] layout. Offsets are token counts within each sequence, aligned to 16,
+        with the same integer dtype as cu_seqlens. The caller owns checkpoint allocation and publication, including
+        the corresponding convolution snapshot; this method only computes recurrent states.
+        """
+        fwd = self._get_prefill_fwd(q, initial_state, lower_bound, checkpoint_state, checkpoint_offsets)
+        if fwd is not None:
+            output = torch.empty_like(v, memory_format=torch.contiguous_format)
+            final_state = torch.empty_like(initial_state, memory_format=torch.contiguous_format)
+            fwd(q=q.contiguous(), k=k.contiguous(), v=v.contiguous(), g=g.contiguous(), beta=beta,
+                scale=q.size(-1) ** -0.5, out=output, A_log=A_log.contiguous(),
+                dt_bias=dt_bias.reshape(q.size(2), q.size(3)).contiguous(), lower_bound=lower_bound,
+                initial_state=initial_state.contiguous(), final_state=final_state, cu_seqlens=cu_seqlens,
+                checkpoint_state=checkpoint_state, checkpoint_offsets=checkpoint_offsets)
+            return output, final_state
+        return self.chunk_kda(
+            q=q.contiguous(), k=k.contiguous(), v=v.contiguous(), g=g, beta=beta,
+            A_log=A_log, dt_bias=dt_bias, initial_state=initial_state, output_final_state=True,
+            use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True, use_beta_sigmoid_in_kernel=True,
+            safe_gate=True, lower_bound=lower_bound, state_v_first=True, cu_seqlens=cu_seqlens)
 
     def get_step_metadata_provider(self):
         """Reuse FLA chunk-index preparation outside model forward."""
@@ -245,13 +304,23 @@ class CudaKdaImpl(KdaImpl):
         num_heads: int,
         head_dim: int,
         lower_bound: float,
+        *,
+        checkpoint_state: torch.Tensor | None = None,
+        checkpoint_offsets: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if metadata.is_decoding:
+            if checkpoint_state is not None or checkpoint_offsets is not None:
+                raise ValueError('KDA checkpoint export is only supported during prefill.')
+        else:
+            self._get_prefill_fwd(raw_gate.unflatten(-1, (num_heads, head_dim)), recurrent_state,
+                                 lower_bound, checkpoint_state, checkpoint_offsets)
         if (getattr(metadata, 'num_spec_tokens', 0) or 0) > 0:
             return self._forward_spec(
                 mixed_qkv, raw_gate, raw_beta, conv_state, recurrent_state,
                 metadata, conv_weight=conv_weight, conv_bias=conv_bias,
                 a_log=a_log, dt_bias=dt_bias, num_heads=num_heads,
-                head_dim=head_dim, lower_bound=lower_bound)
+                head_dim=head_dim, lower_bound=lower_bound,
+                checkpoint_state=checkpoint_state, checkpoint_offsets=checkpoint_offsets)
         batch_size = metadata.state_ids.numel()
         if metadata.is_decoding:
             query_length = mixed_qkv.size(1) // batch_size
@@ -293,23 +362,19 @@ class CudaKdaImpl(KdaImpl):
             )
             output = output.flatten(0, 1).unsqueeze(0)
         else:
-            output, final_state = self.chunk_kda(
-                q=q.contiguous(),
-                k=k.contiguous(),
-                v=v.contiguous(),
+            output, final_state = self._prefill_recurrent(
+                q=q,
+                k=k,
+                v=v,
                 g=raw_gate,
                 beta=raw_beta,
                 A_log=a_log,
                 dt_bias=dt_bias,
                 initial_state=selected_state,
-                output_final_state=True,
-                use_qk_l2norm_in_kernel=True,
-                use_gate_in_kernel=True,
-                use_beta_sigmoid_in_kernel=True,
-                safe_gate=True,
                 lower_bound=lower_bound,
-                state_v_first=True,
                 cu_seqlens=metadata.cu_seqlens,
+                checkpoint_state=checkpoint_state,
+                checkpoint_offsets=checkpoint_offsets,
             )
         _store_state(recurrent_state, final_state, metadata)
         return output

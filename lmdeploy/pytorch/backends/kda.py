@@ -27,11 +27,21 @@ class KdaImpl(ABC):
         num_heads: int,
         head_dim: int,
         lower_bound: float,
+        *,
+        checkpoint_state: torch.Tensor | None = None,
+        checkpoint_offsets: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Run short convolution followed by the KDA recurrence."""
+        """Run convolution and recurrence, optionally exporting a prefill recurrent state.
+
+        Checkpoint arguments must be provided together. The caller supplies a contiguous [N, H, V, K] FP32 output
+        buffer and [N] sequence-relative token counts aligned to 16 (matching cu_seqlens dtype). The caller owns
+        convolution snapshots, checkpoint publication and any MTP ring-slot selection. Decode does not export here.
+        """
         raise NotImplementedError
 
 
 @dataclass(frozen=True)
 class KdaBuildSpec(BuildSpec[KdaImpl]):
     """Request a device-specific KDA implementation."""
+
+    model_type: str | None = None

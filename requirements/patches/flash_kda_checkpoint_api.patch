@@ -1,0 +1,167 @@
+diff --git a/README.md b/README.md
+index 15583bb..79c1dfb 100644
+--- a/README.md
++++ b/README.md
+@@ -84,7 +84,7 @@ bash tests/test.sh
+ ```python
+ flash_kda.fwd(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound,
+               initial_state=None, final_state=None, cu_seqlens=None,
+-              workspace=None)
++              workspace=None, *, checkpoint_state=None, checkpoint_offsets=None)
+ ```
+
+ **Parameters:**
+@@ -105,8 +105,11 @@ flash_kda.fwd(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound,
+ | `final_state` | bf16/fp32/None | `[B, H, V, K]` or `[N, H, V, K]` | (optional, output) Final recurrent state |
+ | `cu_seqlens` | int32/int64 | `[N+1]` | (optional) Cumulative sequence lengths for variable-length batching |
+ | `workspace` | uint8/None | `[workspace_size]` | (optional) Reusable workspace; allocated automatically when omitted |
++| `checkpoint_state` | fp32/None | `[N, H, V, K]` | (optional, output) One recurrent checkpoint per sequence |
++| `checkpoint_offsets` | int32/int64/None | `[N]` | (optional) Sequence-relative token counts at which to export checkpoints |
+
+ - Currently requires `K = V = 128`.
++- Provide both checkpoint arguments or neither. The checkpoint buffer must be contiguous and on CUDA. Offsets must be contiguous CUDA tensors with the same dtype as `cu_seqlens` (int64 without `cu_seqlens`). A positive offset is a token count divisible by 16, no greater than the sequence length; zero leaves that sequence's checkpoint buffer unchanged. Callers must validate these values. Export does not split the forward: `out` and `final_state` still cover the complete sequence.
+ - `initial_state` / `final_state` accept `None` (stateless), bf16, or fp32 tensors. When both are provided, their dtypes must match.
+ - When `cu_seqlens` is provided, `B` must be 1, `T` is the total length across all sequences, and `initial_state` / `final_state` have shape `[N, H, V, K]`.
+ - When `cu_seqlens` is `None`, each batch element is treated as an independent sequence, and the state shape is `[B, H, V, K]`.
+diff --git a/flash_kda/__init__.py b/flash_kda/__init__.py
+index fdb557f..851fbb4 100644
+--- a/flash_kda/__init__.py
++++ b/flash_kda/__init__.py
+@@ -22,6 +22,9 @@ def fwd(
+     final_state=None,
+     cu_seqlens=None,
+     workspace=None,
++    *,
++    checkpoint_state=None,
++    checkpoint_offsets=None,
+ ):
+     """FlashKDA forward (Flash Kimi Delta Attention).
+
+@@ -47,11 +50,25 @@ def fwd(
+             or int64, shape ``[N+1]``. When provided, ``B`` must be 1.
+         workspace (torch.Tensor, optional): Reusable uint8 workspace. Allocated
+             automatically when omitted.
++        checkpoint_state (torch.Tensor, optional): FP32 output buffer,
++            shape ``[N, H, V, K]`` (``N = B`` without ``cu_seqlens``), written
++            in place at the requested offset in each sequence. Must be
++            provided together with ``checkpoint_offsets``.
++        checkpoint_offsets (torch.Tensor, optional): Contiguous CUDA tensor
++            of shape ``[N]``. Each positive offset is a sequence-relative
++            token count divisible by 16 and no greater than that sequence's
++            length. Zero disables export for that sequence, leaving its
++            buffer unchanged. Dtype must match ``cu_seqlens``, or be int64
++            in batched mode. The caller must validate offset values.
+     Notes:
+         * Currently requires ``K = V = 128``.
+         * Beta may be strided; other input and output tensors must be
+           contiguous.
+     """
++    if (checkpoint_state is None) != (checkpoint_offsets is None):
++        raise ValueError(
++            "checkpoint_state and checkpoint_offsets must be provided together"
++        )
+     B, T_seq, H = q.shape[:3]
+     N = cu_seqlens.numel() - 1 if cu_seqlens is not None else B
+     if workspace is None:
+@@ -76,4 +93,6 @@ def fwd(
+         initial_state=initial_state,
+         final_state=final_state,
+         cu_seqlens=cu_seqlens,
++        checkpoint_state=checkpoint_state,
++        checkpoint_offsets=checkpoint_offsets,
+     )
+diff --git a/tests/test_public_api.py b/tests/test_public_api.py
+new file mode 100644
+index 0000000..d93b8d3
+--- /dev/null
++++ b/tests/test_public_api.py
+@@ -0,0 +1,89 @@
++"""Public wrapper tests that also run without a compiled CUDA extension."""
++
++import importlib.util
++import sys
++from pathlib import Path
++from types import SimpleNamespace
++from unittest.mock import Mock
++
++import pytest
++import torch
++
++
++@pytest.fixture
++def api(monkeypatch):
++    name = "_flash_kda_api_test"
++    source = Path(__file__).resolve().parents[1] / "flash_kda" / "__init__.py"
++    spec = importlib.util.spec_from_file_location(
++        name, source, submodule_search_locations=[str(source.parent)]
++    )
++    module = importlib.util.module_from_spec(spec)
++    monkeypatch.setitem(sys.modules, name, module)
++    monkeypatch.setitem(sys.modules, name + "._C", SimpleNamespace())
++    native = SimpleNamespace(fwd=Mock(), get_workspace_size=Mock(return_value=256))
++    monkeypatch.setattr(torch.ops, "flash_kda", native)
++    spec.loader.exec_module(module)
++    return module, native
++
++
++@pytest.mark.parametrize("capture", [False, True])
++@pytest.mark.parametrize("reuse_workspace", [False, True])
++@pytest.mark.parametrize("seqlen_dtype", [None, torch.int32, torch.int64])
++def test_public_fwd_passes_checkpoint_buffers(
++    api, capture, reuse_workspace, seqlen_dtype
++):
++    module, native = api
++    q = torch.empty(2 if seqlen_dtype is None else 1, 32, 2, 128, dtype=torch.bfloat16)
++    cu = None if seqlen_dtype is None else torch.tensor([0, 16, 32], dtype=seqlen_dtype)
++    state = torch.empty(2, 2, 128, 128)
++    checkpoint = torch.empty_like(state) if capture else None
++    offsets = (
++        torch.tensor([16, 16], dtype=seqlen_dtype or torch.int64) if capture else None
++    )
++    workspace = torch.empty(256, dtype=torch.uint8) if reuse_workspace else None
++    # Existing positional arguments, including workspace, keep their positions.
++    module.fwd(
++        q,
++        q,
++        q,
++        q,
++        q[..., 0],
++        0.125,
++        q,
++        torch.zeros(2),
++        torch.zeros(2, 128),
++        -5,
++        state,
++        state,
++        cu,
++        workspace,
++        checkpoint_state=checkpoint,
++        checkpoint_offsets=offsets,
++    )
++    native.fwd.assert_called_once()
++    args, kwargs = native.fwd.call_args
++    assert kwargs["checkpoint_state"] is checkpoint
++    assert kwargs["checkpoint_offsets"] is offsets
++    assert kwargs["cu_seqlens"] is cu
++    assert kwargs["initial_state"] is state
++    assert kwargs["final_state"] is state
++    if reuse_workspace:
++        assert args[7] is workspace
++        native.get_workspace_size.assert_not_called()
++    else:
++        native.get_workspace_size.assert_called_once_with(q.size(0) * q.size(1), 2, 2)
++        assert args[7].dtype == torch.uint8
++        assert args[7].numel() == 256
++
++
++@pytest.mark.parametrize("missing", ["checkpoint_state", "checkpoint_offsets"])
++def test_unpaired_checkpoint_rejected_before_allocation(api, missing):
++    module, native = api
++    kwargs = dict(
++        checkpoint_state=torch.empty(1), checkpoint_offsets=torch.tensor([16])
++    )
++    kwargs.pop(missing)
++    with pytest.raises(ValueError, match="provided together"):
++        module.fwd(*([None] * 10), **kwargs)
++    native.fwd.assert_not_called()
++    native.get_workspace_size.assert_not_called()
