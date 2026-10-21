@@ -21,6 +21,7 @@ from tqdm.auto import tqdm
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.graph_runner import prefill_preparation_scope
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.consts import GDN_REPLAY_CURSOR_CACHE_NAME
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
@@ -247,15 +248,14 @@ def model_forward(
         # Attach operator-owned block caches and configured state caches.
         context.block_caches = cache_engine.block_caches
         context.named_state_caches = state_cache_engine.named_state_caches
+        replay_enabled = model_config.enable_replayssm
         context.replayssm_force_flush = None
-        replayssm_mode = getattr(model_config, 'replayssm_mode', None)
-        if (replayssm_mode == 'standard' and context.is_decoding
+        if (replay_enabled and model_config.model_paradigm == 'ar' and context.is_decoding
                 and cache_inputs is not None and cache_inputs.state_save_plan is not None):
             force_flush = cache_inputs.replayssm_force_flush
             if force_flush is None or force_flush.shape != inputs.state_offsets.shape:
-                raise RuntimeError(
-                    'Standard ReplaySSM decode checkpoint save requires one '
-                    'device force-flush flag per input row.')
+                raise RuntimeError('Standard ReplaySSM decode checkpoint save requires one '
+                                   'device force-flush flag per input row.')
             if force_flush.device != inputs.state_offsets.device:
                 raise RuntimeError('ReplaySSM force-flush mask must be on the model input device.')
             context.replayssm_force_flush = force_flush
@@ -275,25 +275,19 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
-            if replayssm_mode is not None and not context.is_decoding:
-                from lmdeploy.pytorch.consts import GDN_REPLAY_CURSOR_CACHE_NAME
-                from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
-                    reset_gdn_replayssm_cursor,
-                )
-                reset_gdn_replayssm_cursor(
-                    context.named_state_caches[GDN_REPLAY_CURSOR_CACHE_NAME],
-                    context.state_offsets)
-            elif replayssm_mode == 'standard':
-                from lmdeploy.pytorch.consts import GDN_REPLAY_CURSOR_CACHE_NAME
+            if replay_enabled:
                 from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
                     advance_gdn_replayssm_standard_cursor,
+                    reset_gdn_replayssm_cursor,
                 )
-                advance_gdn_replayssm_standard_cursor(
-                    context.named_state_caches[GDN_REPLAY_CURSOR_CACHE_NAME],
-                    context.state_offsets,
-                    model_config.replayssm_buffer_len,
-                    force_flush=context.replayssm_force_flush,
-                )
+                cursor = context.named_state_caches[GDN_REPLAY_CURSOR_CACHE_NAME]
+                # All layers must consume the original cursor before it advances.
+                if not context.is_decoding:
+                    reset_gdn_replayssm_cursor(cursor, context.state_offsets)
+                elif model_config.model_paradigm == 'ar':
+                    advance_gdn_replayssm_standard_cursor(
+                        cursor, context.state_offsets, model_config.replayssm_buffer_len,
+                        force_flush=context.replayssm_force_flush)
             if not isinstance(output, dict):
                 output = dict(hidden_states=output)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
@@ -991,23 +985,17 @@ class BaseModelAgent:
 
     def _commit_mtp_replayssm(self, inputs: ModelInputs, extra_inputs: ExtraInputs) -> None:
         """Commit accepted target-input prefixes after rejection broadcast."""
-        if self.model_config.replayssm_mode != 'mtp' or not inputs.is_decoding or inputs.is_dummy:
+        if (not self.model_config.enable_replayssm or self.spec_agent.num_spec_tokens == 0
+                or not inputs.is_decoding or inputs.is_dummy):
             return
         rejected = getattr(extra_inputs, 'num_rejected_tokens', None)
         if rejected is None:
             raise RuntimeError('MTP ReplaySSM requires broadcast rejection counts before commit.')
-        from lmdeploy.pytorch.consts import GDN_REPLAY_CURSOR_CACHE_NAME
-        from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import (
-            commit_gdn_replayssm_spec_cursor,
-        )
+        from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import commit_gdn_replayssm_spec_cursor
         commit_gdn_replayssm_spec_cursor(
-            self.state_cache_engine.named_state_caches[GDN_REPLAY_CURSOR_CACHE_NAME],
-            inputs.state_offsets,
-            inputs.seq_length,
-            rejected,
-            self.model_config.replayssm_buffer_len,
-            self.spec_agent.num_spec_tokens + 1,
-        )
+            self.state_cache_engine.named_state_caches[GDN_REPLAY_CURSOR_CACHE_NAME], inputs.state_offsets,
+            inputs.seq_length, rejected, self.model_config.replayssm_buffer_len,
+            self.spec_agent.num_spec_tokens + 1)
 
     async def _async_step(
         self,
@@ -1437,6 +1425,10 @@ class BaseModelAgent:
         model_path = self.model_path
         adapters = self.adapters
         device = self.device
+        if self.model_config.enable_replayssm:
+            capability = torch.cuda.get_device_capability(device)
+            if capability[0] != 9:
+                raise ValueError(f'ReplaySSM requires SM90 on every worker, got SM{capability[0]}{capability[1]}.')
         rank = self.rank
         custom_module_map = self.model_config.custom_module_map
         if custom_module_map is not None:
@@ -1458,9 +1450,7 @@ class BaseModelAgent:
                                             num_spec_tokens=self.spec_agent.num_spec_tokens,
                                             max_batch_size=self.cache_config.max_batches,
                                             spec_model_ctx=spec_model_ctx,
-                                            enable_replayssm=self.model_config.enable_replayssm,
-                                            replayssm_buffer_len=self.model_config.replayssm_buffer_len,
-                                            replayssm_mode=self.model_config.replayssm_mode)
+                                            replayssm_buffer_len=self.model_config.replayssm_buffer_len)
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:

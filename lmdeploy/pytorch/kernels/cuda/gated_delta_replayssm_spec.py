@@ -5,11 +5,18 @@ import torch
 import triton
 import triton.language as tl
 
-from .gated_delta_replayssm_config import (
-    MTP_COMMIT_CURSOR_SM90_CONFIG,
-    MTP_RECONSTRUCT_SM90_CONFIG,
-    get_mtp_exact_fold_config,
-)
+
+def _get_mtp_reconstruct_policy(B: int, H: int, HV: int, K: int, V: int, T: int,
+                               channelwise: bool) -> tuple[bool, bool]:
+    """Measured checkpoint eviction/grid policy; unrelated shapes keep
+    defaults."""
+    # Limit the checkpoint streaming hint to the measured small-batch geometry;
+    # applying it to larger batches can regress performance.
+    evict_checkpoint = channelwise and B in (8, 16) and (H, HV, K, V, T) == (64, 64, 128, 128, 6)
+    # Small grids retain the batch-major order; larger grids benefit from
+    # traversing contiguous heads before moving to the next state slot.
+    head_major = channelwise and (K, V, T) == (128, 128, 6) and B * HV >= 512
+    return evict_checkpoint, head_major
 
 
 @triton.jit
@@ -107,6 +114,8 @@ def gdn_replayssm_exact_fold_kernel(
         return
 
     write_pos = tl.load(p_cursor).to(tl.int32)
+    if write_pos == 0:
+        return
     cache_base = tl.load(p_cursor + 1).to(tl.int32)
     o_v = i_v * BV + tl.arange(0, BV)
     o_k = tl.arange(0, BK)
@@ -199,6 +208,8 @@ def gdn_replayssm_spec_circular_kernel(
     BV: tl.constexpr,
     BC: tl.constexpr,
     CHANNELWISE_G: tl.constexpr,
+    EVICT_CHECKPOINT: tl.constexpr = False,
+    HEAD_MAJOR: tl.constexpr = False,
 ):
     """Fold/reconstruct and verify after the raw-history snapshot barrier.
 
@@ -206,8 +217,8 @@ def gdn_replayssm_spec_circular_kernel(
     already be writing the new speculative window into the same ring positions.
     """
     i_v = tl.program_id(0)
-    i_b = tl.program_id(1)
-    i_hv = tl.program_id(2)
+    i_b = tl.program_id(2) if HEAD_MAJOR else tl.program_id(1)
+    i_hv = tl.program_id(1) if HEAD_MAJOR else tl.program_id(2)
     i_h = i_hv // (HV // H)
     state_idx = tl.load(state_indices + i_b * stride_indices).to(tl.int64)
     o_v = i_v * BV + tl.arange(0, BV)
@@ -240,7 +251,8 @@ def gdn_replayssm_spec_circular_kernel(
     mask_h = mask_v[:, None] & mask_k[None, :]
     p_h = (checkpoint + state_idx * stride_state_slot + i_hv * V * K
            + o_v[:, None] * K + o_k[None, :])
-    h = tl.load(p_h, mask=mask_h, other=0.0).to(tl.float32)
+    h = tl.load(p_h, mask=mask_h, other=0.0,
+                eviction_policy='evict_first' if EVICT_CHECKPOINT else '').to(tl.float32)
 
     if row_flush:
         # Materialize only the committed raw prefix into the checkpoint.  The
@@ -437,7 +449,7 @@ def fused_recurrent_gdn_replayssm_spec(q: torch.Tensor,
     R = state.cursor.R
     BT = triton.next_power_of_2(T)
     BK = triton.next_power_of_2(K)
-    BV = min(triton.next_power_of_2(V), MTP_RECONSTRUCT_SM90_CONFIG['BV'])
+    BV = min(triton.next_power_of_2(V), 32)
     BC = max(16, triton.next_power_of_2(R))
     if scale is None:
         scale = K**-0.5
@@ -475,12 +487,13 @@ def fused_recurrent_gdn_replayssm_spec(q: torch.Tensor,
         state.beta_ring.stride(0), state.cursor.packed_cursor.stride(0),
         state_indices.stride(0), q_seqlens.stride(0), scale,
     )
-    grid = (triton.cdiv(V, BV), B, HV)
+    evict_checkpoint, head_major = _get_mtp_reconstruct_policy(B, H, HV, K, V, T, g.ndim == 4)
+    grid = (triton.cdiv(V, BV), HV, B) if head_major else (triton.cdiv(V, BV), B, HV)
     gdn_replayssm_spec_circular_kernel[grid](
         *args, H=H, HV=HV, K=K, V=V, R=R, TMAX=T, BT=BT,
-        BK=BK, BV=BV, BC=BC, CHANNELWISE_G=g.ndim == 4,
-        num_warps=MTP_RECONSTRUCT_SM90_CONFIG['num_warps'],
-        num_stages=MTP_RECONSTRUCT_SM90_CONFIG['num_stages'])
+        BK=BK, BV=BV, BC=BC, CHANNELWISE_G=g.ndim == 4, EVICT_CHECKPOINT=evict_checkpoint, HEAD_MAJOR=head_major,
+        num_warps=1,
+        num_stages=1)
     return out, state.checkpoint
 
 
@@ -491,8 +504,8 @@ def fold_gdn_replayssm_mtp_history(state, state_indices: torch.Tensor) -> None:
     h = state.raw_k_ring.shape[1]
     ring_len = state.cursor.R
     bk = triton.next_power_of_2(kdim)
-    config = get_mtp_exact_fold_config(state_indices.numel())
-    bv = min(triton.next_power_of_2(vdim), config['BV'])
+    bv, num_warps, num_stages = (32, 2, 3) if state_indices.numel() <= 1 else (16, 1, 1)
+    bv = min(triton.next_power_of_2(vdim), bv)
     grid = (triton.cdiv(vdim, bv), state_indices.numel(), hv)
     gdn_replayssm_exact_fold_kernel[grid](
         state.checkpoint, state.raw_v_ring, state.raw_k_ring, state.g_ring,
@@ -502,7 +515,7 @@ def fold_gdn_replayssm_mtp_history(state, state_indices: torch.Tensor) -> None:
         state.beta_ring.stride(0), state.cursor.packed_cursor.stride(0),
         state_indices.stride(0), H=h, HV=hv, K=kdim, V=vdim, R=ring_len,
         BK=bk, BV=bv, FOLD_PARTIAL=True, CHANNELWISE_G=state.g_ring.ndim == 4,
-        num_warps=config['num_warps'], num_stages=config['num_stages'])
+        num_warps=num_warps, num_stages=num_stages)
 
 
 def commit_gdn_replayssm_spec_cursor(packed_cursor: torch.Tensor,
@@ -513,7 +526,7 @@ def commit_gdn_replayssm_spec_cursor(packed_cursor: torch.Tensor,
                                      tmax: int) -> None:
     """Commit the rejection-owned accepted target-input prefix on device."""
     n_rows = state_indices.numel()
-    block = MTP_COMMIT_CURSOR_SM90_CONFIG['BLOCK']
+    block = 256
     commit_gdn_replayssm_spec_cursor_kernel[(triton.cdiv(n_rows, block), )](
         packed_cursor, state_indices, q_seqlens, num_rejected_tokens,
         packed_cursor.stride(0), state_indices.stride(0), q_seqlens.stride(0),

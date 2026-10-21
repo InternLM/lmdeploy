@@ -2,10 +2,17 @@
 # Inspired by vLLM: https://github.com/vllm-project/vllm
 import asyncio
 import contextlib
+import math
 from typing import Any, NamedTuple
 
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.consts import (
+    GDN_REPLAY_BETA_CACHE_NAME,
+    GDN_REPLAY_G_CACHE_NAME,
+    GDN_REPLAY_RAW_K_CACHE_NAME,
+    GDN_REPLAY_RAW_V_CACHE_NAME,
+)
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
@@ -271,6 +278,7 @@ class ExecutorBase:
         max_prefill_token_num = self.cache_config.max_prefill_token_num
         max_batches = self.cache_config.max_batches
         rank_cache_block_sizes = self._get_rank_cache_block_sizes(cache_block_sizes)
+        replay_workspace = self._get_replayssm_workspace_size()
         dsa_score_workspace = self._get_dsa_score_workspace_size()
         runtime_cache_size = 0
         while max_prefill_token_num > 0:
@@ -280,6 +288,7 @@ class ExecutorBase:
             runtime_cache_size = int((max_prefill_token_num + max_batches * 2) * vocab_size * 2)
             # The DCP phase estimate already includes indexer scores.
             runtime_cache_size += max(dsa_score_workspace, self._get_dcp_workspace_size(max_prefill_token_num))
+            runtime_cache_size += replay_workspace
             available_mems = [int((free_mem - runtime_cache_size) * cache_max_entry_count) for free_mem in free_mems]
             # Keep at least a small number of KV blocks after runtime reserve.
             # If not possible, reduce the prefill token budget and try again.
@@ -360,10 +369,10 @@ class ExecutorBase:
             logger.info(
                 'ReplaySSM state cache: mode=%s L=%d aligned_bytes_per_slot=%d '
                 'baseline_bytes_per_slot=%d delta_bytes_per_slot=%d '
-                'base_conv_checkpoint_bytes_per_slot=%d ring_bytes_per_slot=%d '
+                'base_conv_checkpoint_bytes_per_slot=%d non_base_state_bytes_per_slot=%d '
                 'num_state_caches=%d total_bytes=%d baseline-budget slot estimate=%d '
                 '(attention TP shards GDN state; EP does not).',
-                model_config.replayssm_mode,
+                'mtp' if model_config.model_paradigm == 'ar_spec' else 'standard',
                 model_config.replayssm_buffer_len,
                 mems,
                 baseline_slot,
@@ -448,9 +457,36 @@ class ExecutorBase:
         """Ask each worker to retain its cache plans and return byte sizes."""
         raise NotImplementedError('Not Implemented.')
 
+    def _get_replayssm_workspace_size(self) -> int:
+        """Bound all retained power-of-two snapshot capacities on one worker.
+
+        Named specs already contain attention-TP-local geometry. Each layer keeps four separate allocations per
+        capacity, rounded to CUDA allocator's 512 B minimum block. Include every bucket, even with sparse graph capture
+        sizes: eager/mixed-phase forwards can visit intermediate capacities too.
+        """
+        model_config = self.model_config
+        max_batches = self.cache_config.max_batches
+        if not model_config.enable_replayssm or model_config.model_paradigm != 'ar_spec':
+            return 0
+        names = {GDN_REPLAY_RAW_V_CACHE_NAME, GDN_REPLAY_RAW_K_CACHE_NAME,
+                 GDN_REPLAY_G_CACHE_NAME, GDN_REPLAY_BETA_CACHE_NAME}
+        specs = [spec for spec in model_config.state_cache_specs if spec.name in names]
+        if len(specs) != len(names):
+            raise ValueError('MTP ReplaySSM requires all four raw-history workspace specs.')
+        total = 0
+        for exponent in range((max_batches - 1).bit_length() + 1):
+            capacity = 1 << exponent
+            for spec in specs:
+                size = capacity * math.prod(spec.shape) * spec.dtype.itemsize
+                total += ((size + 511) // 512 * 512) * len(spec.layer_ids)
+        return total
+
     def _reserve_runtime_mem(self, free_mems: list[int], cache_block_sizes: list[_WorkerCachePlanSizes],
                              spec_cache_config: CacheConfig | None) -> list[int]:
         """Reserve runtime memory and update prefill token limit if needed."""
+        replay_workspace = self._get_replayssm_workspace_size()
+        if replay_workspace:
+            logger.info('Reserve %d bytes for retained ReplaySSM MTP snapshot workspaces.', replay_workspace)
         dsa_score_workspace = self._get_dsa_score_workspace_size()
         if dsa_score_workspace > 0:
             logger.info('Reserve %d MiB for DSA prefill score workspace.',

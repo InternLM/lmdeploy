@@ -37,13 +37,12 @@ def _reference(q, k, v, g, beta, initial_state, q_seqlens):
 
 
 def _make_state(slots, h, hv, kdim, vdim, buffer_len, tmax, dtype, channelwise=False):
-    from lmdeploy.pytorch.nn.gated_delta import GatedDeltaReplayCursor, GatedDeltaReplayState
+    from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayCursor, GatedDeltaReplayState
 
     ring_dtype = torch.float32 if channelwise else dtype
     gate_shape = (slots, hv, buffer_len, kdim) if channelwise else (slots, hv, buffer_len)
     checkpoint = torch.zeros(slots, hv, vdim, kdim, device='cuda', dtype=torch.float32)
     return GatedDeltaReplayState(
-        mode='mtp',
         conv_state=torch.empty(0, device='cuda'),
         checkpoint=checkpoint,
         d_ring=torch.zeros(slots, hv, buffer_len, vdim, device='cuda', dtype=ring_dtype),
@@ -133,8 +132,12 @@ def test_mtp_replayssm_matches_committed_recurrent_state(buffer_len, tmax, expli
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required')
-@pytest.mark.parametrize('channelwise', [False, True])
-def test_mtp_strided_inputs_graph_replay_matches_packed_state(channelwise):
+@pytest.mark.parametrize('channelwise,batch,heads,dim,tmax', [
+    (False, 3, 3, 96, 3),
+    (True, 3, 3, 96, 3),
+    (True, 8, 64, 128, 6),
+])
+def test_mtp_strided_inputs_graph_replay_matches_packed_state(channelwise, batch, heads, dim, tmax):
     from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import (
         commit_gdn_replayssm_spec_cursor,
         fused_recurrent_gdn_replayssm_spec,
@@ -142,7 +145,7 @@ def test_mtp_strided_inputs_graph_replay_matches_packed_state(channelwise):
     )
 
     torch.manual_seed(881)
-    batch, heads, dim, tmax, buffer_len = 3, 3, 96, 3, 16
+    buffer_len = 16
     slots = batch + 5
     states = [_make_state(slots, heads, heads, dim, dim, buffer_len, tmax, torch.bfloat16, channelwise)
               for _ in range(2)]
@@ -257,8 +260,8 @@ def test_mtp_exact_fold_single_row_specialization():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required')
 @pytest.mark.parametrize('channelwise', [False, True])
 def test_flush_raw_history_is_immutable_until_all_consumers_finish(channelwise):
+    from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayCursor, GatedDeltaReplayState
     from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import fused_recurrent_gdn_replayssm_spec
-    from lmdeploy.pytorch.nn.gated_delta import GatedDeltaReplayCursor, GatedDeltaReplayState
 
     torch.manual_seed(743)
     B, H, HV, K, V, R, T = 128, 16, 32, 128, 128, 8, 4
@@ -276,7 +279,6 @@ def test_flush_raw_history_is_immutable_until_all_consumers_finish(channelwise):
     cursor[:, 0] = 5
     cursor[:, 2] = 1
     s = GatedDeltaReplayState(
-        mode='mtp',
         conv_state=torch.empty(0, device='cuda'),
         checkpoint=rand(B, HV, V, K, dtype=torch.float32),
         d_ring=rand(B, HV, R, V, dtype=torch.float32 if channelwise else torch.bfloat16),
@@ -404,3 +406,97 @@ def test_kda_history_changing_graph_inputs_and_partial_acceptance(gate_scale):
         torch.testing.assert_close(actual, expected, atol=2e-3, rtol=5e-3)
     fold_gdn_replayssm_mtp_history(state, ids)
     torch.testing.assert_close(state.checkpoint, truth, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required')
+@pytest.mark.parametrize('channelwise', [False, True])
+def test_empty_partial_fold_preserves_checkpoint_and_cursor_in_graph(channelwise):
+    from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import fold_gdn_replayssm_mtp_history
+    state = _make_state(3, 1, 2, 16, 24, 8, 3, torch.bfloat16, channelwise=channelwise)
+    state.checkpoint.normal_()
+    # Empty rows must not read poisoned raw history, and invalid IDs must not
+    # touch any slot. A non-empty row still folds normally in the same graph.
+    state.raw_k_ring.fill_(float('nan'))
+    state.raw_v_ring.fill_(float('nan'))
+    state.cursor.packed_cursor[0] = torch.tensor([0, 3, 1], device='cuda')
+    ids = torch.tensor([0, 1, -1], device='cuda')
+    graph = torch.cuda.CUDAGraph()
+    fold_gdn_replayssm_mtp_history(state, ids)
+    torch.cuda.synchronize()
+    with torch.cuda.graph(graph):
+        fold_gdn_replayssm_mtp_history(state, ids)
+    before, cursor = state.checkpoint.clone(), state.cursor.packed_cursor.clone()
+    graph.replay()
+    assert torch.equal(state.checkpoint, before)
+    assert torch.equal(state.cursor.packed_cursor, cursor)
+    state.raw_k_ring[1].zero_()
+    state.raw_v_ring[1].zero_()
+    state.g_ring[1].fill_(-0.5)
+    state.cursor.packed_cursor[1, 0] = 1
+    graph.replay()
+    torch.testing.assert_close(state.checkpoint[1], before[1] * torch.exp(torch.tensor(-0.5, device='cuda')))
+    assert torch.equal(state.checkpoint[[0, 2]], before[[0, 2]])
+    assert state.cursor.packed_cursor[1, 0] == 1  # reset belongs to the agent
+
+
+@pytest.mark.parametrize('batch,heads,dim,tmax,channelwise,evict,head_major', [
+    (0, 64, 128, 6, True, False, False),
+    (1, 64, 128, 6, True, False, False),
+    (2, 64, 128, 6, True, False, False),
+    (7, 64, 128, 6, True, False, False),
+    (8, 64, 128, 6, True, True, True),
+    (9, 64, 128, 6, True, False, True),
+    (16, 64, 128, 6, True, True, True),
+    (17, 64, 128, 6, True, False, True),
+    (16, 32, 128, 6, True, False, True),
+    (8, 64, 128, 5, True, False, False),
+    (8, 64, 64, 6, True, False, False),
+    (8, 64, 128, 6, False, False, False),
+])
+def test_mtp_launch_policy_and_fold_dispatch(monkeypatch, batch, heads, dim, tmax,
+                                            channelwise, evict, head_major):
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.kernels.cuda import gated_delta_replayssm_spec as kernels
+
+    class Recorder:
+        def __getitem__(self, grid):
+            self.grid = grid
+
+            def launch(*args, **kwargs):
+                self.kwargs = kwargs
+
+            return launch
+
+    def empty(*shape, dtype=torch.float32):
+        return torch.empty(shape, device='meta', dtype=dtype)
+
+    ring = empty(batch + 1, heads, 16, dim)
+    state = SimpleNamespace(
+        checkpoint=empty(batch + 1, heads, dim, dim), d_ring=ring, k_ring=ring,
+        raw_v_ring=ring, raw_k_ring=ring,
+        g_ring=ring if channelwise else empty(batch + 1, heads, 16),
+        beta_ring=empty(batch + 1, heads, 16),
+        cursor=SimpleNamespace(R=16, Tmax=tmax, packed_cursor=empty(batch + 1, 3, dtype=torch.int32)))
+    q = empty(batch, tmax, heads, dim)
+    gates = q if channelwise else empty(batch, tmax, heads)
+    ids = empty(batch, dtype=torch.int64)
+    qlens = empty(batch, dtype=torch.int32)
+    recorder = Recorder()
+    monkeypatch.setattr(kernels, '_snapshot_replayssm_raw_kernel', Recorder())
+    monkeypatch.setattr(kernels, 'gdn_replayssm_spec_circular_kernel', recorder)
+    kernels.fused_recurrent_gdn_replayssm_spec(q, q, q, gates, empty(batch, tmax, heads), state, ids, qlens)
+    assert tuple(recorder.kwargs[key] for key in ('BV', 'num_warps', 'num_stages')) == (32, 1, 1)
+    assert recorder.kwargs['EVICT_CHECKPOINT'] == evict
+    assert recorder.kwargs['HEAD_MAJOR'] == head_major
+    assert recorder.grid == ((dim // 32, heads, batch) if head_major else (dim // 32, batch, heads))
+
+    monkeypatch.setattr(kernels, 'gdn_replayssm_exact_fold_kernel', recorder)
+    kernels.fold_gdn_replayssm_mtp_history(state, ids)
+    expected = (32, 2, 3) if batch <= 1 else (16, 1, 1)
+    assert tuple(recorder.kwargs[key] for key in ('BV', 'num_warps', 'num_stages')) == expected
+    assert recorder.grid == (dim // expected[0], batch, heads)
+    monkeypatch.setattr(kernels, 'commit_gdn_replayssm_spec_cursor_kernel', recorder)
+    kernels.commit_gdn_replayssm_spec_cursor(state.cursor.packed_cursor, ids, qlens, qlens, 16, tmax)
+    assert recorder.kwargs['BLOCK'] == 256
+    assert recorder.grid == ((batch + 255) // 256, )

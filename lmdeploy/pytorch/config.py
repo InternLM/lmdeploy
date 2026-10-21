@@ -15,6 +15,19 @@ from lmdeploy.utils import get_logger, is_bf16_supported
 logger = get_logger('lmdeploy')
 
 
+def validate_replayssm_config(buffer_len: int, num_spec_tokens: int) -> None:
+    """Validate history capacity against the configured verification window."""
+    if buffer_len not in (8, 16, 32):
+        raise ValueError('replayssm_buffer_len must be one of 8, 16, or 32.')
+    if num_spec_tokens < 0:
+        raise ValueError('num_spec_tokens must be nonnegative.')
+    tmax = num_spec_tokens + 1
+    if num_spec_tokens > 0 and buffer_len < 2 * tmax:
+        raise ValueError('MTP ReplaySSM requires replayssm_buffer_len >= '
+                         '2 * (num_speculative_tokens + 1), got '
+                         f'L={buffer_len}, Tmax={tmax}.')
+
+
 def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
     """Parse the pre-packed W4A16 metadata needed by the inference backend."""
     if quant_config.get('format') != 'pack-quantized':
@@ -176,6 +189,7 @@ class CacheConfig:
     # Model-owned checkpoint validity constraint, independent of prefill chunking.
     prefix_cache_block_aligned: bool = False
     prefix_cache_token_lookahead: int = 0
+    # Requested feature flag; validated before allocating model/cache resources.
     enable_replayssm: bool = False
     replayssm_buffer_len: int = 16
     states_shapes: list[tuple] = field(default_factory=list)
@@ -501,9 +515,9 @@ class ModelConfig:
     # flag to indicate that the model uses gated delta rule layers
     # and requires prepare_chunk_indices during prefill
     is_gated_delta: bool = False
+    # Effective flag: a supported target builder has installed the Replay schema.
     enable_replayssm: bool = False
     replayssm_buffer_len: int = 16
-    replayssm_mode: str | None = None
     replayssm_baseline_state_shapes: list[tuple[tuple[int, ...], torch.dtype]] = field(default_factory=list)
 
     # Named state-cache specs for models that need layered sequence state.
@@ -686,6 +700,22 @@ class ModelConfig:
 
         if spec_method == 'dflash':
             model_config.model_paradigm = 'ar_spec'
+
+        if model_config.enable_replayssm:
+            from lmdeploy.pytorch.consts import (
+                GDN_REPLAY_BETA_CACHE_NAME,
+                GDN_REPLAY_CURSOR_CACHE_NAME,
+                GDN_REPLAY_RAW_K_CACHE_NAME,
+                GDN_REPLAY_RAW_V_CACHE_NAME,
+            )
+            speculative = num_spec_tokens > 0
+            if is_draft_model or num_spec_tokens < 0 or speculative != (model_config.model_paradigm == 'ar_spec'):
+                raise ValueError('ReplaySSM target schema must match num_spec_tokens and model_paradigm.')
+            names = {spec.name for spec in model_config.state_cache_specs}
+            raw_names = {GDN_REPLAY_RAW_K_CACHE_NAME, GDN_REPLAY_RAW_V_CACHE_NAME, GDN_REPLAY_BETA_CACHE_NAME}
+            if (GDN_REPLAY_CURSOR_CACHE_NAME not in names
+                    or names & raw_names != (raw_names if speculative else set())):
+                raise ValueError('ReplaySSM raw-history schema must match the configured speculative protocol.')
 
         # update eos_token_id to list
         if isinstance(model_config.eos_token_id, int):

@@ -22,13 +22,6 @@ from lmdeploy.pytorch.engine.executor import (
     _validate_replayssm_preallocation,
     build_executor,
 )
-from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_config import (
-    MTP_COMMIT_CURSOR_SM90_CONFIG,
-    RESET_CURSOR_SM90_CONFIG,
-    STANDARD_CURSOR_SM90_CONFIG,
-    get_mtp_exact_fold_config,
-    get_standard_replayssm_config,
-)
 
 
 def _hf_config():
@@ -46,8 +39,7 @@ def _cfg():
     return SimpleNamespace(states_shapes=[('legacy', torch.bfloat16)],
                            state_cache_specs=[],
                            enable_replayssm=False,
-                           replayssm_buffer_len=16,
-                           replayssm_mode=None)
+                           replayssm_buffer_len=16)
 
 
 def test_public_replayssm_config_and_cache_propagation():
@@ -123,7 +115,7 @@ def test_replayssm_rejects_model_without_gdn_or_kda(monkeypatch, method):
     # DSV4 and other unsupported families must not be admitted just because
     # their cache has state or their speculative method is deepseek_mtp.
     monkeypatch.setattr('lmdeploy.pytorch.engine.executor.ModelConfig.from_pretrained',
-                        lambda *args, **kwargs: SimpleNamespace(replayssm_mode=None))
+                        lambda *args, **kwargs: SimpleNamespace(enable_replayssm=False))
     monkeypatch.setattr(torch.cuda, 'is_available', lambda: False)
     with pytest.raises(ValueError, match='supported Gated DeltaNet or GLM-5.3 KDA'):
         build_executor('unsupported-model', cache_config, None,
@@ -184,7 +176,7 @@ def test_standard_replayssm_named_schema():
 
     specs = {spec.name: spec for spec in cfg.state_cache_specs}
     assert len(cfg.states_shapes) == 6
-    assert cfg.replayssm_mode == 'standard'
+    assert cfg.enable_replayssm
     assert list(specs) == [
         GDN_CONV_STATE_CACHE_NAME,
         GDN_REPLAY_CHECKPOINT_CACHE_NAME,
@@ -217,7 +209,7 @@ def test_mtp_replayssm_named_schema_uses_fp32_checkpoint_and_raw_rings():
                             replayssm_buffer_len=16)
 
     specs = {spec.name: spec for spec in cfg.state_cache_specs}
-    assert cfg.replayssm_mode == 'mtp'
+    assert cfg.enable_replayssm
     assert specs[GDN_REPLAY_CHECKPOINT_CACHE_NAME].dtype == torch.float32
     assert specs[GDN_REPLAY_RAW_V_CACHE_NAME].shape == (8, 16, 128)
     assert specs[GDN_REPLAY_RAW_K_CACHE_NAME].shape == (4, 16, 64)
@@ -250,36 +242,7 @@ def test_disabled_replayssm_preserves_legacy_shapes():
                             replayssm_buffer_len=16)
     assert cfg.states_shapes == [('legacy', torch.bfloat16)]
     assert cfg.state_cache_specs == []
-    assert cfg.replayssm_mode is None
-
-
-@pytest.mark.parametrize(
-    ('batch', 'expected'),
-    [
-        (1, (32, 1, 1)),
-        (8, (32, 2, 4)),
-        (32, (128, 4, 4)),
-        (64, (128, 4, 3)),
-        (256, (128, 4, 3)),
-        (512, (128, 4, 4)),
-    ],
-)
-def test_standard_replayssm_uses_offline_batch_table(batch, expected):
-    config = get_standard_replayssm_config(batch)
-    assert (config['BV'], config['NK'], config['num_stages']) == expected
-    assert config['num_warps'] == 1
-    assert config['dot_precision'] == 'ieee'
-
-
-def test_cursor_operations_keep_independently_tuned_blocks():
-    assert STANDARD_CURSOR_SM90_CONFIG['BLOCK'] == 128
-    assert MTP_COMMIT_CURSOR_SM90_CONFIG['BLOCK'] == 256
-    assert RESET_CURSOR_SM90_CONFIG['BLOCK'] == 128
-
-
-def test_mtp_exact_fold_uses_single_row_specialization():
-    assert get_mtp_exact_fold_config(1) == {'BV': 32, 'num_warps': 2, 'num_stages': 3}
-    assert get_mtp_exact_fold_config(2) == {'BV': 16, 'num_warps': 1, 'num_stages': 1}
+    assert not cfg.enable_replayssm
 
 
 @pytest.mark.parametrize('num_spec_tokens', [0, 3, 5])
@@ -305,11 +268,99 @@ def test_glm_replayssm_preserves_kpool_and_replaces_only_kda_banks(monkeypatch, 
     assert specs[GDN_REPLAY_G_CACHE_NAME].shape == (2, 16, 128)
     assert specs[GDN_REPLAY_D_CACHE_NAME].dtype == torch.float32
     assert specs[GDN_REPLAY_K_CACHE_NAME].dtype == torch.float32
-    assert config.replayssm_mode == ('mtp' if num_spec_tokens else 'standard')
+    assert config.enable_replayssm
     assert (GDN_REPLAY_RAW_K_CACHE_NAME in specs) == bool(num_spec_tokens)
-    assert baseline.replayssm_mode is None
+    assert not baseline.enable_replayssm
     draft = Glm5NextModelConfigBuilder.build(hf, enable_replayssm=True, is_draft_model=True, **kwargs)
-    assert draft.replayssm_mode is None
+    assert not draft.enable_replayssm
     assert not draft.state_cache_specs
     with pytest.raises(ValueError, match='deepseek_mtp only'):
         Glm5NextModelConfigBuilder.build(hf, enable_replayssm=True, spec_method='qwen3_5_mtp')
+
+
+@pytest.mark.parametrize('length', [0, 3, 7, 64])
+@pytest.mark.parametrize('num_spec_tokens', [0, 3])
+def test_direct_gdn_builder_rejects_invalid_length(length, num_spec_tokens):
+    cfg = _cfg()
+    with pytest.raises(ValueError, match='one of 8, 16, or 32'):
+        configure_gdn_replayssm(cfg, _hf_config(), tp=1, activation_dtype=torch.bfloat16,
+                                ssm_dtype=torch.float32, num_spec_tokens=num_spec_tokens,
+                                enable_replayssm=True, replayssm_buffer_len=length)
+    assert not cfg.enable_replayssm
+    assert not cfg.state_cache_specs
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('num_spec_tokens', [0, 3])
+@pytest.mark.parametrize('draft', [False, True])
+def test_qwen_replayssm_target_draft_protocol(monkeypatch, enabled, num_spec_tokens, draft):
+    from transformers import Qwen3_5Config
+
+    from lmdeploy.pytorch.configurations.qwen3_5 import Qwen3_5ModelConfigBuilder
+
+    monkeypatch.setattr('lmdeploy.pytorch.configurations.qwen3_5.is_bf16_supported', lambda _: True)
+    hf = Qwen3_5Config(text_config=dict(num_hidden_layers=3,
+        layer_types=['linear_attention', 'full_attention', 'linear_attention'],
+        linear_key_head_dim=64, linear_value_head_dim=128,
+        linear_num_key_heads=4, linear_num_value_heads=8, mtp_num_hidden_layers=1))
+    hf.architectures = ['Qwen3_5ForConditionalGeneration']
+    cfg = Qwen3_5ModelConfigBuilder.build(hf, enable_replayssm=enabled,
+        num_spec_tokens=num_spec_tokens, spec_method='qwen3_5_mtp' if num_spec_tokens else None,
+        is_draft_model=draft)
+    assert cfg.enable_replayssm == (enabled and not draft)
+    assert bool(cfg.state_cache_specs) == (enabled and not draft)
+    assert not hasattr(cfg, 'replayssm_mode')
+    if draft:
+        assert cfg.states_shapes == []
+    if cfg.enable_replayssm:
+        specs = {s.name: s for s in cfg.state_cache_specs}
+        assert (GDN_REPLAY_RAW_K_CACHE_NAME in specs) == (num_spec_tokens > 0)
+        assert specs[GDN_CONV_STATE_CACHE_NAME].shape[-1] == hf.text_config.linear_conv_kernel_dim + num_spec_tokens
+
+
+@pytest.mark.parametrize('num_spec_tokens,paradigm,raw,expected_error', [
+    (0, 'ar', False, None), (3, 'ar_spec', True, None),
+    (0, 'ar_spec', False, 'target schema'), (3, 'ar', True, 'target schema'),
+    (0, 'ar', True, 'raw-history schema'), (3, 'ar_spec', False, 'raw-history schema'),
+])
+def test_replayssm_build_boundary_matches_configured_protocol(monkeypatch, num_spec_tokens, paradigm, raw,
+                                                               expected_error):
+    from lmdeploy.pytorch.config import ModelConfig, StateCacheSpec
+
+    names = [GDN_REPLAY_CURSOR_CACHE_NAME]
+    if raw:
+        names += [GDN_REPLAY_RAW_K_CACHE_NAME, GDN_REPLAY_RAW_V_CACHE_NAME, GDN_REPLAY_BETA_CACHE_NAME]
+    cfg = ModelConfig(hidden_size=128, num_layers=1, num_attention_heads=1, num_key_value_heads=1,
+                      bos_token_id=0, eos_token_id=[1], head_dim=128, enable_replayssm=True,
+                      model_paradigm=paradigm,
+                      state_cache_specs=[StateCacheSpec(name, (1,), torch.float32) for name in names])
+    monkeypatch.setattr('lmdeploy.pytorch.configurations.AutoModelConfigBuilder.build', lambda *a, **kw: cfg)
+    monkeypatch.setattr('lmdeploy.pytorch.config._update_torch_dtype', lambda config, *a, **kw: config)
+    if expected_error:
+        with pytest.raises(ValueError, match=expected_error):
+            ModelConfig.from_hf_config(object(), num_spec_tokens=num_spec_tokens, enable_replayssm=True)
+    else:
+        assert ModelConfig.from_hf_config(object(), num_spec_tokens=num_spec_tokens, enable_replayssm=True) is cfg
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('draft', [False, True])
+def test_qwen_next_replayssm_is_target_only(enabled, draft):
+    from transformers import Qwen3NextConfig
+
+    from lmdeploy.pytorch.configurations.qwen3_next import Qwen3NextModelConfigBuilder
+
+    hf = Qwen3NextConfig(num_hidden_layers=4, full_attention_interval=4,
+                         layer_types=['linear_attention'] * 3 + ['full_attention'],
+                         linear_key_head_dim=64, linear_value_head_dim=128,
+                         linear_num_key_heads=4, linear_num_value_heads=8)
+    baseline = Qwen3NextModelConfigBuilder.build(hf, enable_replayssm=False, is_draft_model=draft)
+    cfg = Qwen3NextModelConfigBuilder.build(hf, enable_replayssm=enabled, is_draft_model=draft)
+    assert cfg.enable_replayssm == (enabled and not draft)
+    assert bool(cfg.state_cache_specs) == (enabled and not draft)
+    if not enabled or draft:
+        # Unlike the Qwen3.5 predictor, this builder retains its legacy SSM shapes.
+        assert cfg.states_shapes == baseline.states_shapes
+        assert cfg.state_cache_specs == baseline.state_cache_specs
+    else:
+        assert GDN_REPLAY_CHECKPOINT_CACHE_NAME in {spec.name for spec in cfg.state_cache_specs}

@@ -5,12 +5,36 @@ import torch
 import triton
 import triton.language as tl
 
-from .gated_delta_replayssm_config import (
-    KDA_STANDARD_SM90_CONFIG,
-    RESET_CURSOR_SM90_CONFIG,
-    STANDARD_CURSOR_SM90_CONFIG,
-    get_standard_replayssm_config,
-)
+
+def _get_gdn_launch_params(batch: int) -> tuple[int, int, int, int]:
+    """Offline-selected BV, NK, warps and stages for scalar-gate
+    decode/fold."""
+    if batch <= 1:
+        return 32, 1, 1, 1
+    if batch <= 8:
+        return 32, 2, 1, 4
+    if batch <= 32:
+        return 128, 4, 1, 4
+    if batch <= 256:
+        return 128, 4, 1, 3
+    return 128, 4, 1, 4
+
+
+def _get_kda_decode_launch_params(batch: int) -> tuple[int, int, int]:
+    """BV, NK and warps for qualified SM90 KDA decode; stages remain one.
+
+    Only measured batches are specialized. In particular, the B1 tile regresses B2, and the shared B16/B64 tile is not
+    qualified for the batches in between.
+    """
+    if batch == 1:
+        return 32, 1, 4
+    if batch == 2:
+        return 32, 2, 2
+    if batch == 8:
+        return 128, 4, 2
+    if batch in (16, 64):
+        return 32, 1, 1
+    return 128, 2, 4
 
 
 @triton.jit
@@ -346,10 +370,16 @@ def fused_recurrent_gdn_replayssm_decode(q: torch.Tensor,
         scale = K**-0.5
 
     BK = triton.next_power_of_2(K)
-    config = KDA_STANDARD_SM90_CONFIG if channelwise else get_standard_replayssm_config(B)
-    nk = min(config['NK'], BK)
+    bv, nk, num_warps, num_stages = (128, 2, 4, 1) if channelwise else _get_gdn_launch_params(B)
+    # Only the measured SM90 KDA decode shape uses the tuned launch parameters.
+    # Fold/MTP and other lengths, dtypes and architectures keep their defaults.
+    if (channelwise and (H, HV, K, V, L) == (64, 64, 128, 128, 16)
+            and q.dtype in (torch.bfloat16, torch.float32)
+            and torch.cuda.get_device_capability(q.device)[0] == 9):
+        bv, nk, num_warps = _get_kda_decode_launch_params(B)
+    nk = min(nk, BK)
     BKT = BK // nk
-    BV = min(triton.next_power_of_2(V), config['BV'])
+    BV = min(triton.next_power_of_2(V), bv)
     BC = max(16, triton.next_power_of_2(L))
     out = torch.empty_like(v)
     grid = (triton.cdiv(V, BV), B, HV)
@@ -364,8 +394,8 @@ def fused_recurrent_gdn_replayssm_decode(q: torch.Tensor,
         scale,
         H=H, HV=HV, K=K, V=V, L=L, BK=BK, BV=BV, BC=BC,
         NK=nk, BKT=BKT, HAS_FORCE_FLUSH=force_flush is not None,
-        DOT_PRECISION=dot_precision, CHANNELWISE_G=channelwise, num_warps=config['num_warps'],
-        num_stages=config['num_stages'])
+        DOT_PRECISION=dot_precision, CHANNELWISE_G=channelwise, num_warps=num_warps,
+        num_stages=num_stages)
     return out, checkpoint
 
 
@@ -375,7 +405,7 @@ def advance_gdn_replayssm_standard_cursor(packed_cursor: torch.Tensor,
                                           force_flush: torch.Tensor | None = None) -> None:
     """Advance valid standard-decode rows exactly once after all GDN layers."""
     n_rows = state_indices.numel()
-    block = STANDARD_CURSOR_SM90_CONFIG['BLOCK']
+    block = 128
     _advance_standard_cursor_kernel[(triton.cdiv(n_rows, block), )](
         packed_cursor, state_indices,
         force_flush if force_flush is not None else state_indices,
@@ -395,9 +425,10 @@ def fold_gdn_replayssm_standard_history(checkpoint: torch.Tensor,
     h = k_ring.shape[1]
     length = d_ring.shape[2]
     bk = triton.next_power_of_2(kdim)
-    config = (KDA_STANDARD_SM90_CONFIG if g_ring.ndim == 4
-              else get_standard_replayssm_config(state_indices.numel()))
-    bv = min(triton.next_power_of_2(vdim), config['BV'])
+    # Partial KDA fold retains its default, not the decode batch specializations.
+    bv, _, num_warps, num_stages = ((128, 2, 4, 1) if g_ring.ndim == 4
+                                    else _get_gdn_launch_params(state_indices.numel()))
+    bv = min(triton.next_power_of_2(vdim), bv)
     bc = max(16, triton.next_power_of_2(length))
     grid = (triton.cdiv(vdim, bv), state_indices.numel(), hv)
     _fold_standard_history_kernel[grid](
@@ -406,14 +437,14 @@ def fold_gdn_replayssm_standard_history(checkpoint: torch.Tensor,
         g_ring.stride(0), packed_cursor.stride(0), state_indices.stride(0),
         H=h, HV=hv, K=kdim, V=vdim, L=length, BK=bk, BV=bv, BC=bc,
         CHANNELWISE_G=g_ring.ndim == 4,
-        num_warps=config['num_warps'],
-        num_stages=config['num_stages'])
+        num_warps=num_warps,
+        num_stages=num_stages)
 
 
 def reset_gdn_replayssm_cursor(packed_cursor: torch.Tensor,
                                slot_ids: torch.Tensor) -> None:
     """Reset selected device-resident cursor rows."""
     n_slots = slot_ids.numel()
-    block = RESET_CURSOR_SM90_CONFIG['BLOCK']
+    block = 128
     _reset_cursor_kernel[(triton.cdiv(n_slots, block), )](
         packed_cursor, slot_ids, packed_cursor.stride(0), n_slots, BLOCK=block)

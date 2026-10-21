@@ -1813,7 +1813,9 @@ def test_prepare_prefill_cache_inputs_rejects_mismatched_save_steps():
         maker._prepare_prefill_cache_inputs([_state_seq(4, 11)], save_steps=())
 
 
-def test_from_engine_decode_cache_inputs_compacts_valid_replayssm_saves():
+@pytest.mark.parametrize('replay', [False, True])
+@pytest.mark.parametrize('spec', [False, True])
+def test_from_engine_decode_cache_inputs_compacts_valid_replayssm_saves(replay, spec):
     valid_seqs = [_state_seq(4), _state_seq(5)]
 
     class _StateCheckpoints:
@@ -1836,26 +1838,32 @@ def test_from_engine_decode_cache_inputs_compacts_valid_replayssm_saves():
     engine = SimpleNamespace(
         cache_config=cache_config,
         model_config=SimpleNamespace(use_mrope=False,
-                                     replayssm_mode='standard'),
+                                     enable_replayssm=replay),
         engine_config=SimpleNamespace(prefill_interval=None),
         specdecode_config=None,
         dist_config=SimpleNamespace(dp=1),
         misc_config=SimpleNamespace(enable_chunked_prefill=False),
     )
     config = InputsMakerConfig.from_engine(engine)
-    assert config.replayssm_mode == 'standard'
+    assert config.enable_replayssm == replay
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
     maker.config = config
     maker.state_checkpoints = _StateCheckpoints()
-    maker.spec_decoding = False
+    maker.spec_decoding = spec
     delta = SimpleNamespace(max_q_seqlen=1)
 
     cache_inputs = maker._make_decode_cache_inputs(valid_seqs, delta)
+    if spec:
+        assert cache_inputs is None
+        return
 
     assert cache_inputs.state_restore_plan is None
     assert cache_inputs.state_save_plan == ((4, ), (31, ))
-    assert cache_inputs.replayssm_force_flush.tolist() == [True, False]
+    if replay:
+        assert cache_inputs.replayssm_force_flush.tolist() == [True, False]
+    else:
+        assert cache_inputs.replayssm_force_flush is None
 
 
 @pytest.mark.parametrize(

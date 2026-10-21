@@ -26,7 +26,7 @@ GLM5_KDA_CONV_STATE = 'glm5_kda_conv'
 GLM5_KDA_RECURRENT_STATE = 'glm5_kda_recurrent'
 GLM5_KPOOL_TAIL_K_STATE = 'glm5_kpool_tail_k'
 GLM5_KPOOL_TAIL_SCORE_STATE = 'glm5_kpool_tail_score'
-# Gated DeltaNet ReplaySSM sequence-state cache names.  These names are part
+# Shared GDN/KDA delta-rule ReplaySSM sequence-state cache names.  These names are part
 # of the model/cache-engine contract; keep them stable across implementations.
 GDN_CONV_STATE_CACHE_NAME = 'gdn_conv_state'
 GDN_REPLAY_CHECKPOINT_CACHE_NAME = 'gdn_replay_checkpoint'

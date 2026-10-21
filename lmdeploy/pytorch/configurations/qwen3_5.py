@@ -28,6 +28,7 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
               num_spec_tokens: int = 0,
               **kwargs):
         """build."""
+        enable_replayssm = kwargs.get('enable_replayssm', False) and not is_draft_model
         text_config = hf_config.text_config
         # propagate quantization_config from top-level hf_config into text_config
         quantization_config = getattr(hf_config, 'quantization_config', None)
@@ -87,7 +88,7 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
             activation_dtype=dtype,
             ssm_dtype=ssm_dtype,
             num_spec_tokens=num_spec_tokens,
-            enable_replayssm=kwargs.get('enable_replayssm', False),
+            enable_replayssm=enable_replayssm,
             replayssm_buffer_len=kwargs.get('replayssm_buffer_len', 16),
         )
 

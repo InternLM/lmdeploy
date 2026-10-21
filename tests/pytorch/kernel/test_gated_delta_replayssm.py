@@ -179,7 +179,7 @@ def test_standard_replayssm_graph_save_restore_continues_before_natural_flush():
                                is_decoding=True,
                                device=torch.device('cuda'),
                                is_ssm=True,
-                               is_replayssm_standard=True)
+                               needs_replayssm_force_flush=True)
     mixin = CudaGraphMixin()
     graph_meta.input_buffers = mixin.make_buffers_cudagraph(
         graph_meta,
@@ -303,3 +303,106 @@ def test_standard_replayssm_partial_history_materializes_for_continuation():
     reset_gdn_replayssm_cursor(cursor, state_ids)
     torch.testing.assert_close(checkpoint, baseline, atol=5e-2, rtol=5e-2)
     assert torch.count_nonzero(cursor) == 0
+
+
+class _LaunchRecorder:
+    def __getitem__(self, grid):
+        self.grid = grid
+
+        def launch(*args, **kwargs):
+            self.kwargs = kwargs
+
+        return launch
+
+
+@pytest.mark.parametrize('batch,heads,length,dtype,major,channelwise,tuned', [
+    (1, 64, 16, torch.float32, 9, True, True),
+    (2, 64, 16, torch.bfloat16, 9, True, True),
+    (8, 64, 16, torch.bfloat16, 9, True, True),
+    (16, 64, 16, torch.float32, 9, True, True),
+    (64, 64, 16, torch.bfloat16, 9, True, True),
+    (3, 64, 16, torch.bfloat16, 9, True, False),
+    (4, 64, 16, torch.bfloat16, 9, True, False),
+    (32, 64, 16, torch.bfloat16, 9, True, False),
+    (65, 64, 16, torch.bfloat16, 9, True, False),
+    (1, 64, 8, torch.bfloat16, 9, True, False),
+    (1, 64, 32, torch.bfloat16, 9, True, False),
+    (1, 32, 16, torch.bfloat16, 9, True, False),
+    (1, 64, 16, torch.float16, 9, True, False),
+    (1, 64, 16, torch.float32, 8, True, False),
+    (1, 64, 16, torch.float32, 10, True, False),
+    (8, 64, 16, torch.float32, 9, False, False),
+])
+def test_kda_decode_dispatch_keeps_other_paths(monkeypatch, batch, heads, length,
+                                             dtype, major, channelwise, tuned):
+    from lmdeploy.pytorch.kernels.cuda import gated_delta_replayssm as kernels
+
+    recorder = _LaunchRecorder()
+    monkeypatch.setattr(kernels, '_gdn_replayssm_decode_kernel', recorder)
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda device: (major, 0))
+    # Meta tensors exercise the real Python launcher without claiming GPU work.
+    def empty(*shape, dtype=dtype):
+        return torch.empty(shape, dtype=dtype, device='meta')
+
+    q = empty(batch, 1, heads, 128)
+    g = empty(batch, 1, heads, *([128] if channelwise else []), dtype=torch.float32)
+    checkpoint = empty(batch + 2, heads, 128, 128, dtype=torch.float32)
+    ring = empty(batch + 2, heads, length, 128, dtype=torch.float32)
+    gates = empty(batch + 2, heads, length, *([128] if channelwise else []), dtype=torch.float32)
+    cursor = empty(batch + 2, 3, dtype=torch.int32)
+    ids = empty(batch, dtype=torch.int64)
+    kernels.fused_recurrent_gdn_replayssm_decode(
+        q, q, q, g, empty(batch, 1, heads, dtype=torch.float32),
+        checkpoint, ring, ring, gates, cursor, ids)
+    expected = {
+        1: (32, 1, 4, 1), 2: (32, 2, 2, 1), 8: (128, 4, 2, 1),
+        16: (32, 1, 1, 1), 64: (32, 1, 1, 1),
+    }[batch] if tuned else (128, 2, 4, 1)
+    if not channelwise:
+        expected = (32, 2, 1, 4)  # Scalar-gate B8 path.
+    assert tuple(recorder.kwargs[key] for key in ('BV', 'NK', 'num_warps', 'num_stages')) == expected
+    assert recorder.grid == ((128 + expected[0] - 1) // expected[0], batch, heads)
+
+
+@pytest.mark.parametrize('batch,expected', [
+    (0, (32, 1, 1, 1)), (1, (32, 1, 1, 1)), (2, (32, 2, 1, 4)),
+    (8, (32, 2, 1, 4)), (9, (128, 4, 1, 4)), (32, (128, 4, 1, 4)),
+    (33, (128, 4, 1, 3)), (256, (128, 4, 1, 3)), (257, (128, 4, 1, 4)),
+])
+def test_standard_launch_params_and_cursor_blocks(monkeypatch, batch, expected):
+    from lmdeploy.pytorch.kernels.cuda import gated_delta_replayssm as kernels
+
+    def empty(*shape, dtype=torch.float32):
+        return torch.empty(shape, device='meta', dtype=dtype)
+
+    recorder = _LaunchRecorder()
+    q = empty(batch, 1, 2, 128)
+    checkpoint = empty(batch + 1, 2, 128, 128)
+    ring = empty(batch + 1, 2, 16, 128)
+    gates = empty(batch + 1, 2, 16)
+    cursor = empty(batch + 1, 3, dtype=torch.int32)
+    ids = empty(batch, dtype=torch.int64)
+    monkeypatch.setattr(kernels, '_gdn_replayssm_decode_kernel', recorder)
+    kernels.fused_recurrent_gdn_replayssm_decode(
+        q, q, q, empty(batch, 1, 2), empty(batch, 1, 2),
+        checkpoint, ring, ring, gates, cursor, ids, dot_precision='tf32')
+    assert tuple(recorder.kwargs[key] for key in ('BV', 'NK', 'num_warps', 'num_stages')) == expected
+    assert recorder.kwargs['DOT_PRECISION'] == 'tf32'  # Precision remains owned by the caller.
+    assert recorder.grid == (128 // expected[0], batch, 2)
+
+    monkeypatch.setattr(kernels, '_fold_standard_history_kernel', recorder)
+    kernels.fold_gdn_replayssm_standard_history(checkpoint, ring, ring, gates, cursor, ids)
+    assert tuple(recorder.kwargs[key] for key in ('BV', 'num_warps', 'num_stages')) == (
+        expected[0], expected[2], expected[3])
+    # KDA partial fold must not inherit the decode-specific batch tuning.
+    kernels.fold_gdn_replayssm_standard_history(checkpoint, ring, ring, ring, cursor, ids)
+    assert tuple(recorder.kwargs[key] for key in ('BV', 'num_warps', 'num_stages')) == (128, 4, 1)
+
+    monkeypatch.setattr(kernels, '_advance_standard_cursor_kernel', recorder)
+    kernels.advance_gdn_replayssm_standard_cursor(cursor, ids, 16)
+    assert recorder.kwargs['BLOCK'] == 128
+    assert recorder.grid == ((batch + 127) // 128, )
+    monkeypatch.setattr(kernels, '_reset_cursor_kernel', recorder)
+    kernels.reset_gdn_replayssm_cursor(cursor, ids)
+    assert recorder.kwargs['BLOCK'] == 128
+    assert recorder.grid == ((batch + 127) // 128, )

@@ -135,7 +135,7 @@ class InputsMakerConfig:
     enable_chunked_prefill: bool = False
     use_mrope: bool = False
     prefill_interval: int = 16
-    replayssm_mode: str | None = None
+    enable_replayssm: bool = False
 
     @staticmethod
     def from_engine(engine: 'Engine'):
@@ -162,7 +162,7 @@ class InputsMakerConfig:
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
             use_mrope=model_config.use_mrope,
-            replayssm_mode=model_config.replayssm_mode,
+            enable_replayssm=model_config.enable_replayssm,
             **kwargs,
         )
 
@@ -1034,7 +1034,7 @@ class InputsMakerAsync:
         if state_save_plan is None:
             return None
         force_flush = None
-        if getattr(self.config, 'replayssm_mode', None) == 'standard':
+        if self.config.enable_replayssm:
             # Keep checkpoint-boundary preparation on the host. The ordinary
             # forward-payload transfer moves this row mask to CUDA before
             # ModelAgent consumes it.

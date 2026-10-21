@@ -5,6 +5,8 @@ from typing import Any
 
 import torch
 
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayState
+
 from .base import BuildSpec
 
 
@@ -21,15 +23,15 @@ class KdaImpl(ABC):
         conv_bias: torch.Tensor | None,
         a_log: torch.Tensor,
         dt_bias: torch.Tensor,
-        conv_state: torch.Tensor,
-        recurrent_state: torch.Tensor,
+        conv_state: torch.Tensor | None,
+        recurrent_state: torch.Tensor | GatedDeltaReplayState,
         metadata: Any,
         num_heads: int,
         head_dim: int,
         lower_bound: float,
-        replay_state=None,
     ) -> torch.Tensor:
-        """Run short convolution followed by the KDA recurrence."""
+        """Run convolution then KDA; conv_state=None requires a ReplayState
+        owner."""
         raise NotImplementedError
 
 

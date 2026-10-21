@@ -31,6 +31,7 @@ from lmdeploy.pytorch.backends.cuda.kpool import (
     kpool_select_prefill_cuda,
     kpool_write_token_cache_cuda,
 )
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayState, build_gated_delta_replay_state
 from lmdeploy.pytorch.configurations.glm5_next import is_glm5_kda_layer
 from lmdeploy.pytorch.consts import (
     GDN_REPLAY_CURSOR_CACHE_NAME,
@@ -54,13 +55,7 @@ from lmdeploy.pytorch.nn import (
     ParallelLMHead,
     RMSNorm,
 )
-from lmdeploy.pytorch.nn.gated_delta import (
-    GatedDeltaMeta,
-    GatedDeltaMetaBuilder,
-    GatedDeltaReplayState,
-    build_gated_delta_replay_state,
-    build_rmsnorm_gated,
-)
+from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMeta, GatedDeltaMetaBuilder, build_rmsnorm_gated
 from lmdeploy.pytorch.nn.kpool import (
     kpool_expand_selected_groups,
     kpool_pooled_block_offsets,
@@ -735,6 +730,10 @@ class Glm5NextLinearAttention(nn.Module):
         raw_beta = self.b_proj(hidden_states)
         raw_gate, norm_gate = self.fg_b_proj(self.fg_a_proj(hidden_states))
 
+        if isinstance(past_key_value, GatedDeltaReplayState):
+            conv_state, recurrent_state = None, past_key_value
+        else:
+            conv_state, recurrent_state = past_key_value
         core_output = self.kda(
             mixed_qkv=mixed_qkv,
             raw_gate=raw_gate,
@@ -743,11 +742,8 @@ class Glm5NextLinearAttention(nn.Module):
             conv_bias=None,
             a_log=self.A_log,
             dt_bias=self.dt_bias,
-            conv_state=(past_key_value.conv_state if isinstance(past_key_value, GatedDeltaReplayState)
-                        else past_key_value[0]),
-            recurrent_state=(past_key_value.checkpoint if isinstance(past_key_value, GatedDeltaReplayState)
-                             else past_key_value[1]),
-            replay_state=past_key_value if isinstance(past_key_value, GatedDeltaReplayState) else None,
+            conv_state=conv_state,
+            recurrent_state=recurrent_state,
             metadata=kda_metadata,
             num_heads=self.local_num_heads,
             head_dim=self.head_dim,
@@ -1800,7 +1796,7 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
         if replay_enabled:
             build = self.ctx_mgr.build_ctx
             linear_caches = [
-                build_gated_delta_replay_state(named_states, layer_id, build.replayssm_mode,
+                build_gated_delta_replay_state(named_states, layer_id,
                                                build.replayssm_buffer_len, build.num_spec_tokens + 1,
                                                getattr(context, 'replayssm_force_flush', None))
                 for layer_id in range(self.config.num_hidden_layers)

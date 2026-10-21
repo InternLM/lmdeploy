@@ -30,21 +30,14 @@ def _validate_replayssm_preallocation(cache_config: CacheConfig,
         # native state, so reject every connector role rather than only loads.
         raise ValueError('ReplaySSM does not support external KV-cache connectors; '
                          'disable ReplaySSM or remove kv_transfer_config.')
-    buffer_len = cache_config.replayssm_buffer_len
-    if buffer_len not in (8, 16, 32):
-        raise ValueError('replayssm_buffer_len must be one of 8, 16, or 32.')
-    if specdecode_config is None:
-        return
-    if specdecode_config.method not in ('qwen3_5_mtp', 'deepseek_mtp'):
+    from lmdeploy.pytorch.config import validate_replayssm_config
+
+    num_spec_tokens = 0 if specdecode_config is None else specdecode_config.num_speculative_tokens
+    validate_replayssm_config(cache_config.replayssm_buffer_len, num_spec_tokens)
+    if specdecode_config is not None and specdecode_config.method not in ('qwen3_5_mtp', 'deepseek_mtp'):
         raise ValueError(
             'ReplaySSM speculative decoding supports only qwen3_5_mtp or GLM-5.3 deepseek_mtp, got '
             f'{specdecode_config.method!r}.')
-    tmax = specdecode_config.num_speculative_tokens + 1
-    if buffer_len < 2 * tmax:
-        raise ValueError(
-            'MTP ReplaySSM requires replayssm_buffer_len >= '
-            '2 * (num_speculative_tokens + 1), got '
-            f'L={buffer_len}, Tmax={tmax}.')
 
 
 def _finalize_sparse_mla_cache_policy(model_configs: Sequence[ModelConfig], cache_config: CacheConfig) -> None:
@@ -151,7 +144,7 @@ def build_executor(
             raise ValueError(
                 'ReplaySSM is currently qualified only for SM90 CUDA GPUs, '
                 f'got SM{capability[0]}{capability[1]}.')
-        if model_config.replayssm_mode is None:
+        if not model_config.enable_replayssm:
             raise ValueError('ReplaySSM requires a supported Gated DeltaNet or GLM-5.3 KDA model.')
         if specdecode_config is not None:
             expected = ('deepseek_mtp' if model_config.hf_config.model_type == 'glm5_next'

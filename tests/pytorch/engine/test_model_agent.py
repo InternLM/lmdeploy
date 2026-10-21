@@ -365,7 +365,7 @@ def test_mtp_replayssm_commit_uses_rejection_count_not_stop_position(monkeypatch
                         'commit_gdn_replayssm_spec_cursor', commit)
     cursor = object()
     agent = BaseModelAgent.__new__(BaseModelAgent)
-    agent.model_config = SimpleNamespace(replayssm_mode='mtp',
+    agent.model_config = SimpleNamespace(enable_replayssm=True, model_paradigm='ar_spec',
                                          replayssm_buffer_len=8)
     agent.state_cache_engine = SimpleNamespace(
         named_state_caches={'gdn_replay_cursor': cursor})
@@ -815,7 +815,6 @@ def _make_minimal_build_agent(target_layer_ids, mask_token_id=99):
         tie_word_embeddings=False,
         enable_replayssm=False,
         replayssm_buffer_len=16,
-        replayssm_mode=None,
     )
     agent.misc_config = SimpleNamespace(
         enable_return_routed_experts=False,
@@ -967,7 +966,7 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
 
     agent_module.model_forward(_Model(),
                                inputs,
-                               object(),
+                               SimpleNamespace(enable_replayssm=False),
                                _CacheEngine(),
                                _StateCacheEngine(),
                                stream=object(),
@@ -989,6 +988,7 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
 def test_model_forward_cudagraph_checkpoint_publish_restore_and_continue():
     """Exercise the production graph/model-agent/save ordering as one path."""
     from lmdeploy.pytorch.backends.cuda.graph_runner.full_graph import CUDASingleGraphRunner
+    from lmdeploy.pytorch.backends.gated_delta_rule import build_gated_delta_replay_state
     from lmdeploy.pytorch.consts import (
         GDN_CONV_STATE_CACHE_NAME,
         GDN_REPLAY_CHECKPOINT_CACHE_NAME,
@@ -1007,7 +1007,6 @@ def test_model_forward_cudagraph_checkpoint_publish_restore_and_continue():
     )
     from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
     from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMixin
-    from lmdeploy.pytorch.nn.gated_delta import build_gated_delta_replay_state
     from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import CheckpointCopyPlan
 
     batch, slots, h, hv, kdim, vdim, length = 1, 4, 1, 2, 32, 48, 8
@@ -1091,7 +1090,7 @@ def test_model_forward_cudagraph_checkpoint_publish_restore_and_continue():
 
         def prepare_inputs_for_generation(self, past_key_values, context, **kwargs):
             replay_state = build_gated_delta_replay_state(
-                context.named_state_caches, 0, 'standard', length, 1,
+                context.named_state_caches, 0, length, 1,
                 context.replayssm_force_flush)
             return dict(input_ids=context.input_ids,
                         position_ids=context.position_ids,
@@ -1124,7 +1123,7 @@ def test_model_forward_cudagraph_checkpoint_publish_restore_and_continue():
         model_paradigm='ar',
         states_shapes=[((1, ), torch.float32)],
         use_mrope=False,
-        replayssm_mode='standard',
+        enable_replayssm=True,
         replayssm_buffer_len=length,
         block_size=16,
     )
@@ -2611,3 +2610,13 @@ def test_update_routes_before_renaming(weight_update_agent, monkeypatch, entry, 
         for (actual_name, actual_tensor), (name, tensor) in zip(loaded[tag], expected_weights):
             assert actual_name == 'renamed.' + name
             torch.testing.assert_close(actual_tensor, tensor)
+
+
+def test_replayssm_validates_bound_worker_device_before_model_build(monkeypatch):
+    checked = []
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda device: checked.append(device) or (8, 0))
+    agent = SimpleNamespace(model_path='unused', adapters=None, device=torch.device('cuda:3'),
+                            model_config=SimpleNamespace(enable_replayssm=True))
+    with pytest.raises(ValueError, match='every worker.*SM80'):
+        BaseModelAgent._build_model(agent)
+    assert checked == [torch.device('cuda:3')]

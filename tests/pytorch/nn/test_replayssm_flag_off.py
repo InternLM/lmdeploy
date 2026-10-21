@@ -75,7 +75,7 @@ def test_flag_off_default_prepare_matches_legacy_formula(is_decoding, kv_ratio,
 @pytest.mark.parametrize('is_decoding', [False, True])
 def test_flag_off_commit_never_accesses_replay_state(is_decoding):
     agent = BaseModelAgent.__new__(BaseModelAgent)
-    agent.model_config = SimpleNamespace(replayssm_mode=None)
+    agent.model_config = SimpleNamespace(enable_replayssm=False)
     # Deliberately omit state_cache_engine, spec_agent and rejection counts:
     # the flag-off path must return before accessing any ReplaySSM state.
     agent._commit_mtp_replayssm(SimpleNamespace(is_decoding=is_decoding), object())

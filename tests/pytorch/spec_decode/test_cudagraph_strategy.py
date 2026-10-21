@@ -95,12 +95,11 @@ def test_standard_replayssm_force_flush_uses_fixed_padded_graph_buffer():
 
     import torch
 
+    from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayCursor, GatedDeltaReplayState
     from lmdeploy.pytorch.models.utils.cudagraph import (
         CudaGraphMeta,
         CudaGraphMixin,
-        _bind_replayssm_force_flush,
     )
-    from lmdeploy.pytorch.nn.gated_delta import GatedDeltaReplayCursor, GatedDeltaReplayState
 
     model = CudaGraphMixin()
     graph_meta = CudaGraphMeta(
@@ -110,7 +109,7 @@ def test_standard_replayssm_force_flush_uses_fixed_padded_graph_buffer():
         is_decoding=True,
         device=torch.device('cpu'),
         is_ssm=True,
-        is_replayssm_standard=True,
+        needs_replayssm_force_flush=True,
     )
     graph_meta.input_buffers = model.make_buffers_cudagraph(
         graph_meta,
@@ -137,7 +136,6 @@ def test_standard_replayssm_force_flush_uses_fixed_padded_graph_buffer():
     assert replay_context.replayssm_force_flush.tolist() == [True, False, False, False]
 
     replay_state = GatedDeltaReplayState(
-        mode='standard',
         conv_state=torch.empty(0),
         checkpoint=torch.empty(0),
         d_ring=torch.empty(0),
@@ -146,6 +144,7 @@ def test_standard_replayssm_force_flush_uses_fixed_padded_graph_buffer():
         cursor=GatedDeltaReplayCursor(torch.empty(0), L=8, R=8, Tmax=1),
     )
     attention_state = object()
+    from lmdeploy.pytorch.models.utils.cudagraph import _bind_replayssm_force_flush
     rebound = _bind_replayssm_force_flush(
         [replay_state, attention_state], replay_context.replayssm_force_flush)
     assert replay_state.force_flush is None

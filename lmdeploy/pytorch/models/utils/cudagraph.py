@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayState
 from lmdeploy.pytorch.distributed import get_dcp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 
@@ -17,13 +18,11 @@ BuffType = dict[str, Tensor]
 
 
 def _bind_replayssm_force_flush(past_key_values: list,
-                                force_flush: Tensor) -> list:
+                                force_flush: torch.Tensor) -> list:
     """Bind graph-stable flush storage into standard ReplaySSM states."""
-    from lmdeploy.pytorch.nn.gated_delta import GatedDeltaReplayState
-
     return [
         dataclass_replace(state, force_flush=force_flush)
-        if isinstance(state, GatedDeltaReplayState) and state.mode == 'standard'
+        if isinstance(state, GatedDeltaReplayState) and state.cursor.Tmax == 1
         else state for state in past_key_values
     ]
 
@@ -59,7 +58,8 @@ class CudaGraphMeta:
     use_fa3_decoding: bool = False
     is_ssm: bool = False
     use_mrope: bool = False
-    is_replayssm_standard: bool = False
+    # Capture a mutable, fixed-address force-flush input for Standard ReplaySSM.
+    needs_replayssm_force_flush: bool = False
     block_size: int = 64
     step_meta_plan: 'CudaStepMetaPlan | None' = None
     step_meta_buffers: 'CudaStepMetaGraphBuffers | None' = None
@@ -183,7 +183,7 @@ class CudaGraphMixin:
         if graph_meta.is_ssm:
             state_ids = torch.full((max_batches, ), -1, dtype=torch.int64, device=device)
             input_buffers['state_ids'] = state_ids
-            if graph_meta.is_replayssm_standard:
+            if graph_meta.needs_replayssm_force_flush:
                 # This buffer must exist even when dummy capture has no save
                 # plan. Its presence captures the force-flush kernel branch;
                 # replay only changes the values, never the address.
@@ -310,7 +310,7 @@ class CudaGraphMixin:
             attn_metadata=attn_metadata,
         )
         new_inputs.update(kwargs)
-        if graph_meta.is_replayssm_standard:
+        if graph_meta.needs_replayssm_force_flush:
             # prepare_inputs_for_generation builds these immutable state views
             # before CUDASingleGraphRunner installs graph buffers on context.
             # Rebind the graph copy so captured layer kernels see the stable
@@ -364,7 +364,7 @@ class CudaGraphMixin:
         # ssm
         if graph_meta.is_ssm:
             context.state_offsets = input_buffers['state_ids']
-            if graph_meta.is_replayssm_standard:
+            if graph_meta.needs_replayssm_force_flush:
                 runtime_force_flush = context.replayssm_force_flush
                 force_flush = input_buffers['replayssm_force_flush']
                 force_flush.fill_(False)

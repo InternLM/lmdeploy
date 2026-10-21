@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from lmdeploy.pytorch.config import StateCacheSpec
+from lmdeploy.pytorch.config import StateCacheSpec, validate_replayssm_config
 from lmdeploy.pytorch.consts import (
     GDN_CONV_STATE_CACHE_NAME,
     GDN_REPLAY_BETA_CACHE_NAME,
@@ -39,16 +39,11 @@ def configure_gdn_replayssm(cfg,
                             enable_replayssm: bool,
                             replayssm_buffer_len: int) -> None:
     """Replace legacy GDN state shapes with the named ReplaySSM schema."""
-    cfg.enable_replayssm = enable_replayssm
+    cfg.enable_replayssm = False
     cfg.replayssm_buffer_len = replayssm_buffer_len
     if not enable_replayssm:
         return
-    tmax = num_spec_tokens + 1
-    if num_spec_tokens > 0 and replayssm_buffer_len < 2 * tmax:
-        raise ValueError(
-            'MTP ReplaySSM requires replayssm_buffer_len >= '
-            '2 * (num_speculative_tokens + 1), got '
-            f'L={replayssm_buffer_len}, Tmax={tmax}.')
+    validate_replayssm_config(replayssm_buffer_len, num_spec_tokens)
     cfg.replayssm_baseline_state_shapes = list(cfg.states_shapes)
 
     layer_ids = [idx for idx, layer_type in enumerate(hf_config.layer_types)
@@ -64,8 +59,7 @@ def configure_gdn_replayssm(cfg,
     value_dim = head_v_dim * num_v_heads
     conv_dim = key_dim * 2 + value_dim
     conv_kernel_size = hf_config.linear_conv_kernel_dim + num_spec_tokens
-    mode = 'mtp' if num_spec_tokens > 0 else 'standard'
-    checkpoint_dtype = torch.float32 if mode == 'mtp' else ssm_dtype
+    checkpoint_dtype = torch.float32 if num_spec_tokens > 0 else ssm_dtype
     ring_len = replayssm_buffer_len
 
     specs = [
@@ -77,17 +71,17 @@ def configure_gdn_replayssm(cfg,
                        layer_ids=layer_ids),
         StateCacheSpec(GDN_REPLAY_D_CACHE_NAME,
                        (num_v_heads, ring_len, head_v_dim),
-                       activation_dtype if mode == 'mtp' else ssm_dtype,
+                       activation_dtype if num_spec_tokens > 0 else ssm_dtype,
                        layer_ids=layer_ids),
         StateCacheSpec(GDN_REPLAY_K_CACHE_NAME,
                        (num_k_heads, ring_len, head_k_dim),
-                       activation_dtype if mode == 'mtp' else ssm_dtype,
+                       activation_dtype if num_spec_tokens > 0 else ssm_dtype,
                        layer_ids=layer_ids),
         StateCacheSpec(GDN_REPLAY_G_CACHE_NAME,
                        (num_v_heads, ring_len), torch.float32,
                        layer_ids=layer_ids),
     ]
-    if mode == 'mtp':
+    if num_spec_tokens > 0:
         specs.extend([
             StateCacheSpec(GDN_REPLAY_RAW_V_CACHE_NAME,
                            (num_v_heads, ring_len, head_v_dim), activation_dtype,
@@ -104,7 +98,7 @@ def configure_gdn_replayssm(cfg,
     # Compatibility bridge for scheduler/executor SSM feature gates. Named
     # specs remain the allocation authority.
     cfg.states_shapes = [(tuple(spec.shape), spec.dtype) for spec in specs]
-    cfg.replayssm_mode = mode
+    cfg.enable_replayssm = True
 
 
 class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
@@ -117,6 +111,8 @@ class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str = None, tp: int = 1, **kwargs):
         """build."""
+        is_draft_model = kwargs.get('is_draft_model', False)
+        enable_replayssm = kwargs.get('enable_replayssm', False) and not is_draft_model
         cfg = DefaultModelConfigBuilder.build(hf_config, model_path, tp=tp, **kwargs)
 
         # update num layers
@@ -148,7 +144,7 @@ class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
             activation_dtype=dtype,
             ssm_dtype=dtype,
             num_spec_tokens=kwargs.get('num_spec_tokens', 0),
-            enable_replayssm=kwargs.get('enable_replayssm', False),
+            enable_replayssm=enable_replayssm,
             replayssm_buffer_len=kwargs.get('replayssm_buffer_len', 16),
         )
         return cfg

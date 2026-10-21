@@ -207,16 +207,17 @@ def configure_kda_replayssm(config, layer_ids, heads, dim, conv_width,
     Unlike scalar GDN, decay is channelwise and scales the key factor. Keep transformed keys/deltas in FP32 so
     reconstruction does not introduce a BF16 rounding at each retained KDA transition.
     """
-    if buffer_len not in (8, 16, 32):
-        raise ValueError('replayssm_buffer_len must be one of 8, 16, or 32.')
-    if num_spec_tokens and buffer_len < 2 * (num_spec_tokens + 1):
-        raise ValueError('MTP ReplaySSM requires L >= 2 * Tmax.')
+    from lmdeploy.pytorch.config import validate_replayssm_config
+
+    validate_replayssm_config(buffer_len, num_spec_tokens)
     config.replayssm_baseline_state_shapes = list(config.states_shapes)
     config.enable_replayssm = True
     config.replayssm_buffer_len = buffer_len
-    config.replayssm_mode = 'mtp' if num_spec_tokens else 'standard'
+    # W-1 accepted history + N+1 tentative inputs require W+N slots.
+    # This is convolution capacity, independent of the Replay history length.
+    conv_state_len = conv_width + num_spec_tokens
     shapes = [
-        (GDN_CONV_STATE_CACHE_NAME, (3 * heads * dim, conv_width + num_spec_tokens), torch.bfloat16),
+        (GDN_CONV_STATE_CACHE_NAME, (3 * heads * dim, conv_state_len), torch.bfloat16),
         (GDN_REPLAY_CHECKPOINT_CACHE_NAME, (heads, dim, dim), torch.float32),
         (GDN_REPLAY_D_CACHE_NAME, (heads, buffer_len, dim), torch.float32),
         (GDN_REPLAY_K_CACHE_NAME, (heads, buffer_len, dim), torch.float32),
@@ -284,12 +285,12 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
 
         linear_config, linear_layer_ids, full_attention_layer_ids = (
             _resolve_glm5_linear_config(text_config))
-        is_draft = kwargs.get('is_draft_model', False)
+        is_draft_model = kwargs.get('is_draft_model', False)
+        enable_replayssm = kwargs.get('enable_replayssm', False) and not is_draft_model
         num_spec_tokens = kwargs.get('num_spec_tokens', 0)
-        if is_draft and getattr(text_config, 'num_nextn_predict_layers', 0) != 1:
+        if is_draft_model and getattr(text_config, 'num_nextn_predict_layers', 0) != 1:
             raise ValueError('GLM-5.3 MTP requires one checkpoint predictor layer.')
-        if (kwargs.get('enable_replayssm', False) and not is_draft
-                and kwargs.get('spec_method') not in (None, 'deepseek_mtp')):
+        if enable_replayssm and kwargs.get('spec_method') not in (None, 'deepseek_mtp'):
             raise ValueError('GLM-5.3 ReplaySSM supports deepseek_mtp only.')
         config = DeepseekV32ModelConfigBuilder.build(
             text_config, model_path=model_path,
@@ -319,6 +320,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         # keep a complete checkpoint after each verified token. Store resumes
         # on 64-token boundaries, where the unfinished KPool tail is empty.
         ring_shape = (num_spec_tokens + 1,) if num_spec_tokens else ()
+        # Convolution retains W-1 history plus N+1 verification inputs.
         config.state_cache_specs = [
             StateCacheSpec(
                 GLM5_KDA_CONV_STATE,
@@ -357,7 +359,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             for spec in config.state_cache_specs
         ]
         config.is_gated_delta = True
-        if kwargs.get('enable_replayssm', False) and not is_draft:
+        if enable_replayssm:
             configure_kda_replayssm(
                 config, linear_layer_ids, local_heads, head_dim, conv_kernel_size,
                 num_spec_tokens, kwargs.get('replayssm_buffer_len', 16))
@@ -369,7 +371,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         config.check_env_func = _check_env_glm5_next
         config.hf_config = hf_config
         config.llm_config = text_config
-        if is_draft:
+        if is_draft_model:
             # The predictor has MLA/KPool but no KDA or mHC. Its unfinished
             # KPool tail is reconstructed from its own pageable token cache.
             hf_config.architectures = ['Glm5NextMTPModel']

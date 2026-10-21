@@ -1,14 +1,96 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import torch
 import torch.nn.functional as F
 
+from lmdeploy.pytorch.consts import (
+    GDN_CONV_STATE_CACHE_NAME,
+    GDN_REPLAY_BETA_CACHE_NAME,
+    GDN_REPLAY_CHECKPOINT_CACHE_NAME,
+    GDN_REPLAY_CURSOR_CACHE_NAME,
+    GDN_REPLAY_D_CACHE_NAME,
+    GDN_REPLAY_G_CACHE_NAME,
+    GDN_REPLAY_K_CACHE_NAME,
+    GDN_REPLAY_RAW_K_CACHE_NAME,
+    GDN_REPLAY_RAW_V_CACHE_NAME,
+)
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
 from .base import BuildSpec
+
+
+@dataclass(frozen=True)
+class GatedDeltaReplayCursor:
+    """Shared fixed-address ReplaySSM cursor storage."""
+
+    packed_cursor: torch.Tensor
+    L: int
+    R: int
+    Tmax: int
+
+    WRITE_POS: ClassVar[int] = 0
+    CACHE_BASE: ClassVar[int] = 1
+    IS_FLUSH: ClassVar[int] = 2
+
+
+@dataclass(frozen=True)
+class GatedDeltaReplayState:
+    """Layer-local state views; cursor.Tmax records the configured verification
+    capacity.
+
+    A speculative model remains speculative when verifying only one input. Current q_len must never select the
+    checkpoint/ring lifecycle.
+    """
+
+    conv_state: torch.Tensor
+    checkpoint: torch.Tensor
+    d_ring: torch.Tensor
+    k_ring: torch.Tensor
+    g_ring: torch.Tensor
+    cursor: GatedDeltaReplayCursor
+    raw_v_ring: torch.Tensor | None = None
+    raw_k_ring: torch.Tensor | None = None
+    beta_ring: torch.Tensor | None = None
+    force_flush: torch.Tensor | None = None
+
+
+def _named_layer(caches: Mapping[str, torch.Tensor], name: str, layer_id: int):
+    if hasattr(caches, 'layer'):
+        return caches.layer(name, layer_id)
+    return caches[name][layer_id]
+
+
+def build_gated_delta_replay_state(caches: Mapping[str, torch.Tensor],
+                                   layer_id: int,
+                                   buffer_len: int,
+                                   tmax: int,
+                                   force_flush: torch.Tensor | None = None) -> GatedDeltaReplayState:
+    """Build cheap tensor views for one global GDN layer."""
+    cursor = GatedDeltaReplayCursor(caches[GDN_REPLAY_CURSOR_CACHE_NAME],
+                                    L=buffer_len,
+                                    R=buffer_len,
+                                    Tmax=tmax)
+    kwargs = {}
+    if tmax > 1:
+        kwargs = dict(
+            raw_v_ring=_named_layer(caches, GDN_REPLAY_RAW_V_CACHE_NAME, layer_id),
+            raw_k_ring=_named_layer(caches, GDN_REPLAY_RAW_K_CACHE_NAME, layer_id),
+            beta_ring=_named_layer(caches, GDN_REPLAY_BETA_CACHE_NAME, layer_id),
+        )
+    return GatedDeltaReplayState(
+        conv_state=_named_layer(caches, GDN_CONV_STATE_CACHE_NAME, layer_id),
+        checkpoint=_named_layer(caches, GDN_REPLAY_CHECKPOINT_CACHE_NAME, layer_id),
+        d_ring=_named_layer(caches, GDN_REPLAY_D_CACHE_NAME, layer_id),
+        k_ring=_named_layer(caches, GDN_REPLAY_K_CACHE_NAME, layer_id),
+        g_ring=_named_layer(caches, GDN_REPLAY_G_CACHE_NAME, layer_id),
+        cursor=cursor,
+        force_flush=force_flush,
+        **kwargs,
+    )
 
 
 class GatedDeltaMeta:
@@ -123,7 +205,7 @@ class GatedDeltaRuleImpl(ABC):
         a: torch.Tensor,
         dt_bias: torch.Tensor,
         a_log_exp: torch.Tensor,
-        recurrent_state: torch.Tensor,
+        recurrent_state: torch.Tensor | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
         kv_ratio: int,
         use_qk_l2norm_in_kernel: bool,
@@ -167,7 +249,7 @@ class GatedDeltaRuleImpl(ABC):
         a: torch.Tensor,
         dt_bias: torch.Tensor,
         a_log_exp: torch.Tensor,
-        recurrent_state: torch.Tensor,
+        recurrent_state: torch.Tensor | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
         kv_ratio: int,
         use_qk_l2norm_in_kernel: bool,
@@ -211,7 +293,7 @@ class GatedDeltaRuleImpl(ABC):
         a: torch.Tensor,
         dt_bias: torch.Tensor,
         a_log_exp: torch.Tensor,
-        recurrent_state: torch.Tensor,
+        recurrent_state: torch.Tensor | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
         kv_ratio: int,
         use_qk_l2norm_in_kernel: bool,

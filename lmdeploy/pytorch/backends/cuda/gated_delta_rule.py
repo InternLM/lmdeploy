@@ -8,6 +8,7 @@ import torch
 import triton
 import triton.language as tl
 
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayState
 from lmdeploy.utils import get_logger
 
 from ..gated_delta_rule import (
@@ -331,7 +332,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             a: torch.Tensor,
             dt_bias: torch.Tensor,
             a_log_exp: torch.Tensor,
-            recurrent_state: torch.Tensor,
+            recurrent_state: torch.Tensor | GatedDeltaReplayState,
             gated_delta_meta: GatedDeltaMeta,
             kv_ratio: int,
             use_qk_l2norm_in_kernel: bool,
@@ -361,7 +362,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
             a: torch.Tensor,
             dt_bias: torch.Tensor,
             a_log_exp: torch.Tensor,
-            recurrent_state: torch.Tensor,
+            recurrent_state: torch.Tensor | GatedDeltaReplayState,
             gated_delta_meta: GatedDeltaMeta,
             kv_ratio: int,
             use_qk_l2norm_in_kernel: bool,
@@ -452,16 +453,12 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         a: torch.Tensor,
         dt_bias: torch.Tensor,
         a_log_exp: torch.Tensor,
-        recurrent_state: torch.Tensor,
+        recurrent_state: torch.Tensor | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
         kv_ratio: int,
         use_qk_l2norm_in_kernel: bool,
     ) -> torch.Tensor:
         """Dispatch the legacy or ReplaySSM CUDA implementation."""
-        # Keep the generic backend API independent of the ReplaySSM state
-        # schema. The lazy import also avoids an import cycle with nn.gated_delta.
-        from lmdeploy.pytorch.nn.gated_delta import GatedDeltaReplayState
-
         if not isinstance(recurrent_state, GatedDeltaReplayState):
             return super().forward(
                 query,
@@ -477,8 +474,11 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
                 use_qk_l2norm_in_kernel,
             )
 
+        if not use_qk_l2norm_in_kernel:
+            raise ValueError('ReplaySSM requires Q/K L2 normalization.')
         replay_state = recurrent_state
         meta = gated_delta_meta
+        is_speculative = meta.num_spec_tokens > 0
         is_decoding = meta.is_decoding
         query, key, g, beta, qk_l2norm_done = self.prepare_inputs(
             query,
@@ -497,7 +497,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         )
 
         if not is_decoding:
-            if replay_state.mode == 'standard':
+            if not is_speculative:
                 from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
                     fold_gdn_replayssm_standard_history,
                 )
@@ -509,13 +509,11 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
                     replay_state.cursor.packed_cursor,
                     meta.origin_state_ids,
                 )
-            elif replay_state.mode == 'mtp':
+            else:
                 from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import (
                     fold_gdn_replayssm_mtp_history,
                 )
                 fold_gdn_replayssm_mtp_history(replay_state, meta.origin_state_ids)
-            else:
-                raise RuntimeError(f'unknown ReplaySSM mode: {replay_state.mode}')
 
             core_attn_out, _ = self.chunk_gated_delta_rule(
                 query,
@@ -542,7 +540,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
         g = g[0].unflatten(0, (batch_size, -1)).contiguous()
         beta = beta[0].unflatten(0, (batch_size, -1)).contiguous()
 
-        if replay_state.mode == 'standard':
+        if not is_speculative:
             from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
                 fused_recurrent_gdn_replayssm_decode,
             )
@@ -560,7 +558,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
                 state_indices=meta.origin_state_ids,
                 force_flush=replay_state.force_flush,
             )
-        elif replay_state.mode == 'mtp':
+        else:
             from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import (
                 fused_recurrent_gdn_replayssm_spec,
                 make_gdn_replayssm_spec_workspace,
@@ -590,8 +588,6 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
                 q_seqlens=meta.q_seqlens,
                 workspace=workspace,
             )
-        else:
-            raise RuntimeError(f'unknown ReplaySSM mode: {replay_state.mode}')
 
         # out (batch, seqlen, ...) -> (1, batch * seqlen, ...)
         return core_attn_out.flatten(0, 1).unsqueeze(0)

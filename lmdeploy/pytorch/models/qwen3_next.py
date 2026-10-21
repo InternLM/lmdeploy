@@ -8,18 +8,12 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayState, build_gated_delta_replay_state
 from lmdeploy.pytorch.consts import GDN_REPLAY_CURSOR_CACHE_NAME
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
-from lmdeploy.pytorch.nn.gated_delta import (
-    CausalConv1d,
-    GatedDelta,
-    GatedDeltaMeta,
-    GatedDeltaReplayState,
-    build_gated_delta_replay_state,
-    build_rmsnorm_gated,
-)
+from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta, build_rmsnorm_gated
 from lmdeploy.pytorch.nn.linear import (
     build_colwise_linear,
     build_merged_colwise_linear,
@@ -671,7 +665,6 @@ class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         replay_enabled = (context.named_state_caches is not None
                           and GDN_REPLAY_CURSOR_CACHE_NAME in context.named_state_caches)
         if replay_enabled:
-            mode = self.ctx_mgr.build_ctx.replayssm_mode
             buffer_len = self.ctx_mgr.build_ctx.replayssm_buffer_len
             tmax = self.ctx_mgr.build_ctx.num_spec_tokens + 1
         else:
@@ -684,7 +677,7 @@ class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                 if replay_enabled:
                     new_past_key_values.append(
                         build_gated_delta_replay_state(context.named_state_caches,
-                                                       len(new_past_key_values), mode,
+                                                       len(new_past_key_values),
                                                        buffer_len, tmax,
                                                        getattr(context, 'replayssm_force_flush', None)))
                 else:

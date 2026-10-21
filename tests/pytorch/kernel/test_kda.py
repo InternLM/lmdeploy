@@ -126,9 +126,9 @@ def test_restored_kda_checkpoint_survives_partial_mtp_acceptance():
 def test_replayssm_prefill_decode_partial_acceptance_and_continuation(monkeypatch, num_spec_tokens, relocate):
     from lmdeploy.pytorch.backends import gated_delta_rule as meta_module
     from lmdeploy.pytorch.backends.cuda.kda import CudaKdaImpl
+    from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayCursor, GatedDeltaReplayState
     from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import advance_gdn_replayssm_standard_cursor
     from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import commit_gdn_replayssm_spec_cursor
-    from lmdeploy.pytorch.nn.gated_delta import GatedDeltaReplayCursor, GatedDeltaReplayState
 
     torch.manual_seed(71)
     dim, heads, width, length, slots = 128, 2, 4, 16, 3
@@ -137,7 +137,7 @@ def test_replayssm_prefill_decode_partial_acceptance_and_continuation(monkeypatc
     conv = torch.zeros(slots, 3 * heads * dim, width + num_spec_tokens, device='cuda', dtype=torch.bfloat16)
     checkpoint = torch.zeros(slots, heads, dim, dim, device='cuda')
     state = GatedDeltaReplayState(
-        mode='mtp' if num_spec_tokens else 'standard', conv_state=conv.clone(), checkpoint=checkpoint.clone(),
+        conv_state=conv.clone(), checkpoint=checkpoint.clone(),
         d_ring=torch.zeros(slots, heads, length, dim, device='cuda'),
         k_ring=torch.zeros(slots, heads, length, dim, device='cuda'),
         g_ring=torch.zeros(slots, heads, length, dim, device='cuda'),
@@ -158,7 +158,7 @@ def test_replayssm_prefill_decode_partial_acceptance_and_continuation(monkeypatc
              state.cursor.packed_cursor]
     history, slot = 0, 1
     source_snapshots = None
-    for iteration, count in enumerate([65] + [steps] * 19 + [7, steps]):
+    for iteration, count in enumerate([65] + [steps] * 18 + [1, 7, steps]):
         if relocate and iteration == 3:
             assert state.cursor.packed_cursor[slot, 0].item() > 0
             source_snapshots = [bank[slot].clone() for bank in banks]
@@ -173,16 +173,19 @@ def test_replayssm_prefill_decode_partial_acceptance_and_continuation(monkeypatc
         metadata = meta_module.GatedDeltaMeta(count, width, ids, SimpleNamespace(
             is_decoding=decoding, cu_seqlens_q=torch.tensor([0, count], device='cuda'),
             q_seqlens=qlen, kv_seqlens=qlen + history))
-        inputs = dict(mixed_qkv=torch.randn(1, count, 3 * heads * dim, device='cuda', dtype=torch.bfloat16) / 4,
-                      raw_gate=torch.randn(1, count, heads * dim, device='cuda', dtype=torch.bfloat16),
-                      raw_beta=torch.randn(1, count, heads, device='cuda', dtype=torch.bfloat16))
+        # Verify buffers retain configured Tmax even when only one input is valid.
+        # Do not accidentally test a different, unsupported physical-width ABI.
+        physical_steps = steps if decoding else count
+        inputs = dict(mixed_qkv=torch.randn(1, physical_steps, 3 * heads * dim,
+                                           device='cuda', dtype=torch.bfloat16) / 4,
+                      raw_gate=torch.randn(1, physical_steps, heads * dim, device='cuda', dtype=torch.bfloat16),
+                      raw_beta=torch.randn(1, physical_steps, heads, device='cuda', dtype=torch.bfloat16))
         if relocate:
             # Slow decay keeps missing retained history observable after the move.
             inputs['raw_gate'].sub_(4)
         expected = baseline.forward(**inputs, **kwargs, metadata=metadata, conv_state=conv, recurrent_state=recurrent)
-        actual = replay.forward(**inputs, **kwargs, metadata=metadata, conv_state=state.conv_state,
-                                recurrent_state=state.checkpoint, replay_state=state)
-        torch.testing.assert_close(actual, expected, atol=2e-4, rtol=1e-2)
+        actual = replay.forward(**inputs, **kwargs, metadata=metadata, conv_state=None, recurrent_state=state)
+        torch.testing.assert_close(actual[:, :count], expected[:, :count], atol=2e-4, rtol=1e-2)
         if not decoding:
             expected_state = recurrent[slot, (history + count) % steps] if num_spec_tokens else recurrent[slot]
             torch.testing.assert_close(state.checkpoint[slot], expected_state, atol=2e-4, rtol=1e-2)
@@ -190,7 +193,7 @@ def test_replayssm_prefill_decode_partial_acceptance_and_continuation(monkeypatc
             state.cursor.packed_cursor[slot].zero_()
             accepted = count
         elif num_spec_tokens:
-            accepted = iteration % steps + 1
+            accepted = min(count, iteration % steps + 1)
             rejected = torch.tensor([count - accepted], device='cuda', dtype=torch.int32)
             commit_gdn_replayssm_spec_cursor(state.cursor.packed_cursor, ids, qlen, rejected, length, steps)
         else:
