@@ -16,8 +16,11 @@ For `POST /v1/responses`, include:
 
 ## Notes and Current Limits
 
-- `POST /v1/responses` currently supports a text-first subset of the Responses API.
+- `POST /v1/responses` supports text and user-message image inputs with a vision-capable model.
 - `input` may be a string or a list of Responses input items.
+- User content arrays can mix `input_text` and `input_image` blocks. Images use `image_url` with an HTTP(S) URL or a base64 image data URL. Multiple images and their order are preserved in both streaming and non-streaming requests.
+- Image `detail` and the `min_dynamic_patch` / `max_dynamic_patch` extensions are forwarded like Chat image parameters; their effect depends on the model's image processor.
+- Image `file_id` references, images in system/developer/assistant messages, and images in `function_call_output` are not supported.
 - `instructions`, `developer`, and `system` messages are merged into a single leading system message for chat-template compatibility.
 - Function tools are converted to LMDeploy's OpenAI-compatible tool format. Tool calling requires launching API server with a configured tool parser (`--tool-call-parser ...`).
 - `parallel_tool_calls` defaults to `true`. When it is `false`, LMDeploy follows vLLM-style compatibility and returns only the first parsed function call.
@@ -52,6 +55,29 @@ The response contains an `output` list and a convenience `output_text` field:
   "output_text": "pong"
 }
 ```
+
+## Example: `/v1/responses` with images
+
+Start a vision-capable model without `--language-model-only`, then send:
+
+```bash
+curl http://{server_ip}:{server_port}/v1/responses \
+  -H "content-type: application/json" \
+  -H "Authorization: Bearer <api_key>" \
+  -d '{
+    "model": "Qwen/Qwen3.5-35B-A3B",
+    "input": [{
+      "role": "user",
+      "content": [
+        {"type": "input_text", "text": "Describe this image."},
+        {"type": "input_image", "image_url": "https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg", "detail": "auto"}
+      ]
+    }],
+    "max_output_tokens": 128
+  }'
+```
+
+For a local image, base64-encode its bytes and use `data:image/png;base64,<encoded bytes>` as `image_url`. Add `"stream": true` to receive SSE events. Images use the same media loader and URL restrictions as Chat requests; malformed image data is rejected during preprocessing.
 
 ## Example: `/v1/responses` with tools
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from fastapi.responses import JSONResponse
 
@@ -209,13 +210,41 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _text_from_content(content: Any, field_name: str) -> str:
+def _image_from_content(part: dict[str, Any], field_name: str) -> dict[str, Any]:
+    if part.get('file_id') is not None:
+        raise ValueError(f'Unsupported `file_id` in `{field_name}`. Use `image_url` instead.')
+    url = part.get('image_url')
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError(f'Missing or invalid `image_url` in `{field_name}`. Expected a non-empty string.')
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        raise ValueError(f'Invalid `image_url` in `{field_name}`.') from None
+    if not ((parsed.scheme in ('http', 'https') and parsed.netloc)
+            or (parsed.scheme == 'data' and parsed.path.startswith('image/'))):
+        raise ValueError(f'Invalid `image_url` in `{field_name}`. Expected an HTTP(S) URL or image data URL.')
+    if 'detail' in part and part['detail'] not in ('auto', 'low', 'high', 'original'):
+        raise ValueError(f'Invalid `detail` in `{field_name}`. Expected auto, low, high, or original.')
+    # Match Chat image parameters; decoding and model-specific interpretation
+    # remain the responsibility of the existing multimodal processor.
+    image_url = dict(url=url)
+    for key in ('detail', 'min_dynamic_patch', 'max_dynamic_patch'):
+        if key in part:
+            image_url[key] = part[key]
+    return dict(type='image_url', image_url=image_url)
+
+
+def _content_from_input(content: Any,
+                       field_name: str,
+                       *,
+                       allow_images: bool = False) -> str | list[dict[str, Any]]:
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
-        raise ValueError(f'Unsupported `{field_name}` content. Expected string or text content parts.')
+        raise ValueError(f'Unsupported `{field_name}` content. Expected string or content parts.')
 
-    text_parts: list[str] = []
+    parts: list[dict[str, Any]] = []
+    has_images = False
     for idx, part in enumerate(content):
         part = _as_dict(part)
         if not part:
@@ -227,10 +256,16 @@ def _text_from_content(content: Any, field_name: str) -> str:
                 raise ValueError(f'Missing `text` in `{field_name}` content part at index {idx}.')
             if not isinstance(text, str):
                 raise ValueError(f'Unsupported `text` in `{field_name}` content part at index {idx}. Expected string.')
-            text_parts.append(text)
+            parts.append(dict(type='text', text=text))
             continue
-        raise ValueError(f'Unsupported Responses input content part type: {part_type!r}.')
-    return ''.join(text_parts)
+        if part_type == 'input_image' and allow_images:
+            parts.append(_image_from_content(part, f'{field_name}[{idx}]'))
+            has_images = True
+            continue
+        raise ValueError(f'Unsupported Responses input content part type: {part_type!r} in `{field_name}[{idx}]`.')
+    # Keep the existing text-only concatenation contract. Multimodal content
+    # must retain every text/image boundary and the original image order.
+    return parts if has_images else ''.join(part['text'] for part in parts)
 
 
 def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
@@ -281,7 +316,7 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
                 dict(
                     role='tool',
                     tool_call_id=call_id,
-                    content=_text_from_content(item.get('output', ''), f'input[{idx}].output'),
+                    content=_content_from_input(item.get('output', ''), f'input[{idx}].output'),
                 ))
             continue
         if item_type != 'message':
@@ -292,7 +327,7 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
             role = 'system'
         if role not in ('system', 'user', 'assistant'):
             raise ValueError(f'Unsupported Responses message role at index {idx}: {role!r}.')
-        content = _text_from_content(item.get('content', ''), f'input[{idx}].content')
+        content = _content_from_input(item.get('content', ''), f'input[{idx}].content', allow_images=role == 'user')
         if role == 'system':
             system_parts.append(content)
         else:
