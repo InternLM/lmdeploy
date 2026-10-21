@@ -31,11 +31,12 @@ class KdaImpl(ABC):
         checkpoint_state: torch.Tensor | None = None,
         checkpoint_offsets: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Run convolution and recurrence, optionally exporting a prefill recurrent state.
+        """Run convolution and recurrence, optionally exporting a prefill
+        recurrent state.
 
-        Checkpoint arguments must be provided together. The caller supplies a contiguous [N, H, V, K] FP32 output
-        buffer and [N] sequence-relative token counts aligned to 16 (matching cu_seqlens dtype). The caller owns
-        convolution snapshots, checkpoint publication and any MTP ring-slot selection. Decode does not export here.
+        Checkpoint arguments must be provided together. The caller supplies a contiguous [N, H, V, K] FP32 output buffer
+        and [N] sequence-relative token counts aligned to 16 (matching cu_seqlens dtype). The caller owns convolution
+        snapshots, checkpoint publication and any MTP ring-slot selection. Decode does not export here.
         """
         raise NotImplementedError
 
