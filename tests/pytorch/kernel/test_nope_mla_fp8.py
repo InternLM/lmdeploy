@@ -83,10 +83,13 @@ def _metadata(lengths, query_lengths, blocks, decoding=False):
                                   kv_flatten_size=int(lengths.sum()))
 
 
-requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+requires_sm90 = pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9,
+    reason='656-byte FlashMLA FP8 cache tests require SM90',
+)
 
 
-@requires_cuda
+@requires_sm90
 @pytest.mark.parametrize('query_len', [1, 6, 79])
 @pytest.mark.parametrize('dcp_size,dcp_rank', [(1, 0), (2, 0), (2, 1)])
 def test_nope_writer_only_clears_written_slots(query_len, dcp_size, dcp_rank):
@@ -117,7 +120,7 @@ def test_nope_writer_only_clears_written_slots(query_len, dcp_size, dcp_rank):
     assert torch.all(raw[~written] == 0x5a)
 
 
-@requires_cuda
+@requires_sm90
 @pytest.mark.parametrize('head_dim', [512, 576])
 @pytest.mark.parametrize('layout', ['shd', 'hsd'])
 def test_packed_cache_flatten_logical_width(head_dim, layout):
@@ -137,13 +140,11 @@ def test_packed_cache_flatten_logical_width(head_dim, layout):
     assert torch.count_nonzero(actual[87:]) == 0
 
 
-@requires_cuda
+@requires_sm90
 @pytest.mark.parametrize('heads', [8, 16, 64])
 @pytest.mark.parametrize('query_len', [1, 6])
 @pytest.mark.parametrize('head_dim', [512, 576])
 def test_nope_sparse_decode_matches_dequantized_reference(heads, query_len, head_dim):
-    if torch.cuda.get_device_capability()[0] != 9:
-        pytest.skip('656-byte sparse cache test targets SM90')
     import flash_mla
 
     torch.manual_seed(31)
