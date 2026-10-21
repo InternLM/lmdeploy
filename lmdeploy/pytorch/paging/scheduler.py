@@ -86,6 +86,7 @@ class Scheduler:
         seq_meta.prefill_save_alignment = (
             cache_config.prefill_save_alignment
             if self.is_ssm and (cache_config.enable_prefix_caching or cache_config.num_store_state_caches) else 0)
+        seq_meta.prefill_save_last_only = bool(seq_meta.prefill_save_alignment) and cache_config.prefill_save_last_only
         seq_meta.prefix_cache_checkpoint_block_size = (
             cache_config.block_size
             if cache_config.enable_prefix_caching and cache_config.prefix_cache_block_aligned else 0)

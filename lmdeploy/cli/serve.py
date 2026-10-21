@@ -121,6 +121,7 @@ class SubCliServe:
         ArgumentHelper.prefix_cache_state_budget(pt_group)
         ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
         ArgumentHelper.prefill_save_alignment(pt_group)
+        ArgumentHelper.prefill_save_last_only(pt_group)
         ArgumentHelper.mooncake_state_save_slots(pt_group)
 
         # common engine args
@@ -267,6 +268,7 @@ class SubCliServe:
                 prefix_cache_state_budget=args.prefix_cache_state_budget,
                 prefix_cache_decode_state_interval=args.prefix_cache_decode_state_interval,
                 prefill_save_alignment=args.prefill_save_alignment,
+                prefill_save_last_only=args.prefill_save_last_only,
                 mooncake_state_save_slots=args.mooncake_state_save_slots,
                 device_type=args.device,
                 quant_policy=args.quant_policy,

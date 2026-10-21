@@ -3,6 +3,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import chain
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -95,10 +96,34 @@ def get_long_context_chunk_capacity(seq: 'SchedulerSequence', max_prefill_token_
     return max(max_prefill_token_num, max_span)
 
 
+def get_last_prefill_save_step(seq: 'SchedulerSequence') -> int | None:
+    """Return the last reusable aligned state boundary for the whole input
+    turn.
+
+    Use the fixed input end and full multimodal history so chunk progress and cache hits cannot move the boundary. The
+    shifted draft input must stay with its multimodal span, even when local prefix caching is disabled.
+    """
+    alignment = seq._seq_meta.prefill_save_alignment
+    if not alignment:
+        return None
+    input_shift = max(seq.prefill_input_shift, seq._seq_meta.prefix_cache_token_lookahead)
+    step = (seq.input_end_pos - max(1, input_shift)) // alignment * alignment
+    if step <= 0:
+        return None
+
+    spans = [(max(0, span.start - input_shift), span.end)
+             for span in chain(seq.prefix_cache.multimodal_spans, seq.history_embeddings.embeddings)]
+    # Descending starts let each rewind visit any earlier overlapping span next.
+    for start, end in sorted(spans, reverse=True):
+        if start < step < end:
+            step = start // alignment * alignment
+    return step or None
+
+
 def limit_long_context_checkpoint(seq: 'SchedulerSequence', limit: int) -> int:
     """Cut the final prefill suffix after a reusable aligned checkpoint."""
     alignment = seq._seq_meta.prefill_save_alignment
-    if alignment and seq._seq_meta.enable_prefix_caching:
+    if alignment and seq._seq_meta.enable_prefix_caching and not seq._seq_meta.prefill_save_last_only:
         # Matching leaves at least one input for logits, so an identical prompt
         # can reuse the preceding aligned state instead of its final state.
         step = ((seq.input_end_pos - 1) // alignment) * alignment
@@ -118,8 +143,8 @@ def plan_long_context_chunk(seq: 'SchedulerSequence',
                             include_multimodals: bool = True) -> LongContextChunkPlan:
     """Plan a model-safe chunk, optionally stopping at its last save boundary.
 
-    Alignment is a constraint, not a sampling interval: earlier aligned positions in this chunk are skipped. If no safe
-    aligned position advances the request, use the ordinary chunk and keep only its running state.
+    With last-only saving, ordinary chunks need no alignment; only the turn's final checkpoint cuts a chunk. Otherwise,
+    alignment is a constraint, not a sampling interval: earlier aligned positions in this chunk are skipped.
     """
     chunk_size = min(seq.num_token_ids, chunk_limit)
     start = seq.num_history_ids
@@ -140,8 +165,12 @@ def plan_long_context_chunk(seq: 'SchedulerSequence',
             break
 
     save_alignment = seq._seq_meta.prefill_save_alignment
+    if seq._seq_meta.prefill_save_last_only:
+        save_end = get_last_prefill_save_step(seq)
+        if save_end is not None and start < save_end < end:
+            end = save_end
     # Embedding-only inputs do not yet have a Store content identity.
-    if save_alignment and len(seq.history_embeddings) == 0:
+    elif save_alignment and len(seq.history_embeddings) == 0:
         save_end = end // save_alignment * save_alignment
         for span_start, span_end in reversed(chunk_spans):
             if span_start < save_end < span_end:
