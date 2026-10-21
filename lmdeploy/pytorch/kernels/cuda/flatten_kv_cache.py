@@ -640,6 +640,7 @@ def flatten_kv_cache_mla_fp8_kernel(
     BLOCK_NOPE: tl.constexpr,
     BLOCK_PE: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
+    HAS_PE: tl.constexpr,
 ):
     """Mla fp8 flatten kv cache kernel."""
     page_id = tl.program_id(0)
@@ -667,7 +668,8 @@ def flatten_kv_cache_mla_fp8_kernel(
         zeros_nope = tl.zeros([BLOCK_BS, BLOCK_NOPE], dtype=tl.float32)
         zeros_pe = tl.zeros([BLOCK_BS, BLOCK_PE], dtype=tl.float32)
         tl.store(ko_nope_ptrs, zeros_nope, mask=mask_bs[:, None])
-        tl.store(ko_pe_ptrs, zeros_pe, mask=mask_bs[:, None])
+        if HAS_PE:
+            tl.store(ko_pe_ptrs, zeros_pe, mask=mask_bs[:, None])
         return
 
     seqlen = tl.load(seqlens_ptr + batch_id)
@@ -707,8 +709,9 @@ def flatten_kv_cache_mla_fp8_kernel(
     tl.store(ko_nope_ptrs, ko_nope, mask=mask_bs[:, None])
 
     # pe
-    kc_pe = tl.load(kc_pe_ptrs)
-    tl.store(ko_pe_ptrs, kc_pe, mask=mask_bs[:, None])
+    if HAS_PE:
+        kc_pe = tl.load(kc_pe_ptrs)
+        tl.store(ko_pe_ptrs, kc_pe, mask=mask_bs[:, None])
 
 
 def flatten_kv_cache_mla_fp8(k_caches: Tensor,
@@ -717,9 +720,11 @@ def flatten_kv_cache_mla_fp8(k_caches: Tensor,
                              start_loc: Tensor = None,
                              out_size: int = None,
                              out_dtype: torch.dtype = None,
-                             flatten_kv_layout: str = 'hsd'):
+                             flatten_kv_layout: str = 'hsd',
+                             head_dim: int = 576):
     """This kernel is designed to support mla fp8."""
     assert k_caches.dim() == 4
+    assert head_dim in (512, 576)
 
     b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
 
@@ -739,7 +744,7 @@ def flatten_kv_cache_mla_fp8(k_caches: Tensor,
 
     batch_size, num_blocks = block_offsets.size()
     num_heads = k_caches.size(h_dim)
-    k_head_dim = 576
+    k_head_dim = head_dim
     BLOCK_NOPE = 512
     BLOCK_PE = 64
     BLOCK_BS = k_caches.size(s_dim)
@@ -786,6 +791,7 @@ def flatten_kv_cache_mla_fp8(k_caches: Tensor,
         BLOCK_NOPE=BLOCK_NOPE,
         BLOCK_PE=BLOCK_PE,
         GROUP_SIZE=128,
+        HAS_PE=head_dim == 576,
     )
 
     return k_states

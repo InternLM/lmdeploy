@@ -262,8 +262,9 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         config.num_layers = num_full_layers
         # GLM owns KPool selection in the model adapter, rather than the
         # DeepSeek-V3.2 token indexer selected by mla_index_topk.  Keeping this
-        # unset also preserves the BF16 latent MLA cache policy.
+        # unset avoids selecting the generic token indexer.
         config.mla_index_topk = None
+        config.supports_mla_fp8_cache = True
         config.reserve_dsa_score_workspace = True
         config.k_head_dim = text_config.kv_lora_rank
         # Reuse Qwen3.5's token ring for convolution; recurrent/KPool states

@@ -485,6 +485,8 @@ class ModelConfig:
     use_flash_mla: bool = False
     mla_kv_cache_dtype: str | None = None
     mla_index_topk: int | None = None
+    # Custom indexers (e.g. GLM KPool) can use the packed MLA cache without NSA.
+    supports_mla_fp8_cache: bool = False
     # Custom sparse indexers also need score memory without selecting NSA.
     reserve_dsa_score_workspace: bool = False
 

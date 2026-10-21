@@ -118,16 +118,20 @@ class FlashMLASparseImpl(FlashMLAImpl):
     _MLA_INDEX_ALIGNMENT = 128
     _BF16_CACHE_INDEX_STRIDE = 64
 
-    def __init__(self, mla_index_topk: int, **kwargs):
+    def __init__(self, mla_index_topk: int, mla_index_tail: int = 0, **kwargs):
         super().__init__(**kwargs)
         self.mla_index_topk = mla_index_topk
+        self.mla_index_tail = mla_index_tail
         self.flash_mla_sparse_fwd = None
         self.index_mapper = FlashMLAIndexMapper.build()
 
     def get_step_metadata_provider(self):
         """Describe metadata required by sparse FlashMLA."""
+        index_width = self.mla_index_topk + self.mla_index_tail
+        # The FP8 paged kernel consumes 64-entry tiles, including any KPool tail.
+        index_width = (index_width + 63) // 64 * 64
         return FlashMLAAttentionMetaBuilder(num_attention_heads=self.num_heads,
-                                            index_topk=self.mla_index_topk)
+                                            index_topk=index_width)
 
     def _get_flash_mla_sparse_fwd(self):
         if self.flash_mla_sparse_fwd is not None:
@@ -295,12 +299,20 @@ class FlashMLASparseImpl(FlashMLAImpl):
             k_cache.size(1),
         )
 
+        pad_indices = -indices.size(-1) % 64
+        if pad_indices:
+            indices = torch.nn.functional.pad(indices, (0, pad_indices), value=-1)
+
         num_q_heads = query.size(1)
+        # NoPE uses the same 656-byte cache row as DeepSeek. The extra query
+        # dimensions multiply its zero BF16 tail; keep the model's scale.
+        pad_dim = 64 if query.size(-1) == self._MLA_NOPE_SIZE else 0
+        pad_heads = 0
         scheduler_metadata, _ = self._get_scheduler_metadata(attn_metadata)
         if not isinstance(scheduler_metadata, torch.Tensor):
             pad_heads = -num_q_heads % self._MLA_HEAD_ALIGNMENT
-            if pad_heads:
-                query = torch.nn.functional.pad(query, (0, 0, 0, pad_heads))
+        if pad_dim or pad_heads:
+            query = torch.nn.functional.pad(query, (0, pad_dim, 0, pad_heads))
 
         output = self._decoding_paged(query,
                                       k_cache,
