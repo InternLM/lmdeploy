@@ -1,10 +1,14 @@
 # GLM-5.3 FlashKDA prefill
 
+The native prefill implementation described here currently requires the **vLLM fork of FlashKDA** at the revision below. Installing official `flash-linear-attention` alone does not satisfy this dependency. MoonshotAI/FlashKDA `master` at `7afb9f454f160a6c4bbc0999beca0a8c40a38934` does not provide the required checkpoint operator. On the supported configuration, this dependency applies to ordinary prefill as well as checkpoint-enabled prefill; an incompatible installation fails before either runs.
+
 GLM-5.3 uses the native `torch.ops.flash_kda.fwd()` operator for KDA prefill recurrent computation on the deployment configuration below. Ordinary prefill passes `None` for both checkpoint arguments; a caller requesting an internal recurrent checkpoint supplies both buffers to the same operator. Each call processes the complete prefill interval.
 
 ```text
 Kda → CudaKdaImpl._prefill_recurrent → torch.ops.flash_kda.fwd
 ```
+
+This interface exports recurrent state only. Full IC scheduling and model-to-scheduler checkpoint publication are not enabled by installing these dependencies.
 
 ## Deployment scope
 
@@ -21,16 +25,24 @@ Tensor and device properties select this path automatically, with hardware suppo
 
 ## FlashKDA dependency
 
-Install a FlashKDA build whose native `torch.ops.flash_kda.fwd` schema includes `checkpoint_state` and `checkpoint_offsets`. LMDeploy loads the installed `flash_kda._C` extension to register the operator, then calls it directly for both ordinary and checkpoint-enabled prefill. The public Python wrapper does not need to expose these arguments. No FlashKDA source changes or patches are required.
+`flash-linear-attention` and `FlashKDA` are separate packages. `requirements/runtime_cuda.txt` pins official FLA 0.5.2 for the existing FLA operations; it does not install FlashKDA or enable internal checkpoints. The [FLA 0.5.2 FlashKDA adapter](https://github.com/fla-org/flash-linear-attention/blob/v0.5.2/fla/ops/kda/backends/flash_kda.py) accepts extra keyword arguments but does not forward `checkpoint_state` or `checkpoint_offsets` to `flash_kda.fwd`. Setting `state_v_first=True` selects the state layout, and `output_final_state=True` requests the state at the end of the interval; neither exports an internal checkpoint.
 
-The native checkpoint ABI was validated at the unmodified upstream [FlashKDA commit `ee0be888cd0e972f9409bf53756f8c38c6652173`](https://github.com/MoonshotAI/FlashKDA/commit/ee0be888cd0e972f9409bf53756f8c38c6652173). Its Python wrapper omits these arguments, which does not affect this path. Pin that revision when installing for the deployment configuration above:
+The [MoonshotAI FlashKDA interface at `7afb9f4`](https://github.com/MoonshotAI/FlashKDA/blob/7afb9f454f160a6c4bbc0999beca0a8c40a38934/flash_kda/__init__.py) calls the `flash_kda_C` extension. Its [native interface](https://github.com/MoonshotAI/FlashKDA/blob/7afb9f454f160a6c4bbc0999beca0a8c40a38934/csrc/flash_kda.cpp) has no checkpoint arguments. This version cannot supply the native operator used by the LMDeploy path above. Upgrading FLA alone does not add that native capability.
+
+### Validated fork revision
+
+The native checkpoint ABI was validated using [vllm-project/FlashKDA commit `ee0be888cd0e972f9409bf53756f8c38c6652173`](https://github.com/vllm-project/FlashKDA/commit/ee0be888cd0e972f9409bf53756f8c38c6652173), merged into that fork's `dev` branch by [PR #7](https://github.com/vllm-project/FlashKDA/pull/7). The tested checkout had no local source modifications. This commit is from the vLLM fork, not MoonshotAI's `master` branch.
+
+To reproduce the native-kernel validation with that fork, install the pinned revision explicitly. This separate installation is required only for the native path described here and is not added to LMDeploy's common CUDA requirements:
 
 ```bash
 FLASH_KDA_CUDA_ARCHS=90a python -m pip install --no-build-isolation --no-deps \
-    'git+https://github.com/MoonshotAI/FlashKDA.git@ee0be888cd0e972f9409bf53756f8c38c6652173'
+    'git+https://github.com/vllm-project/FlashKDA.git@ee0be888cd0e972f9409bf53756f8c38c6652173'
 ```
 
-That native revision uses the PyTorch stable extension API and requires PyTorch 2.10 or newer, CUDA Toolkit 12.9 or newer, and a compatible C++ compiler. Set `CUDA_HOME` to the toolkit location when needed. Check the native schema in the environment used by every LMDeploy worker:
+LMDeploy loads this fork's `flash_kda._C` extension and checks that the native `torch.ops.flash_kda.fwd` schema includes `checkpoint_state` and `checkpoint_offsets`. It calls that operator directly for both ordinary and checkpoint-enabled prefill. The fork's public Python wrapper omits these arguments, so it is not used for recurrent prefill.
+
+That native revision uses the PyTorch stable extension API and requires PyTorch 2.10 or newer, CUDA Toolkit 12.9 or newer, and a compatible C++ compiler, alongside LMDeploy's own dependency constraints. Set `CUDA_HOME` to the toolkit location when needed. Check the native schema in the environment used by every LMDeploy worker:
 
 ```bash
 python - <<'PY'
@@ -68,4 +80,4 @@ python -m pytest tests/pytorch/test_kda_prefill.py -q
 python -m pytest tests/pytorch/kernel/test_kda.py -q
 ```
 
-The CPU tests cover tensor/device dispatch, device capability caching across backend instances, native schema compatibility, workspace allocation, optional buffer forwarding, unchanged FLA flags and MTP ring addressing. CUDA tests cover ordinary versus checkpoint-enabled full prefill, exported state versus a prefix forward, disabled capture at offset zero, resumed suffixes, restored short prefills and partial MTP acceptance. The checkpoint tests reject calls to the public Python wrapper. Numerical tests require a compatible GPU and FlashKDA build; API contract tests alone do not establish model-level accuracy or performance.
+The CPU tests cover tensor/device dispatch, device capability caching across backend instances, native schema compatibility, workspace allocation, optional buffer forwarding, unchanged FLA flags and MTP ring addressing. CUDA tests cover ordinary versus checkpoint-enabled full prefill, exported state versus a prefix forward, disabled capture at offset zero, resumed suffixes, restored short prefills and partial MTP acceptance. The checkpoint tests reject calls to the public Python wrapper. The reported H200 numerical validation used the vLLM fork revision above; it does not establish compatibility with MoonshotAI's default branch. Numerical tests require a compatible GPU and FlashKDA build; API contract tests alone do not establish model-level accuracy or performance.
