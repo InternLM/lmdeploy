@@ -1314,3 +1314,39 @@ async def _enumerate_async(results):
     async for result in results:
         yield index, result
         index += 1
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_http_tool_result_images_keep_their_ids_and_content_order(stream):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    messages = [
+        dict(role='user', content='Read both screenshots.'),
+        dict(role='assistant', content=[dict(type='tool_use', id=identifier, name='screenshot', input={})
+                                        for identifier in ('first', 'second')]),
+        dict(role='user', content=[dict(type='tool_result', tool_use_id=identifier, content=[
+            dict(type='text', text='before'),
+            dict(type='image', source=dict(type='url', url=f'https://example.com/{identifier}.png')),
+            dict(type='text', text='after'),
+        ]) for identifier in ('second', 'first')]),
+    ]
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', headers=ANTHROPIC_HEADERS,
+                               json=_messages_payload(messages=messages, stream=stream))
+    assert response.status_code == 200
+    if stream:
+        assert 'event: message_stop' in response.text
+    else:
+        assert response.json()['stop_reason'] == 'end_turn'
+    forwarded = context.async_engine.preprocess_calls[0][0][0]
+    assert [m['role'] for m in forwarded] == ['user', 'assistant', 'tool', 'tool']
+    for message, identifier in zip(forwarded[2:], ('second', 'first')):
+        assert message['tool_call_id'] == identifier
+        assert message['content'] == [dict(type='text', text='before'),
+                                      dict(type='image_url', image_url=dict(url=f'https://example.com/{identifier}.png')),
+                                      dict(type='text', text='after')]
+    assert len(context.session_mgr.removed) == 1

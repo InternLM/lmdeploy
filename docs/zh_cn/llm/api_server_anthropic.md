@@ -18,6 +18,7 @@ LMDeploy 提供了轻量级的 Anthropic 兼容接口，方便接入 Anthropic �
 ## 说明与当前限制
 
 - `POST /v1/messages` 支持文本输出、推理输出（`thinking` block）和工具调用输出（`tool_use` block）。
+- 模型支持工具结果图片时，`tool_result.content` 可以包含 text 和 image 块。这些块保留在同一工具结果中，并保留 `tool_use_id` 和内部顺序；工具结果前、后及结果之间的普通 user 内容也保留原有位置。
 - 工具调用需要在启动 API Server 时配置工具解析器（`--tool-call-parser ...`）。
 - 推理内容 block 的提取依赖解析器配置（与 OpenAI 兼容 chat 接口使用同一套解析器）。
 - `thinking.type` 同时控制模板和推理解析器：`disabled` 关闭思考，`enabled` 和 `adaptive` 开启思考，要求模型模板支持 `enable_thinking`；对于始终输出 `<think>` 的早期 GLM-5.3 模板，关闭思考时 LMDeploy 会预填充 `</think>`。兼容接收 `budget_tokens`，但当前不单独限制思考预算；总输出仍由 `max_tokens` 限制。

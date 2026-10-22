@@ -18,6 +18,7 @@ For Anthropic `POST` endpoints, include:
 ## Notes and Current Limits
 
 - `POST /v1/messages` supports text output, reasoning output (`thinking` blocks), and tool-use output (`tool_use` blocks).
+- `tool_result.content` accepts text and image blocks when the model supports images in tool results. These blocks remain in the same tool result, retaining `tool_use_id` and their internal order. Ordinary user content before, between, or after tool results retains its position.
 - Tool use requires launching API server with a configured tool parser (`--tool-call-parser ...`).
 - Reasoning block extraction depends on parser configuration (same parser stack used by OpenAI-compatible chat endpoint).
 - `thinking.type` controls the template and reasoning parser: `disabled` turns thinking off, while `enabled` and `adaptive` turn it on. The model's chat template must support `enable_thinking`; for early GLM-5.3 templates that always open `<think>`, LMDeploy prefills `</think>` when thinking is disabled. `budget_tokens` is accepted for compatibility but does not enforce a separate thinking budget; `max_tokens` limits total output.
