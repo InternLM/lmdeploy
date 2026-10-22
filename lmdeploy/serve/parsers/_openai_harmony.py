@@ -11,11 +11,13 @@ import shortuuid
 from openai_harmony import HarmonyEncodingName, Role, StreamableParser, load_harmony_encoding
 
 from lmdeploy.serve.openai.protocol import (
+    AllowedToolChoice,
     DeltaFunctionCall,
     DeltaMessage,
     DeltaToolCall,
     FunctionCall,
     ToolCall,
+    ToolChoice,
 )
 from lmdeploy.utils import get_logger
 
@@ -93,7 +95,8 @@ class GptOssResponseParser(ResponseParser):
           the Harmony final channel (``<|channel|>final<|message|> ...
           <|end|>``), optionally preceded by an analysis block.
 
-        Required tool calls reject the request if grammar construction fails.
+        Required tool calls, named functions, and required allowed-tool choices
+        reject the request if grammar construction fails.
         For other modes, a failed grammar construction injects the
         ``response_format`` into the system prompt as a ``# Response Formats``
         section and clears it, matching the Harmony-native fallback.
@@ -109,8 +112,9 @@ class GptOssResponseParser(ResponseParser):
             if grammar is not None:
                 self._set_response_format(grammar)
                 return
-            if tool_choice == 'required':
-                raise ValueError('Failed to build the grammar for `tool_choice="required"` in GPT-OSS.')
+            if (tool_choice == 'required' or isinstance(tool_choice, ToolChoice)
+                    or (isinstance(tool_choice, AllowedToolChoice) and tool_choice.allowed_tools.mode == 'required')):
+                raise ValueError('Failed to build the grammar for the required tool choice in GPT-OSS.')
             # tool grammar failed — fall back to prompt injection so the
             # original response_format (if any) is not left intact to
             # conflict with Harmony tool-call constraints downstream.
