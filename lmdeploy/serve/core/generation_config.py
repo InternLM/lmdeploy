@@ -89,11 +89,11 @@ def build_generation_config(
     **extra_kwargs: Any,
 ) -> GenerationConfig:
     """Build ``GenerationConfig`` from merged sampling defaults and request
-    values."""
+    values, with explicit extra kwargs taking precedence."""
     request_gen_config = extract_request_gen_config(request)
-    for key in extra_kwargs:
-        request_gen_config.pop(key, None)
     merged = merge_gen_config(request_gen_config, _filter_gen_config(default_gen_config))
+    for key in extra_kwargs:
+        merged.pop(key, None)
     merged.pop('max_new_tokens', None)
     merged.pop('do_sample', None)
     return GenerationConfig(
