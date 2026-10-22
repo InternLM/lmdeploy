@@ -1931,3 +1931,36 @@ def test_normal_prefill_rejects_nonfinal_chunk_before_building_inputs():
     task = object.__new__(_ForwardInputsTask)
     with pytest.raises(AssertionError, match='Non-final chunks must use exclusive chunk inputs'):
         task._build_prefill_inputs([SimpleNamespace(kv_token_limit=64)])
+
+
+@pytest.mark.parametrize('with_peer', [False, True])
+def test_resumed_chunked_prefill_reindexes_old_decode_row_before_reactivation(with_peer):
+    from lmdeploy.pytorch.engine.inputs_maker import _ForwardInputsTask
+
+    seq = _DummySeq(0, 900, {}, {})
+    seq.status = MessageStatus.READY  # Admission has not reactivated the new turn yet.
+    peer = SimpleNamespace(status=MessageStatus.RUNNING, num_all_ids=40)
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = _make_inputs_maker_config()
+    maker.scheduler = _FakeScheduler([seq])
+    maker.engine_strategy = SimpleNamespace(get_prealloc_size=lambda _: 0, get_num_decode_tokens=lambda: 4)
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(512)
+    maker.running_seqs = [seq, peer] if with_peer else [seq]
+    maker.create_model_inputs_long_context = lambda *args: SimpleNamespace(is_chunk=True, max_q_seqlen=512)
+    maker.create_model_inputs = lambda *args: _fake_model_inputs()
+    maker._prepare_prefill_cache_inputs = lambda *args, **kwargs: None
+    task = _ForwardInputsTask(maker, prefill=True, enable_empty=False)
+
+    first = task._schedule_prefill()
+    # The worker must drop the old row too; host-side de-duplication is insufficient.
+    assert first.delta is not None
+    assert first.delta.indice_cpu.tolist() == ([1] if with_peer else [])
+    assert maker.running_seqs == ([peer] if with_peer else [])
+
+    seq.status = MessageStatus.RUNNING
+    maker.update_running_seqs([seq], first.inputs)
+    seq.num_token_ids = 900 - seq.num_history_ids
+    final = task._build_active_chunk()
+    maker.update_running_seqs([seq], final.inputs)
+    assert maker.running_seqs == ([peer, seq] if with_peer else [seq])

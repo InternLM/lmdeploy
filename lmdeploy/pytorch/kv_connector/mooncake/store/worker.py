@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import socket
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
 import torch
@@ -384,11 +387,35 @@ class MooncakeStoreWorker:
             raise RuntimeError(
                 f'Mooncake register_buffer failed for {registration.name!r} with return code {ret}')
 
+    def _layout_fingerprint(self, kv_caches, state_registrations, row_block_sizes, cache_schema):
+        """Identify the wire format, not addresses, capacities, or cache
+        policy."""
+        config = self._cache_config
+        layout = dict(
+            protocol='lmdeploy-mooncake-full-state-v1',
+            schema=cache_schema,
+            tp_size=self.tp_size,
+            kv_head_replica_num=self.key_metadata.kv_head_replica_num,
+            block_size=config.block_size,
+            kernel_block_size=config.kernel_block_size,
+            dcp=config.dcp,
+            quant_policy=int(config.quant_policy),
+            token_lookahead=config.prefix_cache_token_lookahead,
+            replay_buffer_len=config.replayssm_buffer_len if config.enable_replayssm else None,
+            states_shapes=config.states_shapes,
+            kv_rows=[(name, str(row.dtype), size)
+                     for (name, row), size in zip(self._iter_cache_rows(kv_caches), row_block_sizes)],
+            state_rows=[(r.name, r.size // (r.slot_count * r.slot_size), r.slot_size, r.transfer_ranges)
+                        for r in state_registrations],
+        )
+        return hashlib.sha256(json.dumps(layout, sort_keys=True, default=str).encode()).hexdigest()
+
     def register_kv_caches(
         self,
         kv_caches: Mapping[str, KVCacheValue],
         *,
         state_cache_pools: Sequence[KVCachePool] = (),
+        cache_schema: str = '',
     ) -> None:
         """Register standard KV rows and owning linear-attention pools."""
         if not kv_caches and not state_cache_pools:
@@ -399,6 +426,9 @@ class MooncakeStoreWorker:
             self._build_registrations(kv_caches) if kv_caches else ((), 0))
         state_registrations, state_backing_storages = self._build_state_registrations(state_cache_pools)
         row_block_sizes = self._prepare_transfer_layout(registrations) if registrations else ()
+        # Publish the same immutable identity to lookup and both transfer threads.
+        self.key_metadata = replace(self.key_metadata, layout_fingerprint=self._layout_fingerprint(
+            kv_caches, state_registrations, row_block_sizes, cache_schema))
         total = len(registrations) + len(state_registrations)
         total_bytes = sum(registration.size for registration in registrations)
         total_bytes += sum(registration.size for registration in state_registrations)

@@ -1182,7 +1182,8 @@ def test_hybrid_save_load_roundtrip_restores_all_rank_local_bytes(layout):
     assert len(store.get_calls) == 4
 
 
-def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path, monkeypatch):
+@pytest.mark.parametrize('replay_len', [None, 8, 16, 32])
+def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path, monkeypatch, replay_len):
     import lmdeploy.pytorch.engine.cache_engine.state as state_module
     from lmdeploy.hf_configs.configuration_glm5_next import Glm5NextConfig
     from lmdeploy.pytorch.backends.default.cache import DefaultCacheBackend
@@ -1213,10 +1214,13 @@ def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path
     hf_config = Glm5NextConfig(text_config=dict(
         num_hidden_layers=2, layer_types=['linear_attention', 'full_attention'],
         linear_num_heads=2, linear_head_dim=8, index_head_dim=8))
-    model_config = Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=3)
+    model_config = Glm5NextModelConfigBuilder.build(
+        hf_config, num_spec_tokens=3, enable_replayssm=replay_len is not None,
+        replayssm_buffer_len=replay_len or 16)
     config = replace(make_cache_config(write_store_config(tmp_path), num_gpu_blocks=3),
                      states_shapes=model_config.states_shapes, num_state_caches=4,
-                     mooncake_state_save_slots=1, prefill_save_alignment=64)
+                     mooncake_state_save_slots=1, prefill_save_alignment=64,
+                     enable_replayssm=replay_len is not None, replayssm_buffer_len=replay_len or 16)
     states = StateCacheEngine(config, model_config)
     indexer = SimpleNamespace(index_kpool=4, head_dim=8)
     draft = SimpleNamespace(_TOKEN_CACHE=Glm5NextMTPAttention._TOKEN_CACHE, indexer=indexer)
@@ -1230,11 +1234,17 @@ def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path
     raw_tokens = cache.gpu_allocation.tensor_views[-1]
     for index, tensor in enumerate(cache.gpu_allocation.tensor_views):
         tensor.copy_((torch.arange(tensor.numel()).reshape(tensor.shape) % 97 + index).to(tensor.dtype))
-    for index, tensor in enumerate(states.state_caches):
+    state_slots = [tensor.movedim(1, 0) if spec.layer_ids is not None else tensor
+                   for tensor, spec in zip(states.state_caches, model_config.state_cache_specs)]
+    for index, tensor in enumerate(state_slots):
         tensor[1].copy_(torch.arange(tensor[1].numel()).reshape(tensor[1].shape) + index)
-    states.copy_slots(1, 3)
+    states.copy_slots(1, 3, checkpoint_only=True)
     expected_kv = [tensor[:, :2].clone() for tensor in cache.gpu_allocation.tensor_views[:-1]]
-    expected_state = [tensor[1].clone() for tensor in states.state_caches[:2]]
+    state_indices = [i for i, spec in enumerate(model_config.state_cache_specs) if spec.store_cacheable]
+    expected_state = [state_slots[i][1].clone() for i in state_indices]
+    # Decode may reuse the source runtime slot while Store reads its frozen snapshot.
+    for tensor in state_slots:
+        tensor[1].zero_()
     store = BytesStore()
     store.existing_keys = store.values
     worker = MooncakeStoreWorker(config, store_factory=lambda: store, replicate_config=object())
@@ -1257,8 +1267,8 @@ def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path
     for tensor in cache.gpu_allocation.tensor_views:
         tensor.zero_()
     raw_tokens.fill_(float('nan'))
-    for tensor in states.state_caches:
-        tensor[2].fill_(float('nan'))
+    for i, tensor in enumerate(state_slots):
+        tensor[2].fill_(-1 if i in state_indices else float('nan'))
     load = MooncakeStoreLoadRequest(2, (2, 0), hashes, 2, state_slot=2)
     worker.start_load_kv(MooncakeStoreConnectorMetadata(load_requests=(load,)))
     worker.kv_recv_thread.request_queue.join()
@@ -1266,10 +1276,11 @@ def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path
     for tensor, expected in zip(cache.gpu_allocation.tensor_views[:-1], expected_kv):
         torch.testing.assert_close(tensor[:, [2, 0]], expected)
         assert (tensor[:, 1] == 0).all()
-    for tensor, expected in zip(states.state_caches[:2], expected_state):
-        torch.testing.assert_close(tensor[2], expected)
+    for i, expected in zip(state_indices, expected_state):
+        torch.testing.assert_close(state_slots[i][2], expected)
     assert torch.isnan(raw_tokens).all()
-    assert all(torch.isnan(tensor[2]).all() for tensor in states.state_caches[2:])
+    assert all(torch.isnan(tensor[2]).all() for i, tensor in enumerate(state_slots)
+               if i not in state_indices)
     worker.shutdown()
 
 
@@ -1360,3 +1371,76 @@ def test_hybrid_load_failure_before_get_completes_once_and_receiver_continues(
         assert [entry.args for entry in completed.call_args_list] == [(7, False), (8, True)]
     finally:
         worker.shutdown()
+
+
+@pytest.mark.parametrize('group_id', [0, 1])
+def test_layout_identity_isolates_replay_and_wire_formats(tmp_path, monkeypatch, group_id):
+    from dataclasses import replace
+    monkeypatch.setattr(torch, 'is_tensor', lambda x: isinstance(x, FakeTensor))
+    worker, _ = make_worker(tmp_path)
+    config = worker._cache_config
+    rows = {'target': FakeTensor(1024)}
+    state = (MooncakeStoreStateRegistration('state', 4096, 8192, 8, 1024, None),)
+    def fingerprint(schema='bf16'):
+        return worker._layout_fingerprint(rows, state, (4096,) * len(rows), schema)
+
+    native = fingerprint()
+    config.enable_replayssm = True
+    fingerprints = {native}
+    for length in (8, 16, 32):
+        config.replayssm_buffer_len = length
+        fingerprints.add(fingerprint())
+    assert len(fingerprints) == 4
+    replay = fingerprint()
+    assert fingerprint('fp16') != replay  # same physical byte size, different logical dtype
+    config.prefix_cache_token_lookahead = 1
+    assert fingerprint() != replay
+    config.prefix_cache_token_lookahead = 0
+    rows['mtp'] = FakeTensor(8192)
+    assert fingerprint() != replay
+    del rows['mtp']
+    # Capacity, role, local prefix policy, and addresses are not part of the wire format.
+    config.num_gpu_blocks = 16
+    config.enable_prefix_caching = True
+    config.prefix_cache_state_budget = 32
+    rows['target'] = FakeTensor(16384, size=65536)
+    state = (MooncakeStoreStateRegistration('state', 32768, 16384, 16, 1024, None),)
+    assert fingerprint() == replay
+    state = (replace(state[0], transfer_ranges=((0, 512),)),)
+    assert fingerprint() != replay
+    block_hash = b'x' * 32
+    assert len({build_store_key(replace(worker.key_metadata, layout_fingerprint=f),
+                                0, block_hash, group_id=group_id) for f in fingerprints}) == 4
+    worker.shutdown()
+
+
+def test_registration_publishes_one_identity_to_lookup_and_transfers(tmp_path, monkeypatch):
+    monkeypatch.setattr(torch, 'is_tensor', lambda x: isinstance(x, FakeTensor))
+    worker, _ = make_worker(tmp_path)
+    identities = []
+    monkeypatch.setattr(worker, '_start_receiver', lambda: identities.append(worker.key_metadata))
+    monkeypatch.setattr(worker, '_start_sender', lambda: identities.append(worker.key_metadata))
+    monkeypatch.setattr(worker, '_start_lookup_server', lambda: identities.append(worker.key_metadata))
+    worker.register_kv_caches({'target': FakeTensor(4096)}, cache_schema='bf16')
+    assert worker.key_metadata.layout_fingerprint
+    assert identities == [worker.key_metadata] * 3
+    worker.shutdown()
+
+
+def test_lookup_never_reuses_an_incompatible_replay_object(tmp_path, monkeypatch):
+    monkeypatch.setattr(torch, 'is_tensor', lambda x: isinstance(x, FakeTensor))
+    for method in ('_start_receiver', '_start_sender', '_start_lookup_server'):
+        monkeypatch.setattr(MooncakeStoreWorker, method, lambda self: None)
+    worker, store = make_worker(tmp_path)
+    worker._cache_config.enable_replayssm = True
+    worker.register_kv_caches({'target': FakeTensor(4096)}, cache_schema='bf16')
+    block_hash = b'x' * 32
+    store.existing_keys = {build_store_key(worker.key_metadata, 0, block_hash)}
+    assert worker.lookup(64, (block_hash,)) == 64
+    other, _ = make_worker(tmp_path, store=store)
+    other._cache_config.enable_replayssm = True
+    other._cache_config.replayssm_buffer_len = 32
+    other.register_kv_caches({'target': FakeTensor(8192)}, cache_schema='bf16')
+    assert other.lookup(64, (block_hash,)) == 0
+    other.shutdown()
+    worker.shutdown()

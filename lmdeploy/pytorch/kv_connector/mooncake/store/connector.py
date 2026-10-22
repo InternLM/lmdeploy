@@ -130,10 +130,12 @@ class MooncakeStoreConnector(KVConnectorBase):
         kv_caches: Mapping[str, KVCacheValue],
         *,
         state_cache_pools: Sequence[KVCachePool] = (),
+        cache_schema: str = '',
     ) -> None:
         return self._require_worker().register_kv_caches(
             kv_caches,
             state_cache_pools=state_cache_pools,
+            cache_schema=cache_schema,
         )
 
     def start_load_kv(self) -> None:

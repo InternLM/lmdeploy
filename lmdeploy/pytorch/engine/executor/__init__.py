@@ -24,11 +24,9 @@ def _validate_replayssm_preallocation(cache_config: CacheConfig,
     if cache_config.role != EngineRole.Hybrid:
         raise ValueError('ReplaySSM does not support P/D-disaggregated engine roles.')
     transfer_config = cache_config.kv_transfer_config
-    if transfer_config is not None and transfer_config.is_kv_transfer_instance:
-        # External caches do not encode the Replay ring/checkpoint protocol in
-        # their compatibility identity. Even producer-only use can collide with
-        # native state, so reject every connector role rather than only loads.
-        raise ValueError('ReplaySSM does not support external KV-cache connectors; '
+    if (transfer_config is not None and transfer_config.is_kv_transfer_instance
+            and not cache_config.use_mooncake_store):
+        raise ValueError('ReplaySSM does not support external KV-cache connectors other than MooncakeStoreConnector; '
                          'disable ReplaySSM or remove kv_transfer_config.')
     from lmdeploy.pytorch.config import validate_replayssm_config
 

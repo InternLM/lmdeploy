@@ -1,11 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import importlib
+import json
 import time
 from collections import deque
 from collections.abc import Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
@@ -1568,6 +1569,17 @@ class BaseModelAgent:
             connector_caches[f'{_MTP_CACHE_PREFIX}{name}'] = cache
         return connector_caches
 
+    def _get_connector_cache_schema(self) -> str:
+        """Include logical dtypes/rows hidden by packed uint8 transfer
+        pools."""
+        engines = (self.cache_engine, self.spec_agent.cache_engine)
+        schema = dict(
+            block=[[asdict(spec) for spec in engine.block_cache_plan.tensor_specs]
+                   if engine is not None else None for engine in engines],
+            state=[asdict(spec) for spec in self.model_config.state_cache_specs],
+        )
+        return json.dumps(schema, sort_keys=True, default=str)
+
     def build_cache_engine(self):
         """Build cache engine."""
         with self.all_context():
@@ -1598,6 +1610,7 @@ class BaseModelAgent:
                 self.kv_connector.register_kv_caches(
                     self._get_connector_kv_caches(),
                     state_cache_pools=self.state_cache_engine.connector_state_cache_pools,
+                    cache_schema=self._get_connector_cache_schema(),
                 )
 
             if self.memdecode_agent is not None:

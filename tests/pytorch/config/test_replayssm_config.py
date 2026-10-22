@@ -69,7 +69,7 @@ def test_public_mtp_replayssm_accepts_supported_preallocation_config():
     _validate_replayssm_preallocation(cache_config, spec_config)
 
 
-@pytest.mark.parametrize('connector', ['MooncakeStoreConnector', 'CustomConnector'])
+@pytest.mark.parametrize('connector', ['CustomConnector'])
 @pytest.mark.parametrize('role', ['kv_producer', 'kv_consumer', 'kv_both'])
 @pytest.mark.parametrize('method', [None, 'qwen3_5_mtp', 'deepseek_mtp'])
 def test_replayssm_rejects_external_connector_before_model_loading(monkeypatch, connector, role, method):
@@ -364,3 +364,15 @@ def test_qwen_next_replayssm_is_target_only(enabled, draft):
         assert cfg.state_cache_specs == baseline.state_cache_specs
     else:
         assert GDN_REPLAY_CHECKPOINT_CACHE_NAME in {spec.name for spec in cfg.state_cache_specs}
+
+
+@pytest.mark.parametrize('role', ['kv_producer', 'kv_consumer', 'kv_both'])
+@pytest.mark.parametrize('method', [None, 'qwen3_5_mtp', 'deepseek_mtp'])
+@pytest.mark.parametrize('prefix', [False, True])
+def test_replayssm_accepts_mooncake_full_state_protocol(role, method, prefix):
+    cache_config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
+        enable_replayssm=True, enable_prefix_caching=prefix,
+        kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role=role)))
+    spec_config = None if method is None else SpecDecodeConfig(
+        model='', method=method, num_speculative_tokens=3)
+    _validate_replayssm_preallocation(cache_config, spec_config)

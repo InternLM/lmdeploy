@@ -513,6 +513,10 @@ class Engine(EngineBase):
                     embeddings=req.data.get('input_embeddings'),
                     mode=UpdateTokenMode.INPUTS,
                 )
+                if self.model_config.enable_replayssm and self.model_config.model_paradigm == 'ar_spec':
+                    # Admission owns reclamation: prefetched work may still
+                    # reference the stopped row until the next scheduling turn.
+                    msg.replayssm_recompute_pending = True
                 msg.sampling_param = sampling_param
                 msg.activate()
 

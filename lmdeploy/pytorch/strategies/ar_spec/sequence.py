@@ -59,12 +59,15 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
 
     def _update_token_ids_inputs(self, token_ids: np.ndarray):
         """Append tokens."""
+        # Discard tentative drafts, but keep the last uncomputed output as input.
+        self.history_cache.resize(self.num_valid_ids)
+        self.history_mrope_pos_ids.resize(min(len(self.history_mrope_pos_ids), self.num_valid_ids))
         num_tokens = len(token_ids)
         self.input_start_pos = self.num_valid_ids
         self.input_end_pos = self.input_start_pos + num_tokens
         self.output_start_pos = self.input_end_pos
         self._num_valid_ids = self._num_valid_ids + num_tokens
-        self._num_token_ids = num_tokens
+        self._num_token_ids = self.num_valid_ids - self.num_history_ids
         self.num_new_tokens = 0
         self.history_cache.append(token_ids)
 
@@ -167,6 +170,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         self.num_ignored_history = min(step, self.num_ignored_history)
 
         self.history_cache.resize(num_valid_ids)
+        # Recompute can restore the last retained output to the input span.
+        self._update_mrope_pos_ids()
         self.model_meta = None
 
         if self.return_routed_experts:
