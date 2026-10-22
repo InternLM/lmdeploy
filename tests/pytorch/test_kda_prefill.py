@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Native FlashKDA dispatch and recurrent checkpoint buffer contracts."""
+import builtins
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -114,7 +115,7 @@ def test_one_native_call_for_ordinary_and_checkpoint_prefill(impl, inputs, nativ
             value = inputs[name]
             inputs[name] = value.reshape(2, 24, *value.shape[2:])
     state = torch.empty_like(inputs['initial_state']) if capture else None
-    offsets = torch.tensor([16, 16], dtype=seqlen_dtype) if capture else None
+    offsets = torch.tensor([16, 16], dtype=seqlen_dtype if varlen else torch.int64) if capture else None
     output, final = impl._prefill_recurrent(**inputs, checkpoint_state=state, checkpoint_offsets=offsets)
     assert len(native_api) == 1
     call = native_api[0]
@@ -169,9 +170,9 @@ def test_checkpoint_arguments_must_be_paired(impl, inputs, native_api, only_stat
     assert not native_api
 
 
-@pytest.mark.parametrize('failure', ['package', 'extension', 'operator', 'checkpoint'])
-@pytest.mark.parametrize('spec', [0, 3])
-def test_incompatible_dependency_fails_before_cache_update(impl, monkeypatch, failure, spec):
+@pytest.fixture(params=['package', 'extension', 'operator', 'checkpoint', 'load_os', 'load_runtime'])
+def incompatible_native(impl, monkeypatch, request):
+    failure = request.param
     module = None if failure == 'package' else SimpleNamespace(fwd=lambda **kwargs: None)
     if failure in ('operator', 'checkpoint'):
         module._C = object()
@@ -181,12 +182,31 @@ def test_incompatible_dependency_fails_before_cache_update(impl, monkeypatch, fa
     monkeypatch.setattr(torch.ops, 'flash_kda', namespace)
     monkeypatch.setitem(sys.modules, 'flash_kda', module)
     monkeypatch.setattr(impl, '_use_flash_kda', lambda *args: True)
+    original_import = builtins.__import__
+
+    def import_module(name, *args, **kwargs):
+        if name == 'flash_kda' and failure.startswith('load_'):
+            error = OSError if failure == 'load_os' else RuntimeError
+            raise error('incompatible CUDA/PyTorch extension')
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', import_module)
+    return RuntimeError if failure in ('operator', 'checkpoint') else ImportError
+
+
+@pytest.mark.parametrize('spec', [0, 3])
+def test_incompatible_dependency_fails_before_checkpoint_cache_update(impl, incompatible_native, spec):
     impl._conv = Mock(side_effect=AssertionError('cache modified before dependency check'))
-    error = ImportError if failure in ('package', 'extension') else RuntimeError
-    with pytest.raises(error, match='FlashKDA|flash_kda.fwd'):
-        impl.forward(**forward_inputs(spec))
+    impl._forward_spec = Mock(side_effect=AssertionError('ring accessed before dependency check'))
+    args = forward_inputs(spec)
+    before = (args['conv_state'].clone(), args['recurrent_state'].clone())
+    with pytest.raises(incompatible_native, match='FlashKDA|flash_kda.fwd'):
+        impl.forward(**args, checkpoint_state=torch.empty(1, 1, 128, 128), checkpoint_offsets=torch.tensor([16]))
     impl._conv.assert_not_called()
+    impl._forward_spec.assert_not_called()
     impl.chunk_kda.assert_not_called()
+    torch.testing.assert_close(args['conv_state'], before[0], rtol=0, atol=0)
+    torch.testing.assert_close(args['recurrent_state'], before[1], rtol=0, atol=0)
 
 
 def forward_inputs(spec=0, decode=False):
@@ -204,11 +224,8 @@ def forward_inputs(spec=0, decode=False):
                 num_heads=heads, head_dim=dim, lower_bound=-5.0)
 
 
-@pytest.mark.parametrize('spec', [0, 1, 3, 5])
-@pytest.mark.parametrize('capture', [False, True])
-def test_forward_and_mtp_prefill_use_native_api(impl, native_api, monkeypatch, spec, capture):
-    args = forward_inputs(spec)
-    before = args['recurrent_state'].clone()
+@pytest.fixture
+def cpu_cache_ops(impl, monkeypatch):
     monkeypatch.setattr(kda_module, '_state_select', lambda state, ids, slots: state[ids, slots].clone())
 
     def scatter(state, ids, slots, values):
@@ -221,6 +238,43 @@ def test_forward_and_mtp_prefill_use_native_api(impl, native_api, monkeypatch, s
         return x
 
     impl._conv = conv
+
+
+@pytest.mark.parametrize('spec', [0, 3])
+def test_ordinary_prefill_falls_back_with_incompatible_dependency(impl, incompatible_native, cpu_cache_ops, spec):
+    args = forward_inputs(spec)
+    before = args['recurrent_state'].clone()
+    impl.chunk_kda = Mock(side_effect=lambda **kwargs: (kwargs['v'], kwargs['initial_state'] + 1))
+    out = impl.forward(**args)
+    torch.testing.assert_close(out, args['mixed_qkv'][..., 256:].unsqueeze(2), rtol=0, atol=0)
+    kwargs = impl.chunk_kda.call_args.kwargs
+    for name in ('output_final_state', 'use_qk_l2norm_in_kernel', 'use_gate_in_kernel',
+                 'use_beta_sigmoid_in_kernel', 'safe_gate', 'state_v_first'):
+        assert kwargs[name] is True
+    assert 'checkpoint_state' not in kwargs and 'checkpoint_offsets' not in kwargs
+    if spec:
+        before[1, (17 + 48) % (spec + 1)] += 1
+    else:
+        before[1] += 1
+    torch.testing.assert_close(args['recurrent_state'], before, rtol=0, atol=0)
+    # A failed optional lookup is cached instead of retried at every layer call.
+    assert impl.__dict__['_optional_flash_kda_fwd'] is None
+
+
+def test_native_execution_error_does_not_retry_fla(impl, inputs, native_api):
+    fwd = Mock(side_effect=RuntimeError('native kernel failed'))
+    impl._flash_kda_fwd = fwd
+    with pytest.raises(RuntimeError, match='native kernel failed'):
+        impl._prefill_recurrent(**inputs)
+    impl.chunk_kda.assert_not_called()
+    fwd.assert_called_once()
+
+
+@pytest.mark.parametrize('spec', [0, 1, 3, 5])
+@pytest.mark.parametrize('capture', [False, True])
+def test_forward_and_mtp_prefill_use_native_api(impl, native_api, cpu_cache_ops, spec, capture):
+    args = forward_inputs(spec)
+    before = args['recurrent_state'].clone()
     # The checkpoint owner supplies the destination slot; runtime ring writes
     # must continue to address the full-prefill end, not the checkpoint offset.
     checkpoint_ring = torch.full((1, spec + 1, 1, 128, 128), -1.0)
@@ -240,6 +294,73 @@ def test_forward_and_mtp_prefill_use_native_api(impl, native_api, monkeypatch, s
     else:
         before[1] += 1
     torch.testing.assert_close(args['recurrent_state'], before, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('spec', [0, 3])
+@pytest.mark.parametrize('invalid,match', [
+    ('state_dtype', 'checkpoint_state.*float32'),
+    ('state_shape', 'checkpoint_state.*shape'),
+    ('state_device', 'checkpoint_state.*device'),
+    ('state_ring_view', 'checkpoint_state.*contiguous'),
+    ('offset_dtype', 'checkpoint_offsets.*dtype'),
+    ('offset_shape', 'checkpoint_offsets.*shape'),
+    ('offset_device', 'checkpoint_offsets.*device'),
+    ('offset_strides', 'checkpoint_offsets.*contiguous'),
+    ('cu_dtype', 'cu_seqlens'),
+    ('cu_shape', 'cu_seqlens'),
+    ('cu_device', 'cu_seqlens'),
+    ('cu_strides', 'cu_seqlens'),
+])
+def test_invalid_checkpoint_rejected_before_cache_update(impl, native_api, spec, invalid, match):
+    args = forward_inputs(spec)
+    meta = args['metadata']
+    meta.state_ids = torch.tensor([1, 2])
+    meta.cu_seqlens = torch.tensor([0, 16, 48])
+    checkpoint = torch.empty(2, 1, 128, 128)
+    offsets = torch.tensor([16, 16])
+    if invalid == 'state_dtype':
+        checkpoint = checkpoint.bfloat16()
+    elif invalid == 'state_shape':
+        checkpoint = checkpoint[:1]
+    elif invalid == 'state_device':
+        checkpoint = checkpoint.to('meta')
+    elif invalid == 'state_ring_view':
+        # A common slot across multiple requests in [N, Ring, H, V, K] is strided.
+        checkpoint = torch.empty(2, 4, 1, 128, 128)[:, 1]
+    elif invalid == 'offset_dtype':
+        offsets = offsets.int()
+    elif invalid == 'offset_shape':
+        offsets = offsets.unsqueeze(0)
+    elif invalid == 'offset_device':
+        offsets = offsets.to('meta')
+    elif invalid == 'offset_strides':
+        offsets = torch.empty(4, dtype=torch.int64)[::2]
+    elif invalid == 'cu_dtype':
+        meta.cu_seqlens = meta.cu_seqlens.float()
+    elif invalid == 'cu_shape':
+        meta.cu_seqlens = meta.cu_seqlens.unsqueeze(0)
+    elif invalid == 'cu_device':
+        meta.cu_seqlens = meta.cu_seqlens.to('meta')
+    else:
+        meta.cu_seqlens = torch.empty(6, dtype=torch.int64)[::2]
+    before = (args['conv_state'].clone(), args['recurrent_state'].clone())
+    impl._conv = Mock(side_effect=AssertionError('cache modified before validation'))
+    impl._forward_spec = Mock(side_effect=AssertionError('ring accessed before validation'))
+    with pytest.raises(ValueError, match=match):
+        impl.forward(**args, checkpoint_state=checkpoint, checkpoint_offsets=offsets)
+    impl._conv.assert_not_called()
+    impl._forward_spec.assert_not_called()
+    assert not native_api
+    torch.testing.assert_close(args['conv_state'], before[0], rtol=0, atol=0)
+    torch.testing.assert_close(args['recurrent_state'], before[1], rtol=0, atol=0)
+
+
+def test_fixed_batch_checkpoint_requires_int64_offsets(impl, inputs, native_api):
+    inputs['cu_seqlens'] = None
+    with pytest.raises(ValueError, match='int64 for fixed-batch'):
+        impl._prefill_recurrent(**inputs, checkpoint_state=torch.empty(1, 2, 128, 128),
+                               checkpoint_offsets=torch.tensor([16], dtype=torch.int32))
+    assert not native_api
 
 
 @pytest.mark.parametrize('spec', [0, 1, 3, 5])

@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -172,6 +173,55 @@ def test_flash_kda_internal_checkpoint_matches_prefix_and_resume(seqlen_dtype, o
             torch.testing.assert_close(resumed, plain[:, start + offset:start + length], rtol=1e-2, atol=5e-4)
             torch.testing.assert_close(resumed_final, plain_final[index:index + 1], rtol=1e-2, atol=1e-4)
             start += length
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+@pytest.mark.parametrize('tokens', [129, 2048])
+def test_kda_prefill_without_flash_kda_matches_fla(monkeypatch, record_property, tokens):
+    from fla.ops import backends
+
+    from lmdeploy.pytorch.backends.cuda.kda import CudaKdaImpl
+
+    if torch.cuda.get_device_capability() != (9, 0) or torch.version.hip is not None:
+        pytest.skip('native reference requires SM90')
+    torch.manual_seed(31)
+    heads, dim = 2, 128
+    values = {name: torch.randn(1, tokens, heads, dim, device='cuda', dtype=torch.bfloat16) / 4
+              for name in ('q', 'k', 'v', 'g')}
+    values['beta'] = torch.randn(1, tokens, heads, device='cuda', dtype=torch.bfloat16)
+    params = dict(initial_state=torch.randn(1, heads, dim, dim, device='cuda') / 8,
+                  A_log=torch.zeros(heads, device='cuda'), dt_bias=torch.zeros(heads * dim, device='cuda'),
+                  cu_seqlens=torch.tensor([0, tokens], dtype=torch.int32, device='cuda'), lower_bound=-5.0)
+    native = CudaKdaImpl()
+    with torch.inference_mode():
+        native_output, native_final = native._prefill_recurrent(**values, **params)
+    assert native._optional_flash_kda_fwd is not None
+
+    # Simulate an environment without the optional package, including FLA's
+    # package discovery. The fallback below runs the actual FLA GPU kernels.
+    monkeypatch.setitem(sys.modules, 'flash_kda', None)
+    find_spec = backends.find_spec_cached
+    monkeypatch.setattr(backends, 'find_spec_cached', lambda name: None if name == 'flash_kda' else find_spec(name))
+    monkeypatch.setenv('FLA_FLASH_KDA', '1')
+    fallback = CudaKdaImpl()
+    with torch.inference_mode():
+        expected, expected_final = fallback.chunk_kda(
+            **values, **params, output_final_state=True,
+            use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True, use_beta_sigmoid_in_kernel=True,
+            safe_gate=True, state_v_first=True)
+        actual, actual_final = fallback._prefill_recurrent(**values, **params)
+    assert fallback._optional_flash_kda_fwd is None
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    torch.testing.assert_close(actual_final, expected_final, rtol=0, atol=0)
+    # Record cross-kernel differences separately from fallback equivalence.
+    # Native and FLA use different arithmetic; model-level accuracy remains
+    # outside this API regression test's scope.
+    for name, fla_value, native_value in (('output', actual, native_output), ('state', actual_final, native_final)):
+        diff = fla_value.float() - native_value.float()
+        rms = diff.square().mean().sqrt()
+        record_property(f'{name}_native_max_abs_error', diff.abs().max().item())
+        record_property(f'{name}_native_rms_error', rms.item())
+        record_property(f'{name}_native_relative_rms_error', (rms / fla_value.float().square().mean().sqrt()).item())
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')

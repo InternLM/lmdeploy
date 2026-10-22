@@ -82,8 +82,8 @@ class CudaKdaImpl(KdaImpl):
         prefill."""
         try:
             from flash_kda import _C  # noqa: F401
-        except ImportError as exc:
-            raise ImportError('SM90 KDA prefill requires FlashKDA with native checkpoint support. '
+        except (ImportError, OSError, RuntimeError) as exc:
+            raise ImportError('KDA checkpoint export requires FlashKDA with native checkpoint support. '
                               'See docs/en/advance/flash_kda.md.') from exc
         try:
             fwd = torch.ops.flash_kda.fwd.default
@@ -95,12 +95,54 @@ class CudaKdaImpl(KdaImpl):
                                'Install the FlashKDA version described in docs/en/advance/flash_kda.md.')
         return fwd
 
-    def _get_prefill_fwd(self, q, initial_state, lower_bound, checkpoint_state, checkpoint_offsets):
+    @cached_property
+    def _optional_flash_kda_fwd(self):
+        """Cache native availability for ordinary prefill without requiring
+        it."""
+        try:
+            return self._flash_kda_fwd
+        except (ImportError, RuntimeError):
+            return None
+
+    @staticmethod
+    def _validate_checkpoint_buffers(q, cu_seqlens, checkpoint_state, checkpoint_offsets):
+        """Validate tensor metadata without reading GPU offset values."""
+        num_sequences = q.size(0)
+        offset_dtype = torch.int64
+        if cu_seqlens is not None:
+            if (cu_seqlens.ndim != 1 or cu_seqlens.numel() < 2
+                    or cu_seqlens.dtype not in (torch.int32, torch.int64)
+                    or cu_seqlens.device != q.device or not cu_seqlens.is_contiguous()):
+                raise ValueError('KDA checkpoint cu_seqlens must be a contiguous int32/int64 vector '
+                                 'on the input device with at least two entries.')
+            num_sequences = cu_seqlens.numel() - 1
+            offset_dtype = cu_seqlens.dtype
+        expected_shape = (num_sequences, q.size(2), q.size(3), q.size(3))
+        if checkpoint_state.dtype != torch.float32:
+            raise ValueError('checkpoint_state must have dtype float32.')
+        if checkpoint_state.device != q.device:
+            raise ValueError('checkpoint_state must be on the same device as the inputs.')
+        if checkpoint_state.shape != expected_shape:
+            raise ValueError(f'checkpoint_state must have shape {expected_shape}.')
+        if not checkpoint_state.is_contiguous():
+            raise ValueError('checkpoint_state must be contiguous; use a separate contiguous buffer for ring slots.')
+        if checkpoint_offsets.dtype != offset_dtype:
+            raise ValueError('checkpoint_offsets must match cu_seqlens dtype, or be int64 for fixed-batch inputs.')
+        if checkpoint_offsets.device != q.device:
+            raise ValueError('checkpoint_offsets must be on the same device as the inputs.')
+        if checkpoint_offsets.shape != (num_sequences,):
+            raise ValueError(f'checkpoint_offsets must have shape ({num_sequences},).')
+        if not checkpoint_offsets.is_contiguous():
+            raise ValueError('checkpoint_offsets must be contiguous.')
+
+    def _get_prefill_fwd(self, q, initial_state, lower_bound, checkpoint_state, checkpoint_offsets, *, cu_seqlens=None):
         """Resolve the native operator before mutating any live cache state."""
         if (checkpoint_state is None) != (checkpoint_offsets is None):
             raise ValueError('checkpoint_state and checkpoint_offsets must be provided together.')
+        if checkpoint_state is not None:
+            self._validate_checkpoint_buffers(q, cu_seqlens, checkpoint_state, checkpoint_offsets)
         if self._use_flash_kda(q, initial_state, lower_bound):
-            return self._flash_kda_fwd
+            return self._flash_kda_fwd if checkpoint_state is not None else self._optional_flash_kda_fwd
         if checkpoint_state is not None:
             raise ValueError('KDA checkpoint export requires SM90 with BF16 inputs, '
                              'D=128, FP32 state and a gate lower bound in [-5, 0].')
@@ -115,7 +157,8 @@ class CudaKdaImpl(KdaImpl):
         the same integer dtype as cu_seqlens. The caller owns checkpoint allocation and publication, including the
         corresponding convolution snapshot; this method only computes recurrent states.
         """
-        fwd = self._get_prefill_fwd(q, initial_state, lower_bound, checkpoint_state, checkpoint_offsets)
+        fwd = self._get_prefill_fwd(q, initial_state, lower_bound, checkpoint_state, checkpoint_offsets,
+                                    cu_seqlens=cu_seqlens)
         if fwd is not None:
             output = torch.empty_like(v, memory_format=torch.contiguous_format)
             final_state = torch.empty_like(initial_state, memory_format=torch.contiguous_format)
@@ -328,7 +371,7 @@ class CudaKdaImpl(KdaImpl):
                 raise ValueError('KDA checkpoint export is only supported during prefill.')
         else:
             self._get_prefill_fwd(raw_gate.unflatten(-1, (num_heads, head_dim)), recurrent_state,
-                                 lower_bound, checkpoint_state, checkpoint_offsets)
+                                 lower_bound, checkpoint_state, checkpoint_offsets, cu_seqlens=metadata.cu_seqlens)
         if (getattr(metadata, 'num_spec_tokens', 0) or 0) > 0:
             return self._forward_spec(
                 mixed_qkv, raw_gate, raw_beta, conv_state, recurrent_state,
