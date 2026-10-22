@@ -23,6 +23,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from functools import cache
+
 import torch
 import triton
 import triton.language as tl
@@ -30,9 +32,17 @@ from fla.ops.utils.cache import fla_cache_autotune
 from fla.ops.utils.op import exp2
 from fla.utils import (
     IS_NVIDIA_BLACKWELL,
+    IS_NVIDIA_HOPPER,
     autotune_cache_kwargs,
     check_shared_mem,
 )
+
+
+@cache
+def _is_h200(device: torch.device) -> bool:
+    # Only this GPU family has validated the offline four-warp selection.
+    return torch.cuda.get_device_name(device).startswith('NVIDIA H200')
+
 
 # TODO: Triton mainline fixes a Blackwell tl.dot recurrence race.
 # Keep this kernel on num_warps=2 for Blackwell until Triton 3.8 is released
@@ -501,6 +511,15 @@ def indexed_chunk_state_fwd(
     # never clone/restore the pool to make benchmarking appear side-effect free.
     kernel = _indexed_chunk_state_kernel if allow_input_alias else _autotuned_indexed_chunk_state
     launch = dict(BV=32, num_warps=2, num_stages=2) if allow_input_alias else {}
+    # Offline H200 validation: long, single-request GLM KDA prefill is register-heavy
+    # at two warps. Four warps preserve the value tile and chunk arithmetic while
+    # reducing register pressure. Keep every unvalidated geometry conservative.
+    if (allow_input_alias and IS_NVIDIA_HOPPER and count == 1 and length >= 512
+            and _is_h200(k.device)
+            and heads == value_heads and heads in (8, 64) and dim == value_dim == 128
+            and state_v_first and gk is not None and g is None
+            and k.dtype == torch.bfloat16 and pool.dtype == torch.float32):
+        launch['num_warps'] = 4
     kernel[grid](
         k, u, w, v_new, g, gk, h, pool, input_ids, final_ids, checkpoint_ids, checkpoint_offsets,
         pool.stride(0), pool.stride(1), stride_k, stride_v, pool.shape[0], cu_seqlens, chunk_offsets,

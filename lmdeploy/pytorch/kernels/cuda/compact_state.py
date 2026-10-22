@@ -9,13 +9,14 @@ import triton
 import triton.language as tl
 
 
-@triton.jit
+# Live batch changes on admission/drain; it only masks rows, not the layout.
+@triton.jit(do_not_specialize=['B'])
 def _select_ids(bank, inputs, old_outputs, consumed, next_inputs, next_outputs,
                 runtime_ids, request_ids, histories, sources, checkpoint_ids, checkpoint_offsets,
                 cu_seqlens, decode_ids,
                 DECODE_CHECKPOINT: tl.constexpr, FINAL_CHECKPOINT: tl.constexpr, A: tl.constexpr,
                 BIND: tl.constexpr, RECORD: tl.constexpr, OVERRIDE: tl.constexpr,
-                B: tl.constexpr, V: tl.constexpr, OLD_W: tl.constexpr, W: tl.constexpr,
+                B, V: tl.constexpr, OLD_W: tl.constexpr, W: tl.constexpr,
                 ADVANCE: tl.constexpr, PARTIAL_BANK: tl.constexpr, ALLOW_INPUT_ALIAS: tl.constexpr,
                 ROWS: tl.constexpr, COLS: tl.constexpr):
     rows = tl.program_id(0) * ROWS + tl.arange(0, ROWS)
@@ -188,9 +189,9 @@ def select_compact_state_ids(bank_ids: torch.Tensor, input_ids: torch.Tensor, wi
     return next_inputs, next_outputs
 
 
-@triton.jit
+@triton.jit(do_not_specialize=['B'])
 def _stage_ids(bank, inputs, outputs, static_bank, static_inputs, static_outputs,
-               B: tl.constexpr, PAD_B: tl.constexpr, V: tl.constexpr, W: tl.constexpr,
+               B, PAD_B: tl.constexpr, V: tl.constexpr, W: tl.constexpr,
                ROWS: tl.constexpr, COLS: tl.constexpr):
     rows = tl.program_id(0) * ROWS + tl.arange(0, ROWS)
     cols = tl.arange(0, COLS)

@@ -174,3 +174,49 @@ def test_decode_checkpoint_output_alias_fails_closed(alias):
     destination = sources.clone() if alias == 'source' else banks[:, 0].contiguous()
     bound = CompactStateInputs.plan(banks, sources, 1, decode_ids=destination)
     assert bound.input_ids.tolist() == [-1] and bound.output_ids.tolist() == [[-1]]
+
+
+@pytest.mark.parametrize('width', [1, 4, 6])
+@pytest.mark.parametrize('alias', [False, True])
+def test_dynamic_batch_reuses_id_kernels_and_clears_graph_padding(width, alias):
+    from lmdeploy.pytorch.kernels.cuda.compact_state import (
+        _select_ids,
+        _stage_ids,
+        select_compact_state_ids,
+        stage_compact_state_ids,
+    )
+    device = torch.cuda.current_device()
+    bank_width = width if alias else width + 1
+    banks = torch.arange(1, 1 + 128 * bank_width, device='cuda').reshape(128, bank_width)
+    inputs = torch.zeros(128, device='cuda', dtype=torch.int64)
+    destination = CompactStateInputs(banks.clone(), inputs.clone(), banks[:, :width].contiguous().clone(),
+                                    allow_input_alias=alias)
+
+    def run(batch):
+        current, outputs = select_compact_state_ids(banks[:batch], inputs[:batch], width,
+                                                   allow_input_alias=alias)
+        source = CompactStateInputs(banks[:batch], current, outputs, allow_input_alias=alias)
+        stage_compact_state_ids(source, destination)
+        torch.testing.assert_close(current, inputs[:batch], rtol=0, atol=0)
+        torch.testing.assert_close(outputs, banks[:batch, :width], rtol=0, atol=0)
+        for src, dst in zip((source.bank_ids, current, outputs),
+                            (destination.bank_ids, destination.input_ids, destination.output_ids)):
+            torch.testing.assert_close(dst[:batch], src, rtol=0, atol=0)
+            assert (dst[batch:] == -1).all()
+        return source
+
+    run(128)
+    # Inspect the actual compiled variants, not just the decorator declaration.
+    counts = [len(kernel.device_caches[device][0]) for kernel in (_select_ids, _stage_ids)]
+    for batch in [0, *range(1, 65), 127, 128, 33, 1, 0]:
+        run(batch)
+    assert [len(kernel.device_caches[device][0]) for kernel in (_select_ids, _stage_ids)] == counts
+    # Capture for one live B; successive staging launches clear shrinking padding.
+    source = run(33)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        stage_compact_state_ids(source, destination)
+    source.output_ids.add_(1000)
+    graph.replay()
+    torch.testing.assert_close(destination.output_ids[:33], source.output_ids, rtol=0, atol=0)
+    assert (destination.output_ids[33:] == -1).all()

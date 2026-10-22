@@ -239,14 +239,18 @@ class CudaKdaImpl(KdaImpl):
         from .causal_conv1d import compact_causal_conv1d
         ids = metadata.compact_state
         mixed = compact_causal_conv1d(mixed_qkv, conv_weight, conv_bias, conv_state, metadata, 'silu')
-        q, k, v = [x.unflatten(-1, (num_heads, head_dim)).contiguous()
+        q, k, v = [x.unflatten(-1, (num_heads, head_dim))
                    for x in mixed.split(num_heads * head_dim, dim=-1)]
+        # Chunk prefill requires dense inputs; the recurrent decode kernel
+        # already accepts Q/K/V strides. Avoid three payload copies in decode.
+        if not metadata.is_decoding:
+            q, k, v = [x.contiguous() for x in (q, k, v)]
         gate = raw_gate.unflatten(-1, (num_heads, head_dim)).contiguous()
         beta = raw_beta.contiguous()
         if metadata.is_decoding:
             batch, width = ids.output_ids.shape
-            q, k, v, gate, beta = [x[0].unflatten(0, (batch, width)).contiguous()
-                                   for x in (q, k, v, gate, beta)]
+            q, k, v = [x[0].unflatten(0, (batch, width)) for x in (q, k, v)]
+            gate, beta = [x[0].unflatten(0, (batch, width)).contiguous() for x in (gate, beta)]
             output, _ = self._decode_recurrent(
                 q, k, v, g=gate, beta=beta, A_log=a_log, dt_bias=dt_bias, lower_bound=lower_bound,
                 initial_state=recurrent_state, output_final_state=True,
