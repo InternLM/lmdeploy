@@ -20,6 +20,10 @@ For Anthropic `POST` endpoints, include:
 - `POST /v1/messages` supports text output, reasoning output (`thinking` blocks), and tool-use output (`tool_use` blocks).
 - Tool use requires launching API server with a configured tool parser (`--tool-call-parser ...`).
 - Reasoning block extraction depends on parser configuration (same parser stack used by OpenAI-compatible chat endpoint).
+- `thinking.type` controls the template and reasoning parser: `disabled` turns thinking off, while `enabled` and `adaptive` turn it on. The model's chat template must support `enable_thinking`; for early GLM-5.3 templates that always open `<think>`, LMDeploy prefills `</think>` when thinking is disabled. `budget_tokens` is accepted for compatibility but does not enforce a separate thinking budget; `max_tokens` limits total output.
+- `usage.cache_read_input_tokens` reports engine prefix-cache hits; `usage.input_tokens` excludes those hits. This uses LMDeploy prefix caching, not Anthropic cache breakpoints or TTLs. Cache-write accounting is not exposed.
+- `usage.output_tokens_details.thinking_tokens` is an LMDeploy extension containing the parser's reasoning token count (zero when unavailable). Streaming reports the final count in `message_delta.usage`.
+- When a configured stop sequence triggers the engine's token-based stop matching, both streaming and non-streaming responses report `stop_reason="stop_sequence"` and the matched `stop_sequence`. Natural EOS still reports `end_turn`.
 - `count_tokens` is tokenizer/chat-template based and is intended for practical estimation.
 
 ## Example: `/v1/messages`

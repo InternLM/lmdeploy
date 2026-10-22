@@ -57,6 +57,7 @@ class GenOut:
     cached_tokens: int = 0
     # Token ids aligned 1:1 with input-scoring logprobs rows.
     logprob_token_ids: list[int] | None = None
+    stop_sequence: str | None = None
 
     def to_response(self, index: int = 0) -> Response:
         """Convert GenOut to Response object.
@@ -781,6 +782,13 @@ class AsyncEngine:
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{input_len}, output_tokens {gen_len}')
+                    stop_sequence = None
+                    if finish_reason == 'stop':
+                        # Match against the same token IDs used by GenerationConfig,
+                        # before the terminal token is discarded from visible output.
+                        stop_sequence = next((word for word in gen_config.stop_words or []
+                                              if outputs.token_ids[-1] in
+                                              self.tokenizer.indexes_containing_token(word)), None)
                     yield GenOut(response,
                                  input_len,
                                  gen_len,
@@ -792,7 +800,8 @@ class AsyncEngine:
                                  last_hidden_state=last_hidden_state,
                                  routed_experts=routed_experts,
                                  cache_block_ids=outputs.cache_block_ids,
-                                 cached_tokens=cached_tokens)
+                                 cached_tokens=cached_tokens,
+                                 stop_sequence=stop_sequence)
                 else:
                     logger.error(f'session {session_id} finished, {outputs.status}, '
                                  'reason "error"')

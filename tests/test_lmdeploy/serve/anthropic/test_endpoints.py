@@ -720,8 +720,10 @@ def test_messages_streaming_usage_matches_anthropic_event_spec():
     assert message_start['message']['usage'] == {
         'input_tokens': 8,
         'output_tokens': 1,
+        'cache_read_input_tokens': 0,
+        'output_tokens_details': {'thinking_tokens': 0},
     }
-    assert message_delta['usage'] == {'output_tokens': 2}
+    assert message_delta['usage'] == {'output_tokens': 2, 'output_tokens_details': {'thinking_tokens': 0}}
     assert len(context.session_mgr.removed) == 1
 
 
@@ -1199,3 +1201,116 @@ def test_messages_rejects_logprobs_when_engine_logprobs_mode_disabled():
     response = _post_messages(client, messages=[{'role': 'user', 'content': 'Hi'}], return_logprob=True)
     assert response.status_code == 400
     assert 'return_logprob' in response.json()['error']['message']
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('thinking_type', [None, 'enabled', 'disabled', 'adaptive'])
+def test_messages_forwards_thinking_to_template_and_parser(stream, thinking_type):
+    client, context = _make_client(return_context=True)
+    options = {} if thinking_type is None else {'thinking': {'type': thinking_type}}
+    if stream:
+        status, _ = _stream_messages_body(client, **options)
+    else:
+        status = _post_messages(client, **options).status_code
+    assert status == 200
+    expected = None if thinking_type is None else {'enable_thinking': thinking_type != 'disabled'}
+    assert context.async_engine.preprocess_calls[0][1]['chat_template_kwargs'] == expected
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('stop_sequence', [None, '6'])
+def test_messages_preserves_usage_and_matched_stop(stream, stop_sequence):
+    class Parser(_BasicParser):
+        def __init__(self, request):
+            super().__init__(request)
+            self.reasoning_tokens = 1
+
+    client, context = _make_client(Parser, return_context=True)
+    original_generate = context.async_engine.generate
+
+    def generate(request, **kwargs):
+        async def results():
+            async for result in original_generate(request, **kwargs):
+                result.cached_tokens = 4
+                result.stop_sequence = stop_sequence if result.finish_reason else None
+                yield result
+        return results()
+
+    context.async_engine.generate = generate
+    options = {'stop_sequences': ['6']}
+    if stream:
+        status, body = _stream_messages_body(client, **options)
+        assert status == 200
+        events = _sse_payloads(body)
+        start = next(e['message'] for e in events if e['type'] == 'message_start')
+        final = next(e for e in events if e['type'] == 'message_delta')
+        usage = start['usage']
+        output_usage = final['usage']
+        result = final['delta']
+        assert events[-1]['type'] == 'message_stop'
+    else:
+        response = _post_messages(client, **options)
+        assert response.status_code == 200
+        result = response.json()
+        usage = output_usage = result['usage']
+    assert usage['input_tokens'] == 4
+    assert usage['cache_read_input_tokens'] == 4
+    assert output_usage['output_tokens'] == 2
+    assert output_usage['output_tokens_details']['thinking_tokens'] == 1
+    assert result['stop_reason'] == ('end_turn' if stop_sequence is None else 'stop_sequence')
+    assert result['stop_sequence'] == stop_sequence
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('thinking_type', ['enabled', 'disabled'])
+@pytest.mark.parametrize('max_tokens', [64, 512])
+def test_messages_thinking_mode_with_real_parser(stream, thinking_type, max_tokens):
+    class Parser(BaseResponseParser):
+        reasoning_parser_cls = ReasoningParserManager.get('default')
+        tool_parser_cls = None
+        tokenizer = SimpleNamespace(get_vocab=lambda: {'<think>': 1, '</think>': 2})
+
+    client, context = _make_client(Parser, return_context=True)
+    original_generate = context.async_engine.generate
+
+    def generate(request, **kwargs):
+        enabled = request.kwargs['chat_template_kwargs']['enable_thinking']
+        assert request.kwargs['gen_config'].max_new_tokens == max_tokens
+
+        async def results():
+            async for index, result in _enumerate_async(original_generate(request, **kwargs)):
+                if enabled:
+                    result.response = 'analysis' if index == 0 else '</think>ok'
+                    result.token_ids = [101] if index == 0 else [2, 102]
+                    result.generate_token_len = 1 if index == 0 else 3
+                else:
+                    result.response = 'o' if index == 0 else 'k'
+                yield result
+        return results()
+
+    context.async_engine.generate = generate
+    options = {'thinking': {'type': thinking_type}, 'max_tokens': max_tokens}
+    if stream:
+        status, body = _stream_messages_body(client, **options)
+        assert status == 200
+        events = _sse_payloads(body)
+        block_types = [e['content_block']['type'] for e in events if e['type'] == 'content_block_start']
+        text = ''.join(e.get('delta', {}).get('text', '') for e in events)
+        usage = next(e['usage'] for e in events if e['type'] == 'message_delta')
+    else:
+        response = _post_messages(client, **options)
+        assert response.status_code == 200
+        data = response.json()
+        block_types = [b['type'] for b in data['content']]
+        text = ''.join(b.get('text', '') for b in data['content'])
+        usage = data['usage']
+    assert block_types == (['thinking', 'text'] if thinking_type == 'enabled' else ['text'])
+    assert text == 'ok'
+    assert usage['output_tokens_details']['thinking_tokens'] == (1 if thinking_type == 'enabled' else 0)
+
+
+async def _enumerate_async(results):
+    index = 0
+    async for result in results:
+        yield index, result
+        index += 1

@@ -26,6 +26,8 @@ LMDeploy 提供了轻量级的 OpenAI Responses 兼容接口，方便接入使�
 - `parallel_tool_calls` 默认为 `true`。当设置为 `false` 时，LMDeploy 会保持与 vLLM 类似的兼容行为，仅返回解析到的第一个 function call。
 - 非 function 类型的 hosted tools（例如 `web_search`）会被接受，但 LMDeploy 会忽略它们。
 - Responses 专属的 logprob 序列化与流式混淆选项当前会被接受但忽略。
+- `reasoning.effort="none"` 通过模型模板和解析器关闭思考；`low`、`medium`、`high`、`max` 开启思考并向模板透传推理强度，实际效果取决于模型支持。其他强度值返回 HTTP 400，暂不支持推理摘要。
+- 非流式响应和流式终止响应的 `usage.input_tokens_details.cached_tokens` 返回引擎前缀缓存命中数；`input_tokens` 仍包含缓存 token。
 - 当前不支持 `background` 模式和 `previous_response_id`。
 
 ## 示例：`/v1/responses`

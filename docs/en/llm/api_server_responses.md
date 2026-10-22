@@ -26,6 +26,8 @@ For `POST /v1/responses`, include:
 - `parallel_tool_calls` defaults to `true`. When it is `false`, LMDeploy follows vLLM-style compatibility and returns only the first parsed function call.
 - Non-function hosted tools, such as `web_search`, are accepted but ignored by LMDeploy.
 - Responses-only logprob serialization and stream obfuscation options are accepted but currently ignored.
+- `reasoning.effort="none"` disables thinking through the model's template and parser. `low`, `medium`, `high`, and `max` enable thinking and forward the effort to the template; model support determines its effect. Other effort values return HTTP 400. Reasoning summaries remain unsupported.
+- `usage.input_tokens_details.cached_tokens` reports engine prefix-cache hits in both non-streaming and terminal streaming responses. `input_tokens` continues to include cached tokens.
 - `background` mode and `previous_response_id` are not supported.
 
 ## Example: `/v1/responses`

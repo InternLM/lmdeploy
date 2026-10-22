@@ -788,6 +788,7 @@ class HFChatTemplate(BaseChatTemplate):
                 self.stop_words.append(self.tokenizer.eot_token)
             arch, _ = get_model_arch(model_path)
             self.is_gpt_oss = arch == 'GptOssForCausalLM'
+            self.is_glm5_next = arch == 'Glm5NextForConditionalGeneration'
             if self.is_gpt_oss:
                 self.stop_words.append('<|call|>')
         except Exception as e:
@@ -819,6 +820,11 @@ class HFChatTemplate(BaseChatTemplate):
         if self.is_gpt_oss and not kwargs.get('tools'):
             # for gpt-oss model, remove this seems more conducive to instruction following.
             prompt = prompt.replace('commentary, ', '', 1)
+        if (self.is_glm5_next and add_generation_prompt and kwargs.get('enable_thinking') is False
+                and prompt.endswith('<think>')):
+            # Early GLM-5.3 templates unconditionally open a thinking block.
+            # Prefill its closing tag so disabled thinking starts at the answer.
+            prompt += '</think>'
         return prompt
 
     def _user_instruction(self):
