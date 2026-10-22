@@ -5,8 +5,10 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from lmdeploy.serve.anthropic.protocol import CountTokensRequest, MessagesRequest
@@ -363,6 +365,31 @@ def test_messages_non_stream():
     assert data['stop_reason'] == 'end_turn'
     assert data['usage']['input_tokens'] == 8
     assert data['usage']['output_tokens'] == 2
+    assert len(context.session_mgr.removed) == 1
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_http_unknown_extension_block_is_preserved_as_text(stream):
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    block = dict(type='unsupported_probe', payload='Preserve this extension')
+    payload = _messages_payload(messages=[dict(role='user', content=[block])], stream=stream)
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', json=payload, headers=ANTHROPIC_HEADERS)
+
+    assert response.status_code == 200, response.text
+    if stream:
+        assert 'event: message_stop' in response.text
+    assert len(context.async_engine.preprocess_calls) == 1
+    args, _ = context.async_engine.preprocess_calls[0]
+    content = args[0][0]['content']
+    # Anthropic deliberately accepts beta/extension blocks and renders them
+    # as text. Unlike the Chat bug, their contents must not disappear.
+    converted = json.loads(content)
+    assert converted['type'] == block['type']
+    assert converted['payload'] == block['payload']
+    assert len(context.async_engine.generate_calls) == 1
     assert len(context.session_mgr.removed) == 1
 
 

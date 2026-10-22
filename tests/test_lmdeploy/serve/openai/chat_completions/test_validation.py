@@ -1,11 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from types import SimpleNamespace
+import sys
+from types import MethodType, SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
+from fastapi import APIRouter, FastAPI
+from fastapi.testclient import TestClient
 
+from lmdeploy.serve.core.async_engine import AsyncEngine
+from lmdeploy.serve.managers import SessionManager
+from lmdeploy.serve.openai.chat_completions import register
 from lmdeploy.serve.openai.chat_completions.validation import check_request
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+from lmdeploy.serve.processors.multimodal import MultimodalProcessor
 
 
 class _SessionManager:
@@ -65,3 +73,78 @@ def test_chat_completions_accepts_raw_input_ids_without_messages():
 
 def test_chat_completions_accepts_null_n_as_unspecified():
     assert check_request(_request(n=None), _server_context()) == ''
+
+
+@pytest.fixture
+def preprocessing_client(chat_endpoint, monkeypatch):
+    """Exercise real preprocessing and error handling without loading a
+    model."""
+    _, context = chat_endpoint
+    engine = context.async_engine
+    engine.session_mgr = SessionManager()
+    engine.session_len = 128
+    engine.backend_config.enable_prefix_caching = False
+    engine.request_logger = SimpleNamespace(log_prompt=lambda *a, **kw: None, log_inputs=lambda *a, **kw: None)
+    engine._determine_gen_config = lambda input_ids, gen_config: gen_config
+    engine.prompt_processor = MultimodalProcessor(
+        tokenizer=SimpleNamespace(encode=lambda *a, **kw: [1]),
+        chat_template=SimpleNamespace(messages2prompt=lambda messages, **kw: str(messages)),
+        vl_encoder=object(),
+    )
+    engine.preprocess = MethodType(AsyncEngine.preprocess, engine)
+    load_media = Mock(side_effect=AssertionError('Invalid content must be rejected before loading media.'))
+    monkeypatch.setattr(sys.modules[MultimodalProcessor.__module__], 'load_from_url', load_media)
+    app, router = FastAPI(), APIRouter()
+    register(router, context)
+    app.include_router(router)
+    with TestClient(app) as client:
+        yield client, engine
+    load_media.assert_not_called()
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('messages, location', [
+    pytest.param([dict(role='user', content=[dict(type='unsupported_probe')])],
+                 'messages[0].content[0].type', id='unknown-only'),
+    pytest.param([dict(role='assistant', content='History'),
+                  dict(role='user', content=[dict(type='text', text='Keep this'), dict(type='unsupported_probe')])],
+                 'messages[1].content[1].type', id='text-and-unknown'),
+    pytest.param([dict(role='user', content=[dict(type='image_url', image_url=dict(url='https://example.com/a.png')),
+                                           dict(type='unsupported_probe')])],
+                 'messages[0].content[1].type', id='image-before-unknown'),
+    pytest.param([dict(role='user', content=[dict(type='image_url', image_url=dict(url='https://example.com/a.png'))]),
+                  dict(role='user', content=[dict(type='unsupported_probe')])],
+                 'messages[1].content[0].type', id='image-in-earlier-message'),
+    pytest.param([dict(role='user', content=['not a content object'])],
+                 'messages[0].content[0]', id='non-object-block'),
+    pytest.param([dict(role='user', content=[dict(text='Missing type')])],
+                 'messages[0].content[0].type', id='missing-type'),
+])
+def test_http_rejects_invalid_content_before_generation(preprocessing_client, messages, location, stream):
+    client, engine = preprocessing_client
+    response = client.post('/v1/chat/completions',
+                           json=dict(model='fake-model', messages=messages, stream=stream, max_completion_tokens=16))
+
+    assert response.status_code == 400, response.text
+    assert response.headers['content-type'].startswith('application/json')
+    error = response.json()
+    assert error['type'] == 'invalid_request_error'
+    assert location in error['message']
+    assert engine.call_count == 0
+    assert engine.session_mgr.sessions == {}
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_http_text_blocks_still_generate(preprocessing_client, stream):
+    client, engine = preprocessing_client
+    messages = [dict(role='user', content=[dict(type='text', text='First'), dict(type='text', text='Second')])]
+    response = client.post('/v1/chat/completions',
+                           json=dict(model='fake-model', messages=messages, stream=stream, max_completion_tokens=16))
+
+    assert response.status_code == 200, response.text
+    if stream:
+        assert 'data: [DONE]' in response.text
+    else:
+        assert response.json()['choices'][0]['message']['content'] == 'choice-1'
+    assert engine.call_count == 1
+    assert engine.session_mgr.sessions == {}
