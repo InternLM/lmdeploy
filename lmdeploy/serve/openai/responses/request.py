@@ -278,12 +278,15 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
         messages.append(dict(role='user', content=request.input))
         return ([dict(role='system', content='\n\n'.join(system_parts))] if system_parts else []) + messages
 
+    previous_item_type = None
     for idx, item in enumerate(request.input):
         item = _as_dict(item)
         if not item:
             raise ValueError(f'Unsupported Responses input item at index {idx}.')
 
         item_type = item.get('type', 'message')
+        adjacent_call = previous_item_type == 'function_call'
+        previous_item_type = item_type
         if item_type == 'function_call':
             call_id = item.get('call_id') or item.get('id')
             name = item.get('name')
@@ -292,21 +295,13 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
             arguments = item.get('arguments') or ''
             if not isinstance(arguments, str):
                 raise ValueError(f'Unsupported `arguments` in function_call item at index {idx}. Expected string.')
-            messages.append(
-                dict(
-                    role='assistant',
-                    content=None,
-                    tool_calls=[
-                        dict(
-                            id=call_id,
-                            type='function',
-                            function=dict(
-                                name=name,
-                                arguments=arguments,
-                            ),
-                        )
-                    ],
-                ))
+            call = dict(id=call_id, type='function', function=dict(name=name, arguments=arguments))
+            # Adjacent calls belong to one parallel invocation. Keep all IDs
+            # visible to templates associating the following tool results.
+            if adjacent_call:
+                messages[-1]['tool_calls'].append(call)
+            else:
+                messages.append(dict(role='assistant', content=None, tool_calls=[call]))
             continue
         if item_type == 'function_call_output':
             call_id = item.get('call_id')
@@ -316,7 +311,7 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
                 dict(
                     role='tool',
                     tool_call_id=call_id,
-                    content=_content_from_input(item.get('output', ''), f'input[{idx}].output'),
+                    content=_content_from_input(item.get('output', ''), f'input[{idx}].output', allow_images=True),
                 ))
             continue
         if item_type != 'message':

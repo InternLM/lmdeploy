@@ -88,6 +88,14 @@ print(response.choices[0].message.content)
 
 ______________________________________________________________________
 
+## 工具结果中的图像
+
+Chat 的 `tool` 消息、Messages 的 `tool_result` 块和 Responses 的 `function_call_output` 项会将图片与对应结果的调用 ID、文本保留在一起。模型的聊天模板和视觉预处理器也必须支持工具结果图片；支持普通图片输入不代表支持工具图片。
+
+针对 GLM-5.3-Flash 的默认模板，预处理会将调用 ID 明确、无歧义的工具结果分组按 assistant 的调用顺序排列，再进行模板渲染和图片收集。该排序规则仅用于 `Glm5NextForConditionalGeneration`，其他架构保留输入顺序；它不会自动推导任意或自定义 Jinja 模板的排序规则。InternVL3 和 InternVL3.5 会处理 user 和 tool 消息中的图片，并保留工具元数据；另一条消息中的旧式 `<IMAGE_TOKEN>` 占位符也不会影响当前消息的图片处理。
+
+对应的工具结果格式见 [Messages API](../llm/api_server_anthropic.md) 和 [Responses API](../llm/api_server_responses.md) 文档。
+
 ## 多张图像
 
 <details>

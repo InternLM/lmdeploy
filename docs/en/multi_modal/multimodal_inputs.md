@@ -88,6 +88,14 @@ print(response.choices[0].message.content)
 
 ______________________________________________________________________
 
+## Images in Tool Results
+
+Chat `tool` messages, Messages `tool_result` blocks, and Responses `function_call_output` items preserve images together with their result's call ID and text. Support also depends on the model's chat template and vision preprocessor; ordinary image support alone does not guarantee tool-image support.
+
+For GLM-5.3-Flash's default template, preprocessing aligns unambiguous tool-result groups with the assistant's call order before both rendering and image collection. This ordering rule is limited to `Glm5NextForConditionalGeneration`; other architectures retain their input order. It does not infer ordering rules from arbitrary or customized Jinja templates. InternVL3 and InternVL3.5 normalize both user and tool images while retaining tool metadata, including when legacy `<IMAGE_TOKEN>` placeholders are present in another message.
+
+See the [Messages API](../llm/api_server_anthropic.md) and [Responses API](../llm/api_server_responses.md) documentation for their tool-result formats.
+
 ## Multiple Images
 
 <details>

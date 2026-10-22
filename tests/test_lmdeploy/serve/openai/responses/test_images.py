@@ -105,12 +105,14 @@ def test_images_outside_user_messages_remain_unsupported(role):
         messages_from_input(request)
 
 
-def test_tool_result_images_remain_unsupported():
+def test_tool_result_images_preserve_call_id_and_image_parameters():
+    image = dict(_image(), detail='high', max_dynamic_patch=4)
     request = ResponsesRequest(model='fake-model', input=[
-        dict(type='function_call_output', call_id='call_1', output=[_image()]),
+        dict(type='function_call_output', call_id='call_1', output=[image]),
     ])
-    with pytest.raises(ValueError, match=r'input_image.*input\[0\].output\[0\]'):
-        messages_from_input(request)
+    assert messages_from_input(request) == [dict(
+        role='tool', tool_call_id='call_1', content=[dict(
+            type='image_url', image_url=dict(url=image['image_url'], detail='high', max_dynamic_patch=4))])]
 
 
 @pytest.mark.parametrize('part, message', [
@@ -222,3 +224,51 @@ def test_http_images_reach_preprocessor_in_order(responses_endpoint, monkeypatch
         assert fetched == [url]
     assert context.async_engine.preprocess_kwargs['do_preprocess'] is True
     assert context.async_engine.session_mgr.removed == context.sessions
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_http_tool_images_preserve_parallel_calls_and_result_ownership(responses_endpoint, stream):
+    _, context = responses_endpoint
+    original_preprocess = context.async_engine.preprocess
+    decoded = []
+
+    async def preprocess(prompt, session, **kwargs):
+        decoded.extend(await MultimodalProcessor.async_parse_multimodal_item(prompt))
+        return await original_preprocess(prompt, session, **kwargs)
+
+    context.async_engine.preprocess = preprocess
+    app = FastAPI()
+    app.include_router(create_responses_router(context))
+    items = [dict(role='user', content='Read both tool images.')]
+    items += [dict(type='function_call', call_id=call_id, name='screenshot', arguments='{}')
+              for call_id in ('red', 'blue')]
+    items += [dict(type='function_call_output', call_id=color, output=[_image(color)])
+              for color in ('blue', 'red')]
+    with TestClient(app) as client:
+        response = client.post('/v1/responses', json=dict(model='fake-model', input=items, stream=stream))
+    assert response.status_code == 200
+    if stream:
+        assert 'event: response.completed' in response.text
+        assert 'event: response.failed' not in response.text
+    else:
+        assert response.json()['status'] == 'completed'
+    assert [call['id'] for call in decoded[1]['tool_calls']] == ['red', 'blue']
+    assert [(m['tool_call_id'], m['content'][0]['data'].getpixel((0, 0))) for m in decoded[2:]] == [
+        ('blue', (0, 0, 255)), ('red', (255, 0, 0)),
+    ]
+    assert context.async_engine.session_mgr.removed == context.sessions
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_invalid_tool_image_returns_400_before_streaming(responses_endpoint, stream):
+    _, context = responses_endpoint
+    app = FastAPI()
+    app.include_router(create_responses_router(context))
+    with TestClient(app) as client:
+        response = client.post('/v1/responses', json=dict(model='fake-model', stream=stream, input=[
+            dict(type='function_call_output', call_id='call_1', output=[dict(type='input_image', file_id='file_1')]),
+        ]))
+    assert response.status_code == 400
+    assert 'input[0].output[0]' in response.json()['error']['message']
+    assert context.async_engine.prompt is None
+    assert context.sessions == []

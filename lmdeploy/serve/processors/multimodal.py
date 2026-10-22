@@ -113,14 +113,14 @@ class MultimodalProcessor:
                                allowed_media_domains: list[str] | None = None):
         """Synchronous helper to parse a single multimodal message item."""
         role = in_messages[i]['role']
-        # OpenAI protocol allows tool_call messages without a content key;
+        # OpenAI protocol allows tool_call messages with missing/null content;
         # the anthropic adapter emits exactly that for pure tool_use turns.
         # Normalize those to content='' so downstream chat-template asserts
         # (model.messages2prompt requires the key on every message) hold.
         content = in_messages[i].get('content')
 
         if role not in ('user', 'tool') or not isinstance(content, list):
-            if 'content' not in in_messages[i]:
+            if content is None:
                 normalized = dict(in_messages[i])
                 normalized['content'] = ''
                 out_messages[i] = normalized
@@ -436,6 +436,7 @@ class MultimodalProcessor:
         messages = await self.async_parse_multimodal_item(messages,
                                                           media_io_kwargs,
                                                           allowed_media_domains=self.allowed_media_domains)
+        messages = chat_template.prepare_multimodal_messages(messages)
 
         if self.backend == 'turbomind':
             if self.vl_encoder._uses_new_preprocess:
