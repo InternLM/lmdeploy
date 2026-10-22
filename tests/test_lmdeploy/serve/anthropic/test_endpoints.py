@@ -5,8 +5,10 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from lmdeploy.serve.anthropic.protocol import CountTokensRequest, MessagesRequest
@@ -26,6 +28,7 @@ from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 from lmdeploy.serve.parsers.tool_parser.interns2preview_tool_parser import InternS2PreviewToolParser
 from lmdeploy.serve.parsers.tool_parser.qwen3_tool_parser import Qwen3ToolParser
+from lmdeploy.serve.parsers.tool_parser.qwen3coder_tool_parser import Qwen3CoderToolParser
 from lmdeploy.serve.utils.server_utils import protocol_error_response
 
 ANTHROPIC_HEADERS = {'anthropic-version': '2023-06-01'}
@@ -362,6 +365,31 @@ def test_messages_non_stream():
     assert data['stop_reason'] == 'end_turn'
     assert data['usage']['input_tokens'] == 8
     assert data['usage']['output_tokens'] == 2
+    assert len(context.session_mgr.removed) == 1
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_http_unknown_extension_block_is_preserved_as_text(stream):
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    block = dict(type='unsupported_probe', payload='Preserve this extension')
+    payload = _messages_payload(messages=[dict(role='user', content=[block])], stream=stream)
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', json=payload, headers=ANTHROPIC_HEADERS)
+
+    assert response.status_code == 200, response.text
+    if stream:
+        assert 'event: message_stop' in response.text
+    assert len(context.async_engine.preprocess_calls) == 1
+    args, _ = context.async_engine.preprocess_calls[0]
+    content = args[0][0]['content']
+    # Anthropic deliberately accepts beta/extension blocks and renders them
+    # as text. Unlike the Chat bug, their contents must not disappear.
+    converted = json.loads(content)
+    assert converted['type'] == block['type']
+    assert converted['payload'] == block['payload']
+    assert len(context.async_engine.generate_calls) == 1
     assert len(context.session_mgr.removed) == 1
 
 
@@ -1104,27 +1132,48 @@ def test_messages_image_data_preserves_input_ids_in_multimodal_content():
     assert kwargs['input_ids'] is None
 
 
-def test_messages_rejects_tools_with_input_ids():
-    context = _FakeServerContext(response_parser_cls=_ToolAndReasoningParser)
-    client = _make_client(server_context=context)
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('choice', [{'type': 'auto'}, {'type': 'tool', 'name': 'search'}])
+def test_messages_raw_tokens_preserve_tool_parsing(stream, choice):
+    class Parser(BaseResponseParser):
+        tool_parser_cls = Qwen3CoderToolParser
+
+    context = _FakeServerContext(response_parser_cls=Parser)
+
+    async def generate(*args, **kwargs):
+        fragments = ['<tool_call><function=search>', '<parameter=query>hi</parameter>',
+                     '</function></tool_call>']
+        for index, fragment in enumerate(fragments):
+            yield SimpleNamespace(
+                response=fragment, token_ids=[101 + index], input_token_len=3,
+                generate_token_len=index + 1, finish_reason='stop' if index == 2 else None,
+                cached_tokens=0, cache_block_ids=None, routed_experts=None, logprobs=None,
+            )
+
+    context.async_engine.generate = generate
     response = _post_messages(
-        client,
-        messages=[],
-        input_ids=[1, 2, 3],
-        tools=[{
-            'name': 'search',
-            'description': 'demo',
-            'input_schema': {
-                'type': 'object',
-                'properties': {},
-            },
-        }],
-        tool_choice={
-            'type': 'auto',
-        },
+        _make_client(server_context=context), messages=[], input_ids=[1, 2, 3],
+        tools=[SEARCH_TOOL], tool_choice=choice, stream=stream,
     )
-    assert response.status_code == 400
-    assert 'tools cannot be used when input_ids is set' in response.json()['error']['message']
+    assert response.status_code == 200
+    args, kwargs = context.async_engine.preprocess_calls[-1]
+    assert args[0] is None
+    assert kwargs['input_ids'] == [1, 2, 3]
+    assert kwargs['tools'][0]['name'] == 'search'
+    if stream:
+        events = [json.loads(line[6:]) for line in response.iter_lines() if line.startswith('data: ')]
+        starts = [e['content_block'] for e in events if e['type'] == 'content_block_start']
+        assert starts[0]['type'] == 'tool_use'
+        assert starts[0]['name'] == 'search'
+        arguments = ''.join(e['delta']['partial_json'] for e in events
+                            if e['type'] == 'content_block_delta' and e['delta']['type'] == 'input_json_delta')
+        assert json.loads(arguments) == {'query': 'hi'}
+        assert next(e for e in events if e['type'] == 'message_delta')['delta']['stop_reason'] == 'tool_use'
+    else:
+        data = response.json()
+        assert data['stop_reason'] == 'tool_use'
+        assert data['content'][0]['name'] == 'search'
+        assert data['content'][0]['input'] == {'query': 'hi'}
 
 
 def test_anthropic_model_listing():

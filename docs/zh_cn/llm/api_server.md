@@ -74,6 +74,10 @@ LMDeploy 的 RESTful API 兼容了 OpenAI 以下 3 个接口：
 - /v1/models
 - /v1/completions
 
+对于 `/v1/chat/completions`，内容数组中的每个块必须是包含受支持 `type` 的对象。
+未知或缺失的块类型、非对象内容块会在生成前返回 HTTP 400，`stream=true` 时也一样。
+错误消息会指出具体位置，例如 `messages[0].content[1].type`，不会再静默删除不支持的内容块。
+
 服务启动后，你可以在浏览器中打开网页 http://0.0.0.0:23333，通过 Swagger UI 查看接口的详细说明，并且也可以直接在网页上操作，体验每个接口的用法，如下图所示。
 
 ![swagger_ui](https://github.com/InternLM/lmdeploy/assets/4560679/b891dd90-3ffa-4333-92b2-fb29dffa1459)

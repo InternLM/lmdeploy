@@ -21,6 +21,29 @@ LMDeploy kv 4/8 bit 量化和推理支持如下 NVIDIA 显卡型号：
 3. kv int8 量化精度几乎无损，kv int4 量化精度在可接受范围之内
 4. 推理高效，在 llama2-7b 上加入 int8/int4 kv 量化，RPS 相较于 fp16 分别提升近 30% 和 40%
 
+## GLM-5.3-Flash FP8 MLA cache
+
+PyTorch 后端支持 GLM-5.3-Flash 的可选 FP8 MLA cache，也适用于 MTP draft 模型：
+
+```shell
+lmdeploy serve api_server /path/to/GLM-5.3-Flash --backend pytorch \
+    --tp 8 --quant-policy fp8 --model-name glm53
+```
+
+默认的 `--quant-policy none` 使用 BF16。在 Python 中启用 FP8 时使用
+`PytorchEngineConfig(quant_policy=16)`。该选项只量化 MLA latent cache，
+KPool 和 KDA state 保持原有格式。每个 latent token 从 1024B 降为 656B：
+512B FP8 数据、16B FP32 scale 和 128B 全零 BF16 尾部，payload 减少约 35.9%，
+不代表整机显存下降相同比例。
+
+实现参考 [vLLM #59246](https://github.com/vllm-project/vllm/pull/59246)：
+decode 将 Q 从 512 维补零至 576 维，保持原有 attention scale；prefill
+反量化为逻辑 512 维，保留短 prompt 的 dense MHA 路径。索引对齐时完整保留
+KPool 尾部 token。FP8 存在量化误差，需要在实际任务上验证精度和性能。
+
+H200 测试使用 FlashMLA `1.0.0+ba89a34`，其支持 Hopper 和 656B cache 格式。
+请使用兼容版本，不要替换为采用不同 packed-cache 格式的构建。
+
 ## TurboQuant 量化
 
 LMDeploy 支持基于 [Google Research 的 TurboQuant 技术](https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/)（将在 ICLR 2026 发表）实现的 KV 量化方案，通过 K=4bit QJL4 + V=2bit MSE 的组合，实现更高的压缩率和几乎无损的精度。

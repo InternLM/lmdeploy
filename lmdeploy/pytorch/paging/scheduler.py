@@ -507,6 +507,17 @@ class Scheduler:
             self.kv_connector.finish_transfers_after_worker_drain()
         self.kv_save_coordinator.clear()
 
+    def reset_cache_after_worker_drain(self) -> None:
+        """Invalidate local cache identity after sleep discards worker storage.
+
+        Ended external loads and save leases must release their references first. Remote Store objects are not
+        invalidated; future requests may restore them through the normal lookup/load completion protocol.
+        """
+        self.finish_kv_transfers_after_worker_drain()
+        if self.sessions:
+            raise RuntimeError('Cannot reset cache before all sessions have ended.')
+        self.block_trie.clear()
+
     def get_block_tables(self, seqs: SeqList):
         """Get block tables for the sequences."""
         return [self.block_manager.get_block_table(seq) for seq in seqs]

@@ -364,16 +364,26 @@ class MultimodalProcessor:
         return messages
 
     def _has_multimodal_input(self, messages: list[dict]) -> bool:
-        """Check if messages contain multimodal input such as images, videos,
-        audios, or time series."""
-        for message in messages:
+        """Validate block types before choosing text or multimodal
+        processing."""
+        has_multimodal_input = False
+        for message_idx, message in enumerate(messages):
             content = message.get('content')
             if not isinstance(content, list):
                 continue
-            for item in content:
-                if isinstance(item, dict) and item.get('type') in MULTIMODAL_TYPES:
-                    return True
-        return False
+            for item_idx, item in enumerate(content):
+                field = f'messages[{message_idx}].content[{item_idx}]'
+                if not isinstance(item, dict):
+                    raise ValueError(f'Invalid content block at `{field}`. Expected an object.')
+                item_type = item.get('type')
+                if item_type == 'text':
+                    continue
+                if item_type not in MULTIMODAL_TYPES:
+                    raise ValueError(f'Unsupported content block type {item_type!r} at `{field}.type`.')
+                # Scan the entire history: an earlier image must not hide an
+                # invalid block later in this message or a subsequent turn.
+                has_multimodal_input = True
+        return has_multimodal_input
 
     async def _get_text_prompt_input(self,
                                      prompt: str | list[dict],
