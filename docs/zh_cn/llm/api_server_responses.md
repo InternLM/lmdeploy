@@ -28,6 +28,7 @@ LMDeploy 提供了轻量级的 OpenAI Responses 兼容接口，方便接入使�
 - 非 function 类型的 hosted tools（例如 `web_search`）会被接受，但 LMDeploy 会忽略它们。
 - Responses 专属的 logprob 序列化与流式混淆选项当前会被接受但忽略。
 - `reasoning.effort="none"` 通过模型模板和解析器关闭思考；`low`、`medium`、`high`、`max` 开启思考并向模板透传推理强度，实际效果取决于模型支持。其他强度值返回 HTTP 400，暂不支持推理摘要。
+- `max_output_tokens` 包含思考和可见回答的 token。达到上限时返回 `status="incomplete"`、`incomplete_details.reason="max_output_tokens"`，此时可能还没有可见文本。可增加预算，或在支持关闭思考的模型上设置 `reasoning: {"effort": "none"}` 来获得简短直接的回答。请求字段被接受不代表回答一定为 `status="completed"`。
 - 非流式响应和流式终止响应的 `usage.input_tokens_details.cached_tokens` 返回引擎前缀缓存命中数；`input_tokens` 仍包含缓存 token。
 - 当前不支持 `background` 模式和 `previous_response_id`。
 
@@ -40,7 +41,8 @@ curl http://{server_ip}:{server_port}/v1/responses \
   -d '{
     "model": "Qwen/Qwen3.5-35B-A3B",
     "input": "Reply exactly: pong",
-    "max_output_tokens": 32
+    "max_output_tokens": 32,
+    "reasoning": {"effort": "none"}
   }'
 ```
 
@@ -76,7 +78,8 @@ curl http://{server_ip}:{server_port}/v1/responses \
         {"type": "input_image", "image_url": "https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg", "detail": "auto"}
       ]
     }],
-    "max_output_tokens": 128
+    "max_output_tokens": 128,
+    "reasoning": {"effort": "none"}
   }'
 ```
 
