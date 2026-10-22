@@ -7,13 +7,15 @@ import torch
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
 @pytest.mark.parametrize('num_spec_tokens', [0, 1, 3])
-@pytest.mark.parametrize('model_type', [None, 'glm5_next'])
-def test_restored_kda_short_prefill_matches_full_context(monkeypatch, num_spec_tokens, model_type):
+@pytest.mark.parametrize('force_fla', [False, True])
+def test_restored_kda_short_prefill_matches_full_context(monkeypatch, num_spec_tokens, force_fla):
     from lmdeploy.pytorch.backends import gated_delta_rule as meta_module
     from lmdeploy.pytorch.backends.cuda.kda import CudaKdaImpl
 
     torch.manual_seed(17)
-    impl = CudaKdaImpl(model_type=model_type)
+    impl = CudaKdaImpl()
+    if force_fla:
+        monkeypatch.setattr(impl, '_use_flash_kda', lambda *args: False)
     dim, width = 128, 4
     histories, tails = (64, 128, 192, 256), (1, 2, 3, 8)
     source_ids, restored_ids, reference_ids = (5, 6, 7, 8), (3, 1, 4, 2), (9, 10, 11, 12)
@@ -80,12 +82,11 @@ def test_restored_kda_short_prefill_matches_full_context(monkeypatch, num_spec_t
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
-@pytest.mark.parametrize('model_type', [None, 'glm5_next'])
-def test_restored_kda_checkpoint_survives_partial_mtp_acceptance(model_type):
+def test_restored_kda_checkpoint_survives_partial_mtp_acceptance():
     from lmdeploy.pytorch.backends.cuda.kda import CudaKdaImpl
 
     torch.manual_seed(7)
-    impl = CudaKdaImpl(model_type=model_type)
+    impl = CudaKdaImpl()
     dim, width, num_spec_tokens = 128, 4, 3
     conv = torch.full((3, 3 * dim, width + num_spec_tokens), float('nan'), dtype=torch.bfloat16, device='cuda')
     recurrent = torch.full((3, 4, 1, dim, dim), float('nan'), dtype=torch.float32, device='cuda')
@@ -130,7 +131,7 @@ def test_flash_kda_internal_checkpoint_matches_prefix_and_resume(seqlen_dtype, o
 
     if torch.cuda.get_device_capability() != (9, 0) or torch.version.hip is not None:
         pytest.skip('direct GLM-5.3 FlashKDA deployment requires SM90')
-    impl = CudaKdaImpl(model_type='glm5_next')
+    impl = CudaKdaImpl()
 
     def reject_wrapper(*args, **kwargs):
         pytest.fail('GLM-5.3 prefill must not call the public FlashKDA wrapper')
@@ -180,7 +181,7 @@ def test_flash_kda_checkpoint_ring_view_preserves_live_prefill_state(num_spec_to
 
     if torch.cuda.get_device_capability() != (9, 0) or torch.version.hip is not None:
         pytest.skip('direct GLM-5.3 FlashKDA deployment requires SM90')
-    impl = CudaKdaImpl(model_type='glm5_next')
+    impl = CudaKdaImpl()
     torch.manual_seed(23)
     dim, width, history, length, offset = 128, 4, 17, 65, 16
     ring = num_spec_tokens + 1

@@ -8,7 +8,7 @@ AR and MTP decode.
 """
 
 from copy import copy
-from functools import cached_property, partial
+from functools import cached_property, lru_cache, partial
 from typing import Any
 
 import torch
@@ -17,6 +17,12 @@ from lmdeploy.pytorch.backends.kda import KdaImpl
 
 from .gated_delta_rule import GatedDeltaStepMetaUpdater, _state_scatter, _state_select
 from .step_metadata import register_step_metadata_impl
+
+
+@lru_cache(maxsize=16)
+def _supports_flash_kda_device(device_index: int) -> bool:
+    """Cache FlashKDA hardware support by CUDA device index."""
+    return torch.version.hip is None and torch.cuda.get_device_capability(device_index) == (9, 0)
 
 
 def _select_state(state: torch.Tensor, metadata: Any) -> torch.Tensor:
@@ -38,8 +44,7 @@ def _store_state(state: torch.Tensor, value: torch.Tensor,
 class CudaKdaImpl(KdaImpl):
     """FlashKDA/FLA prefill and shared channelwise gated-delta decode."""
 
-    def __init__(self, model_type: str | None = None):
-        self.model_type = model_type
+    def __init__(self):
         try:
             from fla.modules.conv.triton.ops import (
                 causal_conv1d_fwd,
@@ -64,12 +69,12 @@ class CudaKdaImpl(KdaImpl):
         register_step_metadata_impl(self)
 
     def _use_flash_kda(self, q, initial_state, lower_bound):
-        """Limit direct FlashKDA to the GLM-5.3 deployment contract."""
-        return (self.model_type == 'glm5_next' and q.is_cuda and torch.version.hip is None
+        """Select FlashKDA by its tensor and device requirements."""
+        return (q.is_cuda
                 and q.dtype == torch.bfloat16 and q.size(-1) == 128
                 and initial_state.dtype == torch.float32
                 and lower_bound is not None and -5.0 <= lower_bound <= 0.0
-                and torch.cuda.get_device_capability(q.device) == (9, 0))
+                and _supports_flash_kda_device(q.device.index))
 
     @cached_property
     def _flash_kda_fwd(self):
@@ -78,7 +83,7 @@ class CudaKdaImpl(KdaImpl):
         try:
             from flash_kda import _C  # noqa: F401
         except ImportError as exc:
-            raise ImportError('GLM-5.3 SM90 prefill requires FlashKDA with native checkpoint support. '
+            raise ImportError('SM90 KDA prefill requires FlashKDA with native checkpoint support. '
                               'See docs/en/advance/flash_kda.md.') from exc
         try:
             fwd = torch.ops.flash_kda.fwd.default
@@ -97,7 +102,7 @@ class CudaKdaImpl(KdaImpl):
         if self._use_flash_kda(q, initial_state, lower_bound):
             return self._flash_kda_fwd
         if checkpoint_state is not None:
-            raise ValueError('KDA checkpoint export requires GLM-5.3 on SM90 with BF16 inputs, '
+            raise ValueError('KDA checkpoint export requires SM90 with BF16 inputs, '
                              'D=128, FP32 state and a gate lower bound in [-5, 0].')
         return None
 

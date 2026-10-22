@@ -11,11 +11,17 @@ from lmdeploy.pytorch.backends.cuda import kda as kda_module
 from lmdeploy.pytorch.backends.cuda.kda import CudaKdaImpl
 
 
+@pytest.fixture(autouse=True)
+def clear_device_cache():
+    kda_module._supports_flash_kda_device.cache_clear()
+    yield
+    kda_module._supports_flash_kda_device.cache_clear()
+
+
 @pytest.fixture
 def impl():
     # Contract tests do not load the FLA/TileLang CUDA kernels.
     impl = CudaKdaImpl.__new__(CudaKdaImpl)
-    impl.model_type = 'glm5_next'
     impl.chunk_kda = Mock(side_effect=AssertionError('unexpected FLA dispatch'))
     return impl
 
@@ -32,32 +38,48 @@ def inputs():
                 cu_seqlens=torch.tensor([0, 16, tokens], dtype=torch.int32), lower_bound=-5.0)
 
 
-@pytest.mark.parametrize('model_type,capability,dtype,dim,state_dtype,bound,is_cuda,hip,expected', [
-    ('glm5_next', (9, 0), torch.bfloat16, 128, torch.float32, -5.0, True, None, True),
-    ('glm5_next', (9, 0), torch.bfloat16, 128, torch.float32, 0.0, True, None, True),
-    (None, (9, 0), torch.bfloat16, 128, torch.float32, -5.0, True, None, False),
-    ('other', (9, 0), torch.bfloat16, 128, torch.float32, -5.0, True, None, False),
-    ('glm5_next', (8, 0), torch.bfloat16, 128, torch.float32, -5.0, True, None, False),
-    ('glm5_next', (10, 0), torch.bfloat16, 128, torch.float32, -5.0, True, None, False),
-    ('glm5_next', (9, 0), torch.float16, 128, torch.float32, -5.0, True, None, False),
-    ('glm5_next', (9, 0), torch.bfloat16, 64, torch.float32, -5.0, True, None, False),
-    ('glm5_next', (9, 0), torch.bfloat16, 128, torch.bfloat16, -5.0, True, None, False),
-    ('glm5_next', (9, 0), torch.bfloat16, 128, torch.float32, None, True, None, False),
-    ('glm5_next', (9, 0), torch.bfloat16, 128, torch.float32, -6.0, True, None, False),
-    ('glm5_next', (9, 0), torch.bfloat16, 128, torch.float32, float('nan'), True, None, False),
-    ('glm5_next', (9, 0), torch.bfloat16, 128, torch.float32, -5.0, False, None, False),
-    ('glm5_next', (9, 0), torch.bfloat16, 128, torch.float32, -5.0, True, 'rocm', False),
+@pytest.mark.parametrize('capability,dtype,dim,state_dtype,bound,is_cuda,hip,expected', [
+    ((9, 0), torch.bfloat16, 128, torch.float32, -5.0, True, None, True),
+    ((9, 0), torch.bfloat16, 128, torch.float32, 0.0, True, None, True),
+    ((8, 0), torch.bfloat16, 128, torch.float32, -5.0, True, None, False),
+    ((10, 0), torch.bfloat16, 128, torch.float32, -5.0, True, None, False),
+    ((9, 0), torch.float16, 128, torch.float32, -5.0, True, None, False),
+    ((9, 0), torch.bfloat16, 64, torch.float32, -5.0, True, None, False),
+    ((9, 0), torch.bfloat16, 128, torch.bfloat16, -5.0, True, None, False),
+    ((9, 0), torch.bfloat16, 128, torch.float32, None, True, None, False),
+    ((9, 0), torch.bfloat16, 128, torch.float32, -6.0, True, None, False),
+    ((9, 0), torch.bfloat16, 128, torch.float32, float('nan'), True, None, False),
+    ((9, 0), torch.bfloat16, 128, torch.float32, -5.0, False, None, False),
+    ((9, 0), torch.bfloat16, 128, torch.float32, -5.0, True, 'rocm', False),
 ])
-def test_dispatch_scope(impl, monkeypatch, model_type, capability, dtype, dim, state_dtype, bound, is_cuda, hip,
-                        expected):
-    impl.model_type = model_type
+def test_dispatch_scope(impl, monkeypatch, capability, dtype, dim, state_dtype, bound, is_cuda, hip, expected):
     q = SimpleNamespace(is_cuda=is_cuda, device=torch.device('cuda:2'), dtype=dtype, size=lambda axis: dim)
     get_capability = Mock(return_value=capability)
     monkeypatch.setattr(torch.cuda, 'get_device_capability', get_capability)
     monkeypatch.setattr(torch.version, 'hip', hip)
     assert impl._use_flash_kda(q, SimpleNamespace(dtype=state_dtype), bound) is expected
     if get_capability.called:
-        get_capability.assert_called_once_with(q.device)
+        get_capability.assert_called_once_with(q.device.index)
+
+
+@pytest.mark.parametrize('capability,expected', [((9, 0), True), ((8, 0), False)])
+def test_device_support_is_cached_across_impls(impl, monkeypatch, capability, expected):
+    q = SimpleNamespace(is_cuda=True, device=torch.device('cuda:2'), dtype=torch.bfloat16, size=lambda axis: 128)
+    state = SimpleNamespace(dtype=torch.float32)
+    get_capability = Mock(return_value=capability)
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', get_capability)
+    monkeypatch.setattr(torch.version, 'hip', None)
+    other = CudaKdaImpl.__new__(CudaKdaImpl)
+    for backend in (impl, other, impl):
+        assert backend._use_flash_kda(q, state, -5.0) is expected
+    get_capability.assert_called_once_with(2)
+
+    # A second device gets its own entry; neither backend instance owns the cache.
+    q.device = torch.device('cuda:3')
+    for backend in (other, impl):
+        assert backend._use_flash_kda(q, state, -5.0) is expected
+    assert get_capability.call_count == 2
+    get_capability.assert_called_with(3)
 
 
 @pytest.fixture
@@ -132,7 +154,7 @@ def test_outside_scope_preserves_fla_contract(impl, inputs, monkeypatch):
         assert kwargs[name] is True
     assert kwargs['cu_seqlens'] is inputs['cu_seqlens']
     assert kwargs['dt_bias'] is inputs['dt_bias']
-    with pytest.raises(ValueError, match='requires GLM-5.3'):
+    with pytest.raises(ValueError, match='requires SM90'):
         impl._prefill_recurrent(**inputs, checkpoint_state=torch.empty_like(inputs['initial_state']),
                                checkpoint_offsets=torch.tensor([16, 16], dtype=torch.int32))
     assert impl.chunk_kda.call_count == 1
@@ -249,15 +271,14 @@ def test_decode_does_not_require_flash_kda(impl, monkeypatch, spec):
     impl.chunk_kda.assert_not_called()
 
 
-def test_build_spec_passes_model_scope(monkeypatch):
+def test_build_spec_uses_default_backend(monkeypatch):
     from lmdeploy.pytorch.backends.cuda.op_backend import CudaOpsBackend
     from lmdeploy.pytorch.backends.kda import KdaBuildSpec
 
     constructor = Mock()
     monkeypatch.setattr(kda_module, 'CudaKdaImpl', constructor)
-    CudaOpsBackend.build_op(KdaBuildSpec(model_type='glm5_next'))
-    constructor.assert_called_once_with(model_type='glm5_next')
-    assert KdaBuildSpec().model_type is None
+    CudaOpsBackend.build_op(KdaBuildSpec())
+    constructor.assert_called_once_with()
 
 
 def test_nn_forwards_checkpoint_buffers():

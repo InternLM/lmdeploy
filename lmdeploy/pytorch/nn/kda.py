@@ -12,10 +12,10 @@ from lmdeploy.pytorch.models.patch import get_build_model_context
 class Kda(nn.Module):
     """Backend-dispatched Kimi Delta Attention recurrence."""
 
-    def __init__(self, model_type: str | None = None):
+    def __init__(self):
         super().__init__()
         self.impl = get_backend().build_op(
-            KdaBuildSpec(model_type=model_type),
+            KdaBuildSpec(),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 

@@ -8,16 +8,16 @@ Kda → CudaKdaImpl._prefill_recurrent → torch.ops.flash_kda.fwd
 
 ## Deployment scope
 
-| Property        | Direct FlashKDA path                               |
-| --------------- | -------------------------------------------------- |
-| Model           | GLM-5.3 (`glm5_next` KDA layers)                   |
-| GPU             | NVIDIA Hopper, compute capability 9.0              |
-| Inputs          | BF16 Q, K, V, raw gate and raw beta                |
-| Head dimensions | K = V = 128                                        |
-| Recurrent cache | FP32, value-first `[N, H, V, K]`                   |
-| Gate            | FP32 `A_log` / `dt_bias`, lower bound in `[-5, 0]` |
+| Property             | Direct FlashKDA path                               |
+| -------------------- | -------------------------------------------------- |
+| Current model caller | GLM-5.3 (`glm5_next` KDA layers)                   |
+| GPU                  | NVIDIA Hopper, compute capability 9.0              |
+| Inputs               | BF16 Q, K, V, raw gate and raw beta                |
+| Head dimensions      | K = V = 128                                        |
+| Recurrent cache      | FP32, value-first `[N, H, V, K]`                   |
+| Gate                 | FP32 `A_log` / `dt_bias`, lower bound in `[-5, 0]` |
 
-Model and device properties select this path automatically. There is no FLA/native prefill switch. `FLA_FLASH_KDA` does not control the direct path. Other models and configurations retain their existing FLA prefill dispatch. FLA 0.5.2 remains required for convolution and gate operations. AR decode and MTP verification retain the shared TileLang recurrence and their existing state-ring behavior.
+Tensor and device properties select this path automatically, with hardware support cached by CUDA device index. The backend does not take a model identifier. GLM-5.3 is currently the only model using the shared `Kda` module; other models retain their existing operator paths. There is no FLA/native prefill switch, and `FLA_FLASH_KDA` does not control the direct path. KDA configurations outside the supported tensor/device contract retain their existing FLA prefill dispatch. FLA 0.5.2 remains required for convolution and gate operations. AR decode and MTP verification retain the shared TileLang recurrence and their existing state-ring behavior.
 
 ## FlashKDA dependency
 
@@ -68,4 +68,4 @@ python -m pytest tests/pytorch/test_kda_prefill.py -q
 python -m pytest tests/pytorch/kernel/test_kda.py -q
 ```
 
-The CPU tests cover dispatch scope, native schema compatibility, workspace allocation, optional buffer forwarding, unchanged FLA flags and MTP ring addressing. CUDA tests cover ordinary versus checkpoint-enabled full prefill, exported state versus a prefix forward, disabled capture at offset zero, resumed suffixes, restored short prefills and partial MTP acceptance. The checkpoint tests reject calls to the public Python wrapper. Numerical tests require a compatible GPU and FlashKDA build; API contract tests alone do not establish model-level accuracy or performance.
+The CPU tests cover tensor/device dispatch, device capability caching across backend instances, native schema compatibility, workspace allocation, optional buffer forwarding, unchanged FLA flags and MTP ring addressing. CUDA tests cover ordinary versus checkpoint-enabled full prefill, exported state versus a prefix forward, disabled capture at offset zero, resumed suffixes, restored short prefills and partial MTP acceptance. The checkpoint tests reject calls to the public Python wrapper. Numerical tests require a compatible GPU and FlashKDA build; API contract tests alone do not establish model-level accuracy or performance.

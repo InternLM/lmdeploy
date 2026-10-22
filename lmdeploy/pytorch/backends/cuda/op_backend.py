@@ -65,7 +65,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             return cast(ImplT, TritonSiluAndMulImpl(spec.inplace))
         if isinstance(spec, KdaBuildSpec):
             from .kda import CudaKdaImpl
-            return cast(ImplT, CudaKdaImpl(model_type=spec.model_type))
+            return cast(ImplT, CudaKdaImpl())
         if isinstance(spec, ApplyRotaryEmbBuildSpec):
             from .apply_rotary_emb import TritonApplyRotaryEmbImpl
             return cast(ImplT, TritonApplyRotaryEmbImpl(enable_fp32_compute=spec.enable_fp32_compute))

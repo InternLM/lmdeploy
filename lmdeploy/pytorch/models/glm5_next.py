@@ -719,7 +719,7 @@ class Glm5NextLinearAttention(nn.Module):
         )
         if get_dist_manager().current_config().dp == 1:
             self.o_proj.tp_reduce_dtype = torch.float32
-        self.kda = Kda(model_type='glm5_next')
+        self.kda = Kda()
 
     def forward(self, hidden_states: torch.Tensor,
                 past_key_value: Sequence[torch.Tensor],
