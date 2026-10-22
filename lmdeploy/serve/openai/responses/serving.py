@@ -80,6 +80,7 @@ class OpenAIServingResponses:
             tool_calls=res.tool_calls,
             input_tokens=res.input_token_len,
             output_tokens=res.generate_token_len,
+            cached_tokens=res.cached_tokens,
             reasoning_tokens=res.reasoning_tokens or 0,
             finish_reason=res.finish_reason,
         )

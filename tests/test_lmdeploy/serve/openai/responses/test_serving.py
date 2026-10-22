@@ -186,6 +186,18 @@ def test_responses_non_streaming_reports_reasoning_tokens(
     assert response['usage']['output_tokens_details']['reasoning_tokens'] == 3
 
 
+def test_responses_non_streaming_reports_cached_tokens(
+        responses_endpoint, fake_raw_request):
+    endpoint, context = responses_endpoint
+    context.async_engine.cached_tokens = 5
+
+    response = asyncio.run(
+        endpoint(ResponsesRequest(model='fake-model', input='Hi'),
+                 fake_raw_request))
+
+    assert response['usage']['input_tokens_details']['cached_tokens'] == 5
+
+
 def test_responses_non_streaming_disconnect_cleans_up_session(
         responses_endpoint):
     class _DisconnectedRawRequest:

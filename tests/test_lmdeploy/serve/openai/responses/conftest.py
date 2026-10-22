@@ -15,6 +15,7 @@ class FakeAsyncEngine:
 
     model_name = 'fake-model'
     backend_config = SimpleNamespace(adapters=[])
+    cached_tokens = 0
 
     def __init__(self):
         self.generate_kwargs = None
@@ -37,7 +38,7 @@ class FakeAsyncEngine:
                 input_token_len=1,
                 generate_token_len=1,
                 finish_reason='stop',
-                cached_tokens=0,
+                cached_tokens=self.cached_tokens,
                 logprobs=None,
                 routed_experts=None,
                 cache_block_ids=None,

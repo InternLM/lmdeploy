@@ -104,6 +104,44 @@ def test_responses_streaming_sse_shape(sse_payloads,
     assert completed_response['usage']['output_tokens_details']['reasoning_tokens'] == 2
 
 
+def test_responses_streaming_reports_cached_tokens(sse_payloads,
+                                                   passthrough_response_parser_cls):
+    request = ResponsesRequest(model='fake-model', input='Hi there', stream=True)
+
+    async def _result_generator():
+        yield SimpleNamespace(
+            response='Hello ',
+            input_token_len=8,
+            generate_token_len=1,
+            cached_tokens=4,
+            finish_reason=None,
+        )
+        yield SimpleNamespace(
+            response='world!',
+            input_token_len=8,
+            generate_token_len=2,
+            cached_tokens=4,
+            finish_reason='stop',
+        )
+
+    async def _collect_events():
+        parser = passthrough_response_parser_cls(request)
+        return [
+            event async for event in stream_response(
+                _parsed_stream(_result_generator(), parser),
+                request=request,
+                model_name='fake-model',
+                created_time=123,
+            )
+        ]
+
+    payloads = sse_payloads(asyncio.run(_collect_events()))
+    completed_response = payloads[-1]['response']
+
+    assert payloads[-1]['type'] == 'response.completed'
+    assert completed_response['usage']['input_tokens_details']['cached_tokens'] == 4
+
+
 def test_responses_streaming_length_finish_reason_emits_incomplete_event(
         sse_payloads, passthrough_response_parser_cls):
     request = ResponsesRequest(model='fake-model',
