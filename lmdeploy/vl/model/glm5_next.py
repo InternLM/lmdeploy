@@ -64,7 +64,7 @@ class GLM5NextVisionModel(VisionModel):
         )
 
         config_path = Path(self.model_path) / 'processor_config.json'
-        processor_config = json.loads(config_path.read_text())
+        processor_config = json.loads(config_path.read_text(encoding='utf-8'))
         image_processor = Glm4vImageProcessor(
             **_processor_kwargs(processor_config['image_processor']))
         video_processor = Glm4vVideoProcessor(
