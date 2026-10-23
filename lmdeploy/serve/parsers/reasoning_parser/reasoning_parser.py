@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from mmengine import Registry
 
@@ -16,6 +16,10 @@ LEGACY_REASONING_PARSER_NAMES = ('qwen-qwq', 'intern-s1', 'deepseek-r1')
 @ReasoningParserManager.register_module(name='default')
 class ReasoningParser:
     """Unified reasoning parser for all ``--reasoning-parser`` options."""
+
+    # Tags whose structural meaning must be confirmed by token ID.
+    # Empty declarations retain the existing string-based behavior.
+    token_id_terminals: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, **kwargs):
         pass

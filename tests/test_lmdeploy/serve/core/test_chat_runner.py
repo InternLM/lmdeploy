@@ -9,7 +9,7 @@ import pytest
 
 from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage, DeltaToolCall
 
 
 class _FakeSession:
@@ -282,3 +282,134 @@ def test_runner_engine_error_is_not_reclassified_as_request_error():
 
     with pytest.raises(RuntimeError, match='engine exploded'):
         asyncio.run(_run())
+
+
+def test_runner_binds_effective_preprocessed_decode_options():
+    class StrictParser(_Parser):
+        requires_output_chunks = True
+
+        def bind_generation_config(self, config):
+            self.bound_config = config
+
+    class AdjustingEngine(_FakeEngine):
+
+        async def preprocess(self, messages, session, **kwargs):
+            result = await super().preprocess(messages, session, **kwargs)
+            # AsyncEngine preprocess also copies and adjusts GenerationConfig.
+            result.gen_config = SimpleNamespace(skip_special_tokens=False)
+            self.effective_config = result.gen_config
+            return result
+
+    context = _FakeServerContext(StrictParser)
+    context.async_engine = AdjustingEngine()
+
+    async def run():
+        runner = await ChatRunner.prepare(context, _request())
+        assert runner.response_parser.bound_config is context.async_engine.effective_config
+        assert runner.gen_config is not runner.response_parser.bound_config
+        await runner.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_runner_preserves_empty_batches_and_final_boundary(stream):
+    class StrictParser(_Parser):
+        requires_output_chunks = True
+
+        def __init__(self, request):
+            super().__init__(request)
+            self.rows = []
+
+        def stream_chunk(self, text, ids, *, final, engine_final):
+            assert final == engine_final
+            self.rows.append((text, ids, engine_final))
+            return super().stream_chunk(text, ids)
+
+        def parse_complete(self, text, ids, *, output_chunks):
+            self.rows = output_chunks
+            assert text == 'X</think>🧑'
+            assert ids == [1, 2, 3, 4]
+            return text, None, None
+
+    rows = [('', [1, 2], False), ('X</think>🧑', [3, 4], False), ('', [], True)]
+    outputs = [SimpleNamespace(response=text, token_ids=ids, finish_reason='stop' if final else None,
+                               input_token_len=3, generate_token_len=4, cached_tokens=0,
+                               logprobs=[{i: -0.1} for i in ids], routed_experts=None,
+                               cache_block_ids=None) for text, ids, final in rows]
+    engine = _FakeEngine(outputs)
+    parser = StrictParser(_request(return_token_ids=True))
+
+    async def run():
+        runner = ChatRunner(parser.request, parser, None, engine.session_mgr.session,
+                            engine.generate(None), engine.session_mgr)
+        if stream:
+            chunks = [x async for x in runner.stream()]
+            assert [i for x in chunks for i in x.token_ids] == [1, 2, 3, 4]
+            assert [p for x in chunks for p in x.logprobs or []] == [{i: -0.1} for i in [1, 2, 3, 4]]
+        else:
+            result = await runner.collect()
+            assert result.token_ids == [1, 2, 3, 4]
+        assert parser.rows == rows
+        assert engine.generator_closed
+        assert engine.session_mgr.removed == [engine.session_mgr.session]
+
+    asyncio.run(run())
+
+
+def test_legacy_parser_does_not_receive_new_keywords():
+    class LegacyParser(_Parser):
+
+        def stream_chunk(self, text, ids, *, final):
+            return super().stream_chunk(text, ids)
+
+        def parse_complete(self, text, ids):
+            return text, None, None
+
+    async def run():
+        for stream in (True, False):
+            runner = await ChatRunner.prepare(_FakeServerContext(LegacyParser), _request())
+            if stream:
+                assert [x.delta_message.content async for x in runner.stream()] == ['ok']
+            else:
+                assert (await runner.collect()).text == 'ok'
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('stop_sequence', [None, 'END'])
+def test_runner_preserves_stop_sequence_with_token_id_parser(stream, stop_sequence):
+    call = DeltaToolCall(index=0, id='call_search', function={'name': 'search', 'arguments': '{}'})
+
+    class StrictParser(_Parser):
+        requires_output_chunks = True
+
+        def stream_chunk(self, text, ids, *, final, engine_final):
+            assert final and engine_final
+            return [(DeltaMessage(tool_calls=[call]), True)]
+
+        def parse_complete(self, text, ids, *, output_chunks):
+            assert output_chunks == [('ok', [1], True)]
+            return '', [call], None
+
+    engine = _FakeEngine()
+    engine.outputs[0].stop_sequence = stop_sequence
+    parser = StrictParser(_request(tools=_tools()))
+
+    async def run():
+        runner = ChatRunner(parser.request, parser, None, engine.session_mgr.session,
+                            engine.generate(None), engine.session_mgr)
+        if stream:
+            chunks = [chunk async for chunk in runner.stream()]
+            assert chunks[-1].delta_message.tool_calls == [call]
+            result = chunks[-1]
+        else:
+            result = await runner.collect()
+            assert result.tool_calls == [call]
+        assert result.finish_reason == ('stop' if stop_sequence is not None else 'tool_calls')
+        assert result.stop_sequence == stop_sequence
+        assert runner._closed and engine.generator_closed
+        assert engine.session_mgr.removed == [engine.session_mgr.session]
+
+    asyncio.run(run())
