@@ -64,6 +64,10 @@ You can overview and try out the offered RESTful APIs by the website `http://0.0
 
 If you need to integrate the service into your own projects or products, we recommend the following approach:
 
+### Inspect the rendered chat prompt
+
+Set `return_prompt_text=true` on `/v1/chat/completions` to include the rendered `prompt_text` in the response. With the Python OpenAI client, pass `extra_body={"return_prompt_text": True}`; raw JSON may use either the top-level field or the same nested object, with the top-level value taking precedence. Streaming includes the prompt in the first chunk of each choice. The value is the actual template output, so reasoning-effort markers depend on the model's template. Raw `input_ids` requests have no rendered prompt and return `null`. The field is omitted unless requested.
+
 ### Integrate with `OpenAI`
 
 Here is an example of interaction with the endpoint `v1/chat/completions` service via the openai package.

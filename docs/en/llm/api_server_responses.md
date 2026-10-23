@@ -27,6 +27,9 @@ For `POST /v1/responses`, include:
 - `parallel_tool_calls` defaults to `true`. When it is `false`, LMDeploy follows vLLM-style compatibility and returns only the first parsed function call.
 - Non-function hosted tools, such as `web_search`, are accepted but ignored by LMDeploy.
 - Responses-only logprob serialization and stream obfuscation options are accepted but currently ignored.
+- `reasoning.effort="none"` disables thinking through the model's template and parser. `low`, `medium`, `high`, and `max` enable thinking and forward the effort to the template; model support determines its effect. Other effort values return HTTP 400. Reasoning summaries remain unsupported.
+- `max_output_tokens` includes both reasoning and visible answer tokens. Reaching the limit returns `status="incomplete"` with `incomplete_details.reason="max_output_tokens"`, possibly before any visible text. Increase the budget, or use `reasoning: {"effort": "none"}` with a model that supports disabling thinking for a short direct answer. Accepting the request's fields does not guarantee `status="completed"`.
+- `usage.input_tokens_details.cached_tokens` reports engine prefix-cache hits in both non-streaming and terminal streaming responses. `input_tokens` continues to include cached tokens.
 - `background` mode and `previous_response_id` are not supported.
 
 ## Example: `/v1/responses`
@@ -38,7 +41,8 @@ curl http://{server_ip}:{server_port}/v1/responses \
   -d '{
     "model": "Qwen/Qwen3.5-35B-A3B",
     "input": "Reply exactly: pong",
-    "max_output_tokens": 32
+    "max_output_tokens": 32,
+    "reasoning": {"effort": "none"}
   }'
 ```
 
@@ -74,7 +78,8 @@ curl http://{server_ip}:{server_port}/v1/responses \
         {"type": "input_image", "image_url": "https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg", "detail": "auto"}
       ]
     }],
-    "max_output_tokens": 128
+    "max_output_tokens": 128,
+    "reasoning": {"effort": "none"}
   }'
 ```
 

@@ -123,6 +123,17 @@ def check_request(
     for field_name in ('ignore_eos', 'skip_special_tokens', 'include_stop_str_in_output'):
         if field_name in request.model_fields_set:
             chat_request_kwargs[field_name] = getattr(request, field_name)
+    effort = None if request.reasoning is None else request.reasoning.effort
+    if effort is not None:
+        if effort not in ('none', 'low', 'medium', 'high', 'max'):
+            return None, error_response(
+                HTTPStatus.BAD_REQUEST,
+                'Supported reasoning efforts are none, low, medium, high and max.',
+                param='reasoning.effort',
+            )
+        chat_request_kwargs['chat_template_kwargs'] = {'enable_thinking': effort != 'none'}
+        if effort != 'none':
+            chat_request_kwargs['reasoning_effort'] = effort
     chat_request = ChatCompletionRequest(**chat_request_kwargs)
     return ResponsesRequestContext(model_name=model_name, chat_request=chat_request), None
 
@@ -177,7 +188,6 @@ def warn_ignored_request_fields(request: ResponsesRequest) -> None:
             'logit_bias',
             'prompt_cache_key',
             'prompt_cache_retention',
-            'reasoning',
             'safety_identifier',
             'stream_options',
             'top_logprobs',
@@ -191,6 +201,8 @@ def warn_ignored_request_fields(request: ResponsesRequest) -> None:
         ignored_fields.append('service_tier')
     if request.truncation not in (None, 'disabled'):
         ignored_fields.append('truncation')
+    reasoning = _as_dict(request.reasoning)
+    ignored_fields.extend(f'reasoning.{key}' for key in reasoning if key != 'effort')
 
     text = _as_dict(request.text)
     if text.get('verbosity') is not None:

@@ -94,6 +94,7 @@ def make_response(*,
                   output_tokens: int,
                   reasoning_tokens: int,
                   finish_reason: str | None,
+                  cached_tokens: int = 0,
                   message_id: str | None = None,
                   error_code: str | None = None,
                   error_message: str | None = None) -> ResponsesResponse:
@@ -140,7 +141,7 @@ def make_response(*,
         usage=ResponseUsage(
             input_tokens=input_tokens,
             input_tokens_details=ResponseInputTokensDetails(
-                cached_tokens=0,
+                cached_tokens=cached_tokens,
                 cache_write_tokens=0,
                 input_tokens_per_turn=[],
                 cached_tokens_per_turn=[],

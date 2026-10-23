@@ -372,3 +372,61 @@ def test_responses_engine_error_is_not_returned_as_bad_request(
 
     with pytest.raises(RuntimeError, match='engine exploded'):
         asyncio.run(endpoint(ResponsesRequest(model='fake-model', input='Hi'), fake_raw_request))
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('effort', [None, 'none', 'low', 'medium', 'high'])
+def test_responses_forwards_reasoning_effort(responses_endpoint, fake_raw_request, stream, effort):
+    endpoint, context = responses_endpoint
+    options = {} if effort is None else {'reasoning': {'effort': effort}}
+
+    async def run():
+        response = await endpoint(
+            ResponsesRequest(model='fake-model', input='Hi', stream=stream, **options), fake_raw_request)
+        if stream:
+            return [event async for event in response.body_iterator]
+        return response
+
+    asyncio.run(run())
+    kwargs = context.async_engine.preprocess_kwargs
+    assert kwargs['reasoning_effort'] == (None if effort == 'none' else effort)
+    assert kwargs['chat_template_kwargs'] == (None if effort is None else {'enable_thinking': effort != 'none'})
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_responses_preserves_cached_tokens(responses_endpoint, fake_raw_request, sse_payloads, stream):
+    endpoint, context = responses_endpoint
+    original_generate = context.async_engine.generate
+
+    def generate(request, **kwargs):
+        async def results():
+            async for result in original_generate(request, **kwargs):
+                result.input_token_len = 2580
+                result.cached_tokens = 2048
+                yield result
+        return results()
+
+    context.async_engine.generate = generate
+
+    async def run():
+        response = await endpoint(
+            ResponsesRequest(model='fake-model', input='Hi', stream=stream), fake_raw_request)
+        if stream:
+            events = sse_payloads([event async for event in response.body_iterator])
+            return next(e['response'] for e in events if e['type'] == 'response.completed')
+        return response
+
+    result = asyncio.run(run())
+    assert result['usage']['input_tokens'] == 2580
+    assert result['usage']['input_tokens_details']['cached_tokens'] == 2048
+    assert result['usage']['total_tokens'] == 2581
+
+
+@pytest.mark.parametrize('effort', ['minimal', 'xhigh'])
+def test_responses_rejects_unsupported_reasoning_effort(responses_endpoint, fake_raw_request, effort):
+    endpoint, context = responses_endpoint
+    response = asyncio.run(endpoint(
+        ResponsesRequest(model='fake-model', input='Hi', reasoning={'effort': effort}), fake_raw_request))
+    assert response.status_code == 400
+    assert json.loads(response.body)['error']['param'] == 'reasoning.effort'
+    assert context.async_engine.preprocess_kwargs is None

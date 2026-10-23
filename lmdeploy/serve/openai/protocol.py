@@ -5,7 +5,7 @@ import time
 from typing import Any, Literal
 
 import shortuuid
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
 
 
 class ErrorResponse(BaseModel):
@@ -217,6 +217,11 @@ class ChatCompletionRequest(BaseModel):
     min_p: float | None = None
     enable_thinking: bool | None = None  # will be deprecated in the future
     return_token_ids: bool | None = False
+    return_prompt_text: bool = Field(
+        default=False,
+        validation_alias=AliasChoices('return_prompt_text', AliasPath('extra_body', 'return_prompt_text')),
+        description='Return the rendered prompt text used for generation.',
+    )
     return_logprob: bool | None = False
     include_stop_str_in_output: bool | None = False
     # kwargs for chat template renderer
