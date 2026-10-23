@@ -57,3 +57,39 @@ def test_cache_checkpoint_inputs_record_stream_records_only_kv_plans():
         (id(restore_plan), stream),
         (id(save_plan), stream),
     ]
+
+
+def test_compact_one_forward_layout_transfer_pickle_and_copy_exclusion():
+    import pickle
+
+    import pytest
+
+    from lmdeploy.pytorch.compact_state import CompactStatePrefill
+    plan = CompactStatePrefill.from_lengths([72], [2048], checkpoint_ids=[7], checkpoint_offsets=[64])
+    inputs = CacheCheckpointInputs(compact_prefill=plan, kv_save_plan=torch.tensor([[1], [2]]))
+    restored = pickle.loads(pickle.dumps(inputs))
+    assert restored.compact_prefill.checkpoint_ids.tolist() == [7]
+    assert restored.compact_prefill.checkpoint_offsets.tolist() == [64]
+    moved = restored.to_device('meta')
+    assert moved.compact_prefill.cu_seqlens.device.type == 'meta'
+    assert moved.compact_prefill.checkpoint_ids.device.type == 'meta'
+    assert moved.kv_save_plan.device.type == 'meta'
+    for field in ('state_restore_plan', 'state_save_plan'):
+        with pytest.raises(ValueError, match='legacy state-copy'):
+            CacheCheckpointInputs(compact_prefill=plan, **{field: ((1,), (2,))})
+
+
+def test_compact_source_binding_serializes_moves_and_excludes_legacy_copy():
+    import pickle
+
+    import pytest
+
+    sources = torch.tensor([-1, 0, 7])
+    packet = pickle.loads(pickle.dumps(CacheCheckpointInputs(compact_source_ids=sources)))
+    assert packet.compact_source_ids.tolist() == [-1, 0, 7]
+    assert packet.to_device('meta').compact_source_ids.device.type == 'meta'
+    with pytest.raises(ValueError, match='legacy state-copy'):
+        CacheCheckpointInputs(compact_source_ids=sources, state_restore_plan=((1,), (2,)))
+    for invalid in (sources.int(), sources[None], sources[::2]):
+        with pytest.raises(ValueError, match='contiguous per-request int64'):
+            CacheCheckpointInputs(compact_source_ids=invalid)

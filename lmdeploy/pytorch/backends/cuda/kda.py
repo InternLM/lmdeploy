@@ -142,7 +142,8 @@ class CudaKdaImpl(KdaImpl):
         return output
 
     def _decode_recurrent(self, q, k, v, g, beta, A_log, dt_bias, initial_state,
-                          output_final_state=True, lower_bound=None, state_indices=None, cache_seqlens=None, **kwargs):
+                          output_final_state=True, lower_bound=None, state_indices=None, cache_seqlens=None,
+                          output_state_indices=None, allow_input_alias=False, **kwargs):
         """Keep AR and MTP on the same recurrence and gate arithmetic."""
         gate_args = {}
         if lower_bound is not None:
@@ -153,7 +154,9 @@ class CudaKdaImpl(KdaImpl):
         return self.recurrent_func(q, k, v, g=g, beta=beta,
                                    initial_state=initial_state, output_final_state=output_final_state,
                                    use_qk_l2norm_in_kernel=True, transpose_state_layout=True,
-                                   state_indices=state_indices, cache_seqlens=cache_seqlens, **gate_args)
+                                   state_indices=state_indices, cache_seqlens=cache_seqlens,
+                                   output_state_indices=output_state_indices, allow_input_alias=allow_input_alias,
+                                   **gate_args)
 
     def _forward_spec_decode(self, mixed_qkv, raw_gate, raw_beta, conv_state,
                              recurrent_state, metadata, **kwargs):
@@ -230,6 +233,40 @@ class CudaKdaImpl(KdaImpl):
         _store_state(conv_state, final_state, metadata)
         return mixed_qkv
 
+    def _forward_compact(self, mixed_qkv, raw_gate, raw_beta, conv_weight, conv_bias,
+                         a_log, dt_bias, conv_state, recurrent_state, metadata,
+                         num_heads, head_dim, lower_bound):
+        from .causal_conv1d import compact_causal_conv1d
+        ids = metadata.compact_state
+        mixed = compact_causal_conv1d(mixed_qkv, conv_weight, conv_bias, conv_state, metadata, 'silu')
+        q, k, v = [x.unflatten(-1, (num_heads, head_dim))
+                   for x in mixed.split(num_heads * head_dim, dim=-1)]
+        # Chunk prefill requires dense inputs; the recurrent decode kernel
+        # already accepts Q/K/V strides. Avoid three payload copies in decode.
+        if not metadata.is_decoding:
+            q, k, v = [x.contiguous() for x in (q, k, v)]
+        gate = raw_gate.unflatten(-1, (num_heads, head_dim)).contiguous()
+        beta = raw_beta.contiguous()
+        if metadata.is_decoding:
+            batch, width = ids.output_ids.shape
+            q, k, v = [x[0].unflatten(0, (batch, width)) for x in (q, k, v)]
+            gate, beta = [x[0].unflatten(0, (batch, width)).contiguous() for x in (gate, beta)]
+            output, _ = self._decode_recurrent(
+                q, k, v, g=gate, beta=beta, A_log=a_log, dt_bias=dt_bias, lower_bound=lower_bound,
+                initial_state=recurrent_state, output_final_state=True,
+                state_indices=ids.input_ids, output_state_indices=ids.output_ids,
+                allow_input_alias=ids.allow_input_alias)
+            return output.flatten(0, 1).unsqueeze(0)
+        from lmdeploy.pytorch.kernels.cuda.indexed_chunk_gated_delta import indexed_chunk_kda
+        prefill = metadata.compact_prefill
+        return indexed_chunk_kda(
+            q, k, v, gate, beta, recurrent_state, ids.input_ids, ids.output_ids[:, 0],
+            A_log=a_log, dt_bias=dt_bias, use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True,
+            use_beta_sigmoid_in_kernel=True, safe_gate=True, lower_bound=lower_bound, state_v_first=True,
+            cu_seqlens=prefill.cu_seqlens, chunk_indices=prefill.chunk_indices,
+            chunk_offsets=prefill.chunk_offsets, checkpoint_ids=prefill.checkpoint_ids,
+            checkpoint_offsets=prefill.checkpoint_offsets, allow_input_alias=ids.allow_input_alias)
+
     def forward(
         self,
         mixed_qkv: torch.Tensor,
@@ -246,6 +283,10 @@ class CudaKdaImpl(KdaImpl):
         head_dim: int,
         lower_bound: float,
     ) -> torch.Tensor:
+        if getattr(metadata, 'compact_state', None) is not None:
+            return self._forward_compact(mixed_qkv, raw_gate, raw_beta, conv_weight, conv_bias,
+                                         a_log, dt_bias, conv_state, recurrent_state, metadata,
+                                         num_heads, head_dim, lower_bound)
         if (getattr(metadata, 'num_spec_tokens', 0) or 0) > 0:
             return self._forward_spec(
                 mixed_qkv, raw_gate, raw_beta, conv_state, recurrent_state,

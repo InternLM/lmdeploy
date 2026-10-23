@@ -282,3 +282,23 @@ def test_engine_instance_new_request_after_sleep_returns_cancel(event_loop):
     assert len(outputs) == 1
     assert outputs[0].status == ResponseType.CANCEL
     assert engine.req_manager._loop_task is None
+
+
+def test_compact_store_level2_sleep_requires_reload_before_cache_wakeup(event_loop):
+    import threading
+
+    engine, resp = _build_sleeping_test_engine(event_loop)
+    engine.cache_config = SimpleNamespace(compact_state_capacity=object(), use_mooncake_store=True)
+    engine._compact_weight_control_lock = threading.Lock()
+    engine._compact_weight_reload_state = None
+    event_loop.run_until_complete(engine.sleep(level=2))
+    assert engine._compact_weight_reload_state == 'pending'
+    assert resp.is_done and engine.scheduler.ended_sessions
+    engine.wakeup(['weights'])
+    assert engine._sleeping_tags == {'kv_cache'}
+    with pytest.raises(RuntimeError, match='full weight reload'):
+        engine.wakeup(['kv_cache'])
+    with pytest.raises(RuntimeError, match='every worker'):
+        engine.complete_weights_update()
+    assert engine.req_manager.is_request_blocked(RequestType.ADD_SESSION)
+    assert engine.executor.wakeup_calls == [['weights']]

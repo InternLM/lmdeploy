@@ -1734,6 +1734,7 @@ def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans(scorin
             return CheckpointCopyPlan(state_pairs=((4, 21), ))
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
     maker.state_checkpoints = _StateCheckpoints()
     maker.spec_decoding = True
@@ -1760,6 +1761,7 @@ def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():
             return CheckpointCopyPlan(state_pairs=((4, 21), ))
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
     maker.state_checkpoints = _StateCheckpoints()
     maker.spec_decoding = False
@@ -1790,6 +1792,7 @@ def test_prepare_prefill_cache_inputs_groups_partial_kv_restore_and_save_plans()
 
     scheduler = _CopyPlanScheduler()
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True, block_size=16)
     maker.scheduler = scheduler
     maker.state_checkpoints = _StateCheckpoints()
@@ -1901,3 +1904,26 @@ def test_normal_prefill_rejects_nonfinal_chunk_before_building_inputs():
     task = object.__new__(_ForwardInputsTask)
     with pytest.raises(AssertionError, match='Non-final chunks must use exclusive chunk inputs'):
         task._build_prefill_inputs([SimpleNamespace(kv_token_limit=64)])
+
+
+@pytest.mark.parametrize('history,end,budget,span,shift,expected_e,expected_c', [
+    (0, 200, 200, (120, 180), 0, 200, 192),
+    (0, 200, 200, (180, 200), 0, 200, 128),
+    (0, 150, 150, (128, 140), 1, 150, 64),
+    (0, 200, 160, (128, 180), 1, 127, 64),
+    (8, 200, 192, (128, 180), 1, 192, 192),
+])
+def test_compact_checkpoint_export_keeps_multimodal_and_shifted_dependencies_whole(
+        history, end, budget, span, shift, expected_e, expected_c):
+    multimodals = {'image': [_DummyMultiModal(*span)]}
+    seq = _DummySeq(history, end - history, multimodals, multimodals)
+    seq.input_end_pos = end
+    seq.prefill_input_shift = shift
+    seq._seq_meta.enable_prefix_caching = True
+    seq._seq_meta.prefill_save_alignment = 64
+    seq._seq_meta.compact_prefill_checkpoint_stride = 64
+    plan = plan_long_context_chunk(seq, budget)
+    assert (plan.chunk_end, plan.checkpoint_step) == (expected_e, expected_c)
+    assert not span[0] - shift < plan.chunk_end < span[1]
+    assert not span[0] - shift < plan.checkpoint_step < span[1]
+    assert all(data.end <= plan.chunk_end for spans in (plan.multimodals or {}).values() for data in spans)

@@ -535,16 +535,30 @@ class GenerateResponse(BaseModel):
     finish_reason: Literal['stop', 'length', 'tool_calls', 'error', 'abort'] | None = None
 
 
+class CompactStoreWeightIdentity(BaseModel):
+    """Caller attestation of the complete immutable weights, including
+    adapters.
+
+    Required for compact Store reloads, not a serving alias or process epoch. Every bucket (including empty finalize)
+    must carry the same attestation.
+    """
+    model_config = ConfigDict(frozen=True)
+    model_identity: str
+    draft_identity: str | None = None
+
+
 class UpdateParamsRequest(BaseModel):
     """Update weights request."""
     serialized_named_tensors: str | list[str] | dict
     load_format: str | None = None  # 'flattened_bucket' or None
     finished: bool = False
+    compact_store_identity: CompactStoreWeightIdentity | None = None
 
 
 class UpdateWeightsFromIPCRequest(BaseModel):
     """Receive checkpoint-engine CUDA IPC handles keyed by device UUID."""
     zmq_handles: dict[str, str]
+    compact_store_identity: CompactStoreWeightIdentity | None = None
 
 
 class UpdateWeightsFromIPCStatus(BaseModel):
@@ -580,6 +594,7 @@ class UpdateWeightsFromDistributedRequest(BaseModel):
     group_name: str
     load_format: str | None = None  # 'flattened_bucket' or None
     finished: bool = False  # trigger mod.update_weights() finalization when True
+    compact_store_identity: CompactStoreWeightIdentity | None = None
 
 
 class DestroyWeightsUpdateGroupRequest(BaseModel):

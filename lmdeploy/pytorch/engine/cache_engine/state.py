@@ -2,15 +2,17 @@
 """State-cache allocation and slot lifecycle."""
 
 from collections.abc import Iterator, Mapping, Sequence
+from copy import deepcopy
+from dataclasses import replace
 from operator import index as as_index
 
 import torch
 
 from lmdeploy.pytorch.backends import get_backend
 
-from ...config import CacheConfig, ModelConfig, StateCacheSpec
+from ...config import CacheConfig, CompactStateCapacity, ModelConfig, StateCacheSpec
 from ...kv_connector.base import KVCachePool
-from .layout import CacheAllocation, CachePool
+from .layout import CacheAllocation, CachePool, PackedStateCacheLayout
 from .schema import CacheTensorSpec, build_state_cache_tensor_specs
 from .view import NamedCacheView
 
@@ -50,20 +52,125 @@ def _allocate_state_cache_groups(tensor_specs: Sequence[CacheTensorSpec],
     return CacheAllocation(pools=tuple(pools), tensor_views=tuple(views)), checkpoint_pools
 
 
+class CompactStatePlan:
+    """Compile compact-unit and request-private auxiliary layouts once.
+
+    Callers must supply explicit *single-boundary* declarations, never legacy ring shapes. Model/backend capability
+    selection remains outside this plan. Both allocations use the existing backend layout and owning-byte accounting;
+    auxiliary entries are indexed by request slots, not compact unit IDs. Explicit internal selection wires this plan to
+    indexed execution; omitted plans retain the legacy allocation and execution path.
+    """
+
+    @classmethod
+    def from_model_config(cls, model_config: ModelConfig, capacity: CompactStateCapacity) -> 'CompactStatePlan':
+        """Select declared single-boundary shapes, never guess legacy ring
+        axes.
+
+        Stateless target/draft models retain zero resources on every backend. Stateful unknown models/backends keep
+        their legacy path unless a caller explicitly requests this plan, in which case unsupported input fails.
+        """
+        specs = model_config.state_cache_specs
+        if not specs and model_config.states_shapes:
+            raise ValueError('Model does not declare compact state payloads.')
+        if specs and get_backend().get_name() != 'cuda':
+            raise ValueError('Compact state execution currently requires the CUDA backend.')
+        compact_specs = []
+        for spec in specs:
+            if spec.prefix_checkpoint:
+                if spec.compact_shape is None:
+                    raise ValueError(f'State {spec.name} does not declare a compact payload.')
+                if not spec.compact_shape or any(dim <= 0 for dim in spec.compact_shape):
+                    raise ValueError(f'State {spec.name} has invalid compact geometry.')
+                compact_specs.append(replace(spec, shape=spec.compact_shape))
+            else:
+                if spec.compact_shape is not None:
+                    raise ValueError(f'Auxiliary state {spec.name} must retain its request-private geometry.')
+                compact_specs.append(spec)
+        plan = cls(compact_specs, capacity)
+        plan.model_declarations = tuple(deepcopy(specs))
+        return plan
+
+    def __init__(self, state_specs: Sequence[StateCacheSpec], capacity: CompactStateCapacity):
+        self.capacity = capacity
+        self.model_declarations = None  # only model-compiled plans may bind StateCacheEngine
+        if any(spec.prefix_checkpoint != spec.store_cacheable for spec in state_specs):
+            raise ValueError('Compact state requires matching local and Store recovery fields.')
+        if len({spec.name for spec in state_specs}) != len(state_specs):
+            raise ValueError('Compact state declarations must have unique names.')
+        unit_specs = [spec for spec in state_specs if spec.prefix_checkpoint]
+        auxiliary_specs = [spec for spec in state_specs if not spec.prefix_checkpoint]
+        if bool(unit_specs) != bool(capacity.num_units):
+            raise ValueError('Compact capacity and recoverable state declarations must agree.')
+        if auxiliary_specs and not capacity.request_slots:
+            raise ValueError('Auxiliary state requires request capacity.')
+        self.tensor_specs = build_state_cache_tensor_specs((), state_specs=state_specs)
+        self.unit_specs = build_state_cache_tensor_specs((), state_specs=unit_specs)
+        self.auxiliary_specs = build_state_cache_tensor_specs((), state_specs=auxiliary_specs)
+        backend = get_backend().get_cache_backend() if self.tensor_specs else None
+        self._unit_layout = backend.build_state_layout(self.unit_specs) if self.unit_specs else None
+        self._auxiliary_layout = backend.build_state_layout(self.auxiliary_specs) if self.auxiliary_specs else None
+
+    def allocate(self, device: torch.device | str) -> tuple[CacheAllocation, CacheAllocation]:
+        """Return unified-unit storage and independent request auxiliary
+        storage."""
+        empty = CacheAllocation(pools=(), tensor_views=())
+        units = (self._unit_layout.allocate(self.capacity.num_units, device)
+                 if self._unit_layout is not None else empty)
+        if isinstance(self._unit_layout, PackedStateCacheLayout):
+            offset, ranges = 0, []
+            for spec in self.unit_specs:
+                if ranges and ranges[-1][0] + ranges[-1][1] == offset:
+                    start, size = ranges[-1]
+                    ranges[-1] = (start, size + spec.desc.size)
+                else:
+                    ranges.append((offset, spec.desc.size))
+                offset += spec.desc.aligned_size
+            units = CacheAllocation(pools=(replace(units.pools[0], transfer_ranges=tuple(ranges)),),
+                                    tensor_views=units.tensor_views)
+        auxiliary = (self._auxiliary_layout.allocate(self.capacity.request_slots, device)
+                     if self._auxiliary_layout is not None else empty)
+        return units, auxiliary
+
+    def get_nbytes(self) -> tuple[int, int]:
+        """Exact owning bytes, excluding future ID metadata and kernel
+        scratch."""
+        units, auxiliary = self.allocate('meta')
+        return units.nbytes, auxiliary.nbytes
+
+
 class StateCacheEngine:
     """Own state-cache allocation and state-slot transitions."""
 
-    def __init__(self, cache_config: CacheConfig, model_config: ModelConfig):
+    def __init__(self, cache_config: CacheConfig, model_config: ModelConfig,
+                 *, compact_plan: CompactStatePlan | None = None):
         self.cache_config = cache_config
+        self.compact_plan = compact_plan
         tensor_specs = build_state_cache_tensor_specs(cache_config.states_shapes,
                                                       state_specs=model_config.state_cache_specs)
 
-        # Non-CUDA device integrations patch the canonical "cuda" device path
-        # before reaching this layer, so keep using it here.
-        self.allocation, checkpoint_pools = _allocate_state_cache_groups(
-            tensor_specs, model_config.state_cache_specs, cache_config.num_state_caches, device='cuda')
+        # Non-CUDA integrations patch the canonical device in the legacy path.
+        # An explicitly selected compact plan replaces that allocation entirely;
+        # sizing and real allocation retain the same backend-compiled plan.
+        if compact_plan is None:
+            self.allocation, checkpoint_pools = _allocate_state_cache_groups(
+                tensor_specs, model_config.state_cache_specs, cache_config.num_state_caches, device='cuda')
+            self.unit_allocation = self.auxiliary_allocation = None
+        else:
+            if tuple(model_config.state_cache_specs) != compact_plan.model_declarations:
+                raise ValueError('Compact plan does not match model state bindings.')
+            tensor_specs = compact_plan.tensor_specs
+            self.unit_allocation, self.auxiliary_allocation = compact_plan.allocate('cuda')
+            by_name = {
+                spec.name: view
+                for specs, allocation in ((compact_plan.unit_specs, self.unit_allocation),
+                                          (compact_plan.auxiliary_specs, self.auxiliary_allocation))
+                for spec, view in zip(specs, allocation.tensor_views)
+            }
+            checkpoint_pools = self.unit_allocation.pools
+            self.allocation = CacheAllocation(
+                pools=self.unit_allocation.pools + self.auxiliary_allocation.pools,
+                tensor_views=tuple(by_name[spec.name] for spec in tensor_specs))
         self._cache_tensors = list(self.allocation.tensor_views)
-        # Each pool declares the axis that indexes independently movable slots.
         self._slot_tensors = tuple((pool.tensor, pool.entry_axis) for pool in self.allocation.pools)
         self._checkpoint_slot_tensors = tuple((pool.tensor, pool.entry_axis) for pool in checkpoint_pools)
         if any(spec.layer_rows is not None for spec in tensor_specs):
@@ -95,11 +202,13 @@ class StateCacheEngine:
     @property
     def connector_state_cache_pools(self) -> tuple[KVCachePool, ...]:
         """Return owning pools and the slot bytes persisted by the Store."""
-        return tuple(KVCachePool(pool.tensor, pool.entry_axis, pool.transfer_ranges)
-                     for pool in self.allocation.pools)
+        pools = self.unit_allocation.pools if self.compact_plan is not None else self.allocation.pools
+        return tuple(KVCachePool(pool.tensor, pool.entry_axis, pool.transfer_ranges) for pool in pools)
 
     def zero_slots(self, slot_ids: torch.Tensor | None, zero_mask: torch.Tensor) -> None:
         """Zero the selected state slots in every physical tensor."""
+        if self.compact_plan is not None:
+            raise RuntimeError('Compact inputs are read-only; legacy slot zeroing is not allowed.')
         if slot_ids is None or not self._cache_tensors:
             return
 
@@ -164,6 +273,8 @@ class StateCacheEngine:
         Excluded state is left untouched on both save and restore. Its model must not read stale contents when resuming
         at a prefix boundary.
         """
+        if self.compact_plan is not None:
+            raise RuntimeError('Compact checkpoints share units; legacy state copying is not allowed.')
         if not self._cache_tensors:
             return
 

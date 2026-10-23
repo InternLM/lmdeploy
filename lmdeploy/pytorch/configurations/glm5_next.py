@@ -276,11 +276,13 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
                 GLM5_KDA_CONV_STATE,
                 (num_linear_layers, conv_dim, conv_kernel_size + num_spec_tokens),
                 torch.bfloat16,
+                compact_shape=(num_linear_layers, conv_dim, conv_kernel_size - 1),
             ),
             StateCacheSpec(
                 GLM5_KDA_RECURRENT_STATE,
                 (num_linear_layers, *ring_shape, local_heads, head_dim, head_dim),
                 torch.float32,
+                compact_shape=(num_linear_layers, local_heads, head_dim, head_dim),
             ),
             StateCacheSpec(
                 GLM5_KPOOL_TAIL_K_STATE,

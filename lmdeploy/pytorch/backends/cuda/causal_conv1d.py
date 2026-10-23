@@ -10,6 +10,30 @@ from .step_metadata import register_piecewise_graph_impl
 from .utils import has_tilelang
 
 
+def compact_causal_conv1d(x, weight, bias, conv_state, metadata, activation):
+    """Shared indexed Qwen/KDA convolution; inputs/outputs are unit views."""
+    from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_update, indexed_causal_conv1d_fwd
+    if weight.ndim == 3:
+        if weight.size(1) != 1:
+            raise ValueError('Depthwise convolution weight must have shape [C,1,K].')
+        weight = weight[:, 0]
+    ids = metadata.compact_state
+    if metadata.is_decoding:
+        batch, width = ids.output_ids.shape
+        values = x[0].unflatten(0, (batch, width)).transpose(1, 2)
+        output = causal_conv1d_update(values, conv_state, weight, bias=bias, activation=activation,
+                                     conv_state_indices=ids.input_ids, output_state_indices=ids.output_ids,
+                                     allow_input_alias=ids.allow_input_alias)
+        return output.transpose(1, 2).flatten(0, 1).unsqueeze(0)
+    prefill = metadata.compact_prefill
+    output = indexed_causal_conv1d_fwd(
+        x.transpose(1, 2), weight, conv_state, ids.input_ids, ids.output_ids[:, 0],
+        seq_idx=prefill.seq_idx, cu_seqlens=prefill.cu_seqlens, bias=bias, activation=activation,
+        checkpoint_ids=prefill.checkpoint_ids, checkpoint_offsets=prefill.checkpoint_offsets,
+        allow_input_alias=ids.allow_input_alias)
+    return output.transpose(1, 2)
+
+
 class CausalConv1dTilelangImpl(CausalConv1dImpl):
     """CausalConv1d update implementation."""
 
@@ -167,6 +191,8 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
         activation: str,
     ) -> torch.Tensor:
         """Dispatch causal convolution by inference phase."""
+        if getattr(gated_delta_meta, 'compact_state', None) is not None:
+            return compact_causal_conv1d(x, weight, bias, conv_state, gated_delta_meta, activation)
         if gated_delta_meta.is_decoding:
             return self.decode(x, weight, bias, conv_state, gated_delta_meta, activation)
         return self._prefill(x, weight, bias, conv_state, gated_delta_meta, activation)

@@ -2,6 +2,7 @@
 import torch
 
 from lmdeploy.pytorch import envs as _envs
+from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.utils import get_logger, is_bf16_supported
 
 from .builder import AutoModelConfigBuilder
@@ -78,6 +79,14 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
             dtype = torch.float16
         ssm_dtype = dtype if not _envs.fp32_mamba_ssm_dtype else torch.float32
         cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, ssm_dtype)]
+        # Keep legacy names/order/shapes stable while declaring exact-boundary
+        # payloads at the geometry owner. No runtime mode is selected here.
+        cfg.state_cache_specs = [
+            StateCacheSpec('state_0', conv_state_shape, dtype,
+                           compact_shape=(num_delta_layers, conv_dim, text_config.linear_conv_kernel_dim - 1)),
+            StateCacheSpec('state_1', recurrent_state_shape, ssm_dtype,
+                           compact_shape=(num_delta_layers, num_v_heads, head_v_dim, head_k_dim)),
+        ]
         cfg.is_gated_delta = True
         cfg.check_env_func = _check_env_qwen3_next
 
@@ -92,6 +101,7 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
         if is_draft_model:
             cfg.model_paradigm = 'ar_spec'
             cfg.states_shapes = []
+            cfg.state_cache_specs = []
 
             if spec_method == 'qwen3_5_mtp':
                 hf_config.architectures[0] = 'Qwen3_5MTPModel'

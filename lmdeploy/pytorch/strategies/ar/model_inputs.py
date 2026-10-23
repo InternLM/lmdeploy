@@ -9,7 +9,7 @@ from ..base.model_inputs import MakeDummyMeta, ModelInputsStrategy, make_dummy_i
 
 
 def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor, max_q_seqlen: int,
-                                   model_metas) -> ModelInputs:
+                                   model_metas, *, compact_runtime=None) -> ModelInputs:
     """Next decoding step."""
     if input_ids.dim() == 1:
         input_ids = input_ids[None, :]
@@ -22,6 +22,11 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
     if mrope_pos_ids is not None:
         index = inputs.seq_length.cumsum(0) - 1
         mrope_pos_ids = mrope_pos_ids[:, index] + 1
+    compact_state = inputs.compact_state
+    if compact_state is not None:
+        consumed = (inputs.seq_length > 0).long()
+        compact_state = (compact_state.advance(consumed, width=max_q_seqlen) if compact_runtime is None else
+                         compact_runtime.advance(compact_state, inputs.state_offsets, consumed, width=max_q_seqlen))
     return ModelInputs(
         input_ids=input_ids,
         seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
@@ -36,6 +41,7 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
         model_metas=model_metas,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
+        compact_state=compact_state,
     )
 
 
@@ -86,6 +92,11 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         assert other.mrope_pos_ids is not None
         mrope_pos_ids = torch.cat([inputs.mrope_pos_ids, other.mrope_pos_ids], dim=1)
 
+    if (inputs.compact_state is None) != (other.compact_state is None):
+        raise ValueError('Cannot merge compact and legacy state batches.')
+    compact_state = (inputs.compact_state.merge(other.compact_state)
+                     if inputs.compact_state is not None else None)
+
     return ModelInputs(
         input_ids=input_ids,
         seq_length=seq_length,
@@ -99,6 +110,7 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
         state_offsets=state_offsets,
+        compact_state=compact_state,
         mrope_pos_ids=mrope_pos_ids,
     )
 
@@ -193,6 +205,7 @@ def index_select_model_inputs(inputs: ModelInputs,
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
         state_offsets=state_offsets,
+        compact_state=(inputs.compact_state.index_select(indices) if inputs.compact_state is not None else None),
         target_hidden_states=target_hidden_states,
         target_position_ids=target_position_ids,
         mrope_pos_ids=mrope_pos_ids,

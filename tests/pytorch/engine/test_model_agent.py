@@ -438,7 +438,8 @@ def test_prepare_inputs_prefill_keeps_chunk_model_metas_across_interleaved_prefi
     assert agent._prev_chunk_output is prev_output
     assert normal_prefill.model_metas == [{'normal': 1}]
 
-    middle_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=False, model_metas=None)
+    middle_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=False,
+                                   model_metas=None, compact_state=None)
 
     agent._prepare_inputs_prefill(middle_chunk, delta=None)
 
@@ -451,7 +452,8 @@ def test_prepare_inputs_prefill_final_chunk_consumes_chunk_model_metas():
 
     agent = BaseModelAgent.__new__(BaseModelAgent)
     agent._prev_chunk_output = {'model_metas': [{'chunk': 1}]}
-    final_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=True, model_metas=None)
+    final_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=True,
+                                  model_metas=None, compact_state=None)
 
     agent._prepare_inputs_prefill(final_chunk, delta=None)
 
@@ -481,12 +483,14 @@ def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
     agent.strategy_factory = _StrategyFactory()
     agent.spec_agent = _SpecAgent()
     agent.step_inputs = old_step_inputs
+    agent.compact_runtime = object()
     agent._prev_chunk_output = {'model_metas': [object()]}
     agent._prev_chunk_last_logit = object()
 
     agent.reset_runtime_state()
 
     assert agent.step_inputs is new_step_inputs
+    assert agent.compact_runtime is None
     assert agent._prev_chunk_output is None
     assert agent._prev_chunk_last_logit is None
     assert events == ['build_step_inputs', 'reset_spec']
@@ -835,6 +839,7 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
 
     inputs = SimpleNamespace(
         is_dummy=is_dummy,
+        compact_state=None,
         state_offsets=None,
         seq_length=torch.tensor([1]),
     )
@@ -992,7 +997,8 @@ def test_strategy_inputs_record_stream_tensor_fields():
     ]
 
 
-def test_background_records_h2d_inputs_after_wait_and_before_forward(monkeypatch, event_loop):
+@pytest.mark.parametrize('compact', [False, True])
+def test_background_records_h2d_inputs_after_wait_and_before_forward(monkeypatch, event_loop, compact):
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
     events = []
@@ -1023,12 +1029,18 @@ def test_background_records_h2d_inputs_after_wait_and_before_forward(monkeypatch
             events.append('step')
 
     model_agent = _make_agent_with_queues()
+    model_agent._compact_forward_idle = asyncio.Event() if compact else None
+    if compact:
+        model_agent._compact_forward_idle.set()
     model_agent.stream = _Stream()
     model_agent.all_context = nullcontext
     model_agent._keep_h2d_transfer = lambda item: events.append('keep')
+    model_agent._release_completed_h2d_transfers = lambda: None
 
     async def _async_step(**forward_inputs):
         assert forward_inputs == {'inputs': 'device-inputs'}
+        if compact:
+            assert not model_agent._compact_forward_idle.is_set()
         events.append('forward')
         forward_done.set()
 
@@ -1040,10 +1052,13 @@ def test_background_records_h2d_inputs_after_wait_and_before_forward(monkeypatch
 
     task = event_loop.create_task(model_agent._async_loop_background())
     event_loop.run_until_complete(asyncio.wait_for(forward_done.wait(), timeout=1))
+    assert not task.done()
     task.cancel()
     event_loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
 
     assert events == ['keep', 'wait', 'record', 'forward', 'step']
+    if compact:
+        assert model_agent._compact_forward_idle.is_set()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA allocator')
@@ -1440,6 +1455,7 @@ class TestResetGraphRunner:
                 events.append('memdecode_reset')
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
         agent.patched_model = _PatchedModel()
         agent.spec_agent = _SpecAgent()
         agent.memdecode_agent = _MemDecodeAgent()
@@ -1482,6 +1498,7 @@ class TestResetGraphRunner:
         events = []
         model = object()
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
         agent._model_update_group = {'update': object()}
         agent.patched_model = SimpleNamespace(
             get_model=lambda: model,
@@ -1551,7 +1568,7 @@ class TestResetGraphRunner:
 class TestModelAgentWakeup:
 
     @staticmethod
-    def _make_level2_agent(rebuilt_block_nbytes):
+    def _make_level2_agent(rebuilt_block_nbytes, compact=False):
         from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
         events = []
@@ -1588,15 +1605,16 @@ class TestModelAgentWakeup:
             events.append(('build_cache_plans', received_cache_config, received_spec_cache_config))
             agent._cache_plan_block_nbytes = rebuilt_block_nbytes
             target_nbytes, spec_nbytes = rebuilt_block_nbytes
-            return target_nbytes, spec_nbytes, 0
+            return (target_nbytes, spec_nbytes, 0, 4096) if compact else (target_nbytes, spec_nbytes, 0)
 
         agent.build_model = _build_model
         agent.build_cache_plans = _build_cache_plans
         agent.build_graph_runner = lambda: events.append('build_graph_runner')
         return agent, events, cache_config, spec_cache_config
 
-    def test_level2_wakeup_rebuilds_cache_plans_before_graph_runner(self):
-        agent, events, cache_config, spec_cache_config = self._make_level2_agent((256, 128))
+    @pytest.mark.parametrize('compact', [False, True])
+    def test_level2_wakeup_rebuilds_cache_plans_before_graph_runner(self, compact):
+        agent, events, cache_config, spec_cache_config = self._make_level2_agent((256, 128), compact=compact)
 
         agent.wakeup(['weights'])
 
@@ -1779,6 +1797,7 @@ class TestCheckpointEngineWeightUpdate:
                 return self.model
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
         agent.patched_model = _PatchedModel()
         agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
         agent.spec_agent._enabled = False
@@ -2079,6 +2098,7 @@ class TestMemDecodeModelAgentLifecycle:
 @pytest.fixture(params=['flat', 'null_llm', 'nested', 'mirrored'])
 def weight_update_agent(request):
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.cache_config = SimpleNamespace(compact_state_capacity=None)
     config = SimpleNamespace(num_hidden_layers=5, num_nextn_predict_layers=2)
     # Follower ranks have the draft config but no local proposer.
     agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
@@ -2147,7 +2167,7 @@ def test_update_routes_before_renaming(weight_update_agent, monkeypatch, entry, 
         payload = pybase64.b64encode(pickle.dumps({'metadata': bucket.metadata})).decode()
         agent.update_params(UpdateParamsRequest(serialized_named_tensors=payload,
                                                 load_format='flattened_bucket', finished=False))
-        assert agent._update_params_ipc_event.record.call_count == sum(bool(v) for v in expected.values())
+        assert agent._update_params_ipc_event.record.call_count == int(bool(weights))
     else:
         # NCCL and checkpoint-engine IPC use this upstream shared loader.
         agent._load_updated_weight_bucket(weights, 'test')
@@ -2156,3 +2176,45 @@ def test_update_routes_before_renaming(weight_update_agent, monkeypatch, entry, 
         for (actual_name, actual_tensor), (name, tensor) in zip(loaded[tag], expected_weights):
             assert actual_name == 'renamed.' + name
             torch.testing.assert_close(actual_tensor, tensor)
+
+
+def test_cancelled_background_does_not_certify_shielded_postprocess_idle(monkeypatch, event_loop):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    agent = _make_agent_with_queues()
+    agent._compact_forward_idle = asyncio.Event()
+    agent._compact_forward_idle.set()
+    agent.stream = object()
+    agent.all_context = nullcontext
+    agent._release_completed_h2d_transfers = lambda: None
+    began, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    class Inputs:
+        async def get(self):
+            return {'inputs': None}
+
+        def step(self):
+            pytest.fail('Cancelled step must not commit the background iteration')
+
+    async def postprocess():
+        began.set()
+        await release.wait()
+        finished.set()
+
+    async def step(**kwargs):
+        await asyncio.shield(postprocess())
+
+    agent._async_step = step
+    monkeypatch.setattr(agent_module, 'build_inputs_maker', lambda _: Inputs())
+    monkeypatch.setattr(agent_module.torch.cuda, 'stream', lambda _: nullcontext())
+
+    async def scenario():
+        task = asyncio.create_task(agent._async_loop_background())
+        await began.wait()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert not agent._compact_forward_idle.is_set() and not finished.is_set()
+        release.set()
+        await finished.wait()
+        assert not agent._compact_forward_idle.is_set()
+    event_loop.run_until_complete(scenario())

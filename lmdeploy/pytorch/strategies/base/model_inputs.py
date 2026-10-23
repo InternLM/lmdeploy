@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import torch
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.compact_state import CompactStateInputs
 from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.model_inputs import ModelInputs
 
@@ -17,6 +18,8 @@ class MakeDummyMeta:
     # Add any fields needed for making dummy inputs
     use_ssm: bool = False
     use_mrope: bool = False
+    compact_bank_width: int = 0
+    compact_allow_input_alias: bool = False
 
 
 @record_function('make_dummy_input')
@@ -46,6 +49,17 @@ def make_dummy_inputs(batch_size: int,
     if meta.use_ssm:
         state_offsets = torch.full((batch_size, ), -1, dtype=torch.long, device=device)
 
+    compact = None
+    if meta.compact_bank_width:
+        if not meta.use_ssm:
+            raise ValueError('Compact dummy metadata requires a stateful model.')
+        width = max_q_seqlen if is_decoding else 1
+        compact = CompactStateInputs(
+            torch.full((batch_size, meta.compact_bank_width), -1, dtype=torch.int64, device=device),
+            torch.full((batch_size,), -1, dtype=torch.int64, device=device),
+            torch.full((batch_size, width), -1, dtype=torch.int64, device=device),
+            allow_input_alias=meta.compact_allow_input_alias)
+
     mrope_pos_ids = None
     if meta.use_mrope:
         mrope_pos_ids = torch.zeros(3, num_tokens, dtype=torch.long, device=device)
@@ -63,6 +77,7 @@ def make_dummy_inputs(batch_size: int,
         local_adapter_ids=local_adapter_ids,
         is_dummy=True,
         state_offsets=state_offsets,
+        compact_state=compact,
         mrope_pos_ids=mrope_pos_ids,
     )
 

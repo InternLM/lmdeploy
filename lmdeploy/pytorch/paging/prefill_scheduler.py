@@ -147,15 +147,17 @@ class _PrefillReorderer:
     def _estimate_long_chunks(self, seq: SchedulerSequence, chunk_limit: int, first_chunk_end: int):
         """Count the planned first chunk and estimate its continuation in O(1).
 
-        The continuation accounts for save alignment but treats future tokens as text. Later multimodal spans can change
-        its boundaries, so this remains an ordering estimate, never an allocation or execution plan.
+        Legacy continuation accounts for save alignment. Direct compact exports use the normal token-budget estimate;
+        unsupported internal offsets or future multimodal spans can add cuts. This is an ordering estimate, never an
+        allocation or execution plan.
         """
         chunk_limit = max(1, chunk_limit)
         end = seq.num_history_ids + seq.num_token_ids
         remaining = end - first_chunk_end
         ordinary_chunks = 1 + (remaining + chunk_limit - 1) // chunk_limit
         alignment = seq._seq_meta.prefill_save_alignment
-        if not alignment or len(seq.history_embeddings) > 0:
+        if (not alignment or len(seq.history_embeddings) > 0
+                or seq._seq_meta.compact_prefill_checkpoint_stride):
             return ordinary_chunks
 
         if chunk_limit >= alignment:

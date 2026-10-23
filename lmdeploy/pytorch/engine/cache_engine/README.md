@@ -254,6 +254,64 @@ Consumer rows and layer rows are different identities:
 Layer rows are state-cache metadata. They are not used to give standard K/V or
 operator-requested block caches synthetic model-layer identities.
 
+### Indexed compact state
+
+Set `LMDEPLOY_ENABLE_COMPACT_STATE=1` **before starting the Python process** to
+select unified compact state for stateful targets. Unset or `0` keeps legacy
+execution; stateless models allocate no compact state. The variable uses the
+standard boolean parser (`1/true/yes/on`, `0/false/no/off`) and is propagated to
+Ray workers. No test hook or public engine-config flag is needed.
+
+The current supported targets are CUDA Qwen3.5 and GLM-5.3 Flash with AR or
+matching single-layer MTP, using UniExecutor or RayExecutor. By default,
+`num_gpu_blocks=0` automatically sizes KV capacity using `cache_max_entry_count`
+after reserving each worker's actual compact/auxiliary state and runtime bytes.
+The shared block count fits both target and MTP draft KV on every rank.
+An explicit positive `num_gpu_blocks` (CLI `--num-gpu-blocks`) is optional and
+is never silently reduced. PD, MemDecode and deprecated MP execution are not
+supported. Mooncake Store additionally requires immutable
+`compact_model_identity` and, for MTP, `compact_draft_identity` in
+`kv_connector_extra_config`; CPU KV paging and other connectors are unsupported.
+Enabling the variable does not bypass these checks or silently fall back.
+
+The executor derives request/checkpoint/Store capacities from the existing cache
+settings and the MTP width, with owner-validated input reuse enabled. Internal
+explicit capacity objects remain available for geometry tests.
+
+A recoverable `StateCacheSpec` may explicitly declare `compact_shape`, using
+its existing layer-row convention. It describes one exact-boundary recurrent
+state or ordered K-1 convolution history, not a speculative ring. Absence means
+unsupported; the allocator never infers a compact shape from legacy axes.
+
+`CompactStatePlan.from_model_config()` compiles these declarations and retains
+the backend layouts for both sizing and allocation. Passing that plan as
+`StateCacheEngine(..., compact_plan=plan)` replaces the legacy allocation:
+
+- recoverable fields have `capacity.num_units` entries;
+- runtime-only auxiliary fields retain their shape and have
+  `capacity.request_slots` entries;
+- model-facing declaration order and names stay unchanged;
+- connector pools contain only the compact recovery fields, not auxiliary tails.
+
+The caller must select indexed kernels and validated per-forward unit IDs with
+this allocation. Auxiliary consumers still use request-slot IDs, not unit IDs.
+Legacy state copy/zero APIs reject compact mode; checkpoints retain references
+and kernels write new private outputs. Omitted plans preserve legacy behavior.
+Stateless model plans allocate no state pools and do not select a backend.
+
+With explicit `allow_input_alias=True`, standard AR/MTP uses a private decode
+bank of `W = 1 + num_speculative_tokens` units. A newly admitted prefill leases
+one private destination; protected capacity credits guarantee promotion to the
+full bank when decode is scheduled. Shared checkpoints and in-flight Store
+reads remain outside that writable bank. An already promoted bank is retained
+across later prefills while its submitted accesses still require it.
+
+This is phase-specific **unit-ID leasing**, not per-request GPU allocation:
+the owning pool is allocated up front with `1 + R * W + B + S` units, including
+the reserved zero unit, request capacity `R`, checkpoint budget `B`, and Store
+budget `S`. The explicit disjoint-input mode instead uses `W + 1` private units
+per decode bank. Neither mode reduces request or KV-block capacity implicitly.
+
 ## Runtime Ownership and Movement
 
 After CPU and accelerator allocation, `CacheEngine` resolves corresponding

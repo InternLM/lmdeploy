@@ -6,6 +6,7 @@ import torch
 from torch import Tensor
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.compact_state import CompactStateInputs
 from lmdeploy.pytorch.distributed import get_dcp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 
@@ -49,6 +50,7 @@ class CudaGraphMeta:
     block_size: int = 64
     step_meta_plan: 'CudaStepMetaPlan | None' = None
     step_meta_buffers: 'CudaStepMetaGraphBuffers | None' = None
+    compact_state_buffers: CompactStateInputs | None = None
 
 
 class CudaGraphMixin:
@@ -165,6 +167,17 @@ class CudaGraphMixin:
         if graph_meta.use_mrope:
             input_buffers['mrope_position_ids'] = torch.zeros(3, max_tokens, dtype=torch.int64, device=device)
 
+        context = get_step_ctx_manager().current_context()
+        compact = getattr(context, 'compact_state', None)
+        if compact is not None:
+            if not graph_meta.is_ssm or not context.is_decoding:
+                raise ValueError('Compact full-graph buffers require stateful decode.')
+            graph_meta.compact_state_buffers = CompactStateInputs(
+                torch.full((max_batches, compact.bank_ids.shape[1]), -1, dtype=torch.int64, device=device),
+                torch.full((max_batches,), -1, dtype=torch.int64, device=device),
+                torch.full((max_batches, decode_query_len), -1, dtype=torch.int64, device=device),
+                allow_input_alias=compact.allow_input_alias)
+
         # ssm
         if graph_meta.is_ssm:
             state_ids = torch.full((max_batches, ), -1, dtype=torch.int64, device=device)
@@ -177,6 +190,14 @@ class CudaGraphMixin:
                                past_key_values: list[list[torch.Tensor]], attn_metadata: Any, inputs_embeds: Tensor,
                                **kwargs) -> dict[str, Tensor]:
         """Fill cudagraph buffers from forward inputs."""
+
+        context = get_step_ctx_manager().current_context()
+        compact = getattr(context, 'compact_state', None)
+        if (compact is None) != (graph_meta.compact_state_buffers is None):
+            raise ValueError('Compact state mode changed without resetting the CUDA graph runner.')
+        if compact is not None:
+            from lmdeploy.pytorch.kernels.cuda.compact_state import stage_compact_state_ids
+            stage_compact_state_ids(compact, graph_meta.compact_state_buffers)
 
         block_offsets: Tensor = attn_metadata.block_offsets
         q_start_loc: Tensor = attn_metadata.q_start_loc
@@ -337,6 +358,8 @@ class CudaGraphMixin:
         # ssm
         if graph_meta.is_ssm:
             context.state_offsets = input_buffers['state_ids']
+        if graph_meta.compact_state_buffers is not None:
+            context.compact_state = graph_meta.compact_state_buffers
 
     def get_outputs_cudagraph(self, output_buffers: dict[str, torch.Tensor], input_ids: Tensor, **kwargs):
         """Get outputs from buffers."""

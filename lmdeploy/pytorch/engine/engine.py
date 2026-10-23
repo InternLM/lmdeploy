@@ -3,6 +3,8 @@ import asyncio
 import ctypes
 import gc
 import os
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -217,6 +219,7 @@ class Engine(EngineBase):
             cache_config,
             seq_meta=self.seq_meta,
             kv_connector=scheduler_connector,
+            compact_capacity=cache_config.compact_state_capacity,
         )
 
         # engine args
@@ -238,6 +241,11 @@ class Engine(EngineBase):
         if self._sleeping_tags:
             self._block_new_inputs()
         self._weights_update_lock: asyncio.Lock | None = None
+        self._compact_weight_control_lock = threading.Lock()
+        # None means ready; pending/failed must survive weight-tag wakeup.
+        self._compact_weight_reload_state = ('pending' if self.misc_config.empty_init
+                                             and self.cache_config.compact_state_capacity is not None
+                                             and self.cache_config.use_mooncake_store else None)
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
 
@@ -539,10 +547,64 @@ class Engine(EngineBase):
         self.migration_event = None
         self.scheduler.shutdown()
         self.executor.release()
+        if (getattr(self.cache_config, 'compact_state_capacity', None) is not None
+                and self.executor.device_type == 'cuda'):
+            torch._C._cuda_clearCublasWorkspaces()
 
     def update_params(self, request: Any):
         """Update params."""
-        self.executor.update_params(request)
+        return self._apply_weight_update(self.executor.update_params, request, request.finished, False)
+
+    @contextmanager
+    def _compact_weight_control(self, wait=False):
+        """Serialize compact weight/cache control, never inference hot paths.
+
+        Async transport callers wait in a thread so they can still drain peers. Synchronous lifecycle calls fail rather
+        than block the sleep coroutine.
+        """
+        cache = getattr(self, 'cache_config', None)
+        compact = cache is not None and cache.compact_state_capacity is not None and cache.use_mooncake_store
+        if not compact:
+            yield False
+            return
+        lock = self._compact_weight_control_lock
+        if not lock.acquire(blocking=wait):
+            raise RuntimeError('A compact weight/cache control operation is already in progress.')
+        try:
+            yield True
+        finally:
+            lock.release()
+
+    def _apply_weight_update(self, func, request, finished, status_result, *args, wait=False):
+        with self._compact_weight_control(wait=wait) as compact:
+            if compact and self._compact_weight_reload_state != 'failed':
+                self._compact_weight_reload_state = 'pending'
+            try:
+                result = func(request, *args)
+                if not compact:
+                    return result
+                success = result[0] if status_result else True
+                if not success:
+                    self._compact_weight_reload_state = 'failed'
+                elif self._compact_weight_reload_state == 'failed':
+                    raise RuntimeError('Compact Store reload previously failed on a worker; discard this instance.')
+                elif finished:
+                    if 'kv_cache' not in self._sleeping_tags:
+                        raise RuntimeError('Compact Store reload requires a sleeping cache lifecycle.')
+                    identity = request.compact_store_identity
+                    if identity is None:
+                        raise RuntimeError('Compact Store reload completed without weight identity.')
+                    # Workers validated all buckets and finalized all local
+                    # models. Only this all-rank success permits cache wakeup.
+                    extra = self.cache_config.kv_transfer_config.kv_connector_extra_config
+                    extra['compact_model_identity'] = identity.model_identity
+                    extra['compact_draft_identity'] = identity.draft_identity
+                    self._compact_weight_reload_state = None
+                return result
+            except BaseException:
+                if compact:
+                    self._compact_weight_reload_state = 'failed'
+                raise
 
     def _get_weights_update_lock(self):
         """Get the disaggregated weights-update lock."""
@@ -550,10 +612,10 @@ class Engine(EngineBase):
             self._weights_update_lock = asyncio.Lock()
         return self._weights_update_lock
 
-    async def _run_weights_update(self, func, *args):
+    async def _run_weights_update(self, func, *args, **kwargs):
         """Run one serialized disaggregated weights-update operation."""
         async with self._get_weights_update_lock():
-            return await asyncio.to_thread(func, *args)
+            return await asyncio.to_thread(func, *args, **kwargs)
 
     async def get_checkpoint_engine_status(self):
         """Get checkpoint-engine readiness from all local model workers."""
@@ -561,12 +623,15 @@ class Engine(EngineBase):
 
     async def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
         """Receive weights through checkpoint-engine CUDA IPC."""
-        return await self._run_weights_update(self.executor.update_weights_from_ipc,
-                                              request, reject_reason)
+        return await self._run_weights_update(self._apply_weight_update, self.executor.update_weights_from_ipc,
+                                              request, True, True, reject_reason, wait=True)
 
     def complete_weights_update(self):
         """Record successful initialization/update without waking KV cache."""
-        self._sleeping_tags.discard('weights')
+        with self._compact_weight_control() as compact:
+            if compact and self._compact_weight_reload_state is not None:
+                raise RuntimeError('Compact Store weight reload has not succeeded on every worker.')
+            self._sleeping_tags.discard('weights')
 
     async def init_weights_update_group(self, request: Any):
         """Init disaggregated weights-update process group."""
@@ -574,7 +639,8 @@ class Engine(EngineBase):
 
     async def update_weights_from_distributed(self, request: Any):
         """Receive weights through the disaggregated process group."""
-        return await self._run_weights_update(self.executor.update_weights_from_distributed, request)
+        return await self._run_weights_update(self._apply_weight_update, self.executor.update_weights_from_distributed,
+                                              request, request.finished, True, wait=True)
 
     async def destroy_weights_update_group(self, request: Any):
         """Tear down a previously initialized weights-update process group."""
@@ -590,7 +656,7 @@ class Engine(EngineBase):
         logger.info('PyTorch engine is allowing new inference requests.')
         self.req_manager.unblock_request_types(_INPUT_REQUEST_TYPES)
 
-    def _cancel_and_end_all_sessions(self):
+    def _cancel_and_end_all_sessions(self, reason='engine sleep'):
         """Cancel active responses and remove all scheduler sessions."""
         num_cancelled = 0
         sessions = self.scheduler.get_sessions()
@@ -600,54 +666,63 @@ class Engine(EngineBase):
                 resp: Response = getattr(seq, 'resp', None)
                 if resp is None or resp.is_done:
                     continue
-                self.req_manager.reject_request(resp, reason='engine sleep')
+                self.req_manager.reject_request(resp, reason=reason)
                 num_cancelled += 1
 
         # Sleep releases KV cache, so every existing scheduler session becomes
         # invalid even when the original request asked to preserve cache.
         for session_id in session_ids:
             self.end_session(session_id)
-        logger.info('PyTorch engine sleep cleanup cancelled %s active responses and ended %s sessions.',
-                    num_cancelled, len(session_ids))
+        logger.info('PyTorch %s cleanup cancelled %s active responses and ended %s sessions.',
+                    reason, num_cancelled, len(session_ids))
 
     async def sleep(self, level: int = 1):
         """Sleep."""
-        logger.info('PyTorch engine sleep requested: level=%s.', level)
-        # log sleep tags so we can resume at the right condition in wakeup.
-        self._sleeping_tags = _SLEEPING_TAGS.copy()
-        # block ADD_MESSAGE and ADD_SESSION
-        self._block_new_inputs()
-        if self._engine_loop is not None:
-            await self._engine_loop.drain_for_sleep()
-            logger.info('PyTorch engine loop drained for sleep.')
-        # cancel all remain sessions
-        self._cancel_and_end_all_sessions()
-        await self.executor.sleep(level)
-        self.scheduler.reset_cache_after_worker_drain()
-        if self._engine_loop is not None:
-            self._engine_loop.reset_runtime_state()
-        logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
+        with self._compact_weight_control() as compact:
+            if compact:
+                if self._compact_weight_reload_state is not None:
+                    raise RuntimeError('Compact Store weight reload is pending/failed; cannot sleep again.')
+                if level != 1:
+                    self._compact_weight_reload_state = 'pending'
+            logger.info('PyTorch engine sleep requested: level=%s.', level)
+            # log sleep tags so we can resume at the right condition in wakeup.
+            self._sleeping_tags = _SLEEPING_TAGS.copy()
+            # block ADD_MESSAGE and ADD_SESSION
+            self._block_new_inputs()
+            if self._engine_loop is not None:
+                await self._engine_loop.drain_for_sleep()
+                logger.info('PyTorch engine loop drained for sleep.')
+            # cancel all remain sessions
+            self._cancel_and_end_all_sessions()
+            await self.executor.sleep(level)
+            self.scheduler.reset_cache_after_worker_drain()
+            if self._engine_loop is not None:
+                self._engine_loop.reset_runtime_state()
+            logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
-        wakeup_tags = tags
-        logger.info('PyTorch engine wakeup requested: tags=%s, sleeping_tags=%s.',
-                    wakeup_tags, sorted(self._sleeping_tags))
-        self.executor.wakeup(wakeup_tags)
-        if wakeup_tags is None:
-            self._sleeping_tags.clear()
-        else:
-            self._sleeping_tags.difference_update(wakeup_tags)
-        # The engine would resume only when all sleep tags have been cleared.
-        if not self._sleeping_tags:
-            # enable ADD_MESSAGE and ADD_SESSION
-            self._unblock_new_inputs()
-            if self._engine_loop is not None:
-                self._engine_loop.resume_from_sleep()
-            logger.info('PyTorch engine wakeup complete; inference requests are enabled.')
-        else:
-            logger.info('PyTorch engine partial wakeup; blocked tags=%s.',
-                        sorted(self._sleeping_tags))
+        with self._compact_weight_control() as compact:
+            if compact and (tags is None or 'kv_cache' in tags) and self._compact_weight_reload_state is not None:
+                raise RuntimeError('Compact Store cache wakeup requires successful full weight reload on every worker.')
+            wakeup_tags = tags
+            logger.info('PyTorch engine wakeup requested: tags=%s, sleeping_tags=%s.',
+                        wakeup_tags, sorted(self._sleeping_tags))
+            self.executor.wakeup(wakeup_tags)
+            if wakeup_tags is None:
+                self._sleeping_tags.clear()
+            else:
+                self._sleeping_tags.difference_update(wakeup_tags)
+            # The engine would resume only when all sleep tags have been cleared.
+            if not self._sleeping_tags:
+                # enable ADD_MESSAGE and ADD_SESSION
+                self._unblock_new_inputs()
+                if self._engine_loop is not None:
+                    self._engine_loop.resume_from_sleep()
+                logger.info('PyTorch engine wakeup complete; inference requests are enabled.')
+            else:
+                logger.info('PyTorch engine partial wakeup; blocked tags=%s.',
+                            sorted(self._sleeping_tags))
 
     async def async_loop(self):
         engine_loop = None
@@ -677,10 +752,18 @@ class Engine(EngineBase):
             if engine_loop is not None:
                 engine_loop.stop()
             self._engine_loop = None
+            if getattr(self.cache_config, 'compact_state_capacity', None) is not None:
+                self._block_new_inputs()
+                self._cancel_and_end_all_sessions(reason='engine shutdown')
+                # Failure must bypass release, not turn a timeout/unreachable
+                # rank into proof that its cache addresses are no longer used.
+                await asyncio.wait_for(self.executor.drain_compact(), timeout=120)
+                self.scheduler.finish_kv_transfers_after_worker_drain()
             self._loop_finally()
 
     def close(self):
-        if self.executor.device_type == 'cuda':
+        if (self.executor.device_type == 'cuda'
+                and getattr(self.cache_config, 'compact_state_capacity', None) is None):
             # https://discuss.pytorch.org/t/how-to-delete-a-tensor-in-gpu-to-free-up-memory/48879/32
             # W/O this, repeatedly rebuilding and destroying engines within the same process
             # will cause more and more reserved CUDA memory.
