@@ -52,6 +52,10 @@ class ExecutorBase:
         self.world_size = dist_config.world_size
         self.device_type = device_type
         self.specdecode_config = specdecode_config
+        # MTP prefix identity includes the next token consumed by the draft.
+        cache_config.prefix_cache_token_lookahead = int(
+            specdecode_config is not None
+            and specdecode_config.method in ('deepseek_mtp', 'qwen3_5_mtp', 'hy3_mtp'))
         if cache_config.use_mooncake_store and model_config.states_shapes and specdecode_config is not None:
             supported_mtp = (specdecode_config.method == 'qwen3_5_mtp'
                              or (specdecode_config.method == 'deepseek_mtp'
