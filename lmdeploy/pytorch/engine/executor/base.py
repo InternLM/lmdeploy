@@ -82,8 +82,7 @@ class ExecutorBase:
         self._maybe_disable_unsupported_prefix_caching(check_window=not self._has_cache_update_hook())
 
     def _validate_compact_state_config(self):
-        """Guard internal development selection before building
-        workers/pools."""
+        """Validate compact state before building workers/pools."""
         cache, model = self.cache_config, self.model_config
         capacity = cache.compact_state_capacity
         if capacity is None:
@@ -114,8 +113,8 @@ class ExecutorBase:
                 value = extra.get(key)
                 if not isinstance(value, str) or not value.strip():
                     raise ValueError(f'Compact Store requires {key} naming immutable actual weights/revision.')
-        if cache.num_gpu_blocks <= 0:
-            raise ValueError('Compact development requires explicit baseline num_gpu_blocks; never auto-shrink KV.')
+        if cache.num_gpu_blocks < 0:
+            raise ValueError('Compact state requires non-negative num_gpu_blocks (0 selects automatic sizing).')
         spec = self.specdecode_config
         if spec is not None:
             expected_method = 'deepseek_mtp' if model.hf_config.model_type == 'glm5_next' else 'qwen3_5_mtp'

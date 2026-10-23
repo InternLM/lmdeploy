@@ -27,7 +27,7 @@ def _configs(width=1, family='qwen3_5'):
     specs = [StateCacheSpec('state_0', (2, 8, 3 + width), torch.bfloat16, compact_shape=(2, 8, 3)),
              StateCacheSpec('state_1', (2, width, 2, 4, 4), torch.float32, compact_shape=(2, 2, 4, 4))]
     model = ModelConfig(hidden_size=16, num_layers=2, num_attention_heads=2, num_key_value_heads=2,
-                         bos_token_id=1, eos_token_id=[2], head_dim=8, is_gated_delta=True,
+                         bos_token_id=1, eos_token_id=[2], head_dim=8, k_head_dim=8, is_gated_delta=True,
                          state_cache_specs=specs, states_shapes=[(s.shape, s.dtype) for s in specs],
                          hf_config=SimpleNamespace(model_type=family), model_paradigm='ar' if width == 1 else 'ar_spec')
     cache = CacheConfig(max_batches=2, block_size=16, num_cpu_blocks=0, num_gpu_blocks=32,
@@ -109,7 +109,7 @@ def test_worker_retains_exact_plan_for_sizing_real_allocation_and_dummy(
 
 
 @pytest.mark.parametrize('case', ['device', 'family', 'paradigm', 'pd', 'memory',
-                                  'auto_kv', 'capacity', 'method', 'draft_state', 'draft_layers', 'draft_compact'])
+                                  'negative_kv', 'capacity', 'method', 'draft_state', 'draft_layers', 'draft_compact'])
 def test_unsupported_selection_rejects_before_worker_creation(case):
     model, cache, spec = _configs(4)
     executor = ExecutorBase.__new__(ExecutorBase)
@@ -126,8 +126,8 @@ def test_unsupported_selection_rejects_before_worker_creation(case):
         cache.role = EngineRole.Prefill
     elif case == 'memory':
         executor.misc_config.memdecode_config = object()
-    elif case == 'auto_kv':
-        cache.num_gpu_blocks = 0
+    elif case == 'negative_kv':
+        cache.num_gpu_blocks = -1
     elif case == 'capacity':
         cache.compact_state_capacity = CompactStateCapacity(3, 4)
     elif case == 'method':
@@ -405,7 +405,7 @@ def test_env_off_and_stateless_keep_legacy(monkeypatch, enabled, stateful):
     assert (cache.compact_state_capacity is not None) == (enabled and stateful)
 
 
-@pytest.mark.parametrize('case', ['device', 'family', 'mp', 'auto_kv', 'identity'])
+@pytest.mark.parametrize('case', ['device', 'family', 'mp', 'negative_kv', 'identity'])
 def test_env_keeps_existing_fail_closed_guards(monkeypatch, case):
     from lmdeploy.messages import KVTransferConfig
     from lmdeploy.pytorch import envs
@@ -415,8 +415,8 @@ def test_env_keeps_existing_fail_closed_guards(monkeypatch, case):
     cache.compact_state_capacity = None
     if case == 'family':
         model.hf_config.model_type = 'unadapted'
-    elif case == 'auto_kv':
-        cache.num_gpu_blocks = 0
+    elif case == 'negative_kv':
+        cache.num_gpu_blocks = -1
     elif case == 'identity':
         cache.kv_transfer_config = KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_consumer')
     with pytest.raises((ValueError, NotImplementedError), match='Compact'):
@@ -437,3 +437,72 @@ def test_env_preserves_explicit_internal_geometry(monkeypatch):
     cache.compact_state_capacity = CompactStateCapacity(6, 1, allow_input_alias=False)
     _build_from_env(monkeypatch, model, cache)
     assert not cache.compact_state_capacity.allow_input_alias
+
+
+@pytest.mark.parametrize('width', [1, 4, 6])
+@pytest.mark.parametrize('ratio', [0.5, 0.7, 0.9])
+@pytest.mark.parametrize('limiting_rank', [0, 1])
+def test_compact_auto_kv_reserves_state_and_runtime_before_fitting_target_and_draft(
+        monkeypatch, width, ratio, limiting_rank):
+    from lmdeploy.pytorch import envs
+
+    monkeypatch.setattr(envs, 'enable_compact_state', True)
+    model, cache, spec = _configs(width, 'glm5_next')
+    model.vocab_size = 128
+    cache.num_gpu_blocks = 0
+    cache.compact_state_capacity = None
+    cache.cache_max_entry_count = ratio
+    cache.max_prefill_token_num = 64
+    if spec is not None:
+        spec.cache_config.num_gpu_blocks = 0
+    executor = _build_from_env(monkeypatch, model, cache, spec)
+    capacity = cache.compact_state_capacity
+    state_slots = cache.num_state_caches
+    # Simulate retained rank-local plans, including auxiliary state/ID bytes.
+    plans = [_WorkerCachePlanSizes(1024, 256 if spec else 0, compact_state=4096),
+             _WorkerCachePlanSizes(2048, 512 if spec else 0, compact_state=6144)]
+    free_mems = [1 << 23, 1 << 23]
+    free_mems[limiting_rank] = 1 << 20
+    monkeypatch.setattr(executor, '_prepare_worker_cache_plans', lambda *a: plans)
+    monkeypatch.setattr(executor, 'gather_free_mem', lambda: free_mems)
+    updates = []
+    monkeypatch.setattr(executor, 'set_cache_config', lambda *args: updates.append(args))
+    monkeypatch.setattr(executor, 'set_model_config', lambda *args: None)
+    executor.update_configs()
+    runtime_bytes = (64 + cache.max_batches * 2) * model.vocab_size * 2
+    per_rank = [int((free - plan.compact_state - runtime_bytes) * ratio) // plan.total
+                for free, plan in zip(free_mems, plans)]
+    assert cache.num_gpu_blocks == min(per_rank) == per_rank[limiting_rank]
+    assert cache.compact_state_capacity == capacity and cache.num_state_caches == state_slots
+    assert cache.max_batches == 2 and cache.max_prefill_token_num == 64
+    assert updates == [(cache, None if spec is None else spec.cache_config)]
+    if spec is not None:
+        assert spec.cache_config.num_gpu_blocks == cache.num_gpu_blocks
+        assert spec.cache_config.max_prefill_token_num == 64
+    # Finalized configs still satisfy validation; geometry cannot depend on KV count.
+    executor._validate_compact_state_config()
+
+
+@pytest.mark.parametrize('shortage', ['state', 'kv'])
+def test_compact_auto_kv_insufficient_memory_does_not_reduce_request_capacity(monkeypatch, shortage):
+    from lmdeploy.pytorch import envs
+
+    monkeypatch.setattr(envs, 'enable_compact_state', True)
+    model, cache, spec = _configs(6)
+    model.vocab_size = 128
+    cache.num_gpu_blocks = spec.cache_config.num_gpu_blocks = 0
+    cache.compact_state_capacity = None
+    cache.max_prefill_token_num = 64
+    executor = _build_from_env(monkeypatch, model, cache, spec)
+    capacity = cache.compact_state_capacity
+    plans = [_WorkerCachePlanSizes(1024, 256, compact_state=4096)]
+    runtime_bytes = (64 + cache.max_batches * 2) * model.vocab_size * 2
+    free = 4096 if shortage == 'state' else 4096 + runtime_bytes + 1
+    monkeypatch.setattr(executor, '_prepare_worker_cache_plans', lambda *a: plans)
+    monkeypatch.setattr(executor, 'gather_free_mem', lambda: [free])
+    monkeypatch.setattr(executor, 'set_cache_config', lambda *a: pytest.fail('Must reject before worker allocation'))
+    with pytest.raises(RuntimeError, match='unchanged request capacity' if shortage == 'state' else 'kv cache'):
+        executor.update_configs()
+    assert cache.compact_state_capacity == capacity
+    assert cache.max_batches == 2 and cache.max_prefill_token_num == 64
+    assert cache.num_gpu_blocks == spec.cache_config.num_gpu_blocks == 0

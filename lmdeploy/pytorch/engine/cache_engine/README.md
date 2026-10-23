@@ -263,10 +263,13 @@ standard boolean parser (`1/true/yes/on`, `0/false/no/off`) and is propagated to
 Ray workers. No test hook or public engine-config flag is needed.
 
 The current supported targets are CUDA Qwen3.5 and GLM-5.3 Flash with AR or
-matching single-layer MTP, using UniExecutor or RayExecutor. Existing guards
-remain in effect: specify a positive `num_gpu_blocks` (CLI `--num-gpu-blocks`)
-to preserve the requested KV capacity; PD, MemDecode and deprecated MP execution
-are not supported. Mooncake Store additionally requires immutable
+matching single-layer MTP, using UniExecutor or RayExecutor. By default,
+`num_gpu_blocks=0` automatically sizes KV capacity using `cache_max_entry_count`
+after reserving each worker's actual compact/auxiliary state and runtime bytes.
+The shared block count fits both target and MTP draft KV on every rank.
+An explicit positive `num_gpu_blocks` (CLI `--num-gpu-blocks`) is optional and
+is never silently reduced. PD, MemDecode and deprecated MP execution are not
+supported. Mooncake Store additionally requires immutable
 `compact_model_identity` and, for MTP, `compact_draft_identity` in
 `kv_connector_extra_config`; CPU KV paging and other connectors are unsupported.
 Enabling the variable does not bypass these checks or silently fall back.
