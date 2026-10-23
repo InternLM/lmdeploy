@@ -5,7 +5,7 @@ import time
 from typing import Any, Literal
 
 import shortuuid
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
 
 
 class ErrorResponse(BaseModel):
@@ -215,8 +215,16 @@ class ChatCompletionRequest(BaseModel):
     seed: int | None = None
     min_new_tokens: int | None = Field(default=None, examples=[None])
     min_p: float | None = None
-    enable_thinking: bool | None = None  # will be deprecated in the future
+    enable_thinking: bool | None = Field(  # will be deprecated in the future
+        default=None,
+        validation_alias=AliasChoices('enable_thinking', AliasPath('extra_body', 'enable_thinking')),
+    )
     return_token_ids: bool | None = False
+    return_prompt_text: bool = Field(
+        default=False,
+        validation_alias=AliasChoices('return_prompt_text', AliasPath('extra_body', 'return_prompt_text')),
+        description='Return the rendered prompt text used for generation.',
+    )
     return_logprob: bool | None = False
     include_stop_str_in_output: bool | None = False
     # kwargs for chat template renderer
@@ -228,6 +236,7 @@ class ChatCompletionRequest(BaseModel):
     # kwargs for media IO
     media_io_kwargs: dict[str, Any] | None = Field(
         default=None,
+        validation_alias=AliasChoices('media_io_kwargs', AliasPath('extra_body', 'media_io_kwargs')),
         description=('Additional kwargs to pass to the media IO processing, keyed by modality.'),
     )
     # kwargs for hf processor

@@ -269,6 +269,19 @@ class BaseResponseParser(ResponseParser):
     def __init__(self, request: ChatCompletionRequest):
         rcls = type(self).reasoning_parser_cls
         tcls = type(self).tool_parser_cls
+        response_format = request.response_format
+        format_type = (response_format.get('type') if isinstance(response_format, dict)
+                       else getattr(response_format, 'type', None))
+        # These grammars constrain the entire generated sequence, including
+        # its first token. Required tools instead use a tagged grammar below.
+        self._literal_output = (format_type in ('json_object', 'json_schema', 'regex_schema')
+                                and request.tool_choice != 'required')
+        if self._literal_output:
+            template_kwargs = dict(request.chat_template_kwargs or {})
+            template_kwargs['enable_thinking'] = False
+            if 'thinking' in template_kwargs:
+                template_kwargs['thinking'] = False
+            request = request.model_copy(update={'chat_template_kwargs': template_kwargs})
         self._kwargs = type(self).chat_template_kwargs_from_request(request)
         self.enable_thinking: bool | None = self._kwargs.get(
             'enable_thinking', self._kwargs.get('thinking', None))
@@ -281,6 +294,15 @@ class BaseResponseParser(ResponseParser):
             and self.enable_thinking is not False
             and self.reasoning_parser.starts_in_reasoning_mode()
         )
+        if self.reasoning_enabled and request.messages:
+            last_message = request.messages[-1]
+            prefill = last_message.get('content')
+            if last_message.get('role') == 'assistant' and isinstance(prefill, str) and prefill:
+                # A nonempty assistant message continues its existing channel;
+                # the template does not add a fresh reasoning-generation prefix.
+                open_tag = self.reasoning_parser.get_reasoning_open_tag()
+                close_tag = self.reasoning_parser.get_reasoning_close_tag()
+                self.reasoning_enabled = bool(open_tag and prefill.rfind(open_tag) > prefill.rfind(close_tag))
         if self.tool_parser is not None:
             self.request = self.tool_parser.adjust_request(request)
         else:
@@ -351,6 +373,12 @@ class BaseResponseParser(ResponseParser):
         """
         self._update_reasoning_tokens(delta_token_ids)
         self._stream_final_received = bool(kwargs.get('final', False))
+
+        if self._literal_output:
+            # Protocol-looking strings inside constrained output are data.
+            # Do not strip them or parse them as reasoning/tool-call markup.
+            self._received_any_text |= bool(delta_text)
+            return [(DeltaMessage(role='assistant', content=delta_text), False)] if delta_text else []
 
         # Special-case: some backends emit a leading empty delta (no text, no
         # tokens) before any actual content. Tests treat this as a visible empty

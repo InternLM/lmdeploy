@@ -432,7 +432,11 @@ def test_executor_keeps_prefix_cache_after_deepseek_v4_window_normalization():
     assert cache_config.enable_prefix_caching
 
 
-def test_executor_keeps_prefix_cache_with_spec_decode():
+@pytest.mark.parametrize(('method', 'lookahead'), [
+    (None, 0), ('deepseek_mtp', 1), ('hy3_mtp', 1), ('qwen3_5_mtp', 1),
+    ('eagle', 0), ('eagle3', 0), ('dflash', 0), ('dspark', 0),
+])
+def test_executor_configures_prefix_cache_lookahead(method, lookahead):
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
                                num_cpu_blocks=0,
@@ -446,9 +450,11 @@ def test_executor_keeps_prefix_cache_with_spec_decode():
                  backend_config=SimpleNamespace(),
                  dist_config=SimpleNamespace(dp=1, world_size=1),
                  misc_config=SimpleNamespace(),
-                 specdecode_config=SimpleNamespace())
+                 specdecode_config=(SpecDecodeConfig(model='draft', method=method, num_speculative_tokens=3)
+                                    if method is not None else None))
 
     assert cache_config.enable_prefix_caching
+    assert cache_config.prefix_cache_token_lookahead == lookahead
 
 
 def test_executor_disables_prefix_cache_with_pd_role():

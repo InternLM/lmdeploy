@@ -113,14 +113,14 @@ class MultimodalProcessor:
                                allowed_media_domains: list[str] | None = None):
         """Synchronous helper to parse a single multimodal message item."""
         role = in_messages[i]['role']
-        # OpenAI protocol allows tool_call messages without a content key;
+        # OpenAI protocol allows tool_call messages with missing/null content;
         # the anthropic adapter emits exactly that for pure tool_use turns.
         # Normalize those to content='' so downstream chat-template asserts
         # (model.messages2prompt requires the key on every message) hold.
         content = in_messages[i].get('content')
 
         if role not in ('user', 'tool') or not isinstance(content, list):
-            if 'content' not in in_messages[i]:
+            if content is None:
                 normalized = dict(in_messages[i])
                 normalized['content'] = ''
                 out_messages[i] = normalized
@@ -364,16 +364,26 @@ class MultimodalProcessor:
         return messages
 
     def _has_multimodal_input(self, messages: list[dict]) -> bool:
-        """Check if messages contain multimodal input such as images, videos,
-        audios, or time series."""
-        for message in messages:
+        """Validate block types before choosing text or multimodal
+        processing."""
+        has_multimodal_input = False
+        for message_idx, message in enumerate(messages):
             content = message.get('content')
             if not isinstance(content, list):
                 continue
-            for item in content:
-                if isinstance(item, dict) and item.get('type') in MULTIMODAL_TYPES:
-                    return True
-        return False
+            for item_idx, item in enumerate(content):
+                field = f'messages[{message_idx}].content[{item_idx}]'
+                if not isinstance(item, dict):
+                    raise ValueError(f'Invalid content block at `{field}`. Expected an object.')
+                item_type = item.get('type')
+                if item_type == 'text':
+                    continue
+                if item_type not in MULTIMODAL_TYPES:
+                    raise ValueError(f'Unsupported content block type {item_type!r} at `{field}.type`.')
+                # Scan the entire history: an earlier image must not hide an
+                # invalid block later in this message or a subsequent turn.
+                has_multimodal_input = True
+        return has_multimodal_input
 
     async def _get_text_prompt_input(self,
                                      prompt: str | list[dict],
@@ -426,6 +436,7 @@ class MultimodalProcessor:
         messages = await self.async_parse_multimodal_item(messages,
                                                           media_io_kwargs,
                                                           allowed_media_domains=self.allowed_media_domains)
+        messages = chat_template.prepare_multimodal_messages(messages)
 
         if self.backend == 'turbomind':
             if self.vl_encoder._uses_new_preprocess:

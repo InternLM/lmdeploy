@@ -74,6 +74,8 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             return_token_ids=bool(request.return_token_ids),
             return_routed_experts=bool(request.return_routed_experts),
             include_stop_str_in_output=bool(request.include_stop_str_in_output),
+            chat_template_kwargs=(
+                {'enable_thinking': request.thinking.type != 'disabled'} if request.thinking is not None else None),
         )
         try:
             chat_runner = await ChatRunner.prepare(
@@ -132,11 +134,13 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             id=request_id,
             model=request.model,
             content=content_blocks,
-            stop_reason=map_finish_reason(res.finish_reason),
-            stop_sequence=None,
-            usage=MessageUsage(
+            stop_reason='stop_sequence' if res.stop_sequence is not None else map_finish_reason(res.finish_reason),
+            stop_sequence=res.stop_sequence,
+            usage=MessageUsage.build(
                 input_tokens=res.input_token_len,
                 output_tokens=res.generate_token_len,
+                cached_tokens=res.cached_tokens,
+                thinking_tokens=res.reasoning_tokens,
             ),
             output_ids=res.token_ids if chat_request.return_token_ids else None,
             output_token_logprobs=output_token_logprobs,

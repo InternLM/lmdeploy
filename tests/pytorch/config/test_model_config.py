@@ -284,8 +284,10 @@ def test_glm5_next_tail_checkpoint_policy_requires_closed_pool_boundary(monkeypa
     for name in (GLM5_KPOOL_TAIL_K_STATE, GLM5_KPOOL_TAIL_SCORE_STATE):
         assert not specs[name].prefix_checkpoint
         assert specs[name].shape[1] == hf_config.text_config.index_kpool + 1 + num_spec_tokens
-    cache = CacheConfig(max_batches=1, block_size=16, num_cpu_blocks=0, num_gpu_blocks=0)
+    cache = CacheConfig(max_batches=1, block_size=16, num_cpu_blocks=0, num_gpu_blocks=0,
+                        prefix_cache_token_lookahead=int(num_spec_tokens > 0))
     model.update_cache_config_func(cache)
+    assert cache.prefix_cache_token_lookahead == int(num_spec_tokens > 0)
     assert cache.prefix_cache_block_aligned
     assert cache.block_size == 64
     assert cache.block_size % hf_config.text_config.index_kpool == 0

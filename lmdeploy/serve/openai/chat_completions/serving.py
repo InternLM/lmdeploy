@@ -269,6 +269,7 @@ def register(router: APIRouter, server_context) -> None:
         async def _completion_stream_generator() -> AsyncGenerator[str, None]:
             try:
                 final_usage = None
+                prompt_text_sent = False
                 async for chunk in chat_runner.stream():
                     logprobs = None
                     output_token_logprobs = None
@@ -302,6 +303,9 @@ def register(router: APIRouter, server_context) -> None:
                         output_token_logprobs=output_token_logprobs,
                         routed_experts=chunk.routed_experts,
                         output_ids=stream_output_ids)
+                    if request.return_prompt_text and not prompt_text_sent:
+                        response_json['prompt_text'] = chat_runner.prompt_text
+                        prompt_text_sent = True
                     if chunk.cache_block_ids is not None and chunk.is_last_delta:
                         response_json['cache_block_ids'] = chunk.cache_block_ids
                         response_json['remote_token_ids'] = chunk.token_ids
@@ -381,6 +385,9 @@ def register(router: APIRouter, server_context) -> None:
             choices=choices,
             usage=usage,
         ).model_dump()
+
+        if request.return_prompt_text:
+            response['prompt_text'] = chat_runner.prompt_text
 
         if with_cache:
             response['cache_block_ids'] = cache_block_ids

@@ -412,7 +412,8 @@ class BaseModelAgent:
         self.kv_connector = None
         self.profiler: AgentProfiler = None
         try:
-            self.guided_decoding_manager = GuidedDecodingManager(self.tokenizer, model_config.vocab_size)
+            self.guided_decoding_manager = GuidedDecodingManager(
+                self.tokenizer, model_config.vocab_size, stop_token_ids=model_config.eos_token_id)
         except ValueError as e:
             logger.warning(f'Failed to create GuidedManager for tokenizer {type(self.tokenizer)}: {e}')
             self.guided_decoding_manager = None

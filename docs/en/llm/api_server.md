@@ -54,13 +54,27 @@ LMDeploy's RESTful API is compatible with the following three OpenAI interfaces:
 - /v1/models
 - /v1/completions
 
+For `/v1/chat/completions`, content arrays must contain objects with a supported `type`.
+Unknown or missing block types and non-object blocks return HTTP 400 before generation, including when `stream=true`.
+The error message identifies the location, for example `messages[0].content[1].type`; unsupported blocks are not silently removed.
+
 You can overview and try out the offered RESTful APIs by the website `http://0.0.0.0:23333` as shown in the below image after launching the service successfully.
 
 ![swagger_ui](https://github.com/InternLM/lmdeploy/assets/4560679/b891dd90-3ffa-4333-92b2-fb29dffa1459)
 
 If you need to integrate the service into your own projects or products, we recommend the following approach:
 
+### Inspect the rendered chat prompt
+
+Set `return_prompt_text=true` on `/v1/chat/completions` to include the rendered `prompt_text` in the response. With the Python OpenAI client, pass `extra_body={"return_prompt_text": True}`; raw JSON may use either the top-level field or the same nested object, with the top-level value taking precedence. Streaming includes the prompt in the first chunk of each choice. The value is the actual template output, so reasoning-effort markers depend on the model's template. Raw `input_ids` requests have no rendered prompt and return `null`. The field is omitted unless requested.
+
 ### Integrate with `OpenAI`
+
+With the default response parser, `json_object`, `json_schema`, and `regex_schema` constrain the entire generated sequence. These modes disable thinking through the chat template and return the constrained output in `content`, including in streams. Protocol-like strings inside the answer remain literal data. Required tool calls use their own tagged grammar and can still include reasoning.
+
+A nonempty final assistant message is treated as a continuation of that message. Plain-text prefills continue in `content`; a prefill ending inside an explicit `<think>` block continues in the reasoning channel.
+
+Raw JSON requests also accept `enable_thinking` and `media_io_kwargs` inside `extra_body`, with top-level values taking precedence. Prefer `chat_template_kwargs={"enable_thinking": false}` for new integrations; the top-level `enable_thinking` option is deprecated.
 
 Here is an example of interaction with the endpoint `v1/chat/completions` service via the openai package.
 Before running it, please install the openai package by `pip install openai`

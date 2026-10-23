@@ -1,8 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """PyTorch engine configuration for GLM-5.3-Flash."""
 
-from functools import partial
-
 import torch
 
 from lmdeploy.pytorch.config import StateCacheSpec
@@ -35,7 +33,7 @@ _GLM5_FULL_LAYER_TYPES = frozenset({
 })
 
 
-def update_cache_config(cache_config, token_lookahead=0):
+def update_cache_config(cache_config):
     """Keep the 64-token MLA / 16-entry KPool owner under one allocator
     reference."""
     if cache_config.role != EngineRole.Hybrid:
@@ -47,8 +45,7 @@ def update_cache_config(cache_config, token_lookahead=0):
     cache_config.block_size = 64
     cache_config.kernel_block_size = 64
     cache_config.prefix_cache_block_aligned = True
-    cache_config.prefix_cache_token_lookahead = token_lookahead
-    if token_lookahead and cache_config.prefix_cache_decode_state_interval:
+    if cache_config.prefix_cache_token_lookahead and cache_config.prefix_cache_decode_state_interval:
         raise ValueError('GLM-5.3 MTP prefix caching only publishes prefill checkpoints.')
     if cache_config.prefix_cache_decode_state_interval % 64:
         raise ValueError('GLM-5.3 prefix_cache_decode_state_interval must be a multiple of 64.')
@@ -364,8 +361,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             configure_kda_replayssm(
                 config, linear_layer_ids, local_heads, head_dim, conv_kernel_size,
                 num_spec_tokens, kwargs.get('replayssm_buffer_len', 16))
-        config.update_cache_config_func = (partial(update_cache_config, token_lookahead=1)
-                                           if num_spec_tokens else update_cache_config)
+        config.update_cache_config_func = update_cache_config
         if kwargs.get('spec_method') not in (None, 'deepseek_mtp'):
             config.prefix_caching_unsupported_reason = (
                 'GLM-5.3 prefix caching supports AR and deepseek_mtp only.')

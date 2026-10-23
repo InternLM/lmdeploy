@@ -114,6 +114,10 @@ class ChatTemplateConfig:
 class BaseChatTemplate:
     """Base Chat template."""
 
+    def prepare_multimodal_messages(self, messages: list[dict]) -> list[dict]:
+        """Prepare message order before rendering and collecting media."""
+        return messages
+
     def __init__(self,
                  system='',
                  meta_instruction='',
@@ -788,10 +792,49 @@ class HFChatTemplate(BaseChatTemplate):
                 self.stop_words.append(self.tokenizer.eot_token)
             arch, _ = get_model_arch(model_path)
             self.is_gpt_oss = arch == 'GptOssForCausalLM'
+            # GLM-5.3-Flash's multimodal architecture, not the text-only GLM-5.3.
+            self.is_glm5_next = arch == 'Glm5NextForConditionalGeneration'
             if self.is_gpt_oss:
                 self.stop_words.append('<|call|>')
         except Exception as e:
             raise ValueError(f'Try apply_chat_template failed: {e}')
+
+    def prepare_multimodal_messages(self, messages: list[dict]) -> list[dict]:
+        """Match GLM-5.3-Flash tool rendering order before collecting media.
+
+        Its template renders an unambiguous, contiguous result group in the preceding assistant's tool-call order. Both
+        the prompt and media collector must see that order. Other templates keep their original message order.
+        """
+        if not self.is_glm5_next:
+            return messages
+        ordered = list(messages)
+        start = 0
+        while start < len(ordered):
+            if ordered[start]['role'] != 'tool':
+                start += 1
+                continue
+            end = start + 1
+            while end < len(ordered) and ordered[end]['role'] == 'tool':
+                end += 1
+            group = ordered[start:end]
+            has_media = any(isinstance(message.get('content'), list)
+                            and any(isinstance(part, dict) and part.get('type') in ('image', 'video', 'audio')
+                                    for part in message['content']) for message in group)
+            previous = ordered[start - 1] if start else {}
+            calls = (previous.get('tool_calls') or []) if previous.get('role') == 'assistant' else []
+            # Match the template's tool_call_id/id fallback. Ambiguous groups
+            # are rendered in input order, so leave their media in that order.
+            call_ids = [call.get('tool_call_id') or call.get('id') for call in calls]
+            result_ids = [message.get('tool_call_id') or message.get('id') for message in group]
+            valid_ids = all(isinstance(identifier, str) and identifier for identifier in call_ids + result_ids)
+            if (has_media and call_ids and valid_ids
+                    and len(set(call_ids)) == len(call_ids) and len(set(result_ids)) == len(result_ids)
+                    and set(result_ids).issubset(call_ids)):
+                positions = {identifier: index for index, identifier in enumerate(call_ids)}
+                ordered[start:end] = sorted(group, key=lambda message: positions[message.get('tool_call_id')
+                                                                                or message.get('id')])
+            start = end
+        return ordered
 
     def get_prompt(self, prompt, **kwargs):
         messages = [{'role': 'user', 'content': prompt}]
@@ -819,6 +862,11 @@ class HFChatTemplate(BaseChatTemplate):
         if self.is_gpt_oss and not kwargs.get('tools'):
             # for gpt-oss model, remove this seems more conducive to instruction following.
             prompt = prompt.replace('commentary, ', '', 1)
+        if (self.is_glm5_next and add_generation_prompt and kwargs.get('enable_thinking') is False
+                and prompt.endswith('<think>')):
+            # Early GLM-5.3 templates unconditionally open a thinking block.
+            # Prefill its closing tag so disabled thinking starts at the answer.
+            prompt += '</think>'
         return prompt
 
     def _user_instruction(self):

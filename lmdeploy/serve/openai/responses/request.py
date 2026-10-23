@@ -123,6 +123,17 @@ def check_request(
     for field_name in ('ignore_eos', 'skip_special_tokens', 'include_stop_str_in_output'):
         if field_name in request.model_fields_set:
             chat_request_kwargs[field_name] = getattr(request, field_name)
+    effort = None if request.reasoning is None else request.reasoning.effort
+    if effort is not None:
+        if effort not in ('none', 'low', 'medium', 'high', 'max'):
+            return None, error_response(
+                HTTPStatus.BAD_REQUEST,
+                'Supported reasoning efforts are none, low, medium, high and max.',
+                param='reasoning.effort',
+            )
+        chat_request_kwargs['chat_template_kwargs'] = {'enable_thinking': effort != 'none'}
+        if effort != 'none':
+            chat_request_kwargs['reasoning_effort'] = effort
     chat_request = ChatCompletionRequest(**chat_request_kwargs)
     return ResponsesRequestContext(model_name=model_name, chat_request=chat_request), None
 
@@ -177,7 +188,6 @@ def warn_ignored_request_fields(request: ResponsesRequest) -> None:
             'logit_bias',
             'prompt_cache_key',
             'prompt_cache_retention',
-            'reasoning',
             'safety_identifier',
             'stream_options',
             'top_logprobs',
@@ -191,6 +201,8 @@ def warn_ignored_request_fields(request: ResponsesRequest) -> None:
         ignored_fields.append('service_tier')
     if request.truncation not in (None, 'disabled'):
         ignored_fields.append('truncation')
+    reasoning = _as_dict(request.reasoning)
+    ignored_fields.extend(f'reasoning.{key}' for key in reasoning if key != 'effort')
 
     text = _as_dict(request.text)
     if text.get('verbosity') is not None:
@@ -223,12 +235,16 @@ def _image_from_content(part: dict[str, Any], field_name: str) -> dict[str, Any]
     if not ((parsed.scheme in ('http', 'https') and parsed.netloc)
             or (parsed.scheme == 'data' and parsed.path.startswith('image/'))):
         raise ValueError(f'Invalid `image_url` in `{field_name}`. Expected an HTTP(S) URL or image data URL.')
-    if 'detail' in part and part['detail'] not in ('auto', 'low', 'high', 'original'):
+    detail = part.get('detail')
+    if detail is not None and detail not in ('auto', 'low', 'high', 'original'):
         raise ValueError(f'Invalid `detail` in `{field_name}`. Expected auto, low, high, or original.')
     # Match Chat image parameters; decoding and model-specific interpretation
     # remain the responsibility of the existing multimodal processor.
     image_url = dict(url=url)
-    for key in ('detail', 'min_dynamic_patch', 'max_dynamic_patch'):
+    # Responses tool-output images allow null detail, equivalent to omission.
+    if detail is not None:
+        image_url['detail'] = detail
+    for key in ('min_dynamic_patch', 'max_dynamic_patch'):
         if key in part:
             image_url[key] = part[key]
     return dict(type='image_url', image_url=image_url)
@@ -278,12 +294,15 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
         messages.append(dict(role='user', content=request.input))
         return ([dict(role='system', content='\n\n'.join(system_parts))] if system_parts else []) + messages
 
+    previous_item_type = None
     for idx, item in enumerate(request.input):
         item = _as_dict(item)
         if not item:
             raise ValueError(f'Unsupported Responses input item at index {idx}.')
 
         item_type = item.get('type', 'message')
+        adjacent_call = previous_item_type == 'function_call'
+        previous_item_type = item_type
         if item_type == 'function_call':
             call_id = item.get('call_id') or item.get('id')
             name = item.get('name')
@@ -292,21 +311,13 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
             arguments = item.get('arguments') or ''
             if not isinstance(arguments, str):
                 raise ValueError(f'Unsupported `arguments` in function_call item at index {idx}. Expected string.')
-            messages.append(
-                dict(
-                    role='assistant',
-                    content=None,
-                    tool_calls=[
-                        dict(
-                            id=call_id,
-                            type='function',
-                            function=dict(
-                                name=name,
-                                arguments=arguments,
-                            ),
-                        )
-                    ],
-                ))
+            call = dict(id=call_id, type='function', function=dict(name=name, arguments=arguments))
+            # Adjacent calls belong to one parallel invocation. Keep all IDs
+            # visible to templates associating the following tool results.
+            if adjacent_call:
+                messages[-1]['tool_calls'].append(call)
+            else:
+                messages.append(dict(role='assistant', content=None, tool_calls=[call]))
             continue
         if item_type == 'function_call_output':
             call_id = item.get('call_id')
@@ -316,7 +327,7 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
                 dict(
                     role='tool',
                     tool_call_id=call_id,
-                    content=_content_from_input(item.get('output', ''), f'input[{idx}].output'),
+                    content=_content_from_input(item.get('output', ''), f'input[{idx}].output', allow_images=True),
                 ))
             continue
         if item_type != 'message':

@@ -58,6 +58,32 @@ class KPoolDecodeMetadata:
     schedule: Tensor | None
 
 
+@dataclass(frozen=True)
+class KPoolPrefillMetadata:
+    """Layer-independent pooled lengths and page layout for one prefill."""
+
+    counts: Tensor
+    starts: Tensor
+    seq_lens: Tensor
+    group_lengths: Tensor
+    query_starts: Tensor
+    query_ends: Tensor
+    block_table: Tensor
+
+
+def kpool_prefill_metadata_cuda(q_seqlens, kv_seqlens, block_offsets, rows, pool_size, *, page_size=64):
+    """Share causal bounds and cache addressing across prefill layers."""
+    counts, starts, seq, lengths, query_starts, query_ends = kpool_prefill_metadata(
+        q_seqlens, kv_seqlens, rows, pool_size)
+    blocks = kpool_pooled_block_offsets(block_offsets, pool_size, page_size).contiguous()
+    # Sum(floor(kv / pool)) can be up to batch - 1 below floor(sum(kv) / pool).
+    # Give the flatten kernel enough pages to zero this padded tail.
+    tail_pages = (counts.numel() + page_size - 1) // page_size
+    if tail_pages > blocks.size(1):
+        blocks = torch.nn.functional.pad(blocks, (0, tail_pages - blocks.size(1)))
+    return KPoolPrefillMetadata(counts, starts, seq, lengths, query_starts, query_ends, blocks)
+
+
 def kpool_decode_metadata_cuda(attn_metadata, rows, pool_size, with_scores=True, *, page_size=64):
     """Prepare decode metadata once; graph replay refills the same buffers."""
     seq, groups, context, schedule_lengths, table = prepare_kpool_decode_metadata(
@@ -197,7 +223,7 @@ def kpool_compress_quantize_cuda(
 
 def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
                               q_seqlens, kv_seqlens, block_offsets, kv_flatten_size,
-                              pool_size, topk, *, return_groups=False):
+                              pool_size, topk, *, return_groups=False, metadata=None):
     """Score and select all ragged prefill requests without host length
     reads."""
     _validate_query(query_fp8, query_weight)
@@ -205,15 +231,14 @@ def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
     if not rows:
         return torch.empty((0, topk // pool_size if return_groups else topk + pool_size - 1),
                            device=query_fp8.device, dtype=torch.int32)
-    counts, starts, seq, lengths, query_starts, query_ends = kpool_prefill_metadata(
-        q_seqlens, kv_seqlens, rows, pool_size)
     keys, scales = kpool_packed_cache_views(packed_cache, query_fp8.size(-1))
-    blocks = kpool_pooled_block_offsets(block_offsets, pool_size, keys.size(1)).contiguous()
-    # Sum(floor(kv / pool)) can be up to batch - 1 below floor(sum(kv) / pool).
-    # Give the shared flatten kernel enough pages to zero this padded tail.
-    tail_pages = (counts.numel() + keys.size(1) - 1) // keys.size(1)
-    if tail_pages > blocks.size(1):
-        blocks = torch.nn.functional.pad(blocks, (0, tail_pages - blocks.size(1)))
+    if metadata is None:
+        metadata = kpool_prefill_metadata_cuda(
+            q_seqlens, kv_seqlens, block_offsets, rows, pool_size, page_size=keys.size(1))
+    counts, starts = metadata.counts, metadata.starts
+    seq, lengths = metadata.seq_lens, metadata.group_lengths
+    query_starts, query_ends = metadata.query_starts, metadata.query_ends
+    blocks = metadata.block_table
     # Reuse the same-dtype flatten operator by copying both fields as bytes.
     flat_keys, flat_scales = flatten_kv_cache(
         keys.view(torch.uint8).unsqueeze(2), scales.view(torch.uint8).unsqueeze(2),

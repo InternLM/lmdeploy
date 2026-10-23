@@ -43,6 +43,7 @@ class ChatStreamChunk:
     cache_block_ids: list[int] | None = None
     reasoning_tokens: int | None = None
     is_last_delta: bool = True
+    stop_sequence: str | None = None
 
 
 @dataclass
@@ -62,6 +63,7 @@ class ChatResult:
     cache_block_ids: list[Any] = field(default_factory=list)
     remote_token_ids: list[Any] = field(default_factory=list)
     reasoning_tokens: int | None = None
+    stop_sequence: str | None = None
 
 
 @dataclass
@@ -74,6 +76,7 @@ class ChatRunner:
     session: Any
     result_generator: Any
     session_manager: Any
+    prompt_text: str | None = None
     _closed: bool = False
 
     @classmethod
@@ -130,6 +133,7 @@ class ChatRunner:
             session=session,
             result_generator=result_generator,
             session_manager=server_context.session_manager,
+            prompt_text=preprocessed.inputs.get('prompt') if parsed_request.return_prompt_text else None,
         )
 
     async def close(self) -> None:
@@ -191,6 +195,7 @@ class ChatRunner:
                             self.request.tool_choice != 'none'
                             and self.response_parser.tool_parser is not None
                             and finish_reason == 'stop'
+                            and getattr(res, 'stop_sequence', None) is None
                             and streaming_tools):
                         finish_reason = 'tool_calls'
 
@@ -207,6 +212,7 @@ class ChatRunner:
                         cache_block_ids=res.cache_block_ids,
                         reasoning_tokens=self.response_parser.reasoning_tokens,
                         is_last_delta=is_last_delta,
+                        stop_sequence=getattr(res, 'stop_sequence', None) if is_last_delta else None,
                     )
         finally:
             await self.close()
@@ -240,7 +246,8 @@ class ChatRunner:
 
         try:
             text, tool_calls, reasoning_content = self.response_parser.parse_complete(text, final_token_ids)
-            if isinstance(tool_calls, list) and len(tool_calls) and final_res.finish_reason == 'stop':
+            if (isinstance(tool_calls, list) and len(tool_calls) and final_res.finish_reason == 'stop'
+                    and getattr(final_res, 'stop_sequence', None) is None):
                 final_res.finish_reason = 'tool_calls'
         except Exception as err:
             raise RequestError(ErrorCode.INVALID_REQUEST, f'Failed to parse output: {err}') from err
@@ -259,6 +266,7 @@ class ChatRunner:
             cache_block_ids=cache_block_ids,
             remote_token_ids=remote_token_ids,
             reasoning_tokens=self.response_parser.reasoning_tokens,
+            stop_sequence=getattr(final_res, 'stop_sequence', None),
         )
 
 
