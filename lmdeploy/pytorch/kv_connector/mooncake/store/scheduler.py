@@ -15,6 +15,7 @@ from lmdeploy.pytorch.kv_connector.base import (
     KVLoadResult,
     RequestId,
 )
+from lmdeploy.pytorch.long_context import get_last_prefill_save_step
 from lmdeploy.pytorch.paging.state_manager import StateAllocator
 from lmdeploy.utils import get_logger
 
@@ -311,6 +312,8 @@ class MooncakeStoreScheduler:
             if full_blocks <= first_block:
                 continue
             if self._is_hybrid:
+                if self._cache_config.prefill_save_last_only and token_len != get_last_prefill_save_step(request):
+                    continue
                 if (token_len % self._cache_config.prefill_save_alignment != 0
                         or not request.is_prefix_cache_boundary_safe(token_len)):
                     continue

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from lmdeploy.pytorch.long_context import get_last_prefill_save_step
 from lmdeploy.pytorch.messages import SchedulerSequence
 from lmdeploy.utils import get_logger
 
@@ -166,6 +167,8 @@ class StateCheckpointLifecycle:
 
         if step is None:
             step = seq.num_valid_ids
+        if not is_decode and seq._seq_meta.prefill_save_last_only and step != get_last_prefill_save_step(seq):
+            return -1
         lookahead = seq._seq_meta.prefix_cache_token_lookahead
         if lookahead and (is_decode or step + lookahead > seq.input_end_pos or seq.logprob_start_pos >= 0):
             return -1
