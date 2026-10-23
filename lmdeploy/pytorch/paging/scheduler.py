@@ -629,4 +629,5 @@ class Scheduler:
                 external_stats.hit_rate() if self.cache_config.use_mooncake_store else None),
             external_prefix_cache_queries=external_stats.num_query_tokens,
             external_prefix_cache_hits=external_stats.num_hit_tokens,
+            num_evicted_blocks=self.block_trie.stats.num_evicted_blocks,
         )
