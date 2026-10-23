@@ -109,14 +109,18 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
 
                     T.sync_threads()
 
+                    # One inclusive scan replaces a serial histogram walk in
+                    # each bin's thread. Counts remain exact integers.
+                    T.cumsum(histogram)
+                    T.sync_threads()
                     if tidx < _RADIX_SIZE:
                         above_count = T.alloc_var(T.int32)
-                        above_count = 0
-                        for other_bin in T.serial(0, _RADIX_SIZE):
-                            if other_bin > tidx:
-                                above_count += histogram[other_bin]
-                        bin_count = histogram[tidx]
-                        if above_count < rank and above_count + bin_count >= rank:
+                        below_count = T.alloc_var(T.int32)
+                        above_count = histogram[_RADIX_SIZE - 1] - histogram[tidx]
+                        below_count = 0
+                        if tidx > 0:
+                            below_count = histogram[tidx - 1]
+                        if above_count < rank and histogram[_RADIX_SIZE - 1] - below_count >= rank:
                             shared_state[_STATE_SELECTED_BIN] = tidx
                             shared_state[_STATE_COUNT_ABOVE] = above_count
 
@@ -135,8 +139,11 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
                     # change sparse attention's BF16 softmax tile boundaries.
                     # ``rank`` is the number of cutoff ties still needed; take
                     # the lowest logical ids, independent of batch/CTA order.
-                    equal_scan = T.alloc_shared((threads,), T.int32)
-                    selected_scan = T.alloc_shared((threads,), T.int32)
+                    # The low/high halves count greater/equal keys together.
+                    # Each tile has at most 1024 entries, so neither count
+                    # can carry across the 16-bit boundary.
+                    counts_scan = T.alloc_shared((threads // 32, 32), T.uint32)
+                    warp_totals = T.alloc_shared((threads // 32,), T.uint32)
                     emitted = T.alloc_var(T.int32)
                     equal_seen = T.alloc_var(T.int32)
                     emitted = 0
@@ -147,21 +154,37 @@ def _sparse_index_topk_byte_radix_kernel(top_k: int,
                         stable_key = T.cast(0, T.uint32)
                         if position < seqlen:
                             stable_key = _ordered_fp32_key(Scores[row, position], True)
-                        equal_scan[tidx] = T.cast(position < seqlen and stable_key == threshold_key, T.int32)
+                        counts_scan[tidx // 32, tidx % 32] = (
+                            T.cast(position < seqlen and stable_key > threshold_key, T.uint32) +
+                            (T.cast(position < seqlen and stable_key == threshold_key, T.uint32) << 16))
                         T.sync_threads()
-                        T.cumsum(equal_scan)
+                        # One row per warp avoids the shared 1D scan's serial
+                        # walk over all 32 segments in warp zero.
+                        T.cumsum(counts_scan, dim=1)
                         T.sync_threads()
+                        for warp in T.Parallel(threads // 32):
+                            warp_totals[warp] = counts_scan[warp, 31]
+                        T.sync_threads()
+                        T.cumsum(warp_totals)
+                        T.sync_threads()
+                        prefix = T.alloc_var(T.uint32)
+                        prefix = counts_scan[tidx // 32, tidx % 32]
+                        if tidx >= 32:
+                            prefix += warp_totals[tidx // 32 - 1]
+                        greater_prefix = T.cast(T.bitwise_and(prefix, T.uint32(65535)), T.int32)
+                        equal_prefix = T.cast(prefix >> 16, T.int32)
                         selected = position < seqlen and (
                             stable_key > threshold_key or
-                            (stable_key == threshold_key and equal_seen + equal_scan[tidx] <= rank))
-                        selected_scan[tidx] = T.cast(selected, T.int32)
-                        T.sync_threads()
-                        T.cumsum(selected_scan)
-                        T.sync_threads()
+                            (stable_key == threshold_key and equal_seen + equal_prefix <= rank))
                         if selected:
-                            Out[row, emitted + selected_scan[tidx] - 1] = position
-                        emitted += selected_scan[threads - 1]
-                        equal_seen += equal_scan[threads - 1]
+                            selected_prefix = (greater_prefix + T.min(equal_seen + equal_prefix, rank) -
+                                               T.min(equal_seen, rank))
+                            Out[row, emitted + selected_prefix - 1] = position
+                        greater_total = T.cast(
+                            T.bitwise_and(warp_totals[threads // 32 - 1], T.uint32(65535)), T.int32)
+                        equal_total = T.cast(warp_totals[threads // 32 - 1] >> 16, T.int32)
+                        emitted += greater_total + T.min(equal_seen + equal_total, rank) - T.min(equal_seen, rank)
+                        equal_seen += equal_total
                         T.sync_threads()
 
                 else:

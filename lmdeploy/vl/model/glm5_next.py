@@ -256,11 +256,12 @@ class GLM5NextVisionModel(VisionModel):
                                        modality='image')
         if image_size is not None:
             kwargs['images_kwargs'] = {'size': image_size}
-        video_size = get_override_size(self.processor.video_processor,
-                                       mm_processor_kwargs.get('video'),
-                                       modality='video')
-        if video_size is not None:
-            kwargs['videos_kwargs']['size'] = video_size
+        if raw_videos:
+            video_size = get_override_size(self.processor.video_processor,
+                                           mm_processor_kwargs.get('video'),
+                                           modality='video')
+            if video_size is not None:
+                kwargs['videos_kwargs']['size'] = video_size
 
         input_text = input_prompt if isinstance(input_prompt, str) else ''
         outputs = self.processor(text=[input_text],
