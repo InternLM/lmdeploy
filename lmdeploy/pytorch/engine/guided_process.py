@@ -26,8 +26,10 @@ class GuidedDecodingManager:
                         f'to {tokenizer_vocab_len}')
             vocab_size = tokenizer_vocab_len
 
-        # Model configs can define additional EOS tokens (e.g. tool-turn ends)
-        # beyond tokenizer.eos_token_id. They must also survive grammar masks.
+        # Model EOS tokens can include tool-turn ends but omit the tokenizer EOS.
+        # Explicit stop IDs override XGrammar's tokenizer detection, so keep both.
+        if stop_token_ids is not None and tokenizer.eos_token_id is not None:
+            stop_token_ids = list(dict.fromkeys([*stop_token_ids, tokenizer.eos_token_id]))
         if type(tokenizer).__name__ == 'InternS1Tokenizer':
             tokenizer_info = xgr.TokenizerInfo(
                 get_interns1_encoded_vocab(tokenizer, vocab_size),

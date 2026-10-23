@@ -32,6 +32,24 @@ def test_model_eos_is_allowed_only_after_complete_output(tokenizer, stop_token):
     assert manager.is_terminated(matcher)
 
 
+@pytest.mark.parametrize('response_format,output', [
+    ({'type': 'regex_schema', 'regex_schema': 'ok'}, 'ok'),
+    ({'type': 'json_object'}, '{}'),
+])
+@pytest.mark.parametrize('stop_token', [1, 2, 3])
+def test_model_eos_preserves_distinct_tokenizer_eos(tokenizer, stop_token, response_format, output):
+    # Like InternVL3, the model's EOS list need not include the tokenizer EOS.
+    model_eos = [2, 3]
+    manager = GuidedDecodingManager(tokenizer, len(tokenizer), stop_token_ids=model_eos)
+    assert model_eos == [2, 3]
+    matcher = manager.get_processor(1, 1, response_format)
+    assert not allowed(manager, matcher, stop_token)
+    assert matcher.accept_string(output)
+    assert allowed(manager, matcher, stop_token)
+    assert matcher.accept_token(stop_token)
+    assert manager.is_terminated(matcher)
+
+
 def test_default_stop_detection_is_preserved(tokenizer):
     manager = GuidedDecodingManager(tokenizer, len(tokenizer))
     matcher = manager.get_processor(1, 1, {'type': 'regex_schema', 'regex_schema': 'ok'})
