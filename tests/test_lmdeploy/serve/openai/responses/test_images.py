@@ -32,20 +32,21 @@ def _request(parts, **kwargs):
     return dict(model='fake-model', input=[dict(role='user', content=parts)], **kwargs)
 
 
-@pytest.mark.parametrize('detail', [None, 'auto', 'low', 'high', 'original'])
-def test_image_parameters_survive_request_validation(detail):
+@pytest.mark.parametrize('detail_fields', [
+    pytest.param({}, id='omitted'), pytest.param({'detail': None}, id='null'),
+    *[pytest.param({'detail': value}, id=value) for value in ('auto', 'low', 'high', 'original')],
+])
+def test_image_parameters_survive_request_validation(detail_fields):
     image = dict(type='input_image', image_url='https://example.com/image.png',
-                 min_dynamic_patch=1, max_dynamic_patch=4)
-    if detail is not None:
-        image['detail'] = detail
+                 min_dynamic_patch=1, max_dynamic_patch=4, **detail_fields)
     request = ResponsesRequest(**_request([image]))
     before = copy.deepcopy(request.model_dump())
 
     messages = messages_from_input(request)
 
     expected = dict(url=image['image_url'], min_dynamic_patch=1, max_dynamic_patch=4)
-    if detail is not None:
-        expected['detail'] = detail
+    if detail_fields.get('detail') is not None:
+        expected['detail'] = detail_fields['detail']
     assert messages == [dict(role='user', content=[dict(type='image_url', image_url=expected)])]
     assert request.model_dump() == before
 
@@ -227,12 +228,22 @@ def test_http_images_reach_preprocessor_in_order(responses_endpoint, monkeypatch
 
 
 @pytest.mark.parametrize('stream', [False, True])
-def test_http_tool_images_preserve_parallel_calls_and_result_ownership(responses_endpoint, stream):
+@pytest.mark.parametrize('detail_fields', [
+    pytest.param({}, id='omitted'), pytest.param({'detail': None}, id='null'),
+    pytest.param({'detail': 'auto'}, id='auto'),
+])
+def test_http_tool_images_preserve_parallel_calls_and_result_ownership(responses_endpoint, stream, detail_fields):
     _, context = responses_endpoint
     original_preprocess = context.async_engine.preprocess
     decoded = []
 
     async def preprocess(prompt, session, **kwargs):
+        for message in prompt[2:]:
+            image_url = message['content'][0]['image_url']
+            if detail_fields.get('detail') is None:
+                assert 'detail' not in image_url
+            else:
+                assert image_url['detail'] == detail_fields['detail']
         decoded.extend(await MultimodalProcessor.async_parse_multimodal_item(prompt))
         return await original_preprocess(prompt, session, **kwargs)
 
@@ -242,7 +253,7 @@ def test_http_tool_images_preserve_parallel_calls_and_result_ownership(responses
     items = [dict(role='user', content='Read both tool images.')]
     items += [dict(type='function_call', call_id=call_id, name='screenshot', arguments='{}')
               for call_id in ('red', 'blue')]
-    items += [dict(type='function_call_output', call_id=color, output=[_image(color)])
+    items += [dict(type='function_call_output', call_id=color, output=[dict(_image(color), **detail_fields)])
               for color in ('blue', 'red')]
     with TestClient(app) as client:
         response = client.post('/v1/responses', json=dict(model='fake-model', input=items, stream=stream))
@@ -260,15 +271,24 @@ def test_http_tool_images_preserve_parallel_calls_and_result_ownership(responses
 
 
 @pytest.mark.parametrize('stream', [False, True])
-def test_invalid_tool_image_returns_400_before_streaming(responses_endpoint, stream):
+@pytest.mark.parametrize('part, field', [
+    pytest.param(dict(type='input_image', file_id='file_1'), 'file_id', id='file-id'),
+    pytest.param(dict(_image(), detail='invalid'), 'detail', id='invalid-detail'),
+    pytest.param(dict(_image(), detail=0), 'detail', id='non-string-detail'),
+])
+def test_invalid_tool_image_returns_400_before_streaming(responses_endpoint, stream, part, field):
     _, context = responses_endpoint
     app = FastAPI()
     app.include_router(create_responses_router(context))
     with TestClient(app) as client:
         response = client.post('/v1/responses', json=dict(model='fake-model', stream=stream, input=[
-            dict(type='function_call_output', call_id='call_1', output=[dict(type='input_image', file_id='file_1')]),
+            dict(role='user', content='Read the screenshot.'),
+            dict(type='function_call', call_id='call_1', name='screenshot', arguments='{}'),
+            dict(type='function_call_output', call_id='call_1', output=[part]),
         ]))
     assert response.status_code == 400
-    assert 'input[0].output[0]' in response.json()['error']['message']
+    assert response.headers['content-type'].startswith('application/json')
+    assert 'input[2].output[0]' in response.json()['error']['message']
+    assert field in response.json()['error']['message']
     assert context.async_engine.prompt is None
     assert context.sessions == []

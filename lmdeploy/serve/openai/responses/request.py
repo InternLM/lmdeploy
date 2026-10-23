@@ -223,12 +223,16 @@ def _image_from_content(part: dict[str, Any], field_name: str) -> dict[str, Any]
     if not ((parsed.scheme in ('http', 'https') and parsed.netloc)
             or (parsed.scheme == 'data' and parsed.path.startswith('image/'))):
         raise ValueError(f'Invalid `image_url` in `{field_name}`. Expected an HTTP(S) URL or image data URL.')
-    if 'detail' in part and part['detail'] not in ('auto', 'low', 'high', 'original'):
+    detail = part.get('detail')
+    if detail is not None and detail not in ('auto', 'low', 'high', 'original'):
         raise ValueError(f'Invalid `detail` in `{field_name}`. Expected auto, low, high, or original.')
     # Match Chat image parameters; decoding and model-specific interpretation
     # remain the responsibility of the existing multimodal processor.
     image_url = dict(url=url)
-    for key in ('detail', 'min_dynamic_patch', 'max_dynamic_patch'):
+    # Responses tool-output images allow null detail, equivalent to omission.
+    if detail is not None:
+        image_url['detail'] = detail
+    for key in ('min_dynamic_patch', 'max_dynamic_patch'):
         if key in part:
             image_url[key] = part[key]
     return dict(type='image_url', image_url=image_url)

@@ -19,7 +19,7 @@ For `POST /v1/responses`, include:
 - `POST /v1/responses` supports text, user-message images, and tool-result images with a vision-capable model.
 - `input` may be a string or a list of Responses input items.
 - User content arrays can mix `input_text` and `input_image` blocks. Images use `image_url` with an HTTP(S) URL or a base64 image data URL. Multiple images and their order are preserved in both streaming and non-streaming requests.
-- Image `detail` and the `min_dynamic_patch` / `max_dynamic_patch` extensions are forwarded like Chat image parameters; their effect depends on the model's image processor.
+- Image `detail` and the `min_dynamic_patch` / `max_dynamic_patch` extensions are forwarded like Chat image parameters; their effect depends on the model's image processor. An omitted or `null` image `detail` uses the default behavior; no `detail` value is forwarded in either case.
 - `function_call_output.output` can also contain an array of `input_text` and `input_image` blocks. Images stay associated with the result's `call_id`. Consecutive `function_call` items are treated as one parallel tool-call group.
 - Image `file_id` references and images in system/developer/assistant messages are not supported.
 - `instructions`, `developer`, and `system` messages are merged into a single leading system message for chat-template compatibility.
