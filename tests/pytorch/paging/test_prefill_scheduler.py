@@ -468,6 +468,38 @@ def test_multimodal_chunk_reservation_obeys_the_draft_input_shift(method):
     scheduler.shutdown()
 
 
+@pytest.mark.parametrize(('budget', 'ends'), [(8192, [8191, 8300]), (32768, [8300])])
+def test_mtp_prefix_checkpoint_keeps_shifted_image_dependency(budget, ends):
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.engine.executor.base import ExecutorBase
+    from lmdeploy.pytorch.engine.inputs_maker import LongContextChunker
+    from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
+
+    spec = SpecDecodeConfig(model='draft', method='qwen3_5_mtp')
+    cache = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=256,
+                        max_prefill_token_num=budget, prefill_save_alignment=8192,
+                        enable_prefix_caching=True, states_shapes=[((2,), torch.float32)], num_state_caches=4)
+    model = SimpleNamespace(sliding_window=-1, bos_token_id=0)
+    ExecutorBase('', model, cache, SimpleNamespace(), DistConfig(), SimpleNamespace(), specdecode_config=spec)
+    strategy = ARSpecStrategyFactory(model, spec).build_sequence_strategy()
+    scheduler = Scheduler(SchedulerConfig(max_batches=1, max_session_len=16384), cache,
+                          seq_meta=SequenceMeta(64, strategy=strategy))
+    seq = scheduler.add_session(0).add_sequence(range(8300), multimodals={
+        'image': [MultiModalData(torch.zeros(2, 2), 8192, 8256)]})
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+
+    chunker = LongContextChunker(budget)
+    chunker.set_seq(seq)
+    for end in ends:
+        size, multimodals = chunker.next_chunk_size()
+        assert size == end - seq.num_history_ids > 0
+        assert scheduler._prefill_scheduler._next_long_context_chunk_end(seq) == end
+        assert chunker.is_last_chunk() == (end == 8300)
+        assert bool(multimodals and multimodals.get('image')) == (end == 8300)
+        chunker.update_step(SimpleNamespace(is_chunk=True, max_q_seqlen=size))
+    scheduler.shutdown()
+
+
 @pytest.mark.parametrize(('hybrid', 'prefix_caching', 'store', 'ends'), [
     (True, True, True, [512, 800]),
     (True, True, False, [512, 800]),
