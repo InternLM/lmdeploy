@@ -11,9 +11,13 @@ from mmengine import Registry
 from lmdeploy.serve.openai.protocol import DeltaMessage
 from lmdeploy.utils import get_logger
 
+from .token_id_buffer import ControlSpan, LocatedText, ParseBuffer
+from .token_id_scanner import TokenIDProfile, TokenIDScanner, build_token_profile
+
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
+    from lmdeploy.messages import GenerationConfig
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaToolCall
 
     from .reasoning_parser import ReasoningParser
@@ -49,6 +53,40 @@ def validate_parser_names(
                          f'{ToolParserManager.module_dict.keys()}')
 
     return reasoning_parser_name, tool_parser_name
+
+
+def _resolve_token_id_terminals(
+    tokenizer: PreTrainedTokenizerBase | None,
+    reasoning_parser_cls: type[ReasoningParser] | None,
+    tool_parser_cls: type[ToolParser] | None,
+) -> tuple[str, ...]:
+    """Merge declarations and preserve the existing GLM/default entry point."""
+    from .reasoning_parser import ReasoningParser
+    from .tool_parser.glm47_tool_parser import Glm47ToolParser
+
+    if tokenizer is None:
+        return ()
+    reasoning_terminals = getattr(reasoning_parser_cls, 'token_id_terminals', ())
+    # Preserve legacy mixed configurations unless reasoning explicitly opts in.
+    if (tool_parser_cls is Glm47ToolParser and reasoning_parser_cls not in (None, ReasoningParser)
+            and not reasoning_terminals):
+        return ()
+    terminals = reasoning_terminals + getattr(tool_parser_cls, 'token_id_terminals', ())
+    if reasoning_parser_cls is ReasoningParser and tool_parser_cls in (None, Glm47ToolParser):
+        reasoning_tags = (reasoning_parser_cls.get_reasoning_open_tag(),
+                          reasoning_parser_cls.get_reasoning_close_tag())
+        is_glm = tool_parser_cls is Glm47ToolParser
+        if not is_glm:
+            get_added_vocab = getattr(tokenizer, 'get_added_vocab', None)
+            added = get_added_vocab() if get_added_vocab is not None else {}
+            # Identify the protocol before validating required tags, so a
+            # missing control token cannot silently disable the fix.
+            glm_markers = {'[gMASK]', '<sop>', '<|observation|>'}
+            glm_tags = reasoning_tags + Glm47ToolParser.token_id_terminals
+            is_glm = glm_markers.issubset(added) or set(glm_tags).issubset(added)
+        if is_glm:
+            terminals = reasoning_tags + terminals
+    return tuple(dict.fromkeys(terminals))
 
 
 def _parse_tool_call_arguments_dict(arguments: Any) -> dict[str, Any] | None:
@@ -156,6 +194,7 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
 
 class ResponseParser:
     supports_required_tool_choice: ClassVar[bool] = False
+    requires_output_chunks: bool = False
     reasoning_tokens: int | None
 
     @classmethod
@@ -219,6 +258,8 @@ class BaseResponseParser(ResponseParser):
     tool_parser_cls: ClassVar[type[ToolParser] | None] = None
     tokenizer: ClassVar[PreTrainedTokenizerBase | None] = None
     supports_required_tool_choice: ClassVar[bool] = True
+    _token_profile: ClassVar[TokenIDProfile | None] = None
+    _token_profile_key: ClassVar[tuple | None] = None
     MODE_PLAIN: ClassVar[str] = 'plain'
     MODE_REASONING: ClassVar[str] = 'reasoning'
     MODE_TOOL: ClassVar[str] = 'tool'
@@ -231,19 +272,34 @@ class BaseResponseParser(ResponseParser):
         tokenizer: PreTrainedTokenizerBase | None = None,
     ) -> None:
         """Configure reasoning/tool parser classes by registry name."""
-        from .reasoning_parser import ReasoningParserManager
+        from .reasoning_parser import ReasoningParser, ReasoningParserManager
         from .tool_parser import ToolParserManager
 
         reasoning_parser_name, tool_parser_name = validate_parser_names(reasoning_parser_name, tool_parser_name)
         cls.tokenizer = tokenizer
+        cls.reasoning_parser_cls = None
+        cls.tool_parser_cls = None
+        cls._token_profile = None
+        cls._token_profile_key = None
 
         if reasoning_parser_name is not None:
             cls.reasoning_parser_cls = ReasoningParserManager.get(reasoning_parser_name)
-            if tokenizer is not None:
-                cls.reasoning_parser_cls.validate_tokenizer(tokenizer)
 
         if tool_parser_name is not None:
             cls.tool_parser_cls = ToolParserManager.get(tool_parser_name)
+
+        terminals = _resolve_token_id_terminals(tokenizer, cls.reasoning_parser_cls, cls.tool_parser_cls)
+        if terminals:
+            assert tokenizer is not None
+            cls._token_profile = build_token_profile(tokenizer, terminals)
+        if cls.reasoning_parser_cls is not None and tokenizer is not None:
+            reasoning_tags = (cls.reasoning_parser_cls.get_reasoning_open_tag(),
+                              cls.reasoning_parser_cls.get_reasoning_close_tag())
+            # Only the shared default validator is fully covered by the
+            # profile. Preserve additional checks owned by custom parsers.
+            if cls.reasoning_parser_cls is not ReasoningParser or not set(reasoning_tags).issubset(terminals):
+                cls.reasoning_parser_cls.validate_tokenizer(tokenizer)
+        cls._token_profile_key = (tokenizer, cls.reasoning_parser_cls, cls.tool_parser_cls)
 
     @classmethod
     def chat_template_kwargs_from_request(cls, request: ChatCompletionRequest) -> dict:
@@ -322,7 +378,21 @@ class BaseResponseParser(ResponseParser):
         else:
             self._mode = self.MODE_PLAIN
         self._tool_return_mode: str = self._mode
-        self._pending = ''
+        # A profile is valid only for the tokenizer and parser classes checked
+        # together at configuration time (including reasoning-only GLM).
+        cls = type(self)
+        profile = cls._token_profile if cls._token_profile_key == (cls.tokenizer, rcls, tcls) else None
+        self._scanner = TokenIDScanner(cls.tokenizer, profile) if profile is not None else None
+        self.requires_output_chunks = self._scanner is not None
+        terminals = tuple(profile.controls.values()) if profile is not None else ()
+        self._pending = ParseBuffer(token_id_terminals=terminals)
+        self._plain_text_tags = [tag for tag in (self._reasoning_open_tag, self._tool_open_tag)
+                                 if tag and tag not in self._pending.token_id_terminals]
+        self._reasoning_text_tags = [tag for tag in (self._reasoning_close_tag, self._tool_open_tag)
+                                     if tag and tag not in self._pending.token_id_terminals]
+        self._tool_uses_token_ids = bool(
+            profile is not None and self._pending.token_id_terminals.intersection(
+                getattr(tcls, 'token_id_terminals', ())))
         self._after_tool_block = False
 
         self._initialize_reasoning_token_counter()
@@ -336,8 +406,25 @@ class BaseResponseParser(ResponseParser):
         """Parse one streamed chunk into delta message channels.
 
         Args:
-            delta_text: New text fragment produced in this stream step.
-            delta_token_ids: Token ids corresponding to ``delta_text``.
+            delta_text: Native decoded text from this engine result.
+            delta_token_ids: New output IDs from the same result. Preserve
+                them even when ``delta_text`` is empty: incomplete UTF-8 bytes
+                may become visible in a later batch.
+
+        Keyword Args:
+            final (bool): Flush the semantic parser because no more text will
+                follow. This alone does not mark an independently decoded
+                engine result. Defaults to False.
+            engine_final (bool): Mark AsyncEngine's independent final result,
+                as indicated by its finish reason. For token-ID parsing, this
+                discards unrendered pending IDs and retains special tokens
+                when aligning any included stop text. Do not set it merely
+                to flush the parser. Defaults to False.
+
+        Note:
+            With token-ID parsing enabled, pass every native batch in order,
+            including empty-text batches. Call ``bind_generation_config()``
+            first with the effective configuration returned by preprocessing.
 
         Returns:
             A list of ``(delta_message, tool_calls_emitted)`` pairs produced
@@ -349,8 +436,32 @@ class BaseResponseParser(ResponseParser):
             :class:`ResponseParser`. Deltas preserve channel order, including
             reasoning before and after a nested tool block.
         """
+        located = (self._scanner.scan(delta_text, delta_token_ids, engine_final=kwargs.get('engine_final', False))
+                   if self._scanner is not None else LocatedText(delta_text))
+        return self._consume_located(located, delta_token_ids, final=kwargs.get('final', False))
+
+    def bind_generation_config(self, gen_config: GenerationConfig) -> None:
+        """Bind detokenization options before processing any output batches.
+
+        Args:
+            gen_config: Effective configuration returned by engine
+                preprocessing. Its ``skip_special_tokens`` value must match
+                native decoding; the original request configuration may have
+                been adjusted during preprocessing.
+        """
+        if self._scanner is not None:
+            self._scanner.skip_special_tokens = gen_config.skip_special_tokens
+
+    def _consume_located(
+        self,
+        located: LocatedText,
+        delta_token_ids: list[int],
+        *,
+        final: bool,
+    ) -> list[tuple[DeltaMessage, bool]]:
+        delta_text = located.text
         self._update_reasoning_tokens(delta_token_ids)
-        self._stream_final_received = bool(kwargs.get('final', False))
+        self._stream_final_received = final
 
         # Special-case: some backends emit a leading empty delta (no text, no
         # tokens) before any actual content. Tests treat this as a visible empty
@@ -369,7 +480,7 @@ class BaseResponseParser(ResponseParser):
 
         if delta_text:
             self._received_any_text = True
-        self._pending += delta_text
+        self._pending.append(located)
         deltas: list[tuple[DeltaMessage, bool]] = []
 
         while True:
@@ -423,15 +534,14 @@ class BaseResponseParser(ResponseParser):
         if not tags:
             if not self._pending:
                 return None, False
-            out = self._pending
-            self._pending = ''
+            out = self._pending.take(len(self._pending))
             return out, True
 
         # Find the earliest protocol open tag.
         earliest_idx = -1
         earliest_tag = None
         for tag in tags:
-            idx = self._pending.find(tag)
+            idx = self._pending.find_structure(tag)
             if idx >= 0 and (earliest_idx < 0 or idx < earliest_idx):
                 earliest_idx = idx
                 earliest_tag = tag
@@ -444,24 +554,21 @@ class BaseResponseParser(ResponseParser):
         if earliest_idx < 0:
             if not self._pending:
                 return None, False
-            if self._stream_final_received:
-                out = self._pending
-                self._pending = ''
+            if self._stream_final_received or not self._plain_text_tags:
+                out = self._pending.take(len(self._pending))
                 return out, True
-            keep = self._longest_open_tag_prefix_suffix(self._pending, tags)
+            keep = self._longest_open_tag_prefix_suffix(self._pending.text, self._plain_text_tags)
             if keep > 0:
                 if keep >= len(self._pending):
                     return None, False
-                out = self._pending[:-keep]
-                self._pending = self._pending[-keep:]
+                out = self._pending.take(len(self._pending) - keep)
                 return (out if out else None), bool(out)
-            out = self._pending
-            self._pending = ''
+            out = self._pending.take(len(self._pending))
             return out, True
 
         # Emit content before protocol open tag.
-        prefix = self._pending[:earliest_idx]
-        self._pending = self._pending[earliest_idx + len(earliest_tag):]
+        prefix = self._pending.take(earliest_idx)
+        self._pending.take(len(earliest_tag))
         if earliest_tag == self._reasoning_open_tag:
             self._mode = self.MODE_REASONING
         else:
@@ -488,8 +595,8 @@ class BaseResponseParser(ResponseParser):
 
         open_tag = self._reasoning_open_tag
         # Drop explicit open tag if model emits it.
-        if open_tag and self._pending.startswith(open_tag):
-            self._pending = self._pending[len(open_tag):]
+        if open_tag and self._pending.startswith_structure(open_tag):
+            self._pending.take(len(open_tag))
             return None, True
 
         close_tag = self._reasoning_close_tag
@@ -503,7 +610,7 @@ class BaseResponseParser(ResponseParser):
         idx = -1
         matched_tag = ''
         for tag in boundary_tags:
-            tag_idx = self._pending.find(tag)
+            tag_idx = self._pending.find_structure(tag)
             if tag_idx >= 0 and (idx < 0 or tag_idx < idx):
                 idx = tag_idx
                 matched_tag = tag
@@ -511,23 +618,20 @@ class BaseResponseParser(ResponseParser):
         if idx < 0:
             if not self._pending:
                 return None, False
-            if self._stream_final_received:
-                out = self._pending
-                self._pending = ''
+            if self._stream_final_received or not self._reasoning_text_tags:
+                out = self._pending.take(len(self._pending))
                 return out, True
-            keep = self._longest_open_tag_prefix_suffix(self._pending, boundary_tags)
+            keep = self._longest_open_tag_prefix_suffix(self._pending.text, self._reasoning_text_tags)
             if keep > 0:
                 if keep >= len(self._pending):
                     return None, False
-                out = self._pending[:-keep]
-                self._pending = self._pending[-keep:]
+                out = self._pending.take(len(self._pending) - keep)
                 return (out if out else None), bool(out)
-            out = self._pending
-            self._pending = ''
+            out = self._pending.take(len(self._pending))
             return out, True
 
-        reasoning_chunk = self._pending[:idx]
-        self._pending = self._pending[idx + len(matched_tag):]
+        reasoning_chunk = self._pending.take(idx)
+        self._pending.take(len(matched_tag))
         if matched_tag == close_tag:
             self._mode = self.MODE_PLAIN
         else:
@@ -552,7 +656,8 @@ class BaseResponseParser(ResponseParser):
         """
         newline_end = 0
         pending_size = len(self._pending)
-        while newline_end < pending_size and self._pending[newline_end] == '\n':
+        pending_text = self._pending.text
+        while newline_end < pending_size and pending_text[newline_end] == '\n':
             newline_end += 1
 
         if newline_end:
@@ -561,12 +666,13 @@ class BaseResponseParser(ResponseParser):
             if not remaining:
                 if not self._stream_final_received:
                     return False
-            elif self._pending.startswith(tool_tag, newline_end):
-                self._pending = self._pending[newline_end:]
+            elif self._pending.startswith_structure(tool_tag, newline_end):
+                self._pending.take(newline_end)
             elif (
-                remaining < len(tool_tag)
+                tool_tag not in self._pending.token_id_terminals
+                and remaining < len(tool_tag)
                 and not self._stream_final_received
-                and self._pending.startswith(tool_tag[:remaining], newline_end)
+                and pending_text.startswith(tool_tag[:remaining], newline_end)
             ):
                 return False
 
@@ -579,15 +685,15 @@ class BaseResponseParser(ResponseParser):
             raise RuntimeError('Invariant violated: MODE_TOOL requires a tool_parser.')
 
         calls: list[DeltaToolCall] = []
+        # Custom/legacy parsers retain their existing call signature.
+        kwargs = {'boundaries': self._pending.boundaries} if self._tool_uses_token_ids else {}
         consumed = self.tool_parser.feed_tool_block(
-            self._pending,
+            self._pending.text,
             calls,
             final=self._stream_final_received,
+            **kwargs,
         )
-        if consumed == len(self._pending):
-            self._pending = ''
-        elif consumed:
-            self._pending = self._pending[consumed:]
+        self._pending.take(consumed)
         if self.tool_parser.block_closed:
             self._mode = self._tool_return_mode
             self._after_tool_block = True
@@ -605,9 +711,21 @@ class BaseResponseParser(ResponseParser):
             return
 
         self.reasoning_tokens = 0
-        vocab = tokenizer.get_vocab()
+        if self._scanner is not None:
+            vocab = {tag: token_id for token_id, tag in self._scanner.profile.controls.items()}
+            # A partial declaration may cover only tool tags. Reasoning usage
+            # still needs its own IDs; avoid exporting the whole vocabulary.
+            for tag in (self._reasoning_open_tag, self._reasoning_close_tag):
+                if tag and tag not in vocab:
+                    token_id = tokenizer.backend_tokenizer.token_to_id(tag)
+                    if token_id is None:
+                        raise ValueError(f'Missing reasoning token: {tag!r}')
+                    vocab[tag] = token_id
+        else:
+            vocab = tokenizer.get_vocab()
         if self._reasoning_open_tag:
             self._reasoning_start_token_id = vocab[self._reasoning_open_tag]
+        assert self._reasoning_close_tag is not None
         self._reasoning_end_token_id = vocab[self._reasoning_close_tag]
 
     def _update_reasoning_tokens(self, token_ids: list[int]) -> None:
@@ -633,6 +751,25 @@ class BaseResponseParser(ResponseParser):
 
         Args:
             text: Full generated output text.
+            token_ids: All generated output IDs in order. Required for
+                token-ID parsing and used for reasoning token counts.
+
+        Keyword Args:
+            output_chunks: Original native batches as
+                ``(chunk_text, chunk_ids, engine_final)`` tuples. Preserve
+                their order, empty-text batches and the independent final
+                result; supply ``text`` and ``token_ids`` concatenated from
+                these same batches. Token-ID parsing locates boundaries per
+                batch before running the semantic parser over the full text.
+                This preserves the native UTF-8 and final-result context
+                that would be lost by merging or re-decoding all IDs.
+                Ignored when token-ID parsing is disabled.
+
+        Note:
+            Call ``bind_generation_config()`` before token-ID parsing.
+            Without ``output_chunks``, the inputs are treated as one ordinary
+            decode batch. Callers collecting native engine output must supply
+            the original batches, as ChatRunner does.
 
         Returns:
             A tuple ``(content, tool_calls, reasoning_content)``:
@@ -643,7 +780,24 @@ class BaseResponseParser(ResponseParser):
         if self.reasoning_tokens is not None:
             self.reasoning_tokens = 0
             self._counting_reasoning_tokens = self.reasoning_enabled
-        messages = self.stream_chunk(text, token_ids or [], final=True)
+        output_chunks = kwargs.get('output_chunks')
+        if self._scanner is not None and output_chunks is not None:
+            # Preserve native decode boundaries, then run the semantic parser
+            # once. Re-decoding concatenated IDs would lose final/UTF-8 context.
+            spans: list[ControlSpan] = []
+            offset = 0
+            for chunk_text, chunk_ids, engine_final in output_chunks:
+                located = self._scanner.scan(chunk_text, chunk_ids, engine_final=engine_final)
+                assert located.spans is not None
+                if not text.startswith(chunk_text, offset):
+                    raise ValueError('Output chunks do not match complete text')
+                spans.extend(ControlSpan(s.start + offset, s.end + offset, s.tag) for s in located.spans)
+                offset += len(chunk_text)
+            if offset != len(text):
+                raise ValueError('Output chunks do not cover complete text')
+            messages = self._consume_located(LocatedText(text, tuple(spans)), token_ids or [], final=True)
+        else:
+            messages = self.stream_chunk(text, token_ids or [], final=True)
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_deltas: list[DeltaToolCall] = []

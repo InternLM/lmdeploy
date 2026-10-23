@@ -17,6 +17,9 @@ class Glm47ToolParser(XmlToolParser):
     resolving ``arg_name``.
     """
 
+    token_id_terminals = (
+        '<tool_call>', '</tool_call>', '<arg_key>', '</arg_key>', '<arg_value>', '</arg_value>',
+    )
     structural_tag_model = 'glm_4_7'
     arg_key_open_tag = '<arg_key>'
     arg_key_close_tag = '</arg_key>'
@@ -40,8 +43,8 @@ class Glm47ToolParser(XmlToolParser):
         final: bool,
     ) -> tuple[int, str, Literal['arg_start', 'done']] | None:
         """Resolve the leading plain-text function name once."""
-        arg_key_start = payload.find(self.arg_key_open_tag, pos)
-        block_end = payload.find(self.get_tool_close_tag(), pos)
+        arg_key_start = self._find_structure(payload, self.arg_key_open_tag, pos)
+        block_end = self._find_structure(payload, self.get_tool_close_tag(), pos)
         if block_end >= 0 and (arg_key_start < 0 or block_end < arg_key_start):
             return block_end, payload[pos:block_end].strip(), 'done'
         if arg_key_start >= 0:
@@ -53,8 +56,8 @@ class Glm47ToolParser(XmlToolParser):
 
     def _consume_arg_start(self, payload: str, pos: int) -> tuple[int, Literal['arg_name', 'done']] | None:
         """Enter ``arg_name`` or stop before the outer closing tag."""
-        arg_key_start = payload.find(self.arg_key_open_tag, pos)
-        block_end = payload.find(self.get_tool_close_tag(), pos)
+        arg_key_start = self._find_structure(payload, self.arg_key_open_tag, pos)
+        block_end = self._find_structure(payload, self.get_tool_close_tag(), pos)
         if block_end >= 0 and (arg_key_start < 0 or block_end < arg_key_start):
             return block_end, 'done'
         if arg_key_start < 0:
@@ -63,10 +66,10 @@ class Glm47ToolParser(XmlToolParser):
 
     def _consume_arg_name(self, payload: str, pos: int) -> tuple[int, str] | None:
         """Read the argument key and return the raw-value start."""
-        key_end = payload.find(self.arg_key_close_tag, pos)
+        key_end = self._find_structure(payload, self.arg_key_close_tag, pos)
         if key_end < 0:
             return None
-        value_start = payload.find(self.arg_value_open_tag, key_end + len(self.arg_key_close_tag))
+        value_start = self._find_structure(payload, self.arg_value_open_tag, key_end + len(self.arg_key_close_tag))
         if value_start < 0:
             return None
 
