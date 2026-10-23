@@ -6,8 +6,33 @@ import asyncio
 import json
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from lmdeploy.serve.openai.responses import ResponsesRequest
+from lmdeploy.serve.openai.responses import ResponsesRequest, create_responses_router
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_http_unknown_content_is_rejected_with_its_location(responses_endpoint, stream):
+    _, context = responses_endpoint
+    app = FastAPI()
+    app.include_router(create_responses_router(context))
+    payload = dict(model='fake-model', stream=stream, input=[
+        dict(role='assistant', content='History'),
+        dict(role='user', content=[dict(type='input_text', text='Keep this'), dict(type='unsupported_probe')]),
+    ])
+    with TestClient(app) as client:
+        response = client.post('/v1/responses', json=payload)
+
+    assert response.status_code == 400
+    assert response.headers['content-type'].startswith('application/json')
+    error = response.json()['error']
+    assert error['type'] == 'invalid_request_error'
+    assert error['param'] == 'input'
+    assert 'unsupported_probe' in error['message']
+    assert 'input[1].content[1]' in error['message']
+    assert context.async_engine.prompt is None
+    assert context.sessions == []
 
 
 @pytest.mark.parametrize(

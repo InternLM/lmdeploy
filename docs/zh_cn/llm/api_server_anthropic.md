@@ -18,6 +18,7 @@ LMDeploy 提供了轻量级的 Anthropic 兼容接口，方便接入 Anthropic �
 ## 说明与当前限制
 
 - `POST /v1/messages` 支持文本输出、推理输出（`thinking` block）和工具调用输出（`tool_use` block）。
+- 模型支持工具结果图片时，`tool_result.content` 可以包含 text 和 image 块。这些块保留在同一工具结果中，并保留 `tool_use_id` 和内部顺序；工具结果前、后及结果之间的普通 user 内容也保留原有位置。
 - 工具调用需要在启动 API Server 时配置工具解析器（`--tool-call-parser ...`）。
 - 推理内容 block 的提取依赖解析器配置（与 OpenAI 兼容 chat 接口使用同一套解析器）。
 - `count_tokens` 基于 tokenizer 和 chat template 计算，适合用于实用估算。

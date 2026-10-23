@@ -396,8 +396,8 @@ def test_responses_rejects_unsupported_input_items():
             'type': 'message',
             'role': 'user',
             'content': [{
-                'type': 'input_image',
-                'image_url': 'https://example.com/cat.png',
+                'type': 'input_audio',
+                'input_audio': {'data': 'abc', 'format': 'wav'},
             }],
         }],
     )
@@ -405,9 +405,9 @@ def test_responses_rejects_unsupported_input_items():
     try:
         messages_from_input(request)
     except ValueError as err:
-        assert 'input_image' in str(err)
+        assert 'input_audio' in str(err)
     else:
-        raise AssertionError('input_image should be rejected by Text V1')
+        raise AssertionError('input_audio should be rejected')
 
 
 def test_responses_rejects_reasoning_input_items():

@@ -813,11 +813,12 @@ def test_worker_drain_finishes_an_ended_session_with_a_dropped_load_output():
     scheduler.schedule(is_prefill=True)
     scheduler.end_session(85)
 
-    scheduler.finish_kv_transfers_after_worker_drain()
+    scheduler.reset_cache_after_worker_drain()
 
     assert 85 not in scheduler.sessions
     assert connector.finished == [seq.seq_id]
     assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == scheduler.cache_config.num_gpu_blocks
 
 
 def test_completed_async_load_is_admitted_before_an_older_waiter():
@@ -948,3 +949,45 @@ def test_worker_drain_releases_save_leases_when_outputs_are_discarded():
 
     assert scheduler.block_manager.get_num_free_gpu_blocks() == 2
     assert not scheduler.kv_save_coordinator.has_pending()
+
+
+def test_cache_reset_drains_save_leases_before_clearing_local_prefix():
+
+    class _SaveMetadata(KVConnectorMetadata):
+
+        def get_save_block_leases(self):
+            return (KVSaveBlockLease(9, tuple(logical_blocks)), )
+
+    connector = _AsyncLookupConnector([])
+    scheduler = _make_async_lookup_scheduler(connector, num_gpu_blocks=4)
+    seq = scheduler.add_session(90).add_sequence(torch.arange(8))
+    scheduler.block_manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    logical_blocks = seq.logical_blocks.get_real_blocks().copy()
+    connector.build_connector_meta = lambda step_input: _SaveMetadata()
+    scheduler.build_connector_meta([seq], connector_token_lens=(8, ))
+    scheduler.end_session(90)
+    assert scheduler.kv_save_coordinator.has_pending()
+    assert all(scheduler.block_manager.allocator.get_ref_count(logical_blocks) == 2)
+
+    def finish_transfers():
+        # Both the trie and asynchronous writer still own the blocks until
+        # worker drain is acknowledged. Do not delete remote Store contents.
+        assert all(scheduler.block_manager.allocator.get_ref_count(logical_blocks) == 2)
+
+    connector.finish_transfers_after_worker_drain = finish_transfers
+    scheduler.reset_cache_after_worker_drain()
+
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 4
+    assert not scheduler.kv_save_coordinator.has_pending()
+    assert connector.shutdown_calls == 0
+    newcomer = scheduler.add_session(91).add_sequence(torch.arange(9))
+    scheduler.block_trie.match(newcomer)
+    assert newcomer.num_history_ids == 0
+
+
+def test_cache_reset_rejects_live_sessions():
+    scheduler = _make_async_lookup_scheduler(_AsyncLookupConnector([]))
+    scheduler.add_session(92)
+    with pytest.raises(RuntimeError, match='sessions'):
+        scheduler.reset_cache_after_worker_drain()

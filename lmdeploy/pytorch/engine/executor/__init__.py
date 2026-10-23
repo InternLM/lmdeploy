@@ -17,7 +17,8 @@ def _finalize_sparse_mla_cache_policy(model_configs: Sequence[ModelConfig], cach
     operators. Sparse MLA records its physical dtype on ``ModelConfig`` and
     must not expose that choice as generic KV quantization at runtime.
     """
-    sparse_mla_configs = [config for config in model_configs if config.mla_index_topk is not None]
+    sparse_mla_configs = [config for config in model_configs
+                          if config.mla_index_topk is not None or getattr(config, 'supports_mla_fp8_cache', False)]
     if not sparse_mla_configs or cache_config.quant_policy == QuantPolicy.NONE:
         return
     if cache_config.quant_policy != QuantPolicy.FP8:

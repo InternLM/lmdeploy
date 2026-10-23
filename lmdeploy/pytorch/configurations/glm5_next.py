@@ -262,8 +262,9 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         config.num_layers = num_full_layers
         # GLM owns KPool selection in the model adapter, rather than the
         # DeepSeek-V3.2 token indexer selected by mla_index_topk.  Keeping this
-        # unset also preserves the BF16 latent MLA cache policy.
+        # unset avoids selecting the generic token indexer.
         config.mla_index_topk = None
+        config.supports_mla_fp8_cache = True
         config.reserve_dsa_score_workspace = True
         config.k_head_dim = text_config.kv_lora_rank
         # Reuse Qwen3.5's token ring for convolution; recurrent/KPool states
@@ -287,6 +288,10 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
                  text_config.index_head_dim),
                 torch.bfloat16,
                 store_cacheable=False,
+                # Prefix checkpoints are 64-token aligned and index_kpool=4:
+                # the incomplete pool is empty at restore. Keep the runtime
+                # raw ring for chunk continuation and speculative rejection.
+                prefix_checkpoint=False,
             ),
             StateCacheSpec(
                 GLM5_KPOOL_TAIL_SCORE_STATE,
@@ -294,6 +299,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
                  text_config.index_head_dim),
                 torch.bfloat16,
                 store_cacheable=False,
+                prefix_checkpoint=False,
             ),
         ]
         # Scheduler compatibility: named specs own allocation, while this

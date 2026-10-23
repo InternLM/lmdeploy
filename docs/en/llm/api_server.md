@@ -54,6 +54,10 @@ LMDeploy's RESTful API is compatible with the following three OpenAI interfaces:
 - /v1/models
 - /v1/completions
 
+For `/v1/chat/completions`, content arrays must contain objects with a supported `type`.
+Unknown or missing block types and non-object blocks return HTTP 400 before generation, including when `stream=true`.
+The error message identifies the location, for example `messages[0].content[1].type`; unsupported blocks are not silently removed.
+
 You can overview and try out the offered RESTful APIs by the website `http://0.0.0.0:23333` as shown in the below image after launching the service successfully.
 
 ![swagger_ui](https://github.com/InternLM/lmdeploy/assets/4560679/b891dd90-3ffa-4333-92b2-fb29dffa1459)

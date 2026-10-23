@@ -251,37 +251,28 @@ def _merge_system_messages(messages: list[_MessageT]) -> list[_MessageT]:
 
 
 def _convert_user_tool_result(block: ContentBlockParam | dict[str, Any]) -> list[dict[str, Any]]:
-    tool_text = ''
-    tool_image_urls: list[str] = []
     content = _block_get(block, 'content')
-
+    tool_content: str | list[dict[str, Any]] = ''
     if isinstance(content, str):
-        tool_text = content
+        tool_content = content
     elif isinstance(content, list):
-        text_parts: list[str] = []
+        parts: list[dict[str, Any]] = []
         for item in content:
             if _block_get(item, 'type') == 'text':
-                text_parts.append(_block_get(item, 'text', ''))
+                parts.append(dict(type='text', text=_block_get(item, 'text', '')))
             elif _block_get(item, 'type') == 'image':
                 url = _convert_image_source_to_url(_block_get(item, 'source', {}))
                 if url:
-                    tool_image_urls.append(url)
-        tool_text = '\n'.join(text_parts)
-
-    messages = [
-        dict(
-            role='tool',
-            tool_call_id=_block_get(block, 'tool_use_id') or _block_get(block, 'id') or '',
-            content=tool_text or '',
-        )
-    ]
-    if tool_image_urls:
-        messages.append(
-            dict(
-                role='user',
-                content=[dict(type='image_url', image_url=dict(url=url)) for url in tool_image_urls],
-            ))
-    return messages
+                    parts.append(dict(type='image_url', image_url=dict(url=url)))
+        # A separate user image message loses its tool_call_id and interrupts
+        # the contiguous tool-result group used by chat templates.
+        if any(part['type'] == 'image_url' for part in parts):
+            tool_content = parts
+        else:
+            tool_content = '\n'.join(part['text'] for part in parts)
+    return [dict(role='tool',
+                 tool_call_id=_block_get(block, 'tool_use_id') or _block_get(block, 'id') or '',
+                 content=tool_content)]
 
 
 def to_openai_messages(
@@ -340,6 +331,13 @@ def to_openai_messages(
 
             if block_type == 'tool_result':
                 if message.role == 'user':
+                    # Ordinary user content is a boundary between tool groups.
+                    if content_parts:
+                        content = (content_parts[0]['text']
+                                   if len(content_parts) == 1 and content_parts[0]['type'] == 'text'
+                                   else content_parts)
+                        openai_messages.append(dict(role='user', content=content))
+                        content_parts = []
                     openai_messages.extend(_convert_user_tool_result(block))
                 else:
                     result_text = _text_from_block_content(
