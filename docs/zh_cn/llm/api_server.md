@@ -90,6 +90,12 @@ LMDeploy 的 RESTful API 兼容了 OpenAI 以下 3 个接口：
 
 ### 使用 openai 接口
 
+使用默认响应解析器时，`json_object`、`json_schema` 和 `regex_schema` 约束整个生成序列。这些模式通过聊天模板关闭思考，并将受约束的输出放入 `content`，流式响应同样如此；答案中的协议标签字符串按普通数据保留。强制工具调用使用独立的标签语法，仍可包含思考。
+
+最后一条非空 assistant 消息会作为续写前缀。普通文本前缀的续写放入 `content`；若前缀停在显式的 `<think>` 块内，则继续输出到思考通道。
+
+原始 JSON 请求也支持在 `extra_body` 中传入 `enable_thinking` 和 `media_io_kwargs`，顶层值优先。新接入建议使用 `chat_template_kwargs={"enable_thinking": false}`；顶层 `enable_thinking` 参数已弃用。
+
 以下代码是通过 openai 包使用 `v1/chat/completions` 服务的例子。运行之前，请先安装 openai 包: `pip install openai`。
 
 ```python

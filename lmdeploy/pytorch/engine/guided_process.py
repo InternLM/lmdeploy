@@ -13,7 +13,8 @@ logger = logging.getLogger('lmdeploy')
 
 class GuidedDecodingManager:
 
-    def __init__(self, tokenizer: PreTrainedTokenizerBase, vocab_size: int | None):
+    def __init__(self, tokenizer: PreTrainedTokenizerBase, vocab_size: int | None,
+                 stop_token_ids: list[int] | None = None):
         if vocab_size is None:
             vocab_size = tokenizer.vocab_size
 
@@ -25,16 +26,18 @@ class GuidedDecodingManager:
                         f'to {tokenizer_vocab_len}')
             vocab_size = tokenizer_vocab_len
 
-        # XGrammar will automatically detect stop tokens from the tokenizer
+        # Model configs can define additional EOS tokens (e.g. tool-turn ends)
+        # beyond tokenizer.eos_token_id. They must also survive grammar masks.
         if type(tokenizer).__name__ == 'InternS1Tokenizer':
             tokenizer_info = xgr.TokenizerInfo(
                 get_interns1_encoded_vocab(tokenizer, vocab_size),
                 vocab_type=xgr.VocabType.RAW,
                 vocab_size=vocab_size,
-                stop_token_ids=[tokenizer.eos_token_id],
+                stop_token_ids=stop_token_ids if stop_token_ids is not None else [tokenizer.eos_token_id],
             )
         else:
-            tokenizer_info = xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=vocab_size)
+            tokenizer_info = xgr.TokenizerInfo.from_huggingface(
+                tokenizer, vocab_size=vocab_size, stop_token_ids=stop_token_ids)
         self.compiler = xgr.GrammarCompiler(tokenizer_info)
         self.vocab_size = vocab_size
         self.processors: dict[int, dict[int, xgr.GrammarMatcher]] = {}
