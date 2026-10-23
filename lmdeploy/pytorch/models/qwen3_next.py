@@ -8,6 +8,8 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayState, build_gated_delta_replay_state
+from lmdeploy.pytorch.consts import GDN_REPLAY_CURSOR_CACHE_NAME
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
@@ -152,7 +154,10 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         """forward."""
 
         # load states
-        conv_state, recurrent_state = past_key_value[:2]
+        if isinstance(past_key_value, GatedDeltaReplayState):
+            conv_state, recurrent_state = past_key_value.conv_state, past_key_value
+        else:
+            conv_state, recurrent_state = past_key_value[:2]
 
         # inputs proj
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)
@@ -657,13 +662,26 @@ class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         attn_metadata = context.attn_metadata
 
         # make past_key_values
-        state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
-        state_caches = list(zip(state_caches[0], state_caches[1]))
+        replay_enabled = (context.named_state_caches is not None
+                          and GDN_REPLAY_CURSOR_CACHE_NAME in context.named_state_caches)
+        if replay_enabled:
+            buffer_len = self.ctx_mgr.build_ctx.replayssm_buffer_len
+            tmax = self.ctx_mgr.build_ctx.num_spec_tokens + 1
+        else:
+            state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
+            state_caches = list(zip(state_caches[0], state_caches[1]))
         past_key_values = list(past_key_values)
         new_past_key_values = []
         for layer_type in self.config.layer_types:
             if layer_type == 'linear_attention':
-                new_past_key_values.append(state_caches.pop(0))
+                if replay_enabled:
+                    new_past_key_values.append(
+                        build_gated_delta_replay_state(context.named_state_caches,
+                                                       len(new_past_key_values),
+                                                       buffer_len, tmax,
+                                                       getattr(context, 'replayssm_force_flush', None)))
+                else:
+                    new_past_key_values.append(state_caches.pop(0))
             elif layer_type == 'full_attention':
                 new_past_key_values.append(past_key_values.pop(0))
 

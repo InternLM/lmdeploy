@@ -118,3 +118,98 @@ def test_restored_kda_checkpoint_survives_partial_mtp_acceptance():
         torch.testing.assert_close(recurrent[1, history % 4], recurrent[2, history % 4], rtol=1e-4, atol=1e-4)
         window = (history + torch.arange(-width, 0, device='cuda')) % conv.size(-1)
         torch.testing.assert_close(conv[1, :, window], conv[2, :, window], rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+@pytest.mark.parametrize('num_spec_tokens', [0, 3, 5])
+@pytest.mark.parametrize('relocate', [False, True])
+def test_replayssm_prefill_decode_partial_acceptance_and_continuation(monkeypatch, num_spec_tokens, relocate):
+    from lmdeploy.pytorch.backends import gated_delta_rule as meta_module
+    from lmdeploy.pytorch.backends.cuda.kda import CudaKdaImpl
+    from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayCursor, GatedDeltaReplayState
+    from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import advance_gdn_replayssm_standard_cursor
+    from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import commit_gdn_replayssm_spec_cursor
+
+    torch.manual_seed(71)
+    dim, heads, width, length, slots = 128, 2, 4, 16, 3
+    steps = num_spec_tokens + 1
+    baseline, replay = CudaKdaImpl(), CudaKdaImpl()
+    conv = torch.zeros(slots, 3 * heads * dim, width + num_spec_tokens, device='cuda', dtype=torch.bfloat16)
+    checkpoint = torch.zeros(slots, heads, dim, dim, device='cuda')
+    state = GatedDeltaReplayState(
+        conv_state=conv.clone(), checkpoint=checkpoint.clone(),
+        d_ring=torch.zeros(slots, heads, length, dim, device='cuda'),
+        k_ring=torch.zeros(slots, heads, length, dim, device='cuda'),
+        g_ring=torch.zeros(slots, heads, length, dim, device='cuda'),
+        cursor=GatedDeltaReplayCursor(torch.zeros(slots, 3, device='cuda', dtype=torch.int32), length, length, steps),
+        raw_v_ring=torch.zeros(slots, heads, length, dim, device='cuda', dtype=torch.bfloat16),
+        raw_k_ring=torch.zeros(slots, heads, length, dim, device='cuda', dtype=torch.bfloat16),
+        beta_ring=torch.zeros(slots, heads, length, device='cuda'))
+    recurrent = checkpoint[:, None].repeat(1, steps, 1, 1, 1) if num_spec_tokens else checkpoint
+    kwargs = dict(conv_weight=torch.randn(3 * heads * dim, width, device='cuda', dtype=torch.bfloat16) / 8,
+                  conv_bias=None, a_log=torch.randn(heads, device='cuda'),
+                  dt_bias=torch.randn(heads * dim, device='cuda'), num_heads=heads, head_dim=dim, lower_bound=-5.)
+    monkeypatch.setattr(meta_module, 'get_step_ctx_manager',
+                        lambda: SimpleNamespace(build_ctx=SimpleNamespace(num_spec_tokens=num_spec_tokens)))
+    # Restore the complete live tuple, not only its materialized checkpoint.
+    # This exercises backend addressing after relocation, not allocator/Store I/O.
+    banks = [state.conv_state, state.checkpoint, state.d_ring, state.k_ring,
+             state.g_ring, state.raw_v_ring, state.raw_k_ring, state.beta_ring,
+             state.cursor.packed_cursor]
+    history, slot = 0, 1
+    source_snapshots = None
+    for iteration, count in enumerate([65] + [steps] * 18 + [1, 7, steps]):
+        if relocate and iteration == 3:
+            assert state.cursor.packed_cursor[slot, 0].item() > 0
+            source_snapshots = [bank[slot].clone() for bank in banks]
+            for bank in banks:
+                bank[2].copy_(bank[slot])
+            conv[2].copy_(conv[slot])
+            recurrent[2].copy_(recurrent[slot])
+            slot = 2
+        decoding = iteration not in (0, 20)
+        qlen = torch.tensor([count], device='cuda', dtype=torch.int32)
+        ids = torch.tensor([slot], device='cuda')
+        metadata = meta_module.GatedDeltaMeta(count, width, ids, SimpleNamespace(
+            is_decoding=decoding, cu_seqlens_q=torch.tensor([0, count], device='cuda'),
+            q_seqlens=qlen, kv_seqlens=qlen + history))
+        # Verify buffers retain configured Tmax even when only one input is valid.
+        # Do not accidentally test a different, unsupported physical-width ABI.
+        physical_steps = steps if decoding else count
+        inputs = dict(mixed_qkv=torch.randn(1, physical_steps, 3 * heads * dim,
+                                           device='cuda', dtype=torch.bfloat16) / 4,
+                      raw_gate=torch.randn(1, physical_steps, heads * dim, device='cuda', dtype=torch.bfloat16),
+                      raw_beta=torch.randn(1, physical_steps, heads, device='cuda', dtype=torch.bfloat16))
+        if relocate:
+            # Slow decay keeps missing retained history observable after the move.
+            inputs['raw_gate'].sub_(4)
+        expected = baseline.forward(**inputs, **kwargs, metadata=metadata, conv_state=conv, recurrent_state=recurrent)
+        actual = replay.forward(**inputs, **kwargs, metadata=metadata, conv_state=None, recurrent_state=state)
+        torch.testing.assert_close(actual[:, :count], expected[:, :count], atol=2e-4, rtol=1e-2)
+        if not decoding:
+            expected_state = recurrent[slot, (history + count) % steps] if num_spec_tokens else recurrent[slot]
+            torch.testing.assert_close(state.checkpoint[slot], expected_state, atol=2e-4, rtol=1e-2)
+            # The model resets only the scheduled request's cursor after prefill.
+            state.cursor.packed_cursor[slot].zero_()
+            accepted = count
+        elif num_spec_tokens:
+            accepted = min(count, iteration % steps + 1)
+            rejected = torch.tensor([count - accepted], device='cuda', dtype=torch.int32)
+            commit_gdn_replayssm_spec_cursor(state.cursor.packed_cursor, ids, qlen, rejected, length, steps)
+        else:
+            accepted = count
+            advance_gdn_replayssm_standard_cursor(state.cursor.packed_cursor, ids, length)
+        history += accepted
+        if num_spec_tokens:
+            window = (history + torch.arange(-width, 0, device='cuda')) % conv.size(-1)
+            torch.testing.assert_close(state.conv_state[slot, :, window], conv[slot, :, window], rtol=0, atol=0)
+        else:
+            torch.testing.assert_close(state.conv_state[slot], conv[slot], rtol=0, atol=0)
+        for bank in banks:
+            assert torch.count_nonzero(bank[0]) == 0
+        if source_snapshots is not None:
+            for bank, saved in zip(banks, source_snapshots):
+                torch.testing.assert_close(bank[1], saved, rtol=0, atol=0)
+    if not relocate:
+        for bank in banks:
+            assert torch.count_nonzero(bank[2]) == 0

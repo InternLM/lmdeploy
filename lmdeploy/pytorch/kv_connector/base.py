@@ -255,10 +255,12 @@ class KVConnectorBase(ABC):
         kv_caches: Mapping[str, KVCacheValue],
         *,
         state_cache_pools: Sequence[KVCachePool] = (),
+        cache_schema: str = '',
     ) -> None:
         """Register GPU KV-cache tensors with the external store.
 
         ``state_cache_pools`` contains owning pools for non-paged state caches.
+        ``cache_schema`` describes logical layouts hidden by packed byte pools.
         This is a no-op for connectors that do not require memory registration.
         Implementations must not retain temporary tensor views in a way that
         changes ownership of the underlying cache allocation.

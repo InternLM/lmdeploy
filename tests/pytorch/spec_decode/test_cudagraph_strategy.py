@@ -90,6 +90,68 @@ def test_cudagraph_step_metadata_plan_owns_single_token_capture_buffers(monkeypa
     assert plan.max_seqlen_q_calls == [1, 1]
 
 
+def test_standard_replayssm_force_flush_uses_fixed_padded_graph_buffer():
+    from types import SimpleNamespace
+
+    import torch
+
+    from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayCursor, GatedDeltaReplayState
+    from lmdeploy.pytorch.models.utils.cudagraph import (
+        CudaGraphMeta,
+        CudaGraphMixin,
+    )
+
+    model = CudaGraphMixin()
+    graph_meta = CudaGraphMeta(
+        max_batchs=4,
+        max_tokens=4,
+        num_blocks=1,
+        is_decoding=True,
+        device=torch.device('cpu'),
+        is_ssm=True,
+        needs_replayssm_force_flush=True,
+    )
+    graph_meta.input_buffers = model.make_buffers_cudagraph(
+        graph_meta,
+        input_ids=torch.zeros((1, 1), dtype=torch.long),
+        position_ids=torch.zeros((1, 1), dtype=torch.long),
+        past_key_values=[],
+        attn_metadata=None,
+    )
+
+    capture_context = SimpleNamespace(local_adapter_ids=None,
+                                      replayssm_force_flush=None)
+    model.update_context_cudagraph(graph_meta, capture_context)
+    force_flush = capture_context.replayssm_force_flush
+    capture_ptr = force_flush.data_ptr()
+    assert force_flush.tolist() == [False, False, False, False]
+
+    replay_context = SimpleNamespace(
+        local_adapter_ids=None,
+        replayssm_force_flush=torch.tensor([True, False]),
+    )
+    model.update_context_cudagraph(graph_meta, replay_context)
+
+    assert replay_context.replayssm_force_flush.data_ptr() == capture_ptr
+    assert replay_context.replayssm_force_flush.tolist() == [True, False, False, False]
+
+    replay_state = GatedDeltaReplayState(
+        conv_state=torch.empty(0),
+        checkpoint=torch.empty(0),
+        d_ring=torch.empty(0),
+        k_ring=torch.empty(0),
+        g_ring=torch.empty(0),
+        cursor=GatedDeltaReplayCursor(torch.empty(0), L=8, R=8, Tmax=1),
+    )
+    attention_state = object()
+    from lmdeploy.pytorch.models.utils.cudagraph import _bind_replayssm_force_flush
+    rebound = _bind_replayssm_force_flush(
+        [replay_state, attention_state], replay_context.replayssm_force_flush)
+    assert replay_state.force_flush is None
+    assert rebound[0].force_flush is replay_context.replayssm_force_flush
+    assert rebound[1] is attention_state
+
+
 def test_cuda_graph_key_separates_query_len_without_target_hidden_size(monkeypatch):
     from types import SimpleNamespace
 

@@ -6,7 +6,7 @@ from lmdeploy.utils import get_logger, is_bf16_supported
 
 from .builder import AutoModelConfigBuilder
 from .default import DefaultModelConfigBuilder
-from .qwen3_next import _check_env_qwen3_next
+from .qwen3_next import _check_env_qwen3_next, configure_gdn_replayssm
 
 logger = get_logger('lmdeploy')
 
@@ -28,6 +28,7 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
               num_spec_tokens: int = 0,
               **kwargs):
         """build."""
+        enable_replayssm = kwargs.get('enable_replayssm', False) and not is_draft_model
         text_config = hf_config.text_config
         # propagate quantization_config from top-level hf_config into text_config
         quantization_config = getattr(hf_config, 'quantization_config', None)
@@ -80,6 +81,16 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
         cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, ssm_dtype)]
         cfg.is_gated_delta = True
         cfg.check_env_func = _check_env_qwen3_next
+        configure_gdn_replayssm(
+            cfg,
+            text_config,
+            tp=tp,
+            activation_dtype=dtype,
+            ssm_dtype=ssm_dtype,
+            num_spec_tokens=num_spec_tokens,
+            enable_replayssm=enable_replayssm,
+            replayssm_buffer_len=kwargs.get('replayssm_buffer_len', 16),
+        )
 
         cfg.use_mrope = True
 

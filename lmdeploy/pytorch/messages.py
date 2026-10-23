@@ -650,6 +650,7 @@ class SchedulerSequence:
     sampling_param: SamplingParam = field(default_factory=SamplingParam)
     logical_blocks: LogicalTokenBlocks = field(default_factory=LogicalTokenBlocks)
     logical_state: int = -1
+    replayssm_recompute_pending: bool = False
     adapter_name: str = None
     arrive_time: float = 0.0
     input_start_pos: int = 0
@@ -1013,6 +1014,9 @@ class SchedulerSequence:
         if self._seq_meta.enable_prefix_caching or self._seq_meta.enable_mooncake_store:
             self._update_prefix_cache_spans(multimodals)
         self.history_multimodals.add_inputs(multimodals)
+        if self._seq_meta.use_mrope:
+            # Rebuild at the input boundary: old draft positions may overlap a new image.
+            self.history_mrope_pos_ids.resize(0)
 
     def _update_prefix_cache_spans(self, multimodals: MultiModalInputs):
         """Record multimodal span identities for future trie keying."""
