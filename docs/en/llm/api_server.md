@@ -70,6 +70,12 @@ Set `return_prompt_text=true` on `/v1/chat/completions` to include the rendered 
 
 ### Integrate with `OpenAI`
 
+With the default response parser, `json_object`, `json_schema`, and `regex_schema` constrain the entire generated sequence. These modes disable thinking through the chat template and return the constrained output in `content`, including in streams. Protocol-like strings inside the answer remain literal data. Required tool calls use their own tagged grammar and can still include reasoning.
+
+A nonempty final assistant message is treated as a continuation of that message. Plain-text prefills continue in `content`; a prefill ending inside an explicit `<think>` block continues in the reasoning channel.
+
+Raw JSON requests also accept `enable_thinking` and `media_io_kwargs` inside `extra_body`, with top-level values taking precedence. Prefer `chat_template_kwargs={"enable_thinking": false}` for new integrations; the top-level `enable_thinking` option is deprecated.
+
 Here is an example of interaction with the endpoint `v1/chat/completions` service via the openai package.
 Before running it, please install the openai package by `pip install openai`
 

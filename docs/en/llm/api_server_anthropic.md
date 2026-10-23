@@ -18,6 +18,7 @@ For Anthropic `POST` endpoints, include:
 ## Notes and Current Limits
 
 - `POST /v1/messages` supports text output, reasoning output (`thinking` blocks), and tool-use output (`tool_use` blocks).
+- A final assistant text prefill continues in a `text` block. Plain answer continuations are not classified as `thinking` merely because a reasoning parser is configured.
 - `tool_result.content` accepts text and image blocks when the model supports images in tool results. These blocks remain in the same tool result, retaining `tool_use_id` and their internal order. Ordinary user content before, between, or after tool results retains its position.
 - Tool use requires launching API server with a configured tool parser (`--tool-call-parser ...`).
 - Reasoning block extraction depends on parser configuration (same parser stack used by OpenAI-compatible chat endpoint).

@@ -215,7 +215,10 @@ class ChatCompletionRequest(BaseModel):
     seed: int | None = None
     min_new_tokens: int | None = Field(default=None, examples=[None])
     min_p: float | None = None
-    enable_thinking: bool | None = None  # will be deprecated in the future
+    enable_thinking: bool | None = Field(  # will be deprecated in the future
+        default=None,
+        validation_alias=AliasChoices('enable_thinking', AliasPath('extra_body', 'enable_thinking')),
+    )
     return_token_ids: bool | None = False
     return_prompt_text: bool = Field(
         default=False,
@@ -233,6 +236,7 @@ class ChatCompletionRequest(BaseModel):
     # kwargs for media IO
     media_io_kwargs: dict[str, Any] | None = Field(
         default=None,
+        validation_alias=AliasChoices('media_io_kwargs', AliasPath('extra_body', 'media_io_kwargs')),
         description=('Additional kwargs to pass to the media IO processing, keyed by modality.'),
     )
     # kwargs for hf processor
