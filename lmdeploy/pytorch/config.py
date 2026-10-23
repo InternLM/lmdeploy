@@ -169,9 +169,8 @@ class CacheConfig:
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
-    # Internal explicit opt-in preserving legacy request/KV capacity.
-    # Indexed execution and checkpoint/Store ownership share this geometry;
-    # the public default remains legacy.
+    # Internal geometry, derived at executor startup when
+    # LMDEPLOY_ENABLE_COMPACT_STATE=1. The default remains legacy.
     compact_state_capacity: 'CompactStateCapacity | None' = None
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0

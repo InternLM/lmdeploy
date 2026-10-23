@@ -256,6 +256,25 @@ operator-requested block caches synthetic model-layer identities.
 
 ### Indexed compact state
 
+Set `LMDEPLOY_ENABLE_COMPACT_STATE=1` **before starting the Python process** to
+select unified compact state for stateful targets. Unset or `0` keeps legacy
+execution; stateless models allocate no compact state. The variable uses the
+standard boolean parser (`1/true/yes/on`, `0/false/no/off`) and is propagated to
+Ray workers. No test hook or public engine-config flag is needed.
+
+The current supported targets are CUDA Qwen3.5 and GLM-5.3 Flash with AR or
+matching single-layer MTP, using UniExecutor or RayExecutor. Existing guards
+remain in effect: specify a positive `num_gpu_blocks` (CLI `--num-gpu-blocks`)
+to preserve the requested KV capacity; PD, MemDecode and deprecated MP execution
+are not supported. Mooncake Store additionally requires immutable
+`compact_model_identity` and, for MTP, `compact_draft_identity` in
+`kv_connector_extra_config`; CPU KV paging and other connectors are unsupported.
+Enabling the variable does not bypass these checks or silently fall back.
+
+The executor derives request/checkpoint/Store capacities from the existing cache
+settings and the MTP width, with owner-validated input reuse enabled. Internal
+explicit capacity objects remain available for geometry tests.
+
 A recoverable `StateCacheSpec` may explicitly declare `compact_shape`, using
 its existing layer-row convention. It describes one exact-boundary recurrent
 state or ordered K-1 convolution history, not a speculative ring. Absence means

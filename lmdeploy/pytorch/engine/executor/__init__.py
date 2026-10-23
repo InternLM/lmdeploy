@@ -4,7 +4,15 @@ from logging import Logger
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch import envs
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    CompactStateCapacity,
+    DistConfig,
+    MiscConfig,
+    ModelConfig,
+    SpecDecodeConfig,
+)
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
@@ -114,6 +122,18 @@ def build_executor(
     _finalize_sparse_mla_cache_policy(shared_cache_models, cache_config)
     if specdecode_config is not None and specdecode_config.cache_config is not None:
         _finalize_sparse_mla_cache_policy([specdecode_config.model_config], specdecode_config.cache_config)
+
+    if envs.enable_compact_state and model_config.states_shapes and cache_config.compact_state_capacity is None:
+        # CacheConfig.states_shapes is populated later; use the target model here.
+        store_budget = (cache_config.mooncake_state_save_slots
+                        if cache_config.use_mooncake_store and cache_config.kv_transfer_config.is_kv_producer else 0)
+        state_slots = cache_config.num_state_caches
+        if state_slots is None:
+            state_slots = cache_config.max_batches + 2 + cache_config.prefix_cache_state_budget + store_budget
+        width = 1 if specdecode_config is None else 1 + specdecode_config.num_speculative_tokens
+        cache_config.compact_state_capacity = CompactStateCapacity.from_legacy(
+            state_slots, cache_config.prefix_cache_state_budget, store_budget, width, allow_input_alias=True)
+        logger.info('Enable unified compact state: %s', cache_config.compact_state_capacity)
 
     if distributed_executor_backend is None:
         distributed_executor_backend = get_distributed_executor_backend(world_size, dp, device_type, logger)

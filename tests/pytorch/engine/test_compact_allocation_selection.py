@@ -34,7 +34,7 @@ def _configs(width=1, family='qwen3_5'):
                          states_shapes=model.states_shapes, compact_state_capacity=CompactStateCapacity(4, width))
     spec = None if width == 1 else SimpleNamespace(
         method='deepseek_mtp' if family == 'glm5_next' else 'qwen3_5_mtp', num_speculative_tokens=width - 1,
-        model_config=SimpleNamespace(states_shapes=[], num_layers=1), cache_config=replace(cache,
+        model_config=SimpleNamespace(states_shapes=[], num_layers=1, mla_index_topk=None), cache_config=replace(cache,
                                                                                           compact_state_capacity=None))
     return model, cache, spec
 
@@ -46,11 +46,18 @@ def _executor(model, cache, spec=None, **kwargs):
 
 @pytest.mark.parametrize('width', [1, 4, 6])
 @pytest.mark.parametrize('family', ['qwen3_5', 'glm5_next'])
-@pytest.mark.parametrize('allow_input_alias', [False, True])
-def test_worker_retains_exact_plan_for_sizing_real_allocation_and_dummy(monkeypatch, width, family, allow_input_alias):
+@pytest.mark.parametrize('allow_input_alias,from_env', [(False, False), (True, False), (True, True)])
+def test_worker_retains_exact_plan_for_sizing_real_allocation_and_dummy(
+        monkeypatch, width, family, allow_input_alias, from_env):
     model, cache, spec = _configs(width, family)
     cache.compact_state_capacity = replace(cache.compact_state_capacity, allow_input_alias=allow_input_alias)
-    executor = _executor(model, cache, spec)
+    if from_env:
+        from lmdeploy.pytorch import envs
+        monkeypatch.setattr(envs, 'enable_compact_state', True)
+        cache.compact_state_capacity = None
+        executor = _build_from_env(monkeypatch, model, cache, spec)
+    else:
+        executor = _executor(model, cache, spec)
     assert cache.num_state_caches == 4  # max_batches+2 unchanged
     assert cache.compact_state_capacity.request_capacity == 3
     agent = BaseModelAgent.__new__(BaseModelAgent)
@@ -320,3 +327,113 @@ def test_stateless_worker_build_allocates_no_state_ids_or_compact_schema(monkeyp
     assert args == (kv,)
     assert not kwargs['state_cache_pools']
     assert 'state_cache_schema' not in kwargs
+
+
+def _build_from_env(monkeypatch, model, cache, spec=None, backend='uni', device='cuda'):
+    """Use normal executor selection; only replace model loading and
+    workers."""
+    from lmdeploy.pytorch.engine.executor import build_executor, uni_executor
+
+    monkeypatch.setattr(ModelConfig, 'from_pretrained', lambda *a, **kw: model)
+    monkeypatch.setattr(uni_executor, 'UniExecutor', lambda **kw: ExecutorBase(dist_config=DistConfig(), **kw))
+    return build_executor('unused', cache, BackendConfig(), DistConfig(), MiscConfig(),
+                          device_type=device, distributed_executor_backend=backend, specdecode_config=spec)
+
+
+@pytest.mark.parametrize('value,enabled', [(None, False), ('0', False), ('1', True), ('true', True),
+                                         ('YES', True), ('on', True), ('false', False), ('no', False),
+                                         ('off', False), ('invalid', None)])
+def test_compact_env_boolean_and_ray_propagation(monkeypatch, value, enabled):
+    import runpy
+
+    from lmdeploy.pytorch import envs
+
+    monkeypatch.delenv('LMDEPLOY_ENABLE_COMPACT_STATE', raising=False)
+    if value is not None:
+        monkeypatch.setenv('LMDEPLOY_ENABLE_COMPACT_STATE', value)
+    if enabled is None:
+        with pytest.raises(ValueError, match='LMDEPLOY_ENABLE_COMPACT_STATE'):
+            runpy.run_path(envs.__file__)
+        return
+    loaded = runpy.run_path(envs.__file__)
+    assert loaded['enable_compact_state'] is enabled
+    forwarded = loaded['get_all_envs']()
+    if value is None:
+        assert 'LMDEPLOY_ENABLE_COMPACT_STATE' not in forwarded
+    else:
+        assert forwarded['LMDEPLOY_ENABLE_COMPACT_STATE'] == value
+
+
+@pytest.mark.parametrize('width', [1, 4, 6])
+@pytest.mark.parametrize('family', ['qwen3_5', 'qwen3_5_moe', 'glm5_next'])
+@pytest.mark.parametrize('apc', [False, True])
+@pytest.mark.parametrize('role', [None, 'kv_producer', 'kv_consumer', 'kv_both'])
+def test_env_selects_normal_startup_geometry(monkeypatch, width, family, apc, role):
+    from lmdeploy.messages import KVTransferConfig, PytorchEngineConfig
+    from lmdeploy.pytorch import envs
+    from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
+
+    monkeypatch.setattr(envs, 'enable_compact_state', True)
+    model, _, spec = _configs(width, family)
+    transfer = None if role is None else KVTransferConfig(
+        kv_connector='MooncakeStoreConnector', kv_role=role,
+        kv_connector_extra_config=dict(compact_model_identity='target-rev', compact_draft_identity='draft-rev'))
+    cache = ConfigBuilder.build_cache_config(PytorchEngineConfig(
+        max_batch_size=2, num_gpu_blocks=32, enable_prefix_caching=apc,
+        prefix_cache_state_budget=2 if apc else 0, mooncake_state_save_slots=3, kv_transfer_config=transfer))
+    assert not cache.states_shapes and cache.compact_state_capacity is None
+    _build_from_env(monkeypatch, model, cache, spec)
+    store = 3 if role in ('kv_producer', 'kv_both') else 0
+    assert cache.compact_state_capacity == CompactStateCapacity(4, width, 2 if apc else 0, store,
+                                                               allow_input_alias=True)
+    assert cache.num_state_caches == 4 + (2 if apc else 0) + store
+    assert cache.num_gpu_blocks == 32
+    assert spec is None or spec.cache_config.compact_state_capacity is None
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('stateful', [False, True])
+def test_env_off_and_stateless_keep_legacy(monkeypatch, enabled, stateful):
+    from lmdeploy.pytorch import envs
+
+    monkeypatch.setattr(envs, 'enable_compact_state', enabled)
+    model, cache, _ = _configs()
+    if not stateful:
+        model.states_shapes, model.state_cache_specs, cache.states_shapes = [], [], []
+    cache.compact_state_capacity = None
+    _build_from_env(monkeypatch, model, cache)
+    assert (cache.compact_state_capacity is not None) == (enabled and stateful)
+
+
+@pytest.mark.parametrize('case', ['device', 'family', 'mp', 'auto_kv', 'identity'])
+def test_env_keeps_existing_fail_closed_guards(monkeypatch, case):
+    from lmdeploy.messages import KVTransferConfig
+    from lmdeploy.pytorch import envs
+
+    monkeypatch.setattr(envs, 'enable_compact_state', True)
+    model, cache, _ = _configs()
+    cache.compact_state_capacity = None
+    if case == 'family':
+        model.hf_config.model_type = 'unadapted'
+    elif case == 'auto_kv':
+        cache.num_gpu_blocks = 0
+    elif case == 'identity':
+        cache.kv_transfer_config = KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_consumer')
+    with pytest.raises((ValueError, NotImplementedError), match='Compact'):
+        _build_from_env(monkeypatch, model, cache, backend='mp' if case == 'mp' else 'uni',
+                        device='cpu' if case == 'device' else 'cuda')
+
+
+def test_env_preserves_explicit_internal_geometry(monkeypatch):
+    from lmdeploy.pytorch import envs
+
+    monkeypatch.setattr(envs, 'enable_compact_state', True)
+    model, cache, _ = _configs()
+    cache.num_state_caches = 6
+    cache.compact_state_capacity = None
+    _build_from_env(monkeypatch, model, cache)
+    assert cache.compact_state_capacity == CompactStateCapacity(6, 1, allow_input_alias=True)
+    # Explicit disjoint layouts remain valid for internal geometry tests.
+    cache.compact_state_capacity = CompactStateCapacity(6, 1, allow_input_alias=False)
+    _build_from_env(monkeypatch, model, cache)
+    assert not cache.compact_state_capacity.allow_input_alias
