@@ -318,18 +318,21 @@ def parse_tool_calls(index: int, text: str):
 
     while index < len(text):
         index, _, stop_token = _read_until_stop(index, text, [f'<{dsml_token}invoke', tool_calls_end_token])
-        assert _ == '>\n', 'Tool call format error'
+        if _ != '>\n':
+            raise ValueError('Tool call format error')
 
         if stop_token == tool_calls_end_token:
             break
 
-        assert stop_token is not None, 'Missing special token'
+        if stop_token is None:
+            raise ValueError('Missing special token')
 
         index, tool_name_content, stop_token = _read_until_stop(
             index, text, [f'<{dsml_token}parameter', f'</{dsml_token}invoke'])
 
         p_tool_name = re.findall(r'^\s*name="(.*?)">\n$', tool_name_content, flags=re.DOTALL)
-        assert len(p_tool_name) == 1, 'Tool name format error'
+        if len(p_tool_name) != 1:
+            raise ValueError('Tool name format error')
         tool_name = p_tool_name[0]
 
         tool_args: dict[str, tuple[str, str]] = {}
@@ -337,15 +340,18 @@ def parse_tool_calls(index: int, text: str):
             index, param_content, stop_token = _read_until_stop(index, text, [f'/{dsml_token}parameter'])
 
             param_kv = re.findall(r'^ name="(.*?)" string="(true|false)">(.*?)<$', param_content, flags=re.DOTALL)
-            assert len(param_kv) == 1, 'Parameter format error'
+            if len(param_kv) != 1:
+                raise ValueError('Parameter format error')
             param_name, string, param_value = param_kv[0]
 
-            assert param_name not in tool_args, 'Duplicate parameter name'
+            if param_name in tool_args:
+                raise ValueError('Duplicate parameter name')
             tool_args[param_name] = (param_value, string)
 
             index, content, stop_token = _read_until_stop(
                 index, text, [f'<{dsml_token}parameter', f'</{dsml_token}invoke'])
-            assert content == '>\n', 'Parameter format error'
+            if content != '>\n':
+                raise ValueError('Parameter format error')
 
         tool_call = decode_dsml_to_arguments(tool_name=tool_name, tool_args=tool_args)
         tool_calls.append(tool_call)
@@ -364,27 +370,30 @@ def parse_message_from_completion_text(text: str, thinking_mode: str):
     if is_thinking:
         index, content_delta, stop_token = _read_until_stop(index, text, [thinking_end_token, tool_calls_start_token])
         reasoning_content = content_delta
-        assert stop_token == thinking_end_token, 'Invalid thinking format'
+        if stop_token != thinking_end_token:
+            raise ValueError('Invalid thinking format')
 
     index, content_delta, stop_token = _read_until_stop(index, text, [eos_token, tool_calls_start_token])
     summary_content = content_delta
     if stop_token == tool_calls_start_token:
         is_tool_calling = True
     else:
-        assert stop_token == eos_token, 'Invalid summary format'
+        if stop_token != eos_token:
+            raise ValueError('Invalid summary format')
 
     if is_tool_calling:
         index, stop_token, tool_calls = parse_tool_calls(index, text)
 
         index, tool_ends_text, stop_token = _read_until_stop(index, text, [eos_token])
-        assert not tool_ends_text, 'Unexpected content after tool calls'
+        if tool_ends_text:
+            raise ValueError('Unexpected content after tool calls')
 
-    assert len(text) == index and stop_token in [eos_token, None], 'Unexpected content at end'
+    if len(text) != index or stop_token not in [eos_token, None]:
+        raise ValueError('Unexpected content at end')
 
     for sp_token in [bos_token, eos_token, thinking_start_token, thinking_end_token, dsml_token]:
-        assert (
-            sp_token not in summary_content and sp_token not in reasoning_content
-        ), 'Unexpected special token in content'
+        if sp_token in summary_content or sp_token in reasoning_content:
+            raise ValueError('Unexpected special token in content')
 
     return {
         'role': 'assistant',
