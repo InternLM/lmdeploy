@@ -13,7 +13,8 @@ from lmdeploy.serve.openai.protocol import ChatCompletionTokenLogprob, ChoiceLog
 def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
                                      token_ids: list[int] | None = None,
                                      logprobs: list[dict[int, float]]
-                                     | None = None):
+                                     | None = None,
+                                     top_logprobs: int = 0):
     """Create openai LogProbs for chat.completion.
 
     Args:
@@ -21,6 +22,8 @@ def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
         token_ids (list[int]): output token ids.
         logprobs (list[dict[int, float]]): the top logprobs for each output
             position.
+        top_logprobs (int): the number of most likely tokens to return at
+            each output position.
     Returns:
         ChoiceLogprobs: logprob result.
     """
@@ -33,7 +36,15 @@ def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
                                           bytes=[],
                                           logprob=0.0,
                                           top_logprobs=[])
-        for top_id, prob in tops.items():
+        top_ids = sorted(tops, key=tops.get, reverse=True)
+        if len(top_ids) > top_logprobs:
+            # Drop the extra selected row the engine appends when the
+            # selected token is outside the model top-k.
+            top_ids = [top_id for top_id in top_ids if top_id != token_id]
+        top_ids = top_ids[:top_logprobs]
+        for top_id, prob in sorted(tops.items(), key=lambda x: x[1], reverse=True):
+            if top_id != token_id and top_id not in top_ids:
+                continue
             token = tokenizer.convert_ids_to_tokens(top_id)
             if isinstance(token, bytes):
                 _bytes = list(token)
@@ -44,7 +55,7 @@ def _create_chat_completion_logprobs(tokenizer: PreTrainedTokenizerBase,
                 item.token = token
                 item.bytes = _bytes
                 item.logprob = prob
-            else:
+            if top_id in top_ids:
                 item.top_logprobs.append(
                     TopLogprob(token=token, bytes=_bytes, logprob=prob))
         content.append(item)
