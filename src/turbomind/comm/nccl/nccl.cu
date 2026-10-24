@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <numeric>
 #include <type_traits>
 #include <unordered_map>
 
@@ -12,6 +11,7 @@
 
 #include "src/turbomind/comm/device_comm.h"
 #include "src/turbomind/comm/host_comm.h"
+#include "src/turbomind/comm/token_ownership.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/utils/cuda_utils.h"
@@ -421,50 +421,36 @@ public:
         NCCLCHECK(ncclCommCount(comm0, &tp0));
         NCCLCHECK(ncclCommCount(comm1, &tp1));
 
-        const int inner_tp = global_n_ranks_ / local_token_nums_count;
+        const int inner_tp = std::min(tp0, tp1);
 
-        std::vector<std::tuple<int, int, int>> tasks;
+        TM_CHECK(tp0 % inner_tp == 0 && tp1 % inner_tp == 0);
+
+        std::vector<OwnedTokenRows> tasks;
         tasks.reserve(global_n_ranks_);
 
-        for (int i = 0, offset = 0; i < global_n_ranks_; ++i) {
-            const int num   = local_token_nums[i / inner_tp];
-            const int slice = (num + inner_tp - 1) / inner_tp;
-            const int first = std::min(num, i % inner_tp * slice);
-            const int last  = std::min(num, first + slice);
-            tasks.emplace_back(offset, first, last - first);
-            if ((i + 1) % inner_tp == 0) {
-                offset += num;
-            }
+        for (int i = 0; i < global_n_ranks_; ++i) {
+            tasks.push_back(ComputeTokenOwnership(i, tp0, tp1, local_token_nums));
         }
-
-        const int rank0 = rank(group0);
-        const int rank1 = rank(group1);
-        TM_CHECK_EQ(rank0, global_rank_ % tp0);
-        TM_CHECK_EQ(rank1, global_rank_ % tp1);
-
-        const int rs_begin = global_rank_ - rank0;
-        const int rs_end   = rs_begin + tp0;
-
-        const int ag_begin = global_rank_ - rank1;
-        const int ag_end   = ag_begin + tp1;
 
         // group0: reduce
         if (tp0 > 1) {
             NCCLCHECK(ncclGroupStart());
-            for (int i = rs_begin; i < rs_end; ++i) {
-                if (auto& [offset, first, num] = tasks[i]; num > 0) {
-                    char*     buff = (char*)hidden + elem_size * (offset + first) * dim;
-                    const int root = i - rs_begin;
-                    NCCLCHECK(ncclReduce(buff, buff, (size_t)num * dim, nccl_type, ncclSum, root, comm0, stream));
+            for (int i = 0; i < global_n_ranks_; ++i) {
+                const auto& owned = tasks[i];
+                const int   num   = owned.row_count();
+                if (num > 0) {
+                    char* buff = (char*)hidden + elem_size * owned.global_begin() * dim;
+                    NCCLCHECK(ncclReduce(buff, buff, (size_t)num * dim, nccl_type, ncclSum, i % tp0, comm0, stream));
                 }
             }
             NCCLCHECK(ncclGroupEnd());
         }
 
-        if (auto& [offset, first, num] = tasks[global_rank_]; num > 0) {
-            char* buff = (char*)hidden + elem_size * (offset + first) * dim;
+        const auto& owned = tasks[global_rank_];
+        if (const int num = owned.row_count(); num > 0) {
+            char* buff = (char*)hidden + elem_size * owned.global_begin() * dim;
             TM_SCOPE_CALL(invokeResidualBiasRMSNorm(buff,
-                                                    (char*)residual + elem_size * first * dim,
+                                                    (char*)residual + elem_size * owned.local_begin() * dim,
                                                     weights,
                                                     bias,
                                                     type,
@@ -478,11 +464,12 @@ public:
         // group1: all-gather
         if (tp1 > 1) {
             NCCLCHECK(ncclGroupStart());
-            for (int i = ag_begin; i < ag_end; ++i) {
-                if (auto& [offset, first, num] = tasks[i]; num > 0) {
-                    char*     buff = (char*)hidden + elem_size * (offset + first) * dim;
-                    const int root = i - ag_begin;
-                    NCCLCHECK(ncclBroadcast(buff, buff, (size_t)num * dim, nccl_type, root, comm1, stream));
+            for (int i = 0; i < global_n_ranks_; ++i) {
+                const auto& peer_owned = tasks[i];
+                const int   peer_num   = peer_owned.row_count();
+                if (peer_num > 0) {
+                    char* buff = (char*)hidden + elem_size * peer_owned.global_begin() * dim;
+                    NCCLCHECK(ncclBroadcast(buff, buff, (size_t)peer_num * dim, nccl_type, i % tp1, comm1, stream));
                 }
             }
             NCCLCHECK(ncclGroupEnd());

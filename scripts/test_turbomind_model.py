@@ -22,6 +22,9 @@ Stdout is plain text in short sections, for example:
   cache_prompt: 'auto'
   cache_generation: 'auto'
   cache_prompt_boundary_skip: 1
+  speculative_method: None
+  speculative_model: ''
+  num_speculative_tokens: 1
   prompt_count: 1
   prompt_source: default
   CUDA_LAUNCH_BLOCKING: 1    (only if --debug was passed)
@@ -66,6 +69,9 @@ Usage (from repo root):
       [--cache-checkpoint-interval N] \\
       [--cache-prompt {all,auto}] \\
       [--cache-generation {all,auto,none}] \\
+      [--speculative-method METHOD] \\
+      [--speculative-model MODEL] \\
+      [--num-speculative-tokens N] \\
       [--debug]
 
 Optional prompts: repeat --prompt for multiple strings, or --prompt-file for a JSON
@@ -174,10 +180,33 @@ class ResolvedPrompts(NamedTuple):
     source: str  # 'default' | 'cli' | 'file'
 
 
+class SpeculativeMetrics(NamedTuple):
+    num_drafts: int
+    num_draft_tokens: int
+    num_accepted_tokens: int
+    num_accepted_tokens_per_pos: list[int]
+
+    @property
+    def draft_acceptance_rate(self) -> float:
+        return self.num_accepted_tokens / self.num_draft_tokens
+
+    @property
+    def mean_acceptance_length(self) -> float:
+        return 1 + self.num_accepted_tokens / self.num_drafts
+
+    @property
+    def per_position_acceptance_rate(self) -> list[float]:
+        return [
+            accepted / self.num_drafts
+            for accepted in self.num_accepted_tokens_per_pos
+        ]
+
+
 class SmokeResult(NamedTuple):
     create_s: float
     infer_s: float
     responses: list[PromptResult]
+    speculative_metrics: SpeculativeMetrics | None
 
 
 def _set_hf_cache(path: str) -> None:
@@ -311,6 +340,9 @@ Optional engine params:
     --cache-checkpoint-interval
     --cache-prompt
     --cache-generation
+    --speculative-method
+    --speculative-model
+    --num-speculative-tokens
 Exit 0: load + inference complete. Exit 1: exception (traceback on stderr). Exit 2: usage error.
 """,
     )
@@ -397,6 +429,22 @@ Exit 0: load + inference complete. Exit 1: exception (traceback on stderr). Exit
               f'(default: {DEFAULT_CACHE_PROMPT_BOUNDARY_SKIP})'),
     )
     parser.add_argument(
+        '--speculative-method',
+        default=None,
+        help='Speculative decoding method (default: disabled)',
+    )
+    parser.add_argument(
+        '--speculative-model',
+        default='',
+        help='Speculative draft model id or local path (default: empty)',
+    )
+    parser.add_argument(
+        '--num-speculative-tokens',
+        type=int,
+        default=1,
+        help='Number of speculative draft tokens (default: 1)',
+    )
+    parser.add_argument(
         '--prompt',
         action='append',
         default=None,
@@ -451,6 +499,9 @@ def run_smoke_infer(
     cache_prompt: str = DEFAULT_CACHE_PROMPT,
     cache_generation: str = DEFAULT_CACHE_GENERATION,
     cache_prompt_boundary_skip: int = DEFAULT_CACHE_PROMPT_BOUNDARY_SKIP,
+    speculative_method: str | None = None,
+    speculative_model: str = '',
+    num_speculative_tokens: int = 1,
     debug: bool = False,
 ) -> SmokeResult:
     _validate_engine_params(
@@ -471,6 +522,7 @@ def run_smoke_infer(
         os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
     from lmdeploy import GenerationConfig, TurbomindEngineConfig, pipeline
+    from lmdeploy.messages import SpeculativeConfig
 
     engine_config = TurbomindEngineConfig(
         async_=async_,
@@ -482,7 +534,7 @@ def run_smoke_infer(
         cp=cp,
         dp=dp,
         ep=ep,
-        enable_metrics=False,
+        enable_metrics=speculative_method is not None,
         communicator=communicator,
         enable_prefix_caching=enable_prefix_caching,
         cache_checkpoint_interval=cache_checkpoint_interval,
@@ -491,14 +543,70 @@ def run_smoke_infer(
         cache_prompt_boundary_skip=cache_prompt_boundary_skip,
     )
     gen_config = GenerationConfig(max_new_tokens=max_new_tokens, do_sample=False)
+    speculative_config = (
+        SpeculativeConfig(
+            method=speculative_method,
+            model=speculative_model,
+            num_speculative_tokens=num_speculative_tokens,
+        ) if speculative_method is not None else None)
 
+    if speculative_config is not None:
+        from lmdeploy.metrics import loggers as metrics_loggers
+
+        # The smoke report consumes the in-process logging counters directly;
+        # it does not create the optional Prometheus exporter.
+        class _NoopPrometheusStatLogger:
+
+            def __init__(self, model_name, max_model_len, dp_rank):
+                pass
+
+            def record_schedule(self, stats):
+                pass
+
+            def record_iteration(self, stats):
+                pass
+
+            def record_specdecode(self, stats):
+                pass
+
+            def record_finish(self, stats):
+                pass
+
+        metrics_loggers.PrometheusStatLogger = (
+            _NoopPrometheusStatLogger)
+
+    speculative_metrics = None
     t0 = time.perf_counter()
     with pipeline(model_id, backend_config=engine_config, log_level='WARNING',
-                  trust_remote_code=True) as pipe:
+                  trust_remote_code=True, speculative_config=speculative_config) as pipe:
         create_s = time.perf_counter() - t0
-        t1 = time.perf_counter()
-        out = pipe(resolved.prompts, gen_config=gen_config, do_preprocess=True)
-        infer_s = time.perf_counter() - t1
+        metrics_processor = None
+        if speculative_config is not None:
+            from lmdeploy.metrics.metrics_processor import metrics_processor
+            pipe._run(
+                fn=lambda: metrics_processor.start_metrics_handler(
+                    enable_metrics=True)).result()
+        try:
+            t1 = time.perf_counter()
+            out = pipe(resolved.prompts, gen_config=gen_config, do_preprocess=True)
+            infer_s = time.perf_counter() - t1
+            if metrics_processor is not None:
+                pipe._run(
+                    coro=metrics_processor.metrics_queue.join()).result()
+                logger = pipe.async_engine.stat_loggers[0]
+                speculative_metrics = SpeculativeMetrics(
+                    num_drafts=logger.num_drafts,
+                    num_draft_tokens=logger.num_draft_tokens,
+                    num_accepted_tokens=logger.num_accepted_tokens,
+                    num_accepted_tokens_per_pos=[
+                        int(x)
+                        for x in logger.num_accepted_tokens_per_pos
+                    ],
+                )
+        finally:
+            if metrics_processor is not None:
+                pipe._run(
+                    coro=metrics_processor.stop_metrics_handler()).result()
 
     if not isinstance(out, list):
         out = [out]
@@ -518,7 +626,7 @@ def run_smoke_infer(
             input_token_len=getattr(res, 'input_token_len', -1),
             generate_token_len=getattr(res, 'generate_token_len', -1),
         ))
-    return SmokeResult(create_s, infer_s, responses)
+    return SmokeResult(create_s, infer_s, responses, speculative_metrics)
 
 
 def print_report(
@@ -542,6 +650,9 @@ def print_report(
     cache_prompt: str = DEFAULT_CACHE_PROMPT,
     cache_generation: str = DEFAULT_CACHE_GENERATION,
     cache_prompt_boundary_skip: int = DEFAULT_CACHE_PROMPT_BOUNDARY_SKIP,
+    speculative_method: str | None = None,
+    speculative_model: str = '',
+    num_speculative_tokens: int = 1,
     debug: bool = False,
 ) -> None:
     print('--- setup ---')
@@ -562,6 +673,9 @@ def print_report(
     print(f'cache_generation: {cache_generation!r}')
     print(f'cache_prompt_boundary_skip: {cache_prompt_boundary_skip}')
     print(f'max_prefill_token_num: {max_prefill_token_num}')
+    print(f'speculative_method: {speculative_method!r}')
+    print(f'speculative_model: {speculative_model!r}')
+    print(f'num_speculative_tokens: {num_speculative_tokens}')
     print(f'prompt_count: {len(resolved.prompts)}')
     print(f'prompt_source: {resolved.source}')
     if debug:
@@ -570,6 +684,23 @@ def print_report(
     print('--- timing ---')
     print(f'pipeline load: {result.create_s:.2f} s')
     print(f'inference: {result.infer_s:.2f} s')
+    if result.speculative_metrics is not None:
+        metrics = result.speculative_metrics
+        rates = ', '.join(
+            f'{rate:.3f}'
+            for rate in metrics.per_position_acceptance_rate)
+        print()
+        print('--- speculative metrics ---')
+        print(f'num_drafts: {metrics.num_drafts}')
+        print(f'num_draft_tokens: {metrics.num_draft_tokens}')
+        print(f'num_accepted_tokens: {metrics.num_accepted_tokens}')
+        print(
+            f'draft_acceptance_rate: '
+            f'{metrics.draft_acceptance_rate * 100:.2f}%')
+        print(
+            f'mean_acceptance_length: '
+            f'{metrics.mean_acceptance_length:.2f}')
+        print(f'per_position_acceptance_rate: {rates}')
     print()
     print('--- tokens ---')
     for item in result.responses:
@@ -611,6 +742,9 @@ def run_smoke_test(
     cache_prompt: str = DEFAULT_CACHE_PROMPT,
     cache_generation: str = DEFAULT_CACHE_GENERATION,
     cache_prompt_boundary_skip: int = DEFAULT_CACHE_PROMPT_BOUNDARY_SKIP,
+    speculative_method: str | None = None,
+    speculative_model: str = '',
+    num_speculative_tokens: int = 1,
     debug: bool = False,
     emit_report: bool = True,
 ) -> SmokeResult:
@@ -639,6 +773,9 @@ def run_smoke_test(
         cache_prompt=cache_prompt,
         cache_generation=cache_generation,
         cache_prompt_boundary_skip=cache_prompt_boundary_skip,
+        speculative_method=speculative_method,
+        speculative_model=speculative_model,
+        num_speculative_tokens=num_speculative_tokens,
         debug=debug,
     )
     if emit_report:
@@ -662,6 +799,9 @@ def run_smoke_test(
             cache_prompt=cache_prompt,
             cache_generation=cache_generation,
             cache_prompt_boundary_skip=cache_prompt_boundary_skip,
+            speculative_method=speculative_method,
+            speculative_model=speculative_model,
+            num_speculative_tokens=num_speculative_tokens,
             debug=debug,
         )
     return result
@@ -691,6 +831,9 @@ def main() -> None:
         cache_prompt=args.cache_prompt,
         cache_generation=args.cache_generation,
         cache_prompt_boundary_skip=args.cache_prompt_boundary_skip,
+        speculative_method=args.speculative_method,
+        speculative_model=args.speculative_model,
+        num_speculative_tokens=args.num_speculative_tokens,
         debug=args.debug,
         emit_report=True,
     )
