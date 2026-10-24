@@ -1,7 +1,6 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 
 #include <future>
-#include <limits>
 #include <random>
 
 #include "src/turbomind/turbomind.h"
@@ -15,7 +14,6 @@
 #include "src/turbomind/engine/cache_registry.h"
 #include "src/turbomind/engine/engine.h"
 #include "src/turbomind/engine/gateway.h"
-#include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/model_request.h"
 
 #include "src/turbomind/models/language_model.h"
@@ -23,6 +21,7 @@
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/model_root.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/speculative/registry.h"
 #include "src/turbomind/models/vision_model.h"
 
 #include "src/turbomind/kernels/gemm/tuner/params.h"
@@ -79,7 +78,8 @@ struct TurboMind::Impl {
                                               data_type_,
                                               engine_param_.session_len,
                                               weights_[0]->text_model_ptr()->vocab_size,
-                                              weights_[0]->text_model_ptr()->hidden_units);
+                                              weights_[0]->text_model_ptr()->hidden_units,
+                                              engine_param_.spec_num_draft_tokens);
     }
 
     core::Module* CreateRoot(int index)
@@ -323,52 +323,49 @@ void TurboMind::Impl::CreateEngine(int index)
 
     ctx.comm.h_comm->Sync();
 
-    const double cache_ratio = param.cache_max_block_count;
-    TM_CHECK_GT(cache_ratio, 0.) << "object-cache path expects 0 < cache_max_block_count < 1";
-    TM_CHECK_LT(cache_ratio, 1.) << "object-cache path no longer accepts cache_max_block_count as a block count";
-
-    size_t free_bytes{}, total_bytes{};
-    TM_CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
-    free_bytes = AllReduce(ctx.comm.h_tp_group, free_bytes, comm::RedOp::kMin);
-
-    const size_t cache_bytes = static_cast<size_t>(static_cast<double>(free_bytes) * cache_ratio);
-    TM_CHECK_GT(cache_bytes, size_t{0});
-    TM_CHECK_LE(cache_bytes, static_cast<size_t>(std::numeric_limits<core::ssize_t>::max()));
-
-    TM_LOG_INFO("Object cache budget: {:.2f} MB from free {:.2f} MB and ratio {:.3f}",
-                cache_bytes / (1024. * 1024.),
-                free_bytes / (1024. * 1024.),
-                cache_ratio);
-
-    Buffer cache_region{static_cast<core::ssize_t>(cache_bytes), data_type_v<int8_t>, core::Context::device_alloc()};
-    ObjectAllocator alloc{std::move(cache_region)};
-    CacheRegistry   cache_registry;
+    CacheRegistry cache_registry;
     cache_registry.set_checkpoint_min_interval(param.cache_checkpoint_interval);
 
-    // create model
-    LanguageModel model{cache_registry, param, ctx, *weights_[index]->text_model_ptr(), phases_};
+    const ModelWeight* draft_weights  = weights_[index]->draft_model_ptr();
+    const ModelWeight& target_weights = *weights_[index]->text_model_ptr();
+
+    const size_t prefix_before = cache_registry.prefix().accumulation_bytes();
+    auto model = std::make_unique<LanguageModel>(cache_registry, param, ctx, target_weights, phases_);
+    const size_t target_end = cache_registry.prefix().accumulation_bytes();
+
+    std::unique_ptr<SpeculativeModel> spec_model;
+    if (!param.spec_method.empty()) {
+        auto& registry = SpeculativeModelRegistry::Instance();
+        TM_CHECK(registry.Contains(param.spec_method)) << "unknown speculative method '" << param.spec_method << "'";
+        TM_CHECK(draft_weights) << "speculative method '" << param.spec_method << "' has no draft weight tree";
+        spec_model = registry.Create(
+            param.spec_method, {cache_registry, param, ctx, *model, *draft_weights, phases_});
+    }
+    const size_t combined_end = cache_registry.prefix().accumulation_bytes();
+    const bool successor_embeddings =
+        spec_model && spec_model->requires_successor_input_embeddings();
+
+    TM_LOG_INFO("Target KV block bytes: {}", target_end - prefix_before);
+    TM_LOG_INFO("Draft KV block bytes: {}", combined_end - target_end);
+    TM_LOG_INFO("Total KV block bytes: {}", combined_end - prefix_before);
 
     // create vision model for VLM checkpoints; null for text-only (no vision sub-tree attached)
     std::unique_ptr<VisionModel> vision_model;
     if (auto* vw = weights_[index]->vision_model_ptr()) {
-        vision_model = CreateVisionModel(*vw, param, ctx, phases_);
+        vision_model = CreateVisionModel(*vw, param, ctx, phases_, successor_embeddings);
     }
-
-    cache_registry.RegisterObjectIds(alloc);
 
     // create engine
     engines_[index] = Engine{param,
-                             std::move(alloc),
                              std::move(cache_registry),
                              std::move(model),
                              std::move(vision_model),
+                             std::move(spec_model),
                              ctx,
                              *gateway_,
                              engine_param_.devices[index],
                              queue_id_[index],
                              phases_};
-
-    core::Context::stream().Sync();
 
     ctx.comm.h_comm->Sync();
 

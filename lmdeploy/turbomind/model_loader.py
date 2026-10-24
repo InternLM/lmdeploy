@@ -15,12 +15,22 @@ class ModelLoader:
     to the C++ runtime.
     """
 
-    def __init__(self, model, model_comm, gpu_count, model_path,
-                 data_type, engine_config):
+    def __init__(self,
+                 model,
+                 model_comm,
+                 gpu_count,
+                 model_path,
+                 data_type,
+                 engine_config,
+                 *,
+                 draft_model=None,
+                 draft_model_path=None):
         self.model = model
+        self.draft_model = draft_model
         self.model_comm = model_comm
         self.gpu_count = gpu_count
         self.model_path = model_path
+        self.draft_model_path = draft_model_path
         self.data_type = data_type
         self.engine_config = engine_config
         self._bind_runtime()
@@ -59,33 +69,52 @@ class ModelLoader:
             [(e * mlp_tp.size + m) % dense_size
              for e, m in zip(ep.ranks, mlp_tp.ranks)])
 
-        self.model.bind_runtime(
-            ctx=ctx,
-            root_handles=[mc.root(g) for g in range(self.gpu_count)],
-            attn_tp=attn_tp,
-            mlp_tp=mlp_tp,
-            ep=ep,
-            model_tp=model_tp,
-            dense_tp=dense_tp,
-        )
+        models = (
+            (self.model,)
+            if self.draft_model is None
+            else (self.model, self.draft_model))
+        for model in models:
+            model.bind_runtime(
+                ctx=ctx,
+                root_handles=[
+                    mc.root(g)
+                    for g in range(self.gpu_count)],
+                attn_tp=attn_tp,
+                mlp_tp=mlp_tp,
+                ep=ep,
+                model_tp=model_tp,
+                dense_tp=dense_tp)
+
+    @staticmethod
+    def _export_one(model, model_path):
+        checkpoint = create_checkpoint(
+            model_path,
+            mappings=getattr(
+                model, '_loader_mappings', []))
+        try:
+            root = Prefix(checkpoint)
+            if getattr(model, 'prefix', ''):
+                root = root + model.prefix
+            model.model(root)
+        finally:
+            checkpoint.close()
 
     def export(self):
-        ckpt = create_checkpoint(
-            self.model_path,
-            mappings=getattr(self.model, '_loader_mappings', []))
-        try:
-            self.model.model(Prefix(ckpt))
-        finally:
-            ckpt.close()
+        self._export_one(
+            self.model, self.model_path)
+        if self.draft_model is not None:
+            self._export_one(
+                self.draft_model,
+                self.draft_model_path)
         torch.cuda.empty_cache()
 
     def export_iter(self):
-        ckpt = create_checkpoint(
-            self.model_path,
-            mappings=getattr(self.model, '_loader_mappings', []))
-        try:
-            self.model.model(Prefix(ckpt))
+        self._export_one(
+            self.model, self.model_path)
+        yield -1
+        if self.draft_model is not None:
+            self._export_one(
+                self.draft_model,
+                self.draft_model_path)
             yield -1
-        finally:
-            ckpt.close()
         torch.cuda.empty_cache()

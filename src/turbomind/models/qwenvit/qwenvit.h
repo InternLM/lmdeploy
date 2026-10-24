@@ -24,7 +24,11 @@ class QwenVitWeight;
 ///   - RMSNorm vs LayerNorm   (Qwen2):    norm_type
 class QwenVit: public VisionModel {
 public:
-    QwenVit(const EngineParam& engine, const Context& ctx, const QwenVitWeight& weights, int phases);
+    QwenVit(const EngineParam&   engine,
+            const Context&       ctx,
+            const QwenVitWeight& weights,
+            int                  phases,
+            bool                 successor_embeddings);
 
     ~QwenVit() override;
 

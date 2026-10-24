@@ -54,11 +54,16 @@ __global__ void BanBadWordsKernel(T*                logits,
                                   const int* const* token_ids_ptrs,
                                   const int*        sequence_length,
                                   const int*        bad_words,
+                                  const bool*       logits_active,
                                   size_t            bad_words_len,
                                   int               vocab_size)
 {
     const int id        = blockIdx.x * blockDim.x + threadIdx.x;
     const int batch_idx = blockIdx.y;
+
+    if (logits_active != nullptr && !logits_active[batch_idx]) {
+        return;
+    }
 
     const int* base_bad_words         = bad_words + batch_idx * 2 * bad_words_len;
     const int* base_bad_words_offsets = base_bad_words + bad_words_len;
@@ -101,6 +106,7 @@ void BanBadWords(Tensor&             logits,
                  const Buffer_<int*> token_ids_ptrs,
                  const Buffer_<int>& sequence_length,
                  const Tensor_<int>& bad_words,
+                 const bool*         logits_active,
                  cudaStream_t        stream)
 {
 
@@ -117,6 +123,7 @@ void BanBadWords(Tensor&             logits,
                                                       token_ids_ptrs.data(),
                                                       sequence_length.data(),
                                                       bad_words.data(),
+                                                      logits_active,
                                                       bad_words_len,
                                                       vocab_size);
     };
