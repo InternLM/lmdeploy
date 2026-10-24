@@ -71,20 +71,32 @@ h:
     extra:
       max-batch-size: 256
       cache-max-entry-count: 0.7
-      prefix-cache-decode-state-interval: 1024
       prefix-cache-state-budget: 256
+      max-prefill-token-num: 64
   backends:
-  - name: turbomind
-    communicators:
-    - nccl
   - name: pytorch
     communicators:
     - nccl
   test_coverage:
   - prefix_cache
-  quantization:
-    pytorch:
-    - fp8
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 2
+    dp: 4
+    ep: 8
+    extra:
+      max-batch-size: 256
+      cache-max-entry-count: 0.7
+      prefix-cache-decode-state-interval: 1024
+      prefix-cache-state-budget: 256
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - prefix_cache_evaluate
 - model_type:
   - chat
   - vl
@@ -105,7 +117,6 @@ h:
   - longtext_benchmark
   - longtext_evaluate
   - mllm_evaluate
-  - prefix_cache
 ascend:
 - model_type:
   - chat
