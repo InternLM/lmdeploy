@@ -34,6 +34,9 @@ class Kda(nn.Module):
         num_heads: int,
         head_dim: int,
         lower_bound: float,
+        *,
+        checkpoint_state: torch.Tensor | None = None,
+        checkpoint_offsets: torch.Tensor | None = None,
     ) -> torch.Tensor:
         return self.impl.forward(
             mixed_qkv=mixed_qkv,
@@ -49,4 +52,6 @@ class Kda(nn.Module):
             num_heads=num_heads,
             head_dim=head_dim,
             lower_bound=lower_bound,
+            checkpoint_state=checkpoint_state,
+            checkpoint_offsets=checkpoint_offsets,
         )

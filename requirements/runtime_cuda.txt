@@ -3,6 +3,8 @@
 accelerate>=0.29.3
 aiohttp
 apache-tvm-ffi==0.1.11; sys_platform == "linux" and "aarch64" not in platform_machine and "arm" not in platform_machine
+# Official FLA; this pin does not install FlashKDA or enable internal checkpoints.
+# Native KDA prefill dependencies are documented in docs/en/advance/flash_kda.md.
 flash-linear-attention==0.5.2
 opencv-python-headless
 peft<=0.14.0
