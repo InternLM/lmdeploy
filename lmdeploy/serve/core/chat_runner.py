@@ -14,6 +14,7 @@ from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
 from lmdeploy.serve.utils.request_cleanup import cleanup_result_generators
 
 from .exceptions import ErrorCode, RequestError
+from .model_name import model_matches
 
 
 @dataclass
@@ -106,7 +107,7 @@ class ChatRunner:
             options.gen_config_kwargs,
         )
         adapter_name = options.adapter_name
-        if adapter_name is None and parsed_request.model != server_context.async_engine.model_name:
+        if adapter_name is None and not model_matches(parsed_request.model, server_context.async_engine):
             adapter_name = parsed_request.model
 
         engine_messages = None if options.input_ids is not None else parsed_request.messages

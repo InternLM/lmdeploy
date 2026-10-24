@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
+from lmdeploy.serve.core.model_name import model_matches
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
 from lmdeploy.serve.openai.errors import (
     create_error_response,
@@ -136,7 +137,7 @@ def register(router: APIRouter, server_context) -> None:
 
         model_name = request.model
         adapter_name = None
-        if model_name != server_context.async_engine.model_name:
+        if not model_matches(model_name, server_context.async_engine):
             adapter_name = model_name  # got a adapter name
         request_id = str(request.session_id)
         created_time = int(time.time())

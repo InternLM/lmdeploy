@@ -7,7 +7,8 @@ from http import HTTPStatus
 
 from fastapi import Request
 
-from ..adapter import get_model_list
+from lmdeploy.serve.core.model_name import model_or_adapter_matches
+
 from ..errors import create_error_response
 from ..protocol import MessagesRequest
 
@@ -54,7 +55,8 @@ def _validate_headers(raw_request: Request):
 
 
 def _validate_model(request: MessagesRequest, server_context):
-    if request.model not in get_model_list(server_context):
+    if not model_or_adapter_matches(request.model, server_context.async_engine,
+                                    getattr(server_context.engine_config, 'adapters', None)):
         return create_error_response(
             HTTPStatus.NOT_FOUND,
             f'The model {request.model!r} does not exist.',
