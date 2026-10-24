@@ -32,9 +32,11 @@ class TextModel(ABC):
 
     _loader_mappings: list = []
 
-    def __init__(self, cfg: PretrainedConfig, *, resolver):
+    def __init__(self, cfg: PretrainedConfig, *, resolver, prefix: str = ''):
         self.cfg: PretrainedConfig = cfg
         self._resolver = resolver
+        self.prefix = prefix
+        self.tap_layer_ids: list[int] = []
 
     @property
     def _vocab_size(self) -> int:

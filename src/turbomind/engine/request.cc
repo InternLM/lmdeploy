@@ -44,21 +44,43 @@ std::ostream& operator<<(std::ostream& os, const GenerationConfig& c)
     return os;
 }
 
-void UpdateState(Request& r, int status, int seq_len)
+void UpdateState(Request& request, RequestState state)
 {
     try {
-        auto new_state = new RequestState{status, seq_len};
-        auto old_state = r.state->exchange(new_state);
-        if (!old_state && r.forward_cb) {
-            r.forward_cb();
+        auto next     = new RequestState{std::move(state)};
+        auto previous = request.state->exchange(next);
+        if (!previous && request.forward_cb) {
+            request.forward_cb();
         }
     }
     catch (const std::exception& e) {
-        TM_LOG_ERROR("Error invoking callback for ({}): {}", r.id, e.what());
+        TM_LOG_ERROR("Error invoking callback for ({}): {}", request.id, e.what());
     }
     catch (...) {
-        TM_LOG_ERROR("Unknown error invoking callback for ({})", r.id);
+        TM_LOG_ERROR("Unknown error invoking callback for ({})", request.id);
     }
+}
+
+std::function<void()> MakeRequestSignal(std::shared_ptr<Request> request, int status, int seq_len)
+{
+    RequestState state;
+    state.status  = status;
+    state.seq_len = seq_len;
+
+    if (request->metrics) {
+        auto&            metrics = *request->metrics;
+        std::scoped_lock lock(metrics.spec_mutex);
+
+        if (!metrics.num_accepted_tokens_per_pos.empty()) {
+            state.num_drafts                  = metrics.num_drafts;
+            state.num_draft_tokens            = metrics.num_draft_tokens;
+            state.num_accepted_tokens         = metrics.num_accepted_tokens;
+            state.num_accepted_tokens_per_pos = metrics.num_accepted_tokens_per_pos;
+        }
+    }
+
+    return
+        [request = std::move(request), state = std::move(state)]() mutable { UpdateState(*request, std::move(state)); };
 }
 
 }  // namespace turbomind

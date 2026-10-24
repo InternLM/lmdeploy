@@ -15,13 +15,16 @@ namespace turbomind {
 std::unique_ptr<VisionModel> CreateVisionModel(const VisionModelWeight& weights,  //
                                                const EngineParam&       engine,
                                                const Context&           ctx,
-                                               int                      phases)
+                                               int                      phases,
+                                               bool                     successor_embeddings)
 {
     if (std::string_view{weights.type()} == "QwenVitWeight") {
-        return std::make_unique<QwenVit>(engine, ctx, static_cast<const QwenVitWeight&>(weights), phases);
+        return std::make_unique<QwenVit>(
+            engine, ctx, static_cast<const QwenVitWeight&>(weights), phases, successor_embeddings);
     }
     if (std::string_view{weights.type()} == "InternVitWeight") {
-        return std::make_unique<InternVit>(engine, ctx, static_cast<const InternVitWeight&>(weights), phases);
+        return std::make_unique<InternVit>(
+            engine, ctx, static_cast<const InternVitWeight&>(weights), phases, successor_embeddings);
     }
 
     TM_LOG_FATAL("Unsupported vision model weight type: {}", weights.type());
