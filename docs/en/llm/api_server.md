@@ -70,40 +70,20 @@ Set `return_prompt_text=true` on `/v1/chat/completions` to include the rendered 
 
 ### Return more chat logprobs with PyTorch
 
-Start the server with `--backend pytorch --logprobs-mode raw_logprobs` and set
-`logprobs=true` and `top_logprobs` in `/v1/chat/completions` requests. PyTorch
-accepts `0 <= top_logprobs <= vocab_size`, using the loaded model's output
-vocabulary rather than the tokenizer's vocabulary size. This also applies to
-multi-process engines and both streaming and non-streaming requests. Counts
-above the model vocabulary return HTTP 400 before generation. TurboMind retains
-the Chat API limit of 20.
+Start with `--backend pytorch --logprobs-mode raw_logprobs`. Chat requests accept
+`0 <= top_logprobs <= vocab_size`, using the loaded model's output vocabulary,
+including multi-process engines. For a 154880-token model, add
+`"logprobs": true, "top_logprobs": 154880, "max_completion_tokens": 1` to a request.
+Oversized counts return HTTP 400; TurboMind retains its limit of 20.
 
-For a model with an output vocabulary of 154880, a one-token probe is:
+Raw logprobs precede temperature, penalties, and sampling filters. For distribution
+analysis, include the selected token's outer score when absent from `top_logprobs`.
+Low-precision scores have rounding error; a full returned distribution can be renormalized for analysis.
+Unmapped vocabulary IDs use `token_id:<id>` with unavailable bytes. Full-vocabulary
+responses are large; keep the output-token budget small.
 
-```json
-{
-  "model": "your-model",
-  "messages": [{"role": "user", "content": "Hello"}],
-  "max_completion_tokens": 1,
-  "logprobs": true,
-  "top_logprobs": 154880
-}
-```
-
-`raw_logprobs` returns log-softmax values before temperature, penalties, and
-sampling filters. Returning only 20 candidates does not limit the engine's
-`top_p` sampling, but those candidates may have insufficient total probability
-for client-side nucleus analysis. Include the selected token's outer `logprob`
-when it is absent from `top_logprobs`. Full-vocabulary responses can be large;
-start with a small output-token budget.
-
-Some models pad their output vocabulary beyond the tokenizer's entries. Those
-IDs are returned as `token_id:<id>` with `bytes=null` (null fields may be omitted
-in streams), preserving their scores without inventing decoded text.
-
-This extension applies to Chat Completions. Responses currently ignores
-`top_logprobs`; Messages' `return_logprob` extension returns only generated-token
-scores, not a candidate distribution.
+Streaming and non-streaming Chat are supported. Responses ignores `top_logprobs`;
+Messages' `return_logprob` returns only generated-token scores.
 
 ### Integrate with `OpenAI`
 

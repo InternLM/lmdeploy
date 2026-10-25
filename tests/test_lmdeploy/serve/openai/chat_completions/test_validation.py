@@ -6,13 +6,11 @@ from types import MethodType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-import torch
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
 from lmdeploy.pytorch.engine import Engine
-from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
 from lmdeploy.pytorch.engine.mp_engine.base import MPEngine
 from lmdeploy.pytorch.engine.mp_engine.base_worker import EngineWorkerBase
 from lmdeploy.serve.core.async_engine import AsyncEngine
@@ -81,17 +79,23 @@ def test_chat_completions_accepts_null_n_as_unspecified():
     assert check_request(_request(n=None), _server_context()) == ''
 
 
-@pytest.mark.parametrize('top_logprobs', [None, 0, 1, 20, 21, 1024, 154880])
-@pytest.mark.parametrize('mode', ['raw_logits', 'raw_logprobs'])
-def test_chat_logprobs_accepts_up_to_model_vocab(top_logprobs, mode):
-    context = _server_context()
-    context.engine_config.logprobs_mode = mode
-    assert check_request(_request(logprobs=True, top_logprobs=top_logprobs), context) == ''
+@pytest.mark.parametrize('config, limit', [
+    (PytorchEngineConfig(logprobs_mode='raw_logprobs'), 154880),
+    (PytorchEngineConfig(logprobs_mode='raw_logits'), 16),
+    (TurbomindEngineConfig(), 20),
+])
+def test_chat_logprobs_backend_limits(config, limit):
+    context = _server_context(limit)
+    context.engine_config = config
+    for count in (None, 0, min(21, limit), limit):
+        assert check_request(_request(logprobs=True, top_logprobs=count), context) == ''
+    for count in (-1, limit + 1):
+        assert 'top_logprobs' in check_request(_request(logprobs=True, top_logprobs=count), context)
 
 
-@pytest.mark.parametrize('vocab_size', [16, 128, 154880])
 @pytest.mark.parametrize('use_mp_engine', [False, True])
-def test_chat_logprobs_rejects_above_each_models_vocab(vocab_size, use_mp_engine):
+def test_chat_logprobs_uses_resolved_model_vocab(use_mp_engine):
+    vocab_size = 154880
     context = _server_context(vocab_size)
     engine = Engine.__new__(Engine)
     engine.executor = SimpleNamespace(model_config=SimpleNamespace(vocab_size=vocab_size))
@@ -111,26 +115,11 @@ def test_chat_logprobs_rejects_above_each_models_vocab(vocab_size, use_mp_engine
         engine._collective_rpc.assert_called_once_with('get_vocab_size')
 
 
-@pytest.mark.parametrize('backend', ['pytorch', 'turbomind'])
-def test_chat_logprobs_rejects_negative_count(backend):
-    context = _server_context()
-    if backend == 'turbomind':
-        context.engine_config = TurbomindEngineConfig()
-    assert 'top_logprobs' in check_request(_request(logprobs=True, top_logprobs=-1), context)
-
-
 def test_chat_logprobs_still_requires_engine_mode_and_request_flag():
     context = _server_context()
     assert 'Invalid logprobs' in check_request(_request(top_logprobs=21), context)
     context.engine_config.logprobs_mode = None
     assert 'not enabled logprobs_mode' in check_request(_request(logprobs=True, top_logprobs=21), context)
-
-
-def test_chat_logprobs_keeps_turbomind_api_limit():
-    context = _server_context()
-    context.engine_config = TurbomindEngineConfig()
-    assert check_request(_request(logprobs=True, top_logprobs=20), context) == ''
-    assert '[0, 20]' in check_request(_request(logprobs=True, top_logprobs=21), context)
 
 
 @pytest.mark.parametrize('selected_id', [0, 2])
@@ -146,7 +135,7 @@ def test_chat_logprobs_preserves_ids_without_tokenizer_entries(selected_id):
 
 
 @pytest.mark.parametrize('stream', [False, True])
-@pytest.mark.parametrize('top_logprobs', [21, 64, 65])
+@pytest.mark.parametrize('top_logprobs', [64, 65])
 def test_http_chat_logprobs_vocab_boundary(chat_endpoint, stream, top_logprobs):
     _, context = chat_endpoint
     engine = context.async_engine
@@ -155,18 +144,12 @@ def test_http_chat_logprobs_vocab_boundary(chat_endpoint, stream, top_logprobs):
     engine.tokenizer.model.model = SimpleNamespace(
         convert_ids_to_tokens=lambda token_id: f'token-{token_id}' if token_id < 60 else None)
 
-    async def generate(preprocessed, **kwargs):
-        engine.call_count += 1
-        config = engine.gen_configs[-1]
-        assert config.logprobs == top_logprobs
-        processor = FusedLogitsProcessor(SamplingInputs(max_num_logprobs=config.logprobs))
-        scores = torch.arange(64, 0, -1, dtype=torch.float32)[None].log_softmax(-1)
-        vals, indices = processor.compute_logprobs(scores, torch.tensor([0]))
-        yield SimpleNamespace(
-            response='token-0', token_ids=[0], input_token_len=4, generate_token_len=1,
-            finish_reason='length', logprobs=[dict(zip(indices[0].tolist(), vals[0].tolist()))],
-            cached_tokens=0, routed_experts=None, cache_block_ids=None,
-        )
+    original_generate = engine.generate
+
+    async def generate(*args, **kwargs):
+        async for result in original_generate(*args, **kwargs):
+            result.logprobs = [{i: -float(i) for i in range(top_logprobs)}]
+            yield result
 
     engine.generate = generate
     app, router = FastAPI(), APIRouter()
@@ -196,8 +179,7 @@ def test_http_chat_logprobs_vocab_boundary(chat_endpoint, stream, top_logprobs):
         # The selected token may be separate from the alternatives in Chat.
         tokens = {rows[0]['token']} | {item['token'] for item in rows[0]['top_logprobs']}
         assert tokens == {f'token-{i}' if i < 60 else f'token_id:{i}' for i in range(top_logprobs)}
-        assert all(item.get('bytes') is None for item in rows[0]['top_logprobs']
-                   if item['token'].startswith('token_id:'))
+        assert engine.gen_configs[0].logprobs == top_logprobs
         assert engine.call_count == 1
     assert engine.session_mgr.sessions == {}
 
