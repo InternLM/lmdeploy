@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.responses import JSONResponse
 
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.chat_completions.fanout import _batch_stream_payloads
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
@@ -536,4 +537,60 @@ def test_stream_usage_is_omitted_when_a_choice_has_no_usage(
     assert not [
         payload for payload in payloads if payload.get('usage') is not None
     ]
+    assert context.session_manager.sessions == {}
+
+
+def test_streaming_request_error_is_sent_as_error_event(
+        chat_endpoint, fake_raw_request):
+
+    class RequestErrorEngine(_PreprocessingEngine):
+        model_name = 'fake-model'
+        backend_config = SimpleNamespace(adapters=[], logprobs_mode=None)
+
+        def __init__(self, original_engine):
+            self.session_mgr = original_engine.session_mgr
+            self.tokenizer = original_engine.tokenizer
+            self.call_count = 0
+            self.gen_configs = []
+            self.sibling_started = asyncio.Event()
+            self.sibling_closed = False
+
+        def generate(self, preprocessed, **kwargs):
+            self.call_count += 1
+            index = self.call_count
+
+            async def wait_forever():
+                self.sibling_started.set()
+                try:
+                    await asyncio.Event().wait()
+                    yield  # noqa: unreachable
+                finally:
+                    self.sibling_closed = True
+
+            async def fail():
+                await self.sibling_started.wait()
+                raise RequestError(ErrorCode.CONTEXT_LENGTH_EXCEEDED)
+                yield  # noqa: unreachable
+
+            return wait_forever() if index == 1 else fail()
+
+    endpoint, context = chat_endpoint
+    engine = RequestErrorEngine(context.async_engine)
+    context.async_engine = engine
+
+    async def collect():
+        response = await endpoint(
+            _request(n=2, stream=True), fake_raw_request)
+        return await asyncio.wait_for(_collect_stream(response), 1)
+
+    text = asyncio.run(collect())
+    payloads = _sse_payloads(text)
+
+    # A protocol error from one choice ends the multi-choice stream the same
+    # way it ends a single-choice stream: an error event, then [DONE].
+    assert payloads[-1]['error']['code'] == 400
+    assert payloads[-1]['error']['message'] == (
+        'The request exceeds the model context length.')
+    assert text.endswith('data: [DONE]\n\n')
+    assert engine.sibling_closed
     assert context.session_manager.sessions == {}
