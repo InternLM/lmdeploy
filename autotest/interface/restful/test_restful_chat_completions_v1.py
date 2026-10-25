@@ -413,7 +413,11 @@ class TestRestfulOpenAI:
         outputs = client.chat.completions.create(
             model=model_name,
             messages=[{'role': 'user', 'content': 'Shanghai is'}],
-            extra_body={'repetition_penalty': 0.0000001, 'min_new_tokens': 100},
+            extra_body={
+                'repetition_penalty': 0.0000001,
+                'min_new_tokens': 100,
+                'chat_template_kwargs': {'enable_thinking': False},
+            },
             temperature=0.01,
             max_tokens=200,
         )
@@ -427,7 +431,11 @@ class TestRestfulOpenAI:
         outputs = client.chat.completions.create(
             model=model_name,
             messages=[{'role': 'user', 'content': 'Hi, pls intro yourself'}],
-            extra_body={'repetition_penalty': 0.0000001, 'min_new_tokens': 100},
+            extra_body={
+                'repetition_penalty': 0.0000001,
+                'min_new_tokens': 100,
+                'chat_template_kwargs': {'enable_thinking': False},
+            },
             temperature=0.01,
             max_tokens=200,
             stream=True,
@@ -473,7 +481,7 @@ class TestRestfulOpenAI:
         outputs = client.chat.completions.create(
             model=model_name,
             messages=[{'role': 'user', 'content': 'Hi, what is your name?'}],
-            extra_body={'ignore_eos': True},
+            extra_body={'ignore_eos': True, 'chat_template_kwargs': {'enable_thinking': False}},
             max_tokens=100,
             temperature=0.01,
         )
@@ -489,7 +497,7 @@ class TestRestfulOpenAI:
         outputs = client.chat.completions.create(
             model=model_name,
             messages=[{'role': 'user', 'content': 'Hi, what is your name?'}],
-            extra_body={'ignore_eos': True},
+            extra_body={'ignore_eos': True, 'chat_template_kwargs': {'enable_thinking': False}},
             max_tokens=100,
             temperature=0.01,
             stream=True,
@@ -512,7 +520,7 @@ class TestRestfulOpenAI:
         outputs = client.chat.completions.create(
             model=model_name,
             messages=[{'role': 'user', 'content': prompt}],
-            extra_body={'ignore_eos': True},
+            extra_body={'ignore_eos': True, 'chat_template_kwargs': {'enable_thinking': False}},
             max_tokens=max_tokens,
             temperature=0.01,
         )

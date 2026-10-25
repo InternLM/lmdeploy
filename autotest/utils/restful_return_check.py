@@ -123,6 +123,69 @@ def assert_usage(usage):
     assert usage.get('completion_tokens') + usage.get('prompt_tokens') == usage.get('total_tokens')
 
 
+def assert_responses_usage(usage):
+    assert usage['input_tokens'] > 0
+    assert usage['output_tokens'] > 0
+    assert usage['total_tokens'] == usage['input_tokens'] + usage['output_tokens']
+    assert usage['output_tokens_details']['reasoning_tokens'] >= 0
+
+
+def assert_responses_batch_return(output, model_name, *, status: str = 'completed'):
+    """Assert ``POST /v1/responses`` JSON (lmdeploy Text V1).
+
+    Returns ``function_call`` output items (possibly empty).
+    """
+    assert output['id']
+    assert output['object'] == 'response'
+    assert output['model'] == model_name
+    assert output['status'] == status
+    assert_responses_usage(output['usage'])
+    output_items = output['output']
+    assert output_items
+    messages = []
+    function_calls = []
+    for item in output_items:
+        assert item['type'] in ('message', 'function_call'), item
+        if item['type'] == 'message':
+            assert item['role'] == 'assistant'
+            content = item['content']
+            assert content[0]['type'] == 'output_text'
+            assert isinstance(content[0]['text'], str)
+            messages.append(item)
+        else:
+            assert item['name']
+            assert item['call_id']
+            assert isinstance(item['arguments'], str)
+            function_calls.append(item)
+    if messages:
+        assert output['output_text'] == messages[0]['content'][0]['text']
+    if status == 'completed':
+        assert output.get('incomplete_details') is None
+        if not function_calls:
+            assert len(output['output_text']) > 0
+    else:
+        assert status == 'incomplete'
+        assert messages[0]['status'] == 'incomplete'
+        assert output['incomplete_details']['reason'] == 'max_output_tokens'
+    return function_calls
+
+
+def assert_responses_error(response: requests.Response, *, status_code: int, error_type: str,
+                           param: str | None = None, message_substr: str | None = None) -> dict:
+    """Assert nested ``error`` from Responses ``check_request``."""
+    assert response.status_code == status_code, response.text[:500]
+    body = response.json()
+    err = body['error']
+    assert err['message']
+    assert err['code'] == status_code
+    assert err['type'] == error_type
+    if param is not None:
+        assert err['param'] == param
+    if message_substr is not None:
+        assert message_substr in err['message']
+    return body
+
+
 def assert_logprobs(logprobs, logprobs_num):
     assert_logprob_element(logprobs)
     assert len(logprobs.get('top_logprobs')) >= 0
@@ -217,6 +280,72 @@ def get_client_and_model(base_url: str | None = None) -> tuple[OpenAI, str]:
     if not models:
         raise RuntimeError(f'No model returned from GET {url}/v1/models')
     return client, models[0].id
+
+
+# VL paths where VLAsyncEngine silently clears enable_prefix_caching.
+_VL_PREFIX_CACHE_UNSUPPORTED = (
+    'intern-s1-mini',
+    'glm-4v',
+    'gemma-3-27b',
+    'internvl3',
+)
+
+def assert_prefix_cache_hit(http_url: str, image_url: str | None = None):
+    """Same prompt twice: first cold, second cache hit, same generation.
+
+    Unsupported VL paths return without asserting so callers can still run
+    functional chat cases on the same server. ``image_url`` adds a vision
+    part (OpenAI ``image_url``) and requires the reply to name the animal.
+    """
+    client, model_name = get_client_and_model(http_url)
+    model_l = model_name.lower()
+    if any(tag in model_l for tag in _VL_PREFIX_CACHE_UNSUPPORTED):
+        print(f'prefix-cache assert skipped for VL path: {model_name}')
+        return
+    # SSM prefix_cache yml sets max-prefill-token-num=64 so this length chunks.
+    pad = 'Prefix-cache probe sentence. ' * 64
+    if image_url:
+        probe = pad + 'What animal is in the image? Reply with one word.'
+        expect = 'tiger'
+        content: str | list[dict[str, Any]] = [
+            {'type': 'image_url', 'image_url': {'url': image_url}},
+            {'type': 'text', 'text': probe},
+        ]
+    else:
+        probe = pad + 'Reply with one word: ok'
+        expect = 'ok'
+        content = probe
+    messages = [{'role': 'user', 'content': content}]
+    create = dict(
+        model=model_name,
+        messages=messages,
+        temperature=0,
+        max_completion_tokens=64,
+        extra_body={'chat_template_kwargs': {'enable_thinking': False}},
+    )
+    first = client.chat.completions.create(**create)
+    second = client.chat.completions.create(**create)
+    first_choice = first.choices[0]
+    second_choice = second.choices[0]
+    first_text = first_choice.message.content
+    second_text = second_choice.message.content
+    first_cached = first.usage.prompt_tokens_details.cached_tokens
+    second_cached = second.usage.prompt_tokens_details.cached_tokens
+    prompt_tokens = second.usage.prompt_tokens
+    first_completion = first.usage.completion_tokens
+    second_completion = second.usage.completion_tokens
+    msg = (f'first_cached={first_cached} second_cached={second_cached} '
+           f'prompt_tokens={prompt_tokens} '
+           f'first_completion={first_completion} second_completion={second_completion} '
+           f'first_text={first_text!r} second_text={second_text!r}')
+    assert first.usage.prompt_tokens == prompt_tokens, msg
+    assert first_completion == second_completion, msg
+    assert first_cached == 0, msg
+    # block_size=64; AR reuses complete blocks; SSM hits last published checkpoint
+    assert prompt_tokens - 64 <= second_cached <= prompt_tokens, msg
+    assert expect in first_text.lower(), msg
+    assert first_text == second_text, msg
+    assert first_choice.finish_reason == second_choice.finish_reason, msg
 
 
 @lru_cache(maxsize=1)
