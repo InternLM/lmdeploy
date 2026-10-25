@@ -88,6 +88,37 @@ LMDeploy 的 RESTful API 兼容了 OpenAI 以下 3 个接口：
 
 向 `/v1/chat/completions` 传入 `return_prompt_text=true`，响应会包含实际渲染的 `prompt_text`。使用 Python OpenAI 客户端时传入 `extra_body={"return_prompt_text": True}`；原始 JSON 同时支持顶层字段和该嵌套对象，顶层值优先。流式响应在每个 choice 的首个 chunk 中返回 prompt。该值来自实际模板输出，推理强度标记取决于模型模板；原始 `input_ids` 请求没有渲染 prompt，返回 `null`。未请求时不返回此字段。
 
+### 使用 PyTorch 返回更多 Chat logprobs
+
+使用 `--backend pytorch --logprobs-mode raw_logprobs` 启动服务，并在
+`/v1/chat/completions` 请求中设置 `logprobs=true` 和 `top_logprobs`。
+PyTorch 允许 `0 <= top_logprobs <= vocab_size`，上限取自已加载模型的输出词表，
+而非 tokenizer 的词表大小。多进程引擎以及流式、非流式请求均适用。
+超过模型词表大小的请求会在生成前返回 HTTP 400。TurboMind 的 Chat API 上限仍为 20。
+
+对于输出词表大小为 154880 的模型，可以先用单 token 请求验证：
+
+```json
+{
+  "model": "your-model",
+  "messages": [{"role": "user", "content": "你好"}],
+  "max_completion_tokens": 1,
+  "logprobs": true,
+  "top_logprobs": 154880
+}
+```
+
+`raw_logprobs` 返回应用 temperature、惩罚及采样过滤前的 log-softmax 值。
+只返回 20 个候选不会限制引擎的 `top_p` 采样，但这些候选的累计概率可能不足以在客户端分析
+nucleus 候选集。当已选 token 不在 `top_logprobs` 中时，应将外层的 `logprob` 合并计入。
+全词表响应可能很大，建议先限制输出 token 数。
+
+部分模型的输出词表包含 tokenizer 未定义的填充 ID。这些位置返回
+`token_id:<id>` 和 `bytes=null`（流式响应可能省略空值字段），保留其分数，不将占位标识当作解码文本。
+
+此扩展适用于 Chat Completions。Responses 目前忽略 `top_logprobs`；
+Messages 的 `return_logprob` 扩展只返回已生成 token 的分数，不返回候选分布。
+
 ### 使用 openai 接口
 
 使用默认响应解析器时，`json_object`、`json_schema` 和 `regex_schema` 约束整个生成序列。这些模式通过聊天模板关闭思考，并将受约束的输出放入 `content`，流式响应同样如此；答案中的协议标签字符串按普通数据保留。强制工具调用使用独立的标签语法，仍可包含思考。

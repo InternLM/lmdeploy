@@ -68,6 +68,43 @@ If you need to integrate the service into your own projects or products, we reco
 
 Set `return_prompt_text=true` on `/v1/chat/completions` to include the rendered `prompt_text` in the response. With the Python OpenAI client, pass `extra_body={"return_prompt_text": True}`; raw JSON may use either the top-level field or the same nested object, with the top-level value taking precedence. Streaming includes the prompt in the first chunk of each choice. The value is the actual template output, so reasoning-effort markers depend on the model's template. Raw `input_ids` requests have no rendered prompt and return `null`. The field is omitted unless requested.
 
+### Return more chat logprobs with PyTorch
+
+Start the server with `--backend pytorch --logprobs-mode raw_logprobs` and set
+`logprobs=true` and `top_logprobs` in `/v1/chat/completions` requests. PyTorch
+accepts `0 <= top_logprobs <= vocab_size`, using the loaded model's output
+vocabulary rather than the tokenizer's vocabulary size. This also applies to
+multi-process engines and both streaming and non-streaming requests. Counts
+above the model vocabulary return HTTP 400 before generation. TurboMind retains
+the Chat API limit of 20.
+
+For a model with an output vocabulary of 154880, a one-token probe is:
+
+```json
+{
+  "model": "your-model",
+  "messages": [{"role": "user", "content": "Hello"}],
+  "max_completion_tokens": 1,
+  "logprobs": true,
+  "top_logprobs": 154880
+}
+```
+
+`raw_logprobs` returns log-softmax values before temperature, penalties, and
+sampling filters. Returning only 20 candidates does not limit the engine's
+`top_p` sampling, but those candidates may have insufficient total probability
+for client-side nucleus analysis. Include the selected token's outer `logprob`
+when it is absent from `top_logprobs`. Full-vocabulary responses can be large;
+start with a small output-token budget.
+
+Some models pad their output vocabulary beyond the tokenizer's entries. Those
+IDs are returned as `token_id:<id>` with `bytes=null` (null fields may be omitted
+in streams), preserving their scores without inventing decoded text.
+
+This extension applies to Chat Completions. Responses currently ignores
+`top_logprobs`; Messages' `return_logprob` extension returns only generated-token
+scores, not a candidate distribution.
+
 ### Integrate with `OpenAI`
 
 With the default response parser, `json_object`, `json_schema`, and `regex_schema` constrain the entire generated sequence. These modes disable thinking through the chat template and return the constrained output in `content`, including in streams. Protocol-like strings inside the answer remain literal data. Required tool calls use their own tagged grammar and can still include reasoning.
