@@ -87,6 +87,21 @@ def test_base_model():
     assert model.messages2prompt('test') == 'test'
 
 
+def test_chat_template_config_from_json(tmp_path):
+    import json
+
+    from lmdeploy.model import ChatTemplateConfig
+
+    # A long meta instruction makes the string invalid as a file name.
+    config = dict(model_name='from-json-test', meta_instruction='You are a helpful assistant. ' * 12)
+    json_str = json.dumps(config)
+    assert ChatTemplateConfig.from_json(json_str).meta_instruction == config['meta_instruction']
+
+    json_file = tmp_path / 'chat_template.json'
+    json_file.write_text(json_str, encoding='utf-8')
+    assert ChatTemplateConfig.from_json(str(json_file)).meta_instruction == config['meta_instruction']
+
+
 def test_vicuna():
     prompt = 'hello, can u introduce yourself'
     model = MODELS.get('vicuna')(capability='completion')
