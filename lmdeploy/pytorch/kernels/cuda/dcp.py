@@ -263,21 +263,23 @@ def _reorder_dcp_prefill_kv_kernel(
     stride_lr,
     stride_ls,
     DCP_SIZE: tl.constexpr,
+    BLOCK_M: tl.constexpr,
     BLOCK_D: tl.constexpr,
 ):
-    source_row = tl.program_id(0)
+    source_row = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    row_mask = source_row < local_capacity * DCP_SIZE
     # Each rank contributes the same capacity, including trailing padding.
     rank = source_row // local_capacity
     local_position = source_row % local_capacity
 
     request = 0
-    request_start = 0
-    request_id = 0
-    position_in_request = 0
-    found = False
+    request_start = tl.full((BLOCK_M, ), 0, tl.int32)
+    request_id = tl.full((BLOCK_M, ), 0, tl.int32)
+    position_in_request = tl.full((BLOCK_M, ), 0, tl.int32)
+    found = tl.full((BLOCK_M, ), False, tl.int1)
     while request < num_sequences:
         request_len = tl.load(LocalLens + rank * stride_lr +
-                              request * stride_ls).to(tl.int32)
+                              request * stride_ls, mask=row_mask, other=0).to(tl.int32)
         owns_position = ((local_position >= request_start)
                          & (local_position < request_start + request_len))
         request_id = tl.where(owns_position, request, request_id)
@@ -291,18 +293,18 @@ def _reorder_dcp_prefill_kv_kernel(
     global_position = position_in_request * DCP_SIZE + rank
     chunk_kv_seqlen = tl.load(ChunkKvSeqLens + request_id, mask=found, other=0)
     output_start = tl.load(KvStartLoc + request_id, mask=found, other=0)
-    valid_row = found & (global_position < chunk_kv_seqlen)
+    valid_row = row_mask & found & (global_position < chunk_kv_seqlen)
 
     dim_offsets = tl.arange(0, BLOCK_D)
     dim_mask = dim_offsets < row_width
-    value = tl.load(Gathered + source_row * stride_gs +
-                    dim_offsets * stride_gd,
-                    mask=valid_row & dim_mask,
+    value = tl.load(Gathered + source_row[:, None] * stride_gs +
+                    dim_offsets[None, :] * stride_gd,
+                    mask=valid_row[:, None] & dim_mask[None, :],
                     other=0.0)
     output_row = output_start + global_position
-    tl.store(Output + output_row * stride_os + dim_offsets * stride_od,
+    tl.store(Output + output_row[:, None] * stride_os + dim_offsets[None, :] * stride_od,
              value,
-             mask=valid_row & dim_mask)
+             mask=valid_row[:, None] & dim_mask[None, :])
 
 
 def sanitize_dcp_lse(local_lse: torch.Tensor,
@@ -429,7 +431,9 @@ def reorder_dcp_prefill_kv(gathered: torch.Tensor, output: torch.Tensor, *,
 
     row_width = gathered_rows.size(1)
     block_d = triton.next_power_of_2(row_width)
-    _reorder_dcp_prefill_kv_kernel[(gathered_rows.size(0), )](
+    # Process four rows per CTA to amortize scheduling and request-scan control overhead.
+    block_m = 4
+    _reorder_dcp_prefill_kv_kernel[(triton.cdiv(gathered_rows.size(0), block_m), )](
         gathered_rows,
         output_rows,
         chunk_kv_seqlens,
@@ -442,6 +446,7 @@ def reorder_dcp_prefill_kv(gathered: torch.Tensor, output: torch.Tensor, *,
         *output_rows.stride(),
         *local_lens.stride(),
         DCP_SIZE=dcp_size,
+        BLOCK_M=block_m,
         BLOCK_D=block_d,
         num_warps=8,
     )

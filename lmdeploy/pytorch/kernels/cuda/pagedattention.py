@@ -576,6 +576,8 @@ def _reduce_split_kernel(
     acc_ptr,
     out_ptr,
     sinks_ptr,
+    lse_ptr,
+    cache_seqlens_ptr,
     stride_ak,
     stride_abs,
     stride_ah,
@@ -587,6 +589,8 @@ def _reduce_split_kernel(
     SPLIT_K: tl.constexpr,
     BLOCK_DV: tl.constexpr,
     USE_PDL: tl.constexpr,
+    NUM_HEADS: tl.constexpr,
+    SEQ_LEN: tl.constexpr,
 ):
     """Second step kernel of split k attention."""
     cur_batch = tl.program_id(1)
@@ -609,6 +613,13 @@ def _reduce_split_kernel(
     if USE_PDL:
         tl.extra.cuda.gdc_wait()
 
+    if lse_ptr is not None:
+        # Empty DCP shards do not write split scratch. Never read it.
+        if tl.load(cache_seqlens_ptr + cur_batch // SEQ_LEN) <= 0:
+            tl.store(out_ptr + offs_dv * stride_od, 0.0, mask=mask_dv)
+            tl.store(lse_ptr + cur_batch * NUM_HEADS + cur_head, -float('inf'))
+            return
+
     m_k = tl.load(acc_ptr + offs_mi)
     l_k = tl.load(acc_ptr + offs_mi + 1)
     # (m_k[:, None] > -float('inf')) produce invalid mask for triton 3.5.1
@@ -625,6 +636,10 @@ def _reduce_split_kernel(
     if sinks_ptr is not None:
         sink = tl.load(sinks_ptr + cur_head).to(l_sum.dtype)
         l_sum = l_sum + tl.exp2(sink * tl_log2(math.e) - m_max)
+    if lse_ptr is not None:
+        # Split accumulators use log2; the DCP merge consumes natural-log LSE.
+        lse = (m_max + tl_log2(l_sum)) / tl_log2(math.e)
+        tl.store(lse_ptr + cur_batch * NUM_HEADS + cur_head, lse)
     acc = acc / (l_sum + 1e-10)
 
     out_offs = offs_dv * stride_od
@@ -794,6 +809,7 @@ def flash_attn_with_kvcache(
     quant_policy: QuantPolicy = QuantPolicy.NONE,
     sinks: Tensor = None,
     kv_layout: str = 'bshd',
+    return_lse: bool = False,
 ):
     """Paged Attention forward.
 
@@ -804,8 +820,12 @@ def flash_attn_with_kvcache(
             per-tensor key scale for per-tensor FP8 KV cache.
         v_scales_zeros: Per-token scale/zero metadata for int KV cache, or
             per-tensor value scale for per-tensor FP8 KV cache.
+        return_lse: Return ``(output, lse)`` with natural-log FP32 LSE shaped
+            [tokens, heads]. Empty cache rows return zero output and -inf LSE.
     """
 
+    if return_lse and quant_policy == QuantPolicy.TURBO_QUANT:
+        raise NotImplementedError('TurboQuant paged attention does not return LSE')
     if kv_layout == 'bshd':
         b_dim, s_dim, h_dim, d_dim = (0, 1, 2, 3)
     elif kv_layout == 'bhsd':
@@ -1032,6 +1052,7 @@ def flash_attn_with_kvcache(
 
     num_warps = 2
     grid = (head, num_tokens)
+    lse = torch.empty((num_tokens, head), device=q.device, dtype=torch.float32) if return_lse else None
     if quant_policy == QuantPolicy.INT4:
         Lv *= 2
         BLOCK_DV *= 2
@@ -1063,6 +1084,8 @@ def flash_attn_with_kvcache(
         _reduce_split_kernel[grid](acc,
                                    o,
                                    sinks,
+                                   lse,
+                                   cache_seqlens,
                                    stride_ak=acc.stride(2),
                                    stride_abs=acc.stride(0),
                                    stride_ah=acc.stride(1),
@@ -1074,7 +1097,9 @@ def flash_attn_with_kvcache(
                                    head_size_v=Lv,
                                    BLOCK_DV=BLOCK_DV,
                                    USE_PDL=use_pdl,
+                                   NUM_HEADS=head,
+                                   SEQ_LEN=seq_len,
                                    num_warps=num_warps,
                                    num_stages=1,
                                    **pdl_launch)
-    return o
+    return (o, lse) if return_lse else o

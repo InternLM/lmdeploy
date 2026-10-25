@@ -7,6 +7,7 @@ from torch import nn
 
 from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.distributed import (
+    all_reduce,
     gather_by_tp_sizes,
     get_dist_group,
     get_dist_manager,
@@ -216,7 +217,7 @@ class LinearBase(nn.Module):
                     out = out.to(self.tp_reduce_dtype)
                     get_dist_group(self.layer_type).all_reduce_(out)
                 else:
-                    dist.all_reduce(out, group=self.tp_group)
+                    all_reduce(out, group=self.tp_group)
                 out = out.to(output_dtype)
         return out
 
