@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import dlinfer.ops as ext_ops
+import torch
 from dlinfer.utils.type_annotation import MoECommType as DlinferMoECommType  # noqa: F401
 from dlinfer.utils.type_annotation import MoeMetadata as DlinferMoeMetadata
 from torch import Tensor
@@ -40,9 +41,16 @@ def fused_moe_w8a8(
 
 
 def pack_w8a8_scales(gate_up_scales: Tensor, down_scales: Tensor):
-    """Pack scales for the Ascend dispatch_ffn_combine path."""
-    from dlinfer.vendor.ascend.moe import pack_w8a8_scales as _pack
-    return _pack(gate_up_scales, down_scales)
+    """Pack W8A8 activation scales for the Ascend dispatch_ffn_combine path.
+
+    The fused operator consumes the IEEE-754 bit pattern in int64 form.
+    """
+
+    def pack_scale(scale: Tensor):
+        scale = scale.reshape(scale.shape[0], -1).to(torch.float32).contiguous()
+        return scale.view(torch.int32).to(torch.int64)
+
+    return pack_scale(gate_up_scales), pack_scale(down_scales)
 
 
 def weights_in_fused_layout(weights: Tensor) -> bool:
