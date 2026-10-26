@@ -19,13 +19,15 @@ Q_POLICY_INT8 = tl.constexpr(8)
 Q_POLICY_TURBO = tl.constexpr(42)
 
 
+# Page-table width and row stride vary with live request lengths; keep both
+# runtime to avoid compiling a scatter variant for every context length.
 @triton.jit
 def _fill_indexed_key_cache_kernel(
     Keys, Scales, GroupIds, Valid, RequestIds, BlockOffsets, KeyCache, ScaleCache,
-    BATCH: tl.constexpr, COLUMNS: tl.constexpr, PAGE: tl.constexpr,
+    BATCH: tl.constexpr, COLUMNS, PAGE: tl.constexpr,
     PAGE_STEP: tl.constexpr, WIDTH: tl.constexpr,
     stride_kr: tl.constexpr, stride_kd: tl.constexpr,
-    stride_sr: tl.constexpr, stride_br: tl.constexpr, stride_bc: tl.constexpr,
+    stride_sr: tl.constexpr, stride_br, stride_bc: tl.constexpr,
     stride_kcb: tl.constexpr, stride_kcs: tl.constexpr, stride_kcd: tl.constexpr,
     stride_scb: tl.constexpr, stride_scs: tl.constexpr,
     BLOCK_D: tl.constexpr, HAS_REQUEST_IDS: tl.constexpr,

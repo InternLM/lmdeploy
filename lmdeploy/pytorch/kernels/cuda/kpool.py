@@ -197,9 +197,12 @@ def _prefill_offsets_kernel(Q, KV, Counts, Starts, QEnds,
     tl.store(QEnds + request, tl.cumsum(q), request < BATCH)
 
 
+# Request-dependent row/page counts and page-table row strides stay runtime
+# throughout these kernels. Only tile geometry and fixed model dimensions
+# need constexpr specialization; otherwise each new context can trigger JIT.
 @triton.jit
 def _prefill_query_metadata_kernel(KV, QEnds, Starts, Seq, Lengths, QueryStarts, QueryEnds,
-                                   ROWS: tl.constexpr, BATCH: tl.constexpr, POOL: tl.constexpr,
+                                   ROWS, BATCH: tl.constexpr, POOL: tl.constexpr,
                                    BLOCK: tl.constexpr):
     row = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     low = tl.full((BLOCK,), 0, tl.int32)
@@ -335,7 +338,7 @@ def _normalized_hadamard(value, WIDTH: tl.constexpr, LEVELS: tl.constexpr):
 
 
 @triton.jit
-def _rotate_kpool_query_kernel(Query, Out, ROWS: tl.constexpr, WIDTH: tl.constexpr,
+def _rotate_kpool_query_kernel(Query, Out, ROWS, WIDTH: tl.constexpr,
                               LEVELS: tl.constexpr, BLOCK_M: tl.constexpr):
     rows = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     offsets = rows[:, None] * WIDTH + tl.arange(0, WIDTH)[None, :]
@@ -504,9 +507,9 @@ def write_raw_ring(keys, scores, new_keys, new_scores, state_ids, history, lengt
 @triton.jit
 def _score_pages(Q, W, Cache, Lengths, Table, Out,
                  QS0: tl.constexpr, QS1: tl.constexpr,
-                 WS0: tl.constexpr, TS0: tl.constexpr,
+                 WS0: tl.constexpr, TS0,
                  PAGE_STRIDE: tl.constexpr, PAGE: tl.constexpr,
-                 HEADS: tl.constexpr, DIM: tl.constexpr, WIDTH: tl.constexpr,
+                 HEADS: tl.constexpr, DIM: tl.constexpr, WIDTH,
                  H: tl.constexpr, D: tl.constexpr, TILE: tl.constexpr):
     row = tl.program_id(0)
     heads = tl.arange(0, H)
@@ -555,8 +558,8 @@ def score_paged(query, weight, cache, lengths, table):
 def _gather_token_tail_kernel(Cache, Blocks, Q, KV, Keys, Scores, StateIds,
                               stride_cb: tl.constexpr, stride_ct: tl.constexpr,
                               stride_cs: tl.constexpr, stride_cd: tl.constexpr,
-                              stride_bb: tl.constexpr, stride_bp: tl.constexpr,
-                              PAGES: tl.constexpr, PAGE_SIZE: tl.constexpr,
+                              stride_bb, stride_bp: tl.constexpr,
+                              PAGES, PAGE_SIZE: tl.constexpr,
                               POOL: tl.constexpr, WIDTH: tl.constexpr,
                               BLOCK_D: tl.constexpr):
     request = tl.program_id(0)
@@ -596,10 +599,10 @@ def gather_kpool_token_tail(cache, block_offsets, q_seqlens, kv_seqlens, pool_si
 def _write_token_cache_kernel(Cache, Blocks, Q, KV, Starts, Keys, Scores,
                                stride_cb: tl.constexpr, stride_ct: tl.constexpr,
                                stride_cs: tl.constexpr, stride_cd: tl.constexpr,
-                               stride_bb: tl.constexpr, stride_bp: tl.constexpr,
+                               stride_bb, stride_bp: tl.constexpr,
                                stride_kt: tl.constexpr, stride_kd: tl.constexpr,
                                stride_st: tl.constexpr, stride_sd: tl.constexpr,
-                               BATCH: tl.constexpr, PAGES: tl.constexpr,
+                               BATCH: tl.constexpr, PAGES,
                                PAGE_SIZE: tl.constexpr, WIDTH: tl.constexpr,
                                BLOCK_B: tl.constexpr, BLOCK_D: tl.constexpr):
     row = tl.program_id(0)
@@ -633,8 +636,8 @@ def write_kpool_token_cache(cache, keys, scores, block_offsets, q_seqlens,
 
 @triton.jit
 def _decode_metadata_kernel(Q, KV, Blocks, Seq, Groups, Context, ScheduleLengths, Table,
-                            STEPS: tl.constexpr, POOL: tl.constexpr, PAGES: tl.constexpr, PAGE_STEP: tl.constexpr,
-                            stride_bb: tl.constexpr, stride_bp: tl.constexpr,
+                            STEPS: tl.constexpr, POOL: tl.constexpr, PAGES, PAGE_STEP: tl.constexpr,
+                            stride_bb, stride_bp: tl.constexpr,
                             BLOCK: tl.constexpr):
     row = tl.program_id(0)
     tile = tl.program_id(1)
