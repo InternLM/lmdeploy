@@ -49,33 +49,32 @@ class LinearWeightsW8A8(LinearWeights):
             self.scale.weight_loader = self.weight_loader_scale_tp
 
     def convert_weight_to_nz(self):
-        """Convert one loaded expert matrix to the NZ layout in-place.
+        """Convert the loaded expert matrices to the NZ layout in-place.
 
-        The checkpoint loader writes expert shards into the ordinary ND tensor. Moving that tensor to host memory before
-        allocating the final NZ tensor avoids a second full HBM copy during model loading.
+        The checkpoint loader writes expert shards into the ordinary ND tensor. The ND->NZ conversion runs on device as
+        a d2d copy with implicit format cast: the ND tensor and its NZ replacement coexist for a single tensor only, so
+        peak device memory grows by one expert tensor instead of a full second copy of the weights. A host round-trip
+        here (D2H + cpu transpose + H2D) is ~20x slower once all TP workers convert concurrently.
         """
         if self._weight_nz or self.weight.device.type != 'npu':
             return
         import torch_npu
 
         old_param = self.weight
-        cpu_weight = old_param.detach().cpu()
-        loader = old_param.weight_loader
-        del self._parameters['weight']
-        del old_param
-        torch.npu.empty_cache()
         nz_weight = torch_npu.empty_with_format(
-            (cpu_weight.shape[0], cpu_weight.shape[2], cpu_weight.shape[1]),
-            dtype=cpu_weight.dtype,
+            (old_param.shape[0], old_param.shape[2], old_param.shape[1]),
+            dtype=old_param.dtype,
             device='npu',
             acl_format=29,
         )
-        nz_weight.copy_(cpu_weight.transpose(1, 2).contiguous())
+        nz_weight.copy_(old_param.detach().transpose(1, 2))
         param = nn.Parameter(nz_weight, requires_grad=False)
-        param.weight_loader = loader
+        param.weight_loader = old_param.weight_loader
+        del self._parameters['weight']
         self.register_parameter('weight', param)
         self._weight_nz = True
-        del cpu_weight
+        del old_param
+        torch.npu.empty_cache()
 
     def update_weight(self, weight: torch.Tensor, scale: torch.Tensor):
         """Update weight."""

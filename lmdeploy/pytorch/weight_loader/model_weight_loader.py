@@ -2,6 +2,7 @@
 
 import json
 import os.path as osp
+import time
 
 import numpy as np
 import torch
@@ -192,6 +193,8 @@ class ModelWeightLoader:
 @torch.inference_mode()
 def process_weights_after_loading(model: torch.nn.Module):
     """Run module weight updates followed by dependent post-load hooks."""
+    logger.info('Processing weights after loading (format conversion / quant repack), this might take a while...')
+    start = time.perf_counter()
     for _, mod in model.named_modules():
         if not hasattr(mod, 'update_weights'):
             continue
@@ -204,6 +207,7 @@ def process_weights_after_loading(model: torch.nn.Module):
         if not hasattr(mod, 'process_weights_after_loading'):
             continue
         mod.process_weights_after_loading()
+    logger.info(f'Processed weights after loading in {time.perf_counter() - start:.1f} seconds.')
 
 
 @torch.inference_mode()
