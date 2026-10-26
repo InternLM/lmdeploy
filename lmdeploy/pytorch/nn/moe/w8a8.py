@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 import torch
-from torch import nn
 
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.moe import FusedMoEW8A8BuildSpec
@@ -27,8 +26,6 @@ class LinearWeightsW8A8(LinearWeights):
                  device: torch.device,
                  expert_list: list[int] = None,
                  quant_dtype: torch.dtype = torch.int8):
-        device = torch.device(device)
-        self._weight_nz = False
         super().__init__(
             num_experts=num_experts,
             in_features=in_features,
@@ -38,7 +35,6 @@ class LinearWeightsW8A8(LinearWeights):
             device=device,
             expert_list=expert_list,
         )
-
         scale = torch.empty((num_experts, out_features, 1), dtype=torch.float32, device=device)
         scale = torch.nn.Parameter(scale, requires_grad=False)
         self.register_parameter('scale', scale)
@@ -47,34 +43,6 @@ class LinearWeightsW8A8(LinearWeights):
             self.scale.weight_loader = self.weight_loader_ep
         else:
             self.scale.weight_loader = self.weight_loader_scale_tp
-
-    def convert_weight_to_nz(self):
-        """Convert the loaded expert matrices to the NZ layout in-place.
-
-        The checkpoint loader writes expert shards into the ordinary ND tensor. The ND->NZ conversion runs on device as
-        a d2d copy with implicit format cast: the ND tensor and its NZ replacement coexist for a single tensor only, so
-        peak device memory grows by one expert tensor instead of a full second copy of the weights. A host round-trip
-        here (D2H + cpu transpose + H2D) is ~20x slower once all TP workers convert concurrently.
-        """
-        if self._weight_nz or self.weight.device.type != 'npu':
-            return
-        import torch_npu
-
-        old_param = self.weight
-        nz_weight = torch_npu.empty_with_format(
-            (old_param.shape[0], old_param.shape[2], old_param.shape[1]),
-            dtype=old_param.dtype,
-            device='npu',
-            acl_format=29,
-        )
-        nz_weight.copy_(old_param.detach().transpose(1, 2))
-        param = nn.Parameter(nz_weight, requires_grad=False)
-        param.weight_loader = old_param.weight_loader
-        del self._parameters['weight']
-        self.register_parameter('weight', param)
-        self._weight_nz = True
-        del old_param
-        torch.npu.empty_cache()
 
     def update_weight(self, weight: torch.Tensor, scale: torch.Tensor):
         """Update weight."""
@@ -176,8 +144,6 @@ class FusedMoEW8A8(FusedMoEBase):
 
     def update_weights(self):
         """Update weights."""
-        self.gate_up.convert_weight_to_nz()
-        self.down.convert_weight_to_nz()
         (gate_up_weights, down_weights, gate_up_scale,
          down_scale) = self.impl.update_weights(self.gate_up.weight, self.down.weight, self.gate_up.scale,
                                                 self.down.scale)
