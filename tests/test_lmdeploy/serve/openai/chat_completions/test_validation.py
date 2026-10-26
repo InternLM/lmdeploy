@@ -197,7 +197,8 @@ def preprocessing_client(chat_endpoint, monkeypatch):
     engine._determine_gen_config = lambda input_ids, gen_config: gen_config
     engine.prompt_processor = MultimodalProcessor(
         tokenizer=SimpleNamespace(encode=lambda *a, **kw: [1]),
-        chat_template=SimpleNamespace(messages2prompt=lambda messages, **kw: str(messages)),
+        chat_template=SimpleNamespace(messages2prompt=lambda messages, **kw: str(messages),
+                                      messages2input_ids=lambda *args, **kwargs: None),
         vl_encoder=object(),
     )
     engine.preprocess = MethodType(AsyncEngine.preprocess, engine)

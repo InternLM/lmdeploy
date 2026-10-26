@@ -94,6 +94,8 @@ Chat `tool` messages, Messages `tool_result` blocks, and Responses `function_cal
 
 For GLM-5.3-Flash's default template, preprocessing aligns unambiguous tool-result groups with the assistant's call order before both rendering and image collection. This ordering rule is limited to `Glm5NextForConditionalGeneration`; other architectures retain their input order. It does not infer ordering rules from arbitrary or customized Jinja templates. InternVL3 and InternVL3.5 normalize both user and tool images while retaining tool metadata, including when legacy `<IMAGE_TOKEN>` placeholders are present in another message.
 
+For GLM-5.3-Flash, install Transformers **5.20.0 or later** to enable `apply_chat_template(..., sanitize_control_tokens=True)` for text and multimodal chat. Content literals such as `<tool_call>` and `<|image|>` are encoded as ordinary text, while the template's own controls remain token IDs. Keep images and videos in structured content blocks: LMDeploy preserves the tool-result order above and expands the media IDs using the processed media dimensions. Older Transformers versions retain the existing string encoding path. This uses HF's sanitization rules, which do not cover dictionary keys, and does not guarantee token-for-token parity with training encoders. The model template's existing interpretation of assistant content, including inline reasoning markers, still applies.
+
 See the [Messages API](../llm/api_server_anthropic.md) and [Responses API](../llm/api_server_responses.md) documentation for their tool-result formats.
 
 ## Multiple Images
