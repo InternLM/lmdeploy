@@ -9,10 +9,9 @@ from ..default.moe_router import DefaultRouterNoauxTCImpl
 class DlinferRouterNoauxTCImpl(DefaultRouterNoauxTCImpl):
     """Ascend no-aux router backed by ``npu_moe_gating_top_k``.
 
-    The fused kernel implements the grouped top-2 score selection used by
-    DeepSeek/GLM no-aux routing. Unsupported configurations retain the
-    default PyTorch implementation so this backend remains compatible with
-    other model variants.
+    The fused kernel implements the grouped top-2 score selection used by DeepSeek/GLM no-aux routing. Unsupported
+    configurations retain the default PyTorch implementation so this backend remains compatible with other model
+    variants.
     """
 
     def forward(

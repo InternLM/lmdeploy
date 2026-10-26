@@ -152,7 +152,8 @@ class DlinferFusedMoEW8A8Impl(DlinferFusedMoEImpl, FusedMoEW8A8Impl):
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
                        down_scale: torch.Tensor):
-        """Prepare NZ weights for dispatch_ffn_combine when its binary is available."""
+        """Prepare NZ weights for dispatch_ffn_combine when its binary is
+        available."""
         scale_dtype = torch.bfloat16 if self.out_dtype == torch.bfloat16 else torch.float32
         if not self.use_fused_op:
             prepared = prepare_fused_w8a8_weights(
