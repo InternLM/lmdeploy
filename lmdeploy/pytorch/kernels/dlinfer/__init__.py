@@ -4,7 +4,14 @@ from .apply_rotary_pos_emb import apply_rotary_pos_emb, apply_rotary_pos_emb_int
 from .awq_kernels import awq_linear
 from .fill_kv_cache import fill_kv_cache
 from .flash_attention import flash_attention_fwd
-from .fused_moe import DlinferMoECommType, DlinferMoeMetadata, fused_moe, fused_moe_w8a8, prepare_fused_w8a8_weights
+from .fused_moe import (
+    DlinferMoECommType,
+    DlinferMoeMetadata,
+    fused_moe,
+    fused_moe_w8a8,
+    pack_w8a8_scales,
+    weights_in_fused_layout,
+)
 from .lightning_indexer import lightning_indexer
 from .linear import linear
 from .moe_gating_topk_softmax import moe_gating_topk_softmax
@@ -23,7 +30,8 @@ __all__ = [
     'DlinferMoeMetadata',
     'fused_moe',
     'fused_moe_w8a8',
-    'prepare_fused_w8a8_weights',
+    'pack_w8a8_scales',
+    'weights_in_fused_layout',
     'paged_attention_fwd',
     'sparse_attention_fwd',
     'sparse_attention_fwd_split',

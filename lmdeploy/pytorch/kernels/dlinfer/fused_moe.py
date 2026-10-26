@@ -39,8 +39,15 @@ def fused_moe_w8a8(
                                   topk_weights, topk_ids, topk, renormalize, moe_metadata, use_fused_op)
 
 
-def prepare_fused_w8a8_weights(gate_up_weights: Tensor, down_weights: Tensor, gate_up_scales: Tensor,
-                               down_scales: Tensor):
-    """Prepare weights for the optional Ascend dispatch_ffn_combine path."""
-    from dlinfer.vendor.ascend.moe import prepare_fused_w8a8_weights as _prepare
-    return _prepare(gate_up_weights, down_weights, gate_up_scales, down_scales)
+def pack_w8a8_scales(gate_up_scales: Tensor, down_scales: Tensor):
+    """Pack scales for the Ascend dispatch_ffn_combine path."""
+    from dlinfer.vendor.ascend.moe import pack_w8a8_scales as _pack
+    return _pack(gate_up_scales, down_scales)
+
+
+def weights_in_fused_layout(weights: Tensor) -> bool:
+    """True when the expert weights were converted to the fused NZ layout."""
+    if weights.device.type != 'npu':
+        return False
+    import torch_npu
+    return torch_npu.get_npu_format(weights) == 29

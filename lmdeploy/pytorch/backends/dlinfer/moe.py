@@ -9,7 +9,8 @@ from lmdeploy.pytorch.kernels.dlinfer import (
     fused_moe,
     fused_moe_w8a8,
     moe_gating_topk_softmax,
-    prepare_fused_w8a8_weights,
+    pack_w8a8_scales,
+    weights_in_fused_layout,
 )
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
@@ -152,18 +153,17 @@ class DlinferFusedMoEW8A8Impl(DlinferFusedMoEImpl, FusedMoEW8A8Impl):
 
     def update_weights(self, gate_up_weights: torch.Tensor, down_weights: torch.Tensor, gate_up_scale: torch.Tensor,
                        down_scale: torch.Tensor):
-        """Prepare NZ weights for dispatch_ffn_combine when its binary is
-        available."""
+        """Pack scales for dispatch_ffn_combine when weights arrive as NZ.
+
+        Whether the expert weights were converted to the fused NZ layout is decided once at weight-load time; the weight
+        format is that decision.
+        """
         scale_dtype = torch.bfloat16 if self.out_dtype == torch.bfloat16 else torch.float32
-        if not self.use_fused_op:
-            prepared = prepare_fused_w8a8_weights(
-                gate_up_weights, down_weights, gate_up_scale, down_scale
-            )
-            # Direct-NZ parameters are already in the fused layout.  The
-            # helper only adds the compact int64 scale representation.
-            if prepared[2].dtype == torch.int64:
-                self.use_fused_op = True
-                self._fused_scales = (prepared[2], prepared[3])
+        if weights_in_fused_layout(gate_up_weights):
+            self.use_fused_op = True
+            self._fused_scales = pack_w8a8_scales(gate_up_scale, down_scale)
+        else:
+            self.use_fused_op = False
 
         gate_up_scale = gate_up_scale.to(scale_dtype)
         down_scale = down_scale.to(scale_dtype)
