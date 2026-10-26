@@ -12,7 +12,7 @@ from .moe_router import moe_gating_top_k
 from .moe_gating_topk_softmax import moe_gating_topk_softmax
 from .pagedattention import paged_attention_fwd
 from .rms_norm import rms_norm
-from .sparse_attention import sparse_attention_fwd
+from .sparse_attention import sparse_attention_fwd, sparse_attention_fwd_split
 
 __all__ = [
     'rms_norm',
@@ -27,6 +27,7 @@ __all__ = [
     'prepare_fused_w8a8_weights',
     'paged_attention_fwd',
     'sparse_attention_fwd',
+    'sparse_attention_fwd_split',
     'flash_attention_fwd',
     'lightning_indexer',
     'linear',
