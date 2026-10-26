@@ -524,6 +524,11 @@ class Engine(EngineBase):
         """Model config."""
         return self.executor.model_config
 
+    @property
+    def vocab_size(self) -> int:
+        """Output vocabulary size from the resolved model configuration."""
+        return self.model_config.vocab_size
+
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.engine_conn.p2p_initialize(init_request)
 
