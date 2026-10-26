@@ -118,6 +118,15 @@ class BaseChatTemplate:
         """Prepare message order before rendering and collecting media."""
         return messages
 
+    def messages2input_ids(self, prompt, messages, tools=None, **kwargs) -> list[int] | None:
+        """Tokenize a rendered prompt, or return None to encode it as plain text.
+
+        Templates whose model needs span-aware encoding (see
+        :mod:`lmdeploy.glm_literal_encoding`) override this. The rendered
+        *prompt* stays authoritative for display and logging either way.
+        """
+        return None
+
     def __init__(self,
                  system='',
                  meta_instruction='',
@@ -794,6 +803,7 @@ class HFChatTemplate(BaseChatTemplate):
             self.is_gpt_oss = arch == 'GptOssForCausalLM'
             # GLM-5.3-Flash's multimodal architecture, not the text-only GLM-5.3.
             self.is_glm5_next = arch == 'Glm5NextForConditionalGeneration'
+            self._glm_base_backend = None
             if self.is_gpt_oss:
                 self.stop_words.append('<|call|>')
         except Exception as e:
@@ -868,6 +878,45 @@ class HFChatTemplate(BaseChatTemplate):
             # Prefill its closing tag so disabled thinking starts at the answer.
             prompt += '</think>'
         return prompt
+
+    def messages2input_ids(self, prompt, messages, tools=None, **kwargs) -> list[int] | None:
+        """Encode a GLM-5.3-Flash prompt without turning content literals into controls.
+
+        The rendered *prompt* tokenizes message content spellings such as
+        ``<tool_call>`` into control IDs. Following the training pipeline
+        (xtuner #2208), content spans are located with a sentinel-marked
+        render and the text runs between genuine controls are re-encoded
+        without added tokens. Returns None (plain encoding) for other
+        models, when no content spelling collides with a control token, or
+        when the marked render does not reproduce *prompt* exactly.
+        """
+        if not getattr(self, 'is_glm5_next', False) or not isinstance(messages, list):
+            return None
+        tokenizer = self.tokenizer
+        if tokenizer is None or not getattr(tokenizer, 'is_fast', False):
+            return None
+        from lmdeploy.glm_literal_encoding import (
+            build_base_backend,
+            encode_with_literal_spans,
+            extract_literal_spans,
+            mark_literal_pieces,
+        )
+
+        try:
+            marked_messages, marked_tools, count = mark_literal_pieces(messages, tools)
+            if not count:
+                return None
+            marked_prompt = self.messages2prompt(marked_messages, tools=marked_tools, **kwargs)
+        except Exception:
+            return None
+        if not isinstance(marked_prompt, str):
+            return None
+        spans = extract_literal_spans(marked_prompt, prompt, count)
+        if spans is None:
+            return None
+        if self._glm_base_backend is None:
+            self._glm_base_backend = build_base_backend(tokenizer)
+        return encode_with_literal_spans(tokenizer, prompt, spans, self._glm_base_backend)
 
     def _user_instruction(self):
         """Extract user message template markers from the tokenizer's chat

@@ -282,7 +282,13 @@ class VisionModel(ABC):
         """
         if VisionModel.has_input_ids(messages):
             return messages[0]['content'][0]['text']
-        return chat_template.messages2prompt(messages, tools=tools, **(chat_template_kwargs or {}))
+        prompt = chat_template.messages2prompt(messages, tools=tools, **(chat_template_kwargs or {}))
+        # Templates with span-aware encoding (GLM-5.3-Flash) may upgrade the
+        # rendered prompt to token ids so content literals stay literal; the
+        # preprocessor expands media placeholders from ids just as it does
+        # for embedded /generate inputs.
+        input_ids = chat_template.messages2input_ids(prompt, messages, tools=tools, **(chat_template_kwargs or {}))
+        return input_ids if input_ids is not None else prompt
 
     def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:
         """Extract image feature. ONLY implement it when the backend is
