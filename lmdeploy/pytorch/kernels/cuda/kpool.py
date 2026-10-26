@@ -510,7 +510,12 @@ def _score_pages(Q, W, Cache, Lengths, Table, Out,
                  WS0: tl.constexpr, TS0,
                  PAGE_STRIDE: tl.constexpr, PAGE: tl.constexpr,
                  HEADS: tl.constexpr, DIM: tl.constexpr, WIDTH,
-                 H: tl.constexpr, D: tl.constexpr, TILE: tl.constexpr):
+                 H: tl.constexpr, D: tl.constexpr, TILE: tl.constexpr,
+                 WIDTH_BOUND: tl.constexpr):
+    # Keep the exact width dynamic while preserving bounded loop-index analysis.
+    # The launcher derives this bound from the actual (possibly padded) page table.
+    tl.assume(WIDTH > 0)
+    tl.assume(WIDTH <= WIDTH_BOUND)
     row = tl.program_id(0)
     heads = tl.arange(0, H)
     ds = tl.arange(0, D)
@@ -544,13 +549,15 @@ def score_paged(query, weight, cache, lengths, table):
     result = torch.empty((rows, width), dtype=torch.float32, device=query.device)
     if not rows or not width:
         return result
+    width_bound = triton.next_power_of_2(width)
     workers = min(triton.cdiv(width, 64),
                   triton.cdiv(torch.cuda.get_device_properties(query.device).multi_processor_count * 2, rows))
     _score_pages[(rows, workers)](
         query, weight, cache, lengths, table, result,
         query.stride(0), query.stride(1), weight.stride(0), table.stride(0),
         cache.stride(0), cache.size(1), heads, dim, width,
-        max(16, triton.next_power_of_2(heads)), triton.next_power_of_2(dim), 64)
+        max(16, triton.next_power_of_2(heads)), triton.next_power_of_2(dim), 64,
+        WIDTH_BOUND=width_bound)
     return result
 
 

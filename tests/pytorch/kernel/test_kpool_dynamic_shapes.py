@@ -141,7 +141,7 @@ def test_indexed_cache_strided_and_masked(pages, fp8, explicit_requests):
     torch.testing.assert_close(scale_cache, expected_scales, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize('pages', [1, 16, 17, 513, 529, 545])
+@pytest.mark.parametrize('pages', [1, 16, 17, 513, 529, 545, 1023, 1024, 1025, 16384, 16385, 41952])
 @pytest.mark.parametrize('strided', [False, True])
 def test_score_pages_graph_replay(pages, strided):
     if torch.cuda.get_device_capability()[0] < 9:
