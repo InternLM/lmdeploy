@@ -125,6 +125,8 @@ class ChatRunner:
             mm_processor_kwargs=parsed_request.mm_processor_kwargs,
             **options.preprocess_kwargs,
         )
+        if getattr(response_parser, 'requires_output_chunks', False):
+            response_parser.bind_generation_config(preprocessed.gen_config)
         result_generator = server_context.async_engine.generate(preprocessed, stream_response=True)
         return cls(
             request=parsed_request,
@@ -165,10 +167,14 @@ class ChatRunner:
                 delta_text = res.response or ''
                 delta_token_ids = res.token_ids if res.token_ids is not None else []
                 try:
+                    parser_kwargs = {}
+                    if getattr(self.response_parser, 'requires_output_chunks', False):
+                        parser_kwargs['engine_final'] = res.finish_reason is not None
                     stream_deltas = self.response_parser.stream_chunk(
                         delta_text,
                         delta_token_ids,
                         final=res.finish_reason is not None,
+                        **parser_kwargs,
                     )
                     if not stream_deltas:
                         # With no visible parser output, emit only when this
@@ -225,6 +231,8 @@ class ChatRunner:
         final_logprobs: list[dict[int, float]] = []
         cache_block_ids: list[Any] = []
         remote_token_ids: list[Any] = []
+        output_chunks: list[tuple[str, list[int], bool]] | None = (
+            [] if getattr(self.response_parser, 'requires_output_chunks', False) else None)
         try:
             async for res in self.result_generator:
                 if raw_request is not None and await raw_request.is_disconnected():
@@ -232,6 +240,10 @@ class ChatRunner:
                     raise RequestError(ErrorCode.INVALID_REQUEST, 'Client disconnected')
                 final_res = res
                 text += res.response or ''
+                if output_chunks is not None:
+                    # Keep even empty-text batches: their IDs may complete a
+                    # UTF-8 character in the following native decode result.
+                    output_chunks.append((res.response or '', res.token_ids or [], res.finish_reason is not None))
                 if res.token_ids:
                     final_token_ids.extend(res.token_ids)
                 if res.logprobs:
@@ -245,7 +257,9 @@ class ChatRunner:
             raise RequestError(ErrorCode.INTERNAL_ERROR, 'No generation output from engine.')
 
         try:
-            text, tool_calls, reasoning_content = self.response_parser.parse_complete(text, final_token_ids)
+            parser_kwargs = {'output_chunks': output_chunks} if output_chunks is not None else {}
+            text, tool_calls, reasoning_content = self.response_parser.parse_complete(
+                text, final_token_ids, **parser_kwargs)
             if (isinstance(tool_calls, list) and len(tool_calls) and final_res.finish_reason == 'stop'
                     and getattr(final_res, 'stop_sequence', None) is None):
                 final_res.finish_reason = 'tool_calls'

@@ -71,10 +71,15 @@ def test_mooncake_state_budget_is_deployable_and_excluded_from_runtime(slots):
     from lmdeploy.cli.utils import ArgumentHelper
     parser = ArgumentParser()
     ArgumentHelper.prefill_save_alignment(parser)
+    ArgumentHelper.prefill_save_last_only(parser)
     ArgumentHelper.mooncake_state_save_slots(parser)
     defaults = parser.parse_args([])
-    assert (defaults.prefill_save_alignment, defaults.mooncake_state_save_slots) == (8192, 8)
-    args = parser.parse_args(['--mooncake-state-save-slots', str(slots), '--prefill-save-alignment', '4096'])
+    assert defaults.prefill_save_alignment == PytorchEngineConfig().prefill_save_alignment == 1024
+    assert CacheConfig.prefill_save_alignment == 1024
+    assert defaults.mooncake_state_save_slots == 8
+    assert not defaults.prefill_save_last_only
+    args = parser.parse_args(['--mooncake-state-save-slots', str(slots), '--prefill-save-alignment', '4096',
+                              '--prefill-save-last-only'])
     config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
         max_batch_size=2, prefix_cache_state_budget=1,
         kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_producer'),
@@ -84,6 +89,7 @@ def test_mooncake_state_budget_is_deployable_and_excluded_from_runtime(slots):
     executor.cache_config = config
     size = executor._get_state_cache_mem()
     assert config.prefill_save_alignment == 4096
+    assert config.prefill_save_last_only
     assert config.num_state_caches == 5 + slots
     assert size == config.num_state_caches * StateCacheEngine.get_state_slot_nbytes(config.states_shapes)
     manager = build_state_manager(config)

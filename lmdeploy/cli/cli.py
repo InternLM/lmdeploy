@@ -57,6 +57,7 @@ class CLI:
         ArgumentHelper.prefix_cache_state_budget(pt_group)
         ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
         ArgumentHelper.prefill_save_alignment(pt_group)
+        ArgumentHelper.prefill_save_last_only(pt_group)
         ArgumentHelper.mooncake_state_save_slots(pt_group)
         ArgumentHelper.enable_replayssm(pt_group)
         ArgumentHelper.replayssm_buffer_len(pt_group)

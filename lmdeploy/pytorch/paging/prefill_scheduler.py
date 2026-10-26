@@ -16,7 +16,11 @@ from torch.profiler import record_function
 
 from lmdeploy.messages import EventType
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.long_context import get_long_context_chunk_limit, plan_long_context_chunk
+from lmdeploy.pytorch.long_context import (
+    get_last_prefill_save_step,
+    get_long_context_chunk_limit,
+    plan_long_context_chunk,
+)
 from lmdeploy.utils import get_logger
 
 from ..config import CacheConfig, SchedulerConfig
@@ -145,7 +149,7 @@ class _PrefillReorderer:
         return info
 
     def _estimate_long_chunks(self, seq: SchedulerSequence, chunk_limit: int, first_chunk_end: int):
-        """Count the planned first chunk and estimate its continuation in O(1).
+        """Estimate chunk count without walking the remaining text chunks.
 
         The continuation accounts for save alignment but treats future tokens as text. Later multimodal spans can change
         its boundaries, so this remains an ordering estimate, never an allocation or execution plan.
@@ -154,6 +158,13 @@ class _PrefillReorderer:
         end = seq.num_history_ids + seq.num_token_ids
         remaining = end - first_chunk_end
         ordinary_chunks = 1 + (remaining + chunk_limit - 1) // chunk_limit
+        if seq._seq_meta.prefill_save_last_only:
+            save_step = get_last_prefill_save_step(seq)
+            if save_step is None or save_step <= first_chunk_end:
+                return ordinary_chunks
+            before_save = (save_step - first_chunk_end + chunk_limit - 1) // chunk_limit
+            after_save = (end - save_step + chunk_limit - 1) // chunk_limit
+            return 1 + before_save + after_save
         alignment = seq._seq_meta.prefill_save_alignment
         if not alignment or len(seq.history_embeddings) > 0:
             return ordinary_chunks

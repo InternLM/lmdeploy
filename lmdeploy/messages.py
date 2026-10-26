@@ -503,9 +503,13 @@ class PytorchEngineConfig:
             must be multiples of the cache block size.
         prefill_save_alignment: Token alignment for prefill state checkpoints,
             shared by local prefix caching and Mooncake Store. Defaults to
-            8192 and must be a positive multiple of block_size. Only applies
+            1024 and must be a positive multiple of block_size. Only applies
             to models with linear-attention state caches; full-attention-only
             models ignore it. Intermediate aligned positions may be skipped.
+        prefill_save_last_only: Save local prefix checkpoints and Mooncake
+            caches only at the last safe aligned boundary before the end of
+            each prefill. Leaves at least one input token for prefix reuse.
+            Defaults to False. Only applies to linear-attention state caches.
         mooncake_state_save_slots: Number of temporary hybrid state snapshots
             reserved for asynchronous Mooncake saves. Defaults to 8. A full
             snapshot pool skips the save without blocking inference.
@@ -580,7 +584,8 @@ class PytorchEngineConfig:
     enable_prefix_caching: bool = False
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
-    prefill_save_alignment: int = 8192
+    prefill_save_alignment: int = 1024
+    prefill_save_last_only: bool = False
     mooncake_state_save_slots: int = 8
     enable_replayssm: bool = False
     replayssm_buffer_len: int = 16

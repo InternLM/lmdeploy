@@ -184,7 +184,8 @@ class CacheConfig:
     num_state_caches: int = None
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
-    prefill_save_alignment: int = 8192
+    prefill_save_alignment: int = 1024
+    prefill_save_last_only: bool = False
     mooncake_state_save_slots: int = 8
     # Model-owned checkpoint validity constraint, independent of prefill chunking.
     prefix_cache_block_aligned: bool = False

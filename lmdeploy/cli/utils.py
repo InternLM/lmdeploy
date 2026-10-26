@@ -643,12 +643,22 @@ class ArgumentHelper:
         """Add the shared prefill state-checkpoint alignment."""
         return parser.add_argument('--prefill-save-alignment',
                                    type=int,
-                                   default=8192,
+                                   default=1024,
                                    help='Token alignment for linear-attention prefill state checkpoints, shared by '
                                    'local prefix caching and Mooncake Store. Must be a positive multiple of cache '
                                    'block size; intermediate aligned positions may be skipped. '
                                    'Ignored by full-attention-only models. '
                                    'Only used by the PyTorch engine.')
+
+    @staticmethod
+    def prefill_save_last_only(parser):
+        """Add the final prefill checkpoint policy."""
+        return parser.add_argument('--prefill-save-last-only',
+                                   action='store_true',
+                                   help='Save local prefix checkpoints and Mooncake caches only at the last safe '
+                                   'prefill-save-alignment boundary before the end of each prefill. '
+                                   'Leaves at least one input token for prefix reuse. '
+                                   'Only used by PyTorch models with linear-attention state caches.')
 
     @staticmethod
     def mooncake_state_save_slots(parser):
