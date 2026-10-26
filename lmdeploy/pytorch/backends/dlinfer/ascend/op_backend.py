@@ -276,12 +276,7 @@ class AscendOpsBackend(DlinferOpsBackend):
                 idx = (step_context.kv_seqlens - 1) % block_size
                 block_num = (step_context.kv_seqlens - 1) // block_size
                 last_block = step_context.block_offsets.gather(1, block_num.view(-1, 1)).view(-1)
-                # MLAPO decode consumes this buffer directly.  Keep the
-                # graph input int32/contiguous here so every attention layer
-                # avoids repeating reshape/cast/contiguous checks.
-                kv_start_indices = (last_block * block_size + idx).to(
-                    torch.int32
-                ).contiguous()
+                kv_start_indices = last_block * block_size + idx
             else:
                 for i in range(len(q_seqlens_list)):
                     q_seq_len = q_seqlens_list[i]
