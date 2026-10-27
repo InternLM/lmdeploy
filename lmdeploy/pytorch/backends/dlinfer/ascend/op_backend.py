@@ -178,7 +178,11 @@ class AscendOpsBackend(DlinferOpsBackend):
             GatedDeltaMetaBuildSpec,
             GatedDeltaRuleBuildSpec,
         )
+        from ...rejection_sampling import RejectionSamplingBuildSpec
 
+        if isinstance(spec, RejectionSamplingBuildSpec):
+            from .rejection_sampling import AscendRejectionSamplingImpl
+            return AscendRejectionSamplingImpl()
         if isinstance(spec, CausalConv1dBuildSpec):
             from .causal_conv1d import AscendCausalConv1dImpl
             return AscendCausalConv1dImpl()
@@ -189,6 +193,12 @@ class AscendOpsBackend(DlinferOpsBackend):
             from .gated_delta_rule import AscendGatedDeltaRuleImpl
             return AscendGatedDeltaRuleImpl()
         return super().build_op(spec, enable_deterministic=enable_deterministic)
+
+    @classmethod
+    def get_cache_backend(cls):
+        """Get the Ascend cache backend provider."""
+        from .cache import AscendCacheBackend
+        return AscendCacheBackend
 
     @staticmethod
     def get_k_block_shape(

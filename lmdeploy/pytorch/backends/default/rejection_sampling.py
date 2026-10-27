@@ -16,7 +16,7 @@ def _format_rejection_outputs(
     batch_size, num_spec_tokens = selected_token_ids.shape
     prefix_before = torch.ones_like(accepted, dtype=torch.bool)
     if num_spec_tokens > 1:
-        prefix_before[:, 1:] = accepted[:, :-1].to(torch.int32).cumprod(dim=1).bool()
+        prefix_before[:, 1:] = accepted[:, :-1].cumprod(dim=1).bool()
 
     placeholder = selected_token_ids.new_full((), PLACEHOLDER_TOKEN_ID)
     output_token_ids = selected_token_ids.new_full(

@@ -48,26 +48,6 @@ class TorchBlockCacheCopy(BlockCacheCopy):
                 blocks_per_chunk = min(blocks_per_chunk, num_logical_blocks)
         return cls(allocation, num_logical_blocks, pages_per_block, blocks_per_chunk)
 
-    @staticmethod
-    def _block_view_gather(workspace: torch.Tensor, entry_axis: int,
-                           block_offsets: torch.Tensor, pool: torch.Tensor) -> None:
-        """Copy blocks out of ``pool`` into consecutive workspace slots.
-
-        torch_npu's index ops contiguous-ize both pool tensors first, which
-        allocates pool-sized temporaries and costs pool-wide time; plain
-        ``copy_`` between block views stays bounded by a single block.
-        """
-        for i, offset in enumerate(block_offsets.tolist()):
-            workspace.select(entry_axis, i).copy_(pool.select(entry_axis, offset))
-
-    @staticmethod
-    def _block_view_scatter(pool: torch.Tensor, entry_axis: int,
-                            block_offsets: torch.Tensor,
-                            workspace: torch.Tensor) -> None:
-        """Copy consecutive workspace slots back into ``pool`` blocks."""
-        for i, offset in enumerate(block_offsets.tolist()):
-            pool.select(entry_axis, offset).copy_(workspace.select(entry_axis, i))
-
     def copy(self, src_block_offsets: torch.Tensor, dst_block_offsets: torch.Tensor) -> None:
         """Gather then scatter complete logical blocks for every pool."""
         num_blocks = src_block_offsets.numel()
@@ -89,15 +69,8 @@ class TorchBlockCacheCopy(BlockCacheCopy):
                 chunk_workspace = workspace.narrow(entry_axis, 0, chunk_blocks)
                 src_chunk = src_block_offsets[start:end]
                 dst_chunk = dst_block_offsets[start:end]
-                if logical_pool.device.type == 'npu':
-                    # torch_npu's index ops contiguous-ize the whole pool
-                    # view first, allocating pool-sized temporaries; copy
-                    # block views instead so peak memory stays bounded.
-                    self._block_view_gather(chunk_workspace, entry_axis, src_chunk, logical_pool)
-                    self._block_view_scatter(logical_pool, entry_axis, dst_chunk, chunk_workspace)
-                else:
-                    torch.index_select(logical_pool, entry_axis, src_chunk, out=chunk_workspace)
-                    logical_pool.index_copy_(entry_axis, dst_chunk, chunk_workspace)
+                torch.index_select(logical_pool, entry_axis, src_chunk, out=chunk_workspace)
+                logical_pool.index_copy_(entry_axis, dst_chunk, chunk_workspace)
 
 
 class DefaultCacheBackend(CacheBackend):
