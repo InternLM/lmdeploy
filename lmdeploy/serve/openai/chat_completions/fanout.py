@@ -266,6 +266,8 @@ def _batch_stream_payloads(payloads: list[dict]) -> list[dict]:
             # A later choice may be sending its first delta in this batch.
             if 'prompt_text' in payload:
                 batches[target].setdefault('prompt_text', payload['prompt_text'])
+            if 'prompt_token_ids' in payload:
+                batches[target].setdefault('prompt_token_ids', payload['prompt_token_ids'])
         next_batch_by_index[index] = target + 1
 
     for payload in batches:

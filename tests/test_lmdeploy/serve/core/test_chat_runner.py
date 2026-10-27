@@ -66,7 +66,7 @@ class _FakeEngine:
     async def preprocess(self, messages, session, **kwargs):
         self.preprocess_messages = messages
         self.preprocess_kwargs = kwargs
-        return SimpleNamespace(messages=messages, session=session)
+        return SimpleNamespace(messages=messages, session=session, inputs={'input_ids': [1, 2, 3]})
 
     def generate(self, request, **kwargs):
         async def _generator():
@@ -411,5 +411,28 @@ def test_runner_preserves_stop_sequence_with_token_id_parser(stream, stop_sequen
         assert result.stop_sequence == stop_sequence
         assert runner._closed and engine.generator_closed
         assert engine.session_mgr.removed == [engine.session_mgr.session]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('enabled', [False, None, True])
+def test_runner_snapshots_preprocessed_prompt_ids(enabled):
+    context = _FakeServerContext(_Parser)
+    prompt_ids = [101, 102, 103]
+    original_preprocess = context.async_engine.preprocess
+
+    async def preprocess(*args, **kwargs):
+        result = await original_preprocess(*args, **kwargs)
+        # No rendered text is needed to return the engine input IDs.
+        result.inputs = {'input_ids': prompt_ids}
+        return result
+
+    context.async_engine.preprocess = preprocess
+
+    async def run():
+        runner = await ChatRunner.prepare(context, _request(return_token_ids=enabled))
+        prompt_ids.append(104)
+        assert runner.prompt_token_ids == ([101, 102, 103] if enabled else None)
+        await runner.close()
 
     asyncio.run(run())

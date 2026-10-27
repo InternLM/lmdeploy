@@ -270,6 +270,7 @@ def register(router: APIRouter, server_context) -> None:
             try:
                 final_usage = None
                 prompt_text_sent = False
+                prompt_token_ids_sent = False
                 async for chunk in chat_runner.stream():
                     logprobs = None
                     output_token_logprobs = None
@@ -306,6 +307,9 @@ def register(router: APIRouter, server_context) -> None:
                     if request.return_prompt_text and not prompt_text_sent:
                         response_json['prompt_text'] = chat_runner.prompt_text
                         prompt_text_sent = True
+                    if request.return_token_ids and not prompt_token_ids_sent:
+                        response_json['prompt_token_ids'] = chat_runner.prompt_token_ids
+                        prompt_token_ids_sent = True
                     if chunk.cache_block_ids is not None and chunk.is_last_delta:
                         response_json['cache_block_ids'] = chunk.cache_block_ids
                         response_json['remote_token_ids'] = chunk.token_ids
@@ -383,8 +387,9 @@ def register(router: APIRouter, server_context) -> None:
             created=created_time,
             model=model_name,
             choices=choices,
+            prompt_token_ids=chat_runner.prompt_token_ids,
             usage=usage,
-        ).model_dump()
+        ).model_dump(exclude={'prompt_token_ids'} if not request.return_token_ids else None)
 
         if request.return_prompt_text:
             response['prompt_text'] = chat_runner.prompt_text
