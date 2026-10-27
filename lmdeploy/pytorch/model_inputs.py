@@ -366,6 +366,10 @@ class StepContext:
     is_first_chunk: bool = False
     is_last_chunk: bool = False
 
+    # Full-graph device scalar: zero for dummy DP steps, otherwise the
+    # unpadded token count. Its address stays fixed while replay values change.
+    moe_valid_token_count: torch.Tensor | None = None
+
     @classmethod
     def new(
         cls,
