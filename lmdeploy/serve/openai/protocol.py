@@ -219,7 +219,12 @@ class ChatCompletionRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices('enable_thinking', AliasPath('extra_body', 'enable_thinking')),
     )
-    return_token_ids: bool | None = False
+    return_token_ids: bool | None = Field(
+        default=False,
+        validation_alias=AliasChoices('return_token_ids', AliasPath('extra_body', 'return_token_ids')),
+        description=('Return prompt_token_ids and generated output_ids. Streaming includes the complete prompt IDs '
+                     'on each choice\'s first chunk and incremental output IDs on each chunk.'),
+    )
     return_prompt_text: bool = Field(
         default=False,
         validation_alias=AliasChoices('return_prompt_text', AliasPath('extra_body', 'return_prompt_text')),
@@ -339,6 +344,7 @@ class ChatCompletionResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: list[ChatCompletionResponseChoice]
+    prompt_token_ids: list[int] | None = None
     usage: UsageInfo
     # OpenAI shape placeholder. Request-side tier scheduling is not implemented;
     # the response reports ``None`` until scheduling is added.
@@ -384,6 +390,7 @@ class ChatCompletionStreamResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: list[ChatCompletionResponseStreamChoice]
+    prompt_token_ids: list[int] | None = None
     usage: UsageInfo | None = None
 
 

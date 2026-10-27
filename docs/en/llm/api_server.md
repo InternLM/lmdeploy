@@ -68,6 +68,47 @@ If you need to integrate the service into your own projects or products, we reco
 
 Set `return_prompt_text=true` on `/v1/chat/completions` to include the rendered `prompt_text` in the response. With the Python OpenAI client, pass `extra_body={"return_prompt_text": True}`; raw JSON may use either the top-level field or the same nested object, with the top-level value taking precedence. Streaming includes the prompt in the first chunk of each choice. The value is the actual template output, so reasoning-effort markers depend on the model's template. Raw `input_ids` requests have no rendered prompt and return `null`. The field is omitted unless requested.
 
+### Return chat token IDs
+
+Set `return_token_ids=true` on `/v1/chat/completions` to return `prompt_token_ids`
+at the response's top level and generated `output_ids` in each choice. With the
+Python OpenAI client, pass `extra_body={"return_token_ids": True}`. Raw JSON
+accepts either the top-level field or the same nested object; the top-level value
+takes precedence. The new `prompt_token_ids` field is omitted unless requested,
+independently of `return_prompt_text` and logprobs.
+
+The prompt IDs are copied from the input prepared for generation, including chat
+template tokens; they are not reconstructed by tokenizing `prompt_text`. Raw
+`input_ids` requests also return the prepared IDs, even without rendered text.
+
+For example, a non-streaming response includes:
+
+```json
+{
+  "prompt_token_ids": [101, 102, 103],
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": "..."},
+      "output_ids": [201, 202],
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+Streaming includes the complete prompt IDs on each choice's first data chunk,
+even if it has no visible text. With `n > 1`, the field may therefore appear in
+multiple chunks; merged choices share one top-level copy. Store one complete
+prompt list and concatenate only the incremental `output_ids` separately for
+each choice. Usage-only chunks do not include prompt IDs.
+
+Token IDs can support fixed-sequence scoring and debugging of control tokens.
+They do not themselves request logprobs or change the existing filtering of stop
+tokens in `output_ids`. Preserve the model/tokenizer revisions and inference
+configuration for replay; multimodal requests also need the original media and
+preprocessing configuration.
+
 ### Return more chat logprobs with PyTorch
 
 Start with `--backend pytorch --logprobs-mode raw_logprobs`. Chat requests accept

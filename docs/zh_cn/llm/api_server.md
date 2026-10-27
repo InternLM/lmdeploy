@@ -88,6 +88,43 @@ LMDeploy 的 RESTful API 兼容了 OpenAI 以下 3 个接口：
 
 向 `/v1/chat/completions` 传入 `return_prompt_text=true`，响应会包含实际渲染的 `prompt_text`。使用 Python OpenAI 客户端时传入 `extra_body={"return_prompt_text": True}`；原始 JSON 同时支持顶层字段和该嵌套对象，顶层值优先。流式响应在每个 choice 的首个 chunk 中返回 prompt。该值来自实际模板输出，推理强度标记取决于模型模板；原始 `input_ids` 请求没有渲染 prompt，返回 `null`。未请求时不返回此字段。
 
+### 返回 Chat token IDs
+
+向 `/v1/chat/completions` 传入 `return_token_ids=true`，响应顶层会返回
+`prompt_token_ids`，每个 choice 中保留生成部分的 `output_ids`。使用 Python
+OpenAI 客户端时传入 `extra_body={"return_token_ids": True}`；原始 JSON 同时支持
+顶层字段和该嵌套对象，顶层值优先。未请求时不返回新增的 `prompt_token_ids` 字段，
+该开关与 `return_prompt_text`、logprobs 独立生效。
+
+输入 IDs 来自准备传给生成过程的输入，包含聊天模板 token，不会通过重新编码
+`prompt_text` 来还原。直接传入 `input_ids` 时，即使没有渲染文本，也会返回
+预处理后的输入 IDs。
+
+例如，非流式响应包含：
+
+```json
+{
+  "prompt_token_ids": [101, 102, 103],
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": "..."},
+      "output_ids": [201, 202],
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+流式响应在每个 choice 的首个数据 chunk 中返回完整输入 IDs，即使该 chunk
+没有可见文本。`n > 1` 时，此字段可能出现在多个 chunk 中；多个 choice 合并到
+同一 chunk 时，共用一份顶层字段。客户端保存一份完整输入列表即可，仅按 choice
+分别拼接增量 `output_ids`。仅包含 usage 的 chunk 不携带输入 IDs。
+
+这些 IDs 可用于固定序列打分和控制 token 排障，但此开关本身不会请求 logprobs，
+也不改变 `output_ids` 原有的停止 token 过滤行为。回放时仍需保存模型和 tokenizer
+版本及推理配置；多模态请求还需要原始媒体及预处理配置。
+
 ### 使用 PyTorch 返回更多 Chat logprobs
 
 使用 `--backend pytorch --logprobs-mode raw_logprobs` 启动服务。Chat 请求允许
