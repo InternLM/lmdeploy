@@ -229,6 +229,8 @@ class MPExecutor(ExecutorBase):
                  device_type: str = 'cuda',
                  trust_remote_code: bool = False):
         """Initialize Executor."""
+        if cache_config.compact_state_capacity is not None:
+            raise NotImplementedError('Compact state completion is not supported by the deprecated MP executor.')
         super().__init__(model_path=model_path,
                          model_config=model_config,
                          cache_config=cache_config,

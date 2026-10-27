@@ -87,6 +87,7 @@ def _bare_model_agent():
 
     agent = BaseModelAgent.__new__(BaseModelAgent)
     agent.all_context = nullcontext
+    agent.compact_state_plan = None
     agent.cache_config = _enabled_config()
     agent.model_config = SimpleNamespace(num_replicate_key_value_heads=4)
     agent.rank = 7
@@ -107,7 +108,7 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
     state_pools = (object(), )
     cache_engine = SimpleNamespace(connector_kv_caches=target_rows)
     mtp_cache_engine = SimpleNamespace(connector_kv_caches=mtp_rows)
-    state_cache_engine = SimpleNamespace(connector_state_cache_pools=state_pools)
+    state_cache_engine = SimpleNamespace(compact_plan=None, connector_state_cache_pools=state_pools)
 
     class _OldConnector:
 
@@ -193,7 +194,7 @@ def test_build_cache_engine_registers_state_pools_with_connector(monkeypatch):
     row_mapping = {'kv': object()}
     state_pools = (object(), )
     cache_engine = SimpleNamespace(connector_kv_caches=row_mapping)
-    state_cache_engine = SimpleNamespace(connector_state_cache_pools=state_pools)
+    state_cache_engine = SimpleNamespace(compact_plan=None, connector_state_cache_pools=state_pools)
 
     class _Connector:
 
@@ -253,7 +254,7 @@ def test_build_cache_engine_propagates_registration_error(monkeypatch):
     dist_ctx = SimpleNamespace(attn_tp_group=SimpleNamespace(rank=3))
     monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: cache_engine)
     monkeypatch.setattr(agent_module, 'StateCacheEngine',
-                        lambda *args, **kwargs: SimpleNamespace(connector_state_cache_pools=()))
+                        lambda *args, **kwargs: SimpleNamespace(compact_plan=None, connector_state_cache_pools=()))
     monkeypatch.setattr(agent_module, 'build_kv_connector', lambda *args, **kwargs: _Connector())
     monkeypatch.setattr(agent_module, 'get_dist_manager',
                         lambda: SimpleNamespace(current_context=lambda: dist_ctx))
@@ -285,7 +286,7 @@ def test_build_cache_engine_propagates_later_initialization_error(monkeypatch):
     cache_engine = SimpleNamespace(connector_kv_caches={'kv': object()})
     dist_ctx = SimpleNamespace(attn_tp_group=SimpleNamespace(rank=3))
     monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: cache_engine)
-    monkeypatch.setattr(agent_module, 'StateCacheEngine', lambda *args, **kwargs: object())
+    monkeypatch.setattr(agent_module, 'StateCacheEngine', lambda *args, **kwargs: SimpleNamespace(compact_plan=None))
     monkeypatch.setattr(agent_module, 'build_kv_connector',
                         lambda *args, **kwargs: events.append('factory'))
     monkeypatch.setattr(agent_module, 'get_dist_manager',
@@ -641,6 +642,7 @@ def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(mo
     )
 
     agent = agent_module.BaseModelAgent.__new__(agent_module.BaseModelAgent)
+    agent.ssm_state_cursor = None
     agent.rank = 0
     agent.kv_connector = _Connector()
     agent.spec_agent = SimpleNamespace(is_enabled=lambda: True,
@@ -658,6 +660,7 @@ def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(mo
     agent._push_output = lambda output: pytest.fail('unexpected output')
 
     inputs = SimpleNamespace(
+        ssm_state_meta=None,
         is_dummy=False,
         is_decoding=False,
         input_ids=torch.tensor([1]),
@@ -700,6 +703,11 @@ def test_release_shuts_down_connector_before_dropping_cache(monkeypatch):
     agent.cache_engine = cache_engine
     agent.state_cache_engine = object()
     agent.patched_model = object()
+    agent.cache_config.compact_state_capacity = object()
+    agent._background_task = None
+    agent.compact_state_plan = object()
+    agent.ssm_state_cursor = object()
+    agent.step_inputs = SimpleNamespace(ssm_state_cursor=agent.ssm_state_cursor)
     agent.reset_graph_runner = lambda: events.append('reset-graph')
     monkeypatch.setattr(agent_module.torch.cuda, 'empty_cache', lambda: events.append('empty-cache'))
 
@@ -709,6 +717,7 @@ def test_release_shuts_down_connector_before_dropping_cache(monkeypatch):
     assert agent.kv_connector is None
     assert agent.cache_engine is None
     assert agent.state_cache_engine is None
+    assert agent.compact_state_plan is agent.ssm_state_cursor is agent.step_inputs is None
 
 
 def test_wakeup_rebuilds_connector_with_kv_cache():

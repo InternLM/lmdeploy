@@ -82,6 +82,7 @@ from lmdeploy.pytorch.prefix_cache_state import PrefixCacheExtraIdentity
 from lmdeploy.utils import get_logger
 
 from ..block_manager.base_block_manager import LogicalAllocator
+from ..compact_state import SSMStateManager
 from ..state_manager import StateManager
 from .checkpoint import (
     StateCheckpointIndex,
@@ -92,6 +93,7 @@ from .checkpoint import (
     make_request_multimodal_identity,
 )
 from .checkpoint_lifecycle import StateCheckpointLifecycle
+from .compact_checkpoint import SSMStateCheckpointLifecycle
 from .kv_lifecycle import KVBlockLifecycle
 from .node import Node
 
@@ -146,7 +148,7 @@ class BlockTrie:
                  allocator: LogicalAllocator,
                  block_size: int,
                  enabled: bool,
-                 checkpoint_state_manager: StateManager | None = None):
+                 checkpoint_state_manager: StateManager | SSMStateManager | None = None):
         self.allocator = allocator
         self.block_size = block_size
         self.enabled = enabled
@@ -158,7 +160,10 @@ class BlockTrie:
         # published recurrent-state snapshots are indexed only at selected
         # exact steps.
         self._checkpoint_index = StateCheckpointIndex(self.block_size, self._hash_block)
-        self._state_checkpoints = StateCheckpointLifecycle(
+        checkpoint_lifecycle = (SSMStateCheckpointLifecycle
+                                if isinstance(checkpoint_state_manager, SSMStateManager)
+                                else StateCheckpointLifecycle)
+        self._state_checkpoints = checkpoint_lifecycle(
             prefix_cache_enabled=self.enabled,
             state_checkpoints_enabled=self._use_checkpoints,
             block_size=self.block_size,
@@ -166,6 +171,8 @@ class BlockTrie:
             state_manager=checkpoint_state_manager,
             index=self._checkpoint_index,
             snapshot_match_data=self._snapshot_checkpoint_match_data,
+            **({'attach_decode_checkpoint': self.attach_decode_checkpoint}
+               if isinstance(checkpoint_state_manager, SSMStateManager) else {}),
         )
         self._kv_lifecycle = KVBlockLifecycle(self.allocator, self._state_checkpoints)
         self.stats = PrefixCacheStats()
@@ -179,6 +186,20 @@ class BlockTrie:
     def state_checkpoints(self) -> StateCheckpointLifecycle:
         """Expose the state-checkpoint lifecycle as a grouped public API."""
         return self._state_checkpoints
+
+    def reset_compact_after_worker_drain(self):
+        """Invalidate a discarded compact GPU cache after all sessions ended.
+
+        Sleep rebuilds both KV and state payloads. Keeping a host trie hit into
+        that fresh allocation would read uninitialized data, even if no forward
+        completion was lost. Do not replace owners/allocators or reset access
+        tickets: stale completion identities must never alias a new request.
+        """
+        if not isinstance(self._state_checkpoints, SSMStateCheckpointLifecycle):
+            raise TypeError('Compact cache reset requires its explicit lifecycle owner.')
+        self._state_checkpoints.finish_cancelled_forwards_after_worker_drain()
+        self.clear()
+        self.stats.reset()
 
     def _record_match_stats(self, seq: SchedulerSequence, query_tokens: int, hit_tokens: int = 0):
         """Record a user-visible prefix-cache match attempt."""
@@ -567,7 +588,8 @@ class BlockTrie:
         seq.prefix_cache.trie_cursor = node
         return node
 
-    def _extend_trie_path(self, seq: SchedulerSequence, node: Node, num_complete_blocks: int):
+    def _extend_trie_path(self, seq: SchedulerSequence, node: Node, num_complete_blocks: int,
+                          *, preserve_blocks: bool = False):
         """Attach or deduplicate the sequence's completed block path."""
         block_size = self.block_size
         logical_blocks = seq.logical_blocks
@@ -590,6 +612,14 @@ class BlockTrie:
             child = node.children.get(block_hash)
             if child is not None and not self._node_matches_block(child, token_ids, extra_identity):
                 break
+
+            if preserve_blocks and child is not None:
+                # Decode publication follows dispatch: queued block-offset
+                # tables must remain valid. Traverse canonical identity without
+                # replacing/freeing the sequence's already submitted KV pages.
+                trie_block_map[block_idx] = child.block_id
+                node = child
+                continue
 
             if (seq._seq_meta.prefix_cache_checkpoint_block_size and child is not None
                     and end > seq.num_history_ids):
@@ -635,6 +665,18 @@ class BlockTrie:
 
         seq.prefix_cache.trie_cursor = node
         self._kv_lifecycle.commit_path_extension(node, ref_blocks=ref_blocks, free_blocks=free_blocks)
+
+    def attach_decode_checkpoint(self, seq: SchedulerSequence, step: int):
+        """Attach known aligned token identity without changing queued KV
+        IDs."""
+        if (not self.enabled or step <= 0 or step % self.block_size or step > seq.num_valid_ids
+                or step // self.block_size > len(seq.logical_blocks)
+                or (seq.kv_token_limit is not None and step > seq.kv_token_limit)):
+            return None
+        node = self._ensure_attached_allocation_cursor(seq)
+        if node.prefix_len < step:
+            self._extend_trie_path(seq, node, step // self.block_size, preserve_blocks=True)
+        return self._state_checkpoints._find_checkpoint_node(seq, step)
 
     def allocate(self, seq: SchedulerSequence):
         """Attach newly allocated full blocks to the prefix-cache trie.
