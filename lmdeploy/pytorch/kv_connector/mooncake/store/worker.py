@@ -333,7 +333,7 @@ class MooncakeStoreWorker:
             # the string-device fakes used in tests; normalize to a bare type
             # such as 'cuda' or 'npu' before validating.
             device_type = str(row.device).split(':')[0]
-            if device_type not in ('cuda', 'npu'):
+            if device_type not in ('cuda', 'npu') and not row.is_cuda:
                 raise ValueError(
                     f'KV cache row {name!r} must be a CUDA tensor or NPU tensor, '
                     f'got device {device_type!r}')
@@ -360,8 +360,13 @@ class MooncakeStoreWorker:
             tensor = pool.tensor
             if not torch.is_tensor(tensor):
                 raise TypeError(f'state cache pool {index} must be a tensor')
-            if not tensor.is_cuda:
-                raise ValueError(f'state cache pool {index} must be a CUDA tensor')
+            # Same device rule as KV rows above: NPU state pools register like
+            # CUDA ones, and CUDA-only host-memory test doubles keep working.
+            device_type = str(tensor.device).split(':')[0]
+            if device_type not in ('cuda', 'npu') and not tensor.is_cuda:
+                raise ValueError(
+                    f'state cache pool {index} must be a CUDA or NPU tensor, '
+                    f'got device {device_type!r}')
             if not tensor.is_contiguous():
                 raise ValueError(f'state cache pool {index} must be contiguous')
             entry_axis = int(pool.entry_axis)
@@ -475,7 +480,9 @@ class MooncakeStoreWorker:
             raise RuntimeError('Mooncake KV-cache receiver is not initialized')
         ready_event = None
         if any(request.state_slot is not None for request in connector_metadata.load_requests):
-            ready_event = torch.cuda.Event()
+            # State slots live in cache memory the forward pass may still be
+            # writing; fence through the device-aware backend like the save path.
+            ready_event = self._transfer_backend.make_ready_event()
             ready_event.record()
         for request in connector_metadata.load_requests:
             request_id = request.request_id
