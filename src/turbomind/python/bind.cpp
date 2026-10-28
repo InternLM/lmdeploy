@@ -42,8 +42,12 @@
 #include "src/turbomind/models/qwenvit/qwenvit_block_weight.h"
 #include "src/turbomind/models/qwenvit/qwenvit_input.h"
 #include "src/turbomind/models/qwenvit/qwenvit_weight.h"
+#include "src/turbomind/models/speculative/eagle3/eagle3_weight.h"
+#include "src/turbomind/models/speculative/qwen3_5_mtp/qwen3_5_mtp_weight.h"
 #include "src/turbomind/models/vision_model_weight.h"
 #include "src/turbomind/python/dlpack.h"
+#include "src/turbomind/python/attention_component_bindings.h"
+#include "src/turbomind/python/eagle3_component_bindings.h"
 #include "src/turbomind/turbomind.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
@@ -306,6 +310,80 @@ std::shared_ptr<Tensor> FromDLPack(const py::object& object)
     return std::make_shared<Tensor>(std::move(owner), std::move(layout), dtype, device);
 }
 
+ft::core::ssize_t TorchStorageCapacityElements(py::handle source, ft::DataType dtype, ft::core::ssize_t fallback)
+{
+    if (!source || !py::hasattr(source, "untyped_storage") || !py::hasattr(source, "storage_offset")) {
+        return fallback;
+    }
+
+    try {
+        const auto elem_bytes = ft::byte_size(dtype);
+        if (elem_bytes <= 0) {
+            return fallback;
+        }
+        auto storage       = source.attr("untyped_storage")();
+        auto storage_bytes = py::cast<ft::core::ssize_t>(storage.attr("nbytes")());
+        auto offset        = py::cast<ft::core::ssize_t>(source.attr("storage_offset")());
+        if (storage_bytes < 0 || offset < 0) {
+            return fallback;
+        }
+        const auto offset_bytes = offset * elem_bytes;
+        if (offset_bytes < 0 || offset_bytes > storage_bytes) {
+            return fallback;
+        }
+        const auto capacity = (storage_bytes - offset_bytes) / elem_bytes;
+        return capacity > fallback ? capacity : fallback;
+    }
+    catch (py::error_already_set& e) {
+        e.restore();
+        PyErr_Clear();
+        return fallback;
+    }
+}
+
+// Like FromDLPack, but sizes the buffer to the source storage's capacity so
+// strided views (e.g. transposed destinations) can be written past cosize().
+std::shared_ptr<Tensor> FromDLPackWithStrides(const py::object& object)
+{
+    py::capsule capsule   = object.attr("__dlpack__")();
+    auto*       managed   = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(capsule.ptr(), kDlTensorCapsuleName));
+    auto&       dl_tensor = managed->dl_tensor;
+
+    const ft::core::Device device{getMemoryType(dl_tensor.device), dl_tensor.device.device_id};
+    const auto             dtype = getDataType(dl_tensor.dtype);
+    assert(dl_tensor.ndim > 0);
+    std::vector<ft::core::ssize_t> shape(dl_tensor.shape, dl_tensor.shape + dl_tensor.ndim);
+
+    // Compute row-major strides if DLPack strides are NULL (contiguous tensor)
+    std::vector<ft::core::ssize_t> strides;
+    if (dl_tensor.strides) {
+        strides.assign(dl_tensor.strides, dl_tensor.strides + dl_tensor.ndim);
+    }
+    else {
+        strides.resize(dl_tensor.ndim);
+        ft::core::ssize_t value = 1;
+        for (int i = dl_tensor.ndim - 1; i >= 0; --i) {
+            strides[i] = value;
+            value *= shape[i];
+        }
+    }
+
+    ft::core::Layout layout{std::move(shape), std::move(strides)};
+    auto*            data = static_cast<char*>(dl_tensor.data) + dl_tensor.byte_offset;
+
+    std::shared_ptr<void> owner{data, [managed](void*) {
+                                    if (managed->deleter) {
+                                        managed->deleter(managed);
+                                    }
+                                }};
+    capsule.set_name("used_dltensor");
+
+    const auto capacity =
+        layout.is_contiguous() ? layout.cosize() : TorchStorageCapacityElements(object, dtype, layout.cosize());
+    auto buffer = ft::core::Buffer{std::move(owner), capacity, dtype, device};
+    return std::make_shared<Tensor>(std::move(buffer), std::move(layout), Tensor::PreserveBufferCapacity{});
+}
+
 static void safe_memcpy(void* dst, const void* src, size_t size)
 {
     cudaPointerAttributes dat{};
@@ -548,7 +626,11 @@ PYBIND11_MODULE(_turbomind, m)
 
     py::class_<ft::RequestState, std::unique_ptr<ft::RequestState>>(m, "RequestState")
         .def_readonly("status", &ft::RequestState::status)
-        .def_readonly("seq_len", &ft::RequestState::seq_len);
+        .def_readonly("seq_len", &ft::RequestState::seq_len)
+        .def_readonly("num_drafts", &ft::RequestState::num_drafts)
+        .def_readonly("num_draft_tokens", &ft::RequestState::num_draft_tokens)
+        .def_readonly("num_accepted_tokens", &ft::RequestState::num_accepted_tokens)
+        .def_readonly("num_accepted_tokens_per_pos", &ft::RequestState::num_accepted_tokens_per_pos);
 
     py::class_<ft::AtomicRequestState, std::shared_ptr<ft::AtomicRequestState>>(m, "AtomicRequestState")
         .def("consume", [](ft::AtomicRequestState& s) { return s.exchange(nullptr); });
@@ -624,6 +706,8 @@ PYBIND11_MODULE(_turbomind, m)
     bind_config<turbomind::core::ModuleListConfig>(m, "ModuleListConfig");
     bind_config<turbomind::core::NormConfig>(m, "NormConfig");
     bind_config<turbomind::core::DecoderLayerConfig>(m, "DecoderLayerConfig");
+    bind_config<turbomind::core::Eagle3WeightConfig>(m, "Eagle3WeightConfig");
+    bind_config<turbomind::core::Qwen35MtpWeightConfig>(m, "Qwen35MtpWeightConfig");
     bind_config<turbomind::core::ModelWeightConfig>(m, "ModelWeightConfig");
     bind_config<turbomind::core::LayerNormConfig>(m, "LayerNormConfig");
     bind_config<turbomind::core::QwenVitConfig>(m, "QwenVitConfig");
@@ -696,6 +780,7 @@ PYBIND11_MODULE(_turbomind, m)
             "dtype"_a,
             "shape"_a);
     m.def("from_dlpack", &FromDLPack, "tensor"_a);
+    m.def("from_dlpack_with_strides", &FromDLPackWithStrides, "tensor"_a);
     m.def(
         "generic_copy_on_stream",
         [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst, std::uintptr_t stream_ptr) {
@@ -970,4 +1055,9 @@ PYBIND11_MODULE(_turbomind, m)
     turbomind::linear_attn::delta_rule::bind_delta_rule(m);
     turbomind::python_linear::bind_linear(m);
     turbomind::bind_moe_gate_v2(m);
+    turbomind::python::BindSpeculativeSampling(m);
+    turbomind::python::BindDraftCarry(m);
+    turbomind::python::BindTargetHiddenProjection(m);
+    turbomind::python::BindSpeculativeSequence(m);
+    turbomind::python::BindVerificationAttention(m);
 }

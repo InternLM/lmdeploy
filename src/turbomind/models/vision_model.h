@@ -28,7 +28,8 @@ class VisionModel {
 public:
     virtual ~VisionModel() = default;
 
-    /// Phase entry point. Called from ``ModelExecutor::Run`` *before*
+    /// Phase entry point. Called from the batch-operation fanouts (the
+    /// engine's host-op functions and the executor's device steps) *before*
     /// the language model. Subclasses dispatch on ``op``.
     virtual void Run(BatchOp op, int phase, TensorMap& env) = 0;
 };
@@ -39,19 +40,25 @@ struct MultiModalData {
     std::array<int, 3> grid_thw;  // qwen3
 };
 
+struct EmbeddingPatch {
+    int row_count;
+    int source_row;
+    int destination_row;
+};
+
 struct MultiModalEmbeddingData {
-    Tensor                           data;
-    std::vector<std::pair<int, int>> image_embeds_coords;
-    std::vector<std::pair<int, int>> input_embeds_coords;
+    Tensor                      data;
+    std::vector<EmbeddingPatch> target_patches;
+    std::vector<EmbeddingPatch> successor_patches;
 
     MultiModalEmbeddingData() = default;
 
-    explicit MultiModalEmbeddingData(Tensor                           data,
-                                     std::vector<std::pair<int, int>> image_embeds_coords,
-                                     std::vector<std::pair<int, int>> input_embeds_coords):
+    explicit MultiModalEmbeddingData(Tensor                      data,
+                                     std::vector<EmbeddingPatch> target_patches,
+                                     std::vector<EmbeddingPatch> successor_patches):
         data{std::move(data)},
-        image_embeds_coords{std::move(image_embeds_coords)},
-        input_embeds_coords{std::move(input_embeds_coords)}
+        target_patches{std::move(target_patches)},
+        successor_patches{std::move(successor_patches)}
     {
     }
 
@@ -80,6 +87,7 @@ private:
 std::unique_ptr<VisionModel> CreateVisionModel(const VisionModelWeight& weights,  //
                                                const EngineParam&       engine,
                                                const Context&           ctx,
-                                               int                      phases);
+                                               int                      phases,
+                                               bool                     successor_embeddings);
 
 }  // namespace turbomind

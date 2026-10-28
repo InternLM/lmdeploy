@@ -3,6 +3,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 add_library(engine STATIC
+    model.cc
     block.cc
     cache_registry.cc
     gateway.cc
