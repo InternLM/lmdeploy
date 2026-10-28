@@ -119,6 +119,15 @@ class HuggingFaceTokenizer:
         return self.model.eos_token_id
 
     @property
+    def special_tokens(self) -> list[str]:
+        """Contents of the special tokens, including added tokens marked as
+        special."""
+        tokens = set(self.model.all_special_tokens)
+        added_tokens = getattr(self.model, 'added_tokens_decoder', {})
+        tokens.update(token.content for token in added_tokens.values() if token.special)
+        return sorted(token for token in tokens if token)
+
+    @property
     def prefix_space_tokens(self):
         """Tokens without prefix space."""
         if self._prefix_space_tokens is None:
@@ -454,6 +463,12 @@ class Tokenizer:
     def eos_token_id(self):
         """End of the sentence token id."""
         return self.model.eos_token_id
+
+    @property
+    def special_tokens(self) -> list[str]:
+        """Contents of the special tokens, including added tokens marked as
+        special."""
+        return self.model.special_tokens
 
     def get_vocab(self):
         """Get vocab."""
