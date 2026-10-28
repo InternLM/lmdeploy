@@ -27,7 +27,11 @@ from .weight_format import (
 logger = get_logger('lmdeploy')
 
 
-def _build_quantized_formats(model_format: str | None, group_size: int | None) -> list[WeightFormat]:
+def _build_quantized_formats(
+    model_format: str | None,
+    group_size: int | None,
+    fp8_block_out: int | None = None,
+) -> list[WeightFormat]:
     formats: list[WeightFormat] = []
     if model_format in (None, 'hf'):
         pass
@@ -36,7 +40,11 @@ def _build_quantized_formats(model_format: str | None, group_size: int | None) -
     elif model_format == 'gptq':
         formats.append(GPTQFormat(block_in=group_size))
     elif model_format == 'compressed-tensors':
-        formats.append(CompressedTensorFormat(block_in=group_size))
+        if fp8_block_out is not None:
+            # float-quantized FP8 (per-channel / blocked), e.g. Ornith W8A8.
+            formats.append(FP8Format(block_out=fp8_block_out))
+        else:
+            formats.append(CompressedTensorFormat(block_in=group_size))
     elif model_format == 'fp8':
         formats.append(FP8Format(block_out=128))
     elif model_format == 'mxfp4':
@@ -177,12 +185,18 @@ def get_tm_config(model_path,
     # 2. Reconcile quant_config (unchanged logic from the prior flow).
     quant_config = search_nested_config(
         hf_model_cfg.to_dict(), 'quantization_config')
+    fp8_block_out = None
     if quant_config:
         quant_method = quant_config.get('quant_method')
         _group_size = int(quant_config.get('group_size', 0))
         version = quant_config.get('version')
-        assert engine_config.model_format is None or engine_config.model_format == quant_method, (
-            f'mismatched quant method: user input "{engine_config.model_format}" '
+        # Allow --model-format fp8 for compressed-tensors checkpoints whose
+        # weights are float-quantized 8-bit (i.e. FP8 in substance). The CT
+        # branch below validates the actual bit-width.
+        _fmt = engine_config.model_format
+        assert _fmt is None or _fmt == quant_method or (
+            _fmt == 'fp8' and quant_method == 'compressed-tensors'
+        ), (f'mismatched quant method: user input "{_fmt}" '
             f'vs model quant_config "{quant_method}"')
         assert not group_size or group_size == _group_size, (
             f'mismatched quant group size: user input "{group_size}" '
@@ -198,17 +212,35 @@ def get_tm_config(model_path,
         elif quant_method == 'mxfp4':
             _group_size = 32
         elif quant_method == 'compressed-tensors':
-            _format = quant_config['config_groups']['group_0']['format']
-            assert _format == 'pack-quantized', (
-                'compressed-tensors only supports pack-quantized format, '
-                f'but got {_format}')
-            _weights = quant_config['config_groups']['group_0']['weights']
-            _group_size = _weights['group_size']
-            _num_bits = _weights['num_bits']
-            _type = _weights['type']
-            assert _num_bits == 4 and _type == 'int', (
-                'pack-quantized requires 4-bit int, '
-                f'but got {_num_bits}-bit {_type}')
+            # Group keys differ across tools: 'group_0' (compressed-tensors
+            # reference) vs 'config_group_0' (e.g. Ornith). Take the first.
+            _groups = quant_config['config_groups']
+            _first = _groups.get('group_0') or _groups.get(sorted(_groups)[0])
+            _format = _first['format']
+            _weights = _first['weights']
+            if _format == 'float-quantized':
+                # FP8 float-quantized (W8A8): per-channel (Ornith) or 128x128
+                # blocked. Map onto the native FP8 path. block_out is the
+                # N-direction scale granularity: per-channel -> 1, blocked -> 128.
+                assert _weights['num_bits'] == 8 and _weights['type'] == 'float', (
+                    f'float-quantized expects 8-bit float weights, got '
+                    f'{_weights["num_bits"]}-bit {_weights["type"]}')
+                _w_gs = _weights.get('group_size')
+                _per_channel = (
+                    _w_gs is None or _w_gs == 0 or _weights.get('strategy') == 'channel'
+                )
+                _group_size = _w_gs if _w_gs else 128  # K-direction group (128)
+                fp8_block_out = 1 if _per_channel else 128
+            else:
+                assert _format == 'pack-quantized', (
+                    'compressed-tensors only supports pack-quantized / '
+                    f'float-quantized format, but got {_format}')
+                _group_size = _weights['group_size']
+                _num_bits = _weights['num_bits']
+                _type = _weights['type']
+                assert _num_bits == 4 and _type == 'int', (
+                    'pack-quantized requires 4-bit int, '
+                    f'but got {_num_bits}-bit {_type}')
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 
@@ -219,7 +251,9 @@ def get_tm_config(model_path,
 
     # 3. Resolve dtype and format overrides.
     requested_dtype = engine_config.dtype
-    quantized_formats = _build_quantized_formats(engine_config.model_format, group_size)
+    quantized_formats = _build_quantized_formats(
+        engine_config.model_format, group_size, fp8_block_out=fp8_block_out
+    )
     executable = _get_executable_dtypes(
         quantized_formats,
         engine_config.devices[0],
