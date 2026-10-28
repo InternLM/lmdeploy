@@ -108,6 +108,35 @@ def test_engine_loop_rejects_malformed_compact_scoring_segments():
             messages, inputs)
 
 
+def test_engine_loop_keeps_only_own_requested_token_columns():
+    """Rows carry the batch union of logprob_extra_token_ids; each request gets its own."""
+
+    def message(ids):
+        return SimpleNamespace(logprob_start_pos=0,
+                               sampling_param=SimpleNamespace(logprob_extra_token_ids=ids),
+                               resp=SimpleNamespace(_input_logprobs=None))
+
+    plain, scorer = message(None), message((32, 33))
+    # columns: [target, top-1, union of requested ids (32, 33)]
+    indices = torch.tensor([[7, 7, 32, 33], [8, 9, 32, 33]], dtype=torch.int32)
+    vals = -indices.float()
+    inputs = SimpleNamespace(is_decoding=False,
+                             logits_indices=torch.arange(2),
+                             seq_logit_length=torch.tensor([1, 1]))
+    EngineLoop._append_input_logprobs(
+        SimpleNamespace(logprobs=BatchedLogProbs(vals=vals, indices=indices)),
+        [plain, scorer], inputs)
+
+    assert plain.resp._input_logprobs == [([-7.0, -7.0], [7, 7])]
+    assert scorer.resp._input_logprobs == [([-8.0, -9.0, -32.0, -33.0],
+                                             [8, 9, 32, 33])]
+
+    bad = BatchedLogProbs(vals=vals[:, :3], indices=indices[:, :3])
+    with pytest.raises(RuntimeError, match='requested-token columns'):
+        EngineLoop._append_input_logprobs(SimpleNamespace(logprobs=bad),
+                                          [plain, scorer], inputs)
+
+
 @pytest.mark.parametrize(('actual_ids', 'expected'), [
     ([], None),
     ([2, 3], [([-2.0], [2]), ([-3.0], [3])]),

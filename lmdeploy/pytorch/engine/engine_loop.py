@@ -221,16 +221,40 @@ class EngineLoop:
                 or num_rows != compact.vals.shape[0]):
             raise RuntimeError('input-logprob compact output mismatch')
 
+        def _requested_ids(msg):
+            sampling_param = getattr(msg, 'sampling_param', None)
+            return getattr(sampling_param, 'logprob_extra_token_ids', None) or ()
+
+        # Rows end with the batch union of logprob_extra_token_ids (see ARSamplingStrategy);
+        # each request keeps only the columns it asked for.
+        #
+        # This projects a batch-wide column layout back onto per-request ones.
+        # It is needed whenever a request naming extra ids shares a batch with a
+        # request that names none or fewer: the other caller of input logprobs is
+        # /generate, which may run on the same engine as /v1/decisions. Without
+        # the projection those responses would silently carry extra columns whose
+        # token ids mean nothing to them.
+        extra_ids = sorted(set().union(*(_requested_ids(msg) for msg in running)))
+        num_base_cols = compact.vals.shape[1] - len(extra_ids)
+        if extra_ids and num_rows > 0 and (num_base_cols < 1
+                                           or compact.indices[0, num_base_cols:].tolist() != extra_ids):
+            raise RuntimeError('input-logprob requested-token columns mismatch')
+
         offset = 0
         for msg, row_count in zip(running, row_counts, strict=True):
             end = offset + row_count
             if row_count > 0:
                 if msg.resp._input_logprobs is None:
                     msg.resp._input_logprobs = []
-                msg.resp._input_logprobs.extend(
-                    zip(compact.vals[offset:end].tolist(),
-                        compact.indices[offset:end].tolist(),
-                        strict=True))
+                vals = compact.vals[offset:end]
+                indices = compact.indices[offset:end]
+                own = set(_requested_ids(msg))
+                if len(own) < len(extra_ids):
+                    keep = list(range(num_base_cols))
+                    keep += [num_base_cols + k for k, token_id in enumerate(extra_ids) if token_id in own]
+                    keep = torch.tensor(keep, device=vals.device)
+                    vals, indices = vals.index_select(1, keep), indices.index_select(1, keep)
+                msg.resp._input_logprobs.extend(zip(vals.tolist(), indices.tolist(), strict=True))
             offset = end
 
     @staticmethod

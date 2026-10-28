@@ -660,6 +660,7 @@ class BaseModelAgent:
         inputs: ModelInputs,
         num_logprobs: int,
         model_metas: list[dict[str, Any]] | None,
+        logprob_extra_token_ids: torch.Tensor | None = None,
     ):
         """Build the scoring-only output without generation modifiers."""
         input_logprobs = None
@@ -689,6 +690,10 @@ class BaseModelAgent:
                 topk_vals, topk_indices = _torch_topk(input_logits, num_logprobs, dim=-1)
                 vals = torch.cat([vals, topk_vals], dim=-1)
                 target_indices = torch.cat([target_indices, topk_indices], dim=-1)
+            if logprob_extra_token_ids is not None:
+                cand_indices = logprob_extra_token_ids.to(input_logits.device)[None].expand(input_logits.size(0), -1)
+                vals = torch.cat([vals, input_logits.gather(-1, cand_indices)], dim=-1)
+                target_indices = torch.cat([target_indices, cand_indices], dim=-1)
             input_logprobs = BatchedLogProbs(vals=vals, indices=target_indices.to(torch.int32))
 
         batch_size = inputs.seq_length.numel()
@@ -1130,7 +1135,8 @@ class BaseModelAgent:
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
             if self.need_output:
                 output = self._get_outputs_with_logprobs(output.get('logits'), inputs,
-                                                         sampling_inputs.max_num_logprobs, model_metas)
+                                                         sampling_inputs.max_num_logprobs, model_metas,
+                                                         logprob_extra_token_ids=sampling_inputs.logprob_extra_token_ids)
             else:
                 output = BatchedOutputs(next_token_ids=None, stopped=None)
             if self.need_output or connector_output is not None or ssm_state_access_id is not None:
