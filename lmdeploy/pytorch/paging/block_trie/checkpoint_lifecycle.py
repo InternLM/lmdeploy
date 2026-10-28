@@ -146,7 +146,8 @@ class StateCheckpointLifecycle:
         self.unpin_restores(seqs)
 
     def reserve_decode_snapshot(self) -> int:
-        """Reserve an unnamed slot before generated tokens have a cache identity."""
+        """Reserve an unnamed slot before generated tokens have a cache
+        identity."""
         if not self._prefix_cache_enabled or not self._state_checkpoints_enabled:
             return -1
         if self._state_manager.get_num_free_checkpoint() == 0 and self.evict(1) == 0:
@@ -154,7 +155,8 @@ class StateCheckpointLifecycle:
         return self._state_manager.allocate_checkpoint_state()
 
     def publish_decode_snapshot(self, seq: SchedulerSequence, step: int, slot: int) -> bool:
-        """Attach a completed snapshot after acceptance establishes its exact identity."""
+        """Attach a completed snapshot after acceptance establishes its exact
+        identity."""
         node = self._find_checkpoint_node(seq, step)
         if node is None or self._node_has_slot(node):
             return False

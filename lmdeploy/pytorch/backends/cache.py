@@ -71,7 +71,8 @@ class CacheBackend(ABC):
     def get_decode_save_mask(plan: torch.Tensor, history: torch.Tensor, query_lengths: torch.Tensor,
                              tokens: torch.Tensor, stop_pos: torch.Tensor, *, is_decoding: bool,
                              lookahead: int) -> torch.Tensor:
-        """Check retained state boundaries against accepted output on device."""
+        """Check retained state boundaries against accepted output on
+        device."""
         raise NotImplementedError('This cache backend does not support decode snapshots.')
 
     @staticmethod

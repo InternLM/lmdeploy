@@ -50,7 +50,8 @@ class CudaCacheBackend(DefaultCacheBackend):
     @staticmethod
     def copy_decode_slots(slot_tensors: tuple[tuple[torch.Tensor, int], ...],
                           plan: torch.Tensor, copy_mask: torch.Tensor) -> None:
-        """Freeze selected checkpoint pools without allocating slot-sized temporaries."""
+        """Freeze selected checkpoint pools without allocating slot-sized
+        temporaries."""
         from ...kernels.cuda.copy_cache import copy_cache_blocks
         for tensor, slot_axis in slot_tensors:
             copy_cache_blocks(tensor, slot_axis, plan[2], plan[3], 1, copy_mask)

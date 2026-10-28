@@ -958,7 +958,8 @@ class BaseModelAgent:
 
     def _save_decode_checkpoints(self, cache_inputs: CacheCheckpointInputs, inputs: ModelInputs,
                                  output: BatchedOutputs | None) -> None:
-        """Freeze states on the forward stream using one TP-consistent acceptance mask."""
+        """Freeze states on the forward stream using one TP-consistent
+        acceptance mask."""
         plan = cache_inputs.decode_save_plan
         if self.need_output:
             cache_backend = get_backend().get_cache_backend()

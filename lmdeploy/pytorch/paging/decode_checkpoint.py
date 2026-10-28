@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Own provisional decode snapshots from dispatch through accepted publication."""
+"""Own provisional decode snapshots from dispatch through accepted
+publication."""
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -36,9 +37,8 @@ class _Snapshot:
 class DecodeCheckpointCoordinator:
     """Reserve before dispatch; attach identity only after accepted output.
 
-    Adjacent prefetched forwards may try the same boundary. They own separate
-    slots, and the worker only copies when the boundary belongs to that
-    forward's retained, accepted state range. No reservation publishes a hash.
+    Adjacent prefetched forwards may try the same boundary. They own separate slots, and the worker only copies when the
+    boundary belongs to that forward's retained, accepted state range. No reservation publishes a hash.
     """
 
     def __init__(self, *, block_manager: 'BaseBlockManager', block_trie: 'BlockTrie',
@@ -54,7 +54,8 @@ class DecodeCheckpointCoordinator:
 
     def prepare(self, running: list[SchedulerSequence], inputs: 'ModelInputs | None',
                 delta: 'ModelInputsDelta | None') -> tuple[int, torch.Tensor] | None:
-        """Reserve candidates using a conservative range for one-step-stale CPU progress."""
+        """Reserve candidates using a conservative range for one-step-stale CPU
+        progress."""
         if inputs is not None:
             if inputs.is_dummy or (inputs.is_chunk and not inputs.is_last_chunk):
                 return None
@@ -100,7 +101,8 @@ class DecodeCheckpointCoordinator:
         return batch_id, torch.tensor(copies, dtype=torch.int64).T.contiguous()
 
     def finish(self, batch_id: int, copied: torch.Tensor | None) -> None:
-        """Publish confirmed snapshots and transfer Store ownership without waiting for I/O."""
+        """Publish confirmed snapshots and transfer Store ownership without
+        waiting for I/O."""
         snapshots = self._batches.pop(batch_id)
         mask = copied.tolist() if copied is not None else ()
         try:
@@ -130,7 +132,8 @@ class DecodeCheckpointCoordinator:
                 self._release(snapshot)
 
     def clear(self) -> None:
-        """Release abandoned reservations only after worker queues have drained."""
+        """Release abandoned reservations only after worker queues have
+        drained."""
         for snapshots in self._batches.values():
             for snapshot in snapshots:
                 self._release(snapshot)

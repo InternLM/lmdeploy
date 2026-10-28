@@ -338,7 +338,8 @@ class KVConnectorBase(ABC):
         return None
 
     def reserve_decode_snapshot(self, request: 'SchedulerSequence') -> int:
-        """Reserve a destination for a conditional decode copy, or return -1."""
+        """Reserve a destination for a conditional decode copy, or return
+        -1."""
         return -1
 
     def release_decode_snapshot(self, slot: int) -> None:
@@ -346,7 +347,8 @@ class KVConnectorBase(ABC):
         raise NotImplementedError
 
     def queue_decode_save(self, step_input: KVConnectorStepInput) -> KVConnectorMetadata | None:
-        """Adopt frozen snapshots and queue their saves on the next normal step."""
+        """Adopt frozen snapshots and queue their saves on the next normal
+        step."""
         return None
 
     def is_lookup_pending(self, request_id: RequestId) -> bool:

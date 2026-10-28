@@ -400,7 +400,8 @@ class MooncakeStoreScheduler:
         return tuple(save_requests)
 
     def reserve_decode_snapshot(self, request: SchedulerSequence) -> int:
-        """Reserve a private Store slot before the worker verifies a candidate."""
+        """Reserve a private Store slot before the worker verifies a
+        candidate."""
         if (not self._kv_transfer_config.is_kv_producer or not self._is_hybrid
                 or request.prefix_cache.decode_store_save_pending or self._state_slots.get_num_free() == 0):
             return -1
@@ -410,7 +411,8 @@ class MooncakeStoreScheduler:
         self._state_slots.free(slot)
 
     def queue_decode_save(self, step_input: KVConnectorStepInput) -> MooncakeStoreConnectorMetadata | None:
-        """Adopt already frozen states; token hashes are now based on accepted output."""
+        """Adopt already frozen states; token hashes are now based on accepted
+        output."""
         saves = self._build_save_requests(step_input)
         if not saves:
             return None

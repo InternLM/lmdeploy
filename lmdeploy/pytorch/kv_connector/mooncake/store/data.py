@@ -377,7 +377,8 @@ class MooncakeStoreLoadRequest:
 
 @dataclass(frozen=True)
 class MooncakeStoreStateSave:
-    """An exact verified state; equal source/destination means already frozen."""
+    """An exact verified state; equal source/destination means already
+    frozen."""
 
     source_slot: int
     snapshot_slot: int

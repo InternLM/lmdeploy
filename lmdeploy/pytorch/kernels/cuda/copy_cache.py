@@ -99,7 +99,8 @@ def _decode_save_mask_kernel(plan, history, query_lengths, tokens, stop_pos, mas
 def decode_save_mask(plan: torch.Tensor, history: torch.Tensor, query_lengths: torch.Tensor,
                      tokens: torch.Tensor, stop_pos: torch.Tensor, *, is_decoding: bool,
                      lookahead: int) -> torch.Tensor:
-    """Validate candidate states on device, including stop-truncated MTP acceptance."""
+    """Validate candidate states on device, including stop-truncated MTP
+    acceptance."""
     num_copies = plan.size(1)
     num_outputs = tokens.numel() // history.numel()
     mask = torch.empty(num_copies, dtype=torch.bool, device=plan.device)

@@ -192,5 +192,6 @@ class StateCacheEngine:
                 dst_tensor.copy_(src_tensor, non_blocking=True)
 
     def copy_decode_slots(self, plan: torch.Tensor, copy_mask: torch.Tensor) -> None:
-        """Freeze accepted state rings before the next forward can overwrite them."""
+        """Freeze accepted state rings before the next forward can overwrite
+        them."""
         self._cache_backend.copy_decode_slots(self._checkpoint_slot_tensors, plan, copy_mask)
