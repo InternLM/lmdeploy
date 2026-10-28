@@ -20,6 +20,21 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
+## CUDA 13 Docker 镜像中的 FlashKDA
+
+使用 `docker/Dockerfile` 或 `docker/Dockerfile_dev` 并指定
+`--build-arg CUDA_VERSION=cu130` 构建的镜像包含固定版本的
+[FlashKDA](https://github.com/MoonshotAI/FlashKDA) wheel。CUDA 12.8 镜像继续使用 Triton KDA 实现。
+
+FLA 0.5.2 在选择 FlashKDA 前不检查 GPU 架构，因此镜像默认关闭该后端。在 H100、H200 等受支持的
+SM90+ GPU 上，通过 `docker run -e FLA_FLASH_KDA=1` 为符合条件的 KDA prefill 启用 FlashKDA，
+并保持 `FLA_DISABLE_BACKEND_DISPATCH` 未设置。设置 `FLA_FLASH_KDA=0` 可切回 Triton；
+修改环境变量后需要重启服务。KDA decode 路径不变。
+
+GLM-5.3 的 KDA prefill 适配器已传入 FlashKDA 所需选项。可通过 prefill trace 中的
+`_flash_kda_fwd_prepare` 和 `_flash_kda_fwd_recurrence` kernel 确认分派结果。
+生产环境启用前，应对比 prefill 输出、循环状态并验证模型质量。
+
 ## 从源码安装
 
 默认情况下，LMDeploy 将面向 NVIDIA CUDA 环境进行编译安装，并同时启用 Turbomind 和 PyTorch 两种后端引擎。TurboMind 的主机 C++ 和 CUDA 代码均要求使用 C++20，并需要 CMake 3.25.2 或更新版本以及 CUDA 工具包 12.0 或更新版本。主机编译器必须支持 C++20，且受所选 CUDA 工具包支持，例如 Linux 上的 GCC 10 或更新版本，或 Windows 上的 Visual Studio 2022。

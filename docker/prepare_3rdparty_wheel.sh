@@ -16,6 +16,7 @@ GDRCOPY_VERSION=2.5.1
 DEEP_EP_VERSION=9af0e0d  # v1.2.1
 DEEP_GEMM_VERSION=88965b0
 FLASH_MLA_VERSION=9241ae3
+FLASH_KDA_VERSION=d7e3b3a9f448500630fa60fb5200f4f9c9b1fc72
 FAST_HADAMARD_TRANSFORM_VERSION=v1.1.0.post2
 
 # DeepEP
@@ -35,6 +36,14 @@ pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/d
 # FlashMLA
 # sm100 compilation for Flash MLA requires NVCC 12.9 or higher
 FLASH_MLA_DISABLE_SM100=1 pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
+
+# FlashKDA requires CUDA >= 12.9; the CUDA 12 image uses Toolkit 12.8.
+# Build explicitly for supported GPUs because Docker builders have no GPU.
+if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    FLASH_KDA_CUDA_ARCHS=all NVCC_THREADS=2 MAX_JOBS=2 \
+        pip wheel -v --no-build-isolation --no-deps -w /wheels \
+        "git+https://github.com/MoonshotAI/FlashKDA.git@${FLASH_KDA_VERSION}"
+fi
 
 # fast_hadamard_transform
 pip wheel -v --no-build-isolation --no-deps -w /wheels \
