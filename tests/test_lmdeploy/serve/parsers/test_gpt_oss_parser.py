@@ -528,14 +528,46 @@ class TestGptOssToolGrammarInjection:
         # Tool grammar wins — must contain tool call, not plain json_schema
         assert 'functions.get_weather' in st_json
 
-    @pytest.mark.parametrize('tool_choice', ['auto', 'required'])
-    def test_tool_grammar_failure_clears_response_format(self, monkeypatch, tool_choice):
-        """Tool grammar failure must clear a non-text response_format so it
-        cannot conflict with Harmony tool-call constraints downstream.
+    @pytest.mark.parametrize(('tool_choice', 'requires_call'), [
+        pytest.param('auto', False, id='auto'),
+        pytest.param('required', True, id='required'),
+        pytest.param(
+            {'type': 'function', 'function': {'name': 'get_weather'}},
+            True,
+            id='named-function',
+        ),
+        pytest.param(
+            {
+                'type': 'allowed_tools',
+                'allowed_tools': {
+                    'mode': 'required',
+                    'tools': [{'type': 'function', 'function': {'name': 'get_weather'}}],
+                },
+            },
+            True,
+            id='allowed-required',
+        ),
+        pytest.param(
+            {
+                'type': 'allowed_tools',
+                'allowed_tools': {
+                    'mode': 'auto',
+                    'tools': [{'type': 'function', 'function': {'name': 'get_weather'}}],
+                },
+            },
+            False,
+            id='allowed-auto',
+        ),
+    ])
+    @pytest.mark.parametrize('response_format', [
+        None,
+        ResponseFormat(type='json_schema', json_schema=JsonSchema(name='test', schema={'type': 'object'})),
+    ], ids=['plain', 'structured'])
+    def test_tool_grammar_failure_respects_tool_choice(self, monkeypatch, tool_choice, requires_call, response_format):
+        """Required tool choices reject grammar failure; automatic choices
+        retain prompt-only fallback and clear a structured response format.
 
-        The monkeypatch is required because ``__init__`` filters tools to the
-        selected function before grammar construction, so no real input can
-        keep ``has_tools`` true while making ``_build_tool_grammar`` fail.
+        Simulate unavailable or failing XGrammar with a valid tool request.
         """
         monkeypatch.setattr(
             gpt_oss_mod.GptOssResponseParser,
@@ -554,15 +586,16 @@ class TestGptOssToolGrammarInjection:
                 },
             }],
             tool_choice=tool_choice,
-            response_format=ResponseFormat(
-                type='json_schema',
-                json_schema=JsonSchema(name='test', schema={'type': 'object'}),
-            ),
+            response_format=response_format,
         )
-        if tool_choice == 'required':
+        if requires_call:
             with pytest.raises(ValueError, match='required'):
                 gpt_oss_mod.GptOssResponseParser(request=request)
             return
         parser = gpt_oss_mod.GptOssResponseParser(request=request)
 
         assert parser.request.response_format is None
+        if response_format is not None:
+            assert '# Response Formats' in parser.request.messages[0]['content']
+        else:
+            assert parser.request.messages == request.messages

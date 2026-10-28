@@ -18,8 +18,9 @@ LMDeploy 提供了轻量级的 OpenAI Responses 兼容接口，方便接入使�
 
 - `POST /v1/responses` 支持文本输入，以及视觉模型的 user 消息图片和工具结果图片输入。
 - `input` 可以是字符串，也可以是 Responses input item 列表。
+- 使用默认响应解析器时，`text.format` 的 `json_object` 和 `json_schema` 约束整个生成序列。模板会关闭思考，JSON 答案返回到 `output_text`，流式文本增量同样如此。
 - user 的 content 数组可以混合 `input_text` 和 `input_image`。图片通过 `image_url` 指定 HTTP(S) URL 或 base64 图片 data URL；流式和非流式请求均支持多图，并保留图文顺序。
-- 图片的 `detail` 和 `min_dynamic_patch` / `max_dynamic_patch` 扩展参数按 Chat 图片参数方式传递，实际效果取决于模型的图片处理器。
+- 图片的 `detail` 和 `min_dynamic_patch` / `max_dynamic_patch` 扩展参数按 Chat 图片参数方式传递，实际效果取决于模型的图片处理器。 图片 `detail` 省略或为 `null` 时均使用默认行为，不向内部图片参数传递该字段。
 - `function_call_output.output` 也可以包含 `input_text` 和 `input_image` 数组。图片保留所属结果的 `call_id`，连续的 `function_call` 条目会转换为同一组并行工具调用。
 - 暂不支持图片 `file_id` 引用，以及 system/developer/assistant 消息中的图片。
 - `instructions`、`developer` 和 `system` 消息会合并为一个位于最前面的 system message，以兼容 chat template。
@@ -27,6 +28,9 @@ LMDeploy 提供了轻量级的 OpenAI Responses 兼容接口，方便接入使�
 - `parallel_tool_calls` 默认为 `true`。当设置为 `false` 时，LMDeploy 会保持与 vLLM 类似的兼容行为，仅返回解析到的第一个 function call。
 - 非 function 类型的 hosted tools（例如 `web_search`）会被接受，但 LMDeploy 会忽略它们。
 - Responses 专属的 logprob 序列化与流式混淆选项当前会被接受但忽略。
+- `reasoning.effort="none"` 通过模型模板和解析器关闭思考；`low`、`medium`、`high`、`max` 开启思考并向模板透传推理强度，实际效果取决于模型支持。其他强度值返回 HTTP 400，暂不支持推理摘要。
+- `max_output_tokens` 包含思考和可见回答的 token。达到上限时返回 `status="incomplete"`、`incomplete_details.reason="max_output_tokens"`，此时可能还没有可见文本。可增加预算，或在支持关闭思考的模型上设置 `reasoning: {"effort": "none"}` 来获得简短直接的回答。请求字段被接受不代表回答一定为 `status="completed"`。
+- 非流式响应和流式终止响应的 `usage.input_tokens_details.cached_tokens` 返回引擎前缀缓存命中数；`input_tokens` 仍包含缓存 token。
 - 当前不支持 `background` 模式和 `previous_response_id`。
 
 ## 示例：`/v1/responses`
@@ -38,7 +42,8 @@ curl http://{server_ip}:{server_port}/v1/responses \
   -d '{
     "model": "Qwen/Qwen3.5-35B-A3B",
     "input": "Reply exactly: pong",
-    "max_output_tokens": 32
+    "max_output_tokens": 32,
+    "reasoning": {"effort": "none"}
   }'
 ```
 
@@ -74,7 +79,8 @@ curl http://{server_ip}:{server_port}/v1/responses \
         {"type": "input_image", "image_url": "https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg", "detail": "auto"}
       ]
     }],
-    "max_output_tokens": 128
+    "max_output_tokens": 128,
+    "reasoning": {"effort": "none"}
   }'
 ```
 

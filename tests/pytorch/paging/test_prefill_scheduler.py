@@ -9,7 +9,7 @@ import torch
 import lmdeploy.pytorch.paging.prefill_scheduler as prefill_scheduler_module
 from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
-from lmdeploy.pytorch.long_context import plan_long_context_chunk
+from lmdeploy.pytorch.long_context import get_last_prefill_save_step, plan_long_context_chunk
 from lmdeploy.pytorch.messages import InputEmbeddings, MessageStatus, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging.scheduler import Scheduler
@@ -468,6 +468,38 @@ def test_multimodal_chunk_reservation_obeys_the_draft_input_shift(method):
     scheduler.shutdown()
 
 
+@pytest.mark.parametrize(('budget', 'ends'), [(8192, [8191, 8300]), (32768, [8300])])
+def test_mtp_prefix_checkpoint_keeps_shifted_image_dependency(budget, ends):
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.engine.executor.base import ExecutorBase
+    from lmdeploy.pytorch.engine.inputs_maker import LongContextChunker
+    from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
+
+    spec = SpecDecodeConfig(model='draft', method='qwen3_5_mtp')
+    cache = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=256,
+                        max_prefill_token_num=budget, prefill_save_alignment=8192,
+                        enable_prefix_caching=True, states_shapes=[((2,), torch.float32)], num_state_caches=4)
+    model = SimpleNamespace(sliding_window=-1, bos_token_id=0)
+    ExecutorBase('', model, cache, SimpleNamespace(), DistConfig(), SimpleNamespace(), specdecode_config=spec)
+    strategy = ARSpecStrategyFactory(model, spec).build_sequence_strategy()
+    scheduler = Scheduler(SchedulerConfig(max_batches=1, max_session_len=16384), cache,
+                          seq_meta=SequenceMeta(64, strategy=strategy))
+    seq = scheduler.add_session(0).add_sequence(range(8300), multimodals={
+        'image': [MultiModalData(torch.zeros(2, 2), 8192, 8256)]})
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+
+    chunker = LongContextChunker(budget)
+    chunker.set_seq(seq)
+    for end in ends:
+        size, multimodals = chunker.next_chunk_size()
+        assert size == end - seq.num_history_ids > 0
+        assert scheduler._prefill_scheduler._next_long_context_chunk_end(seq) == end
+        assert chunker.is_last_chunk() == (end == 8300)
+        assert bool(multimodals and multimodals.get('image')) == (end == 8300)
+        chunker.update_step(SimpleNamespace(is_chunk=True, max_q_seqlen=size))
+    scheduler.shutdown()
+
+
 @pytest.mark.parametrize(('hybrid', 'prefix_caching', 'store', 'ends'), [
     (True, True, True, [512, 800]),
     (True, True, False, [512, 800]),
@@ -476,19 +508,21 @@ def test_multimodal_chunk_reservation_obeys_the_draft_input_shift(method):
     (False, True, True, [800]),
     (True, True, True, [8192, 15872, 16384]),
 ])
-def test_prefill_state_save_alignment_is_shared(hybrid, prefix_caching, store, ends):
+@pytest.mark.parametrize('last_only', [False, True])
+def test_prefill_state_save_alignment_is_shared(hybrid, prefix_caching, store, ends, last_only):
     from lmdeploy.pytorch.engine.inputs_maker import LongContextChunker
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
 
     cache = CacheConfig(
         max_batches=2, block_size=64, num_cpu_blocks=0, num_gpu_blocks=256,
-        max_prefill_token_num=8192, prefill_save_alignment=512,
+        max_prefill_token_num=8192, prefill_save_alignment=512, prefill_save_last_only=last_only,
         enable_prefix_caching=prefix_caching, prefix_cache_block_aligned=hybrid,
         states_shapes=[((2,), torch.float32)] if hybrid else [], num_state_caches=16,
         kv_transfer_config=(KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_both')
                             if store else None))
     scheduler = Scheduler(SchedulerConfig(max_batches=2, max_session_len=32768), cache,
                           seq_meta=SequenceMeta(64, strategy=ARSequenceStrategy()))
+    assert scheduler.seq_meta.prefill_save_last_only == (last_only and hybrid and (prefix_caching or store))
     seq = scheduler.add_session(0).add_sequence(range(ends[-1]))
     prefill = scheduler._prefill_scheduler
     info = prefill_scheduler_module._PrefillReorderer(prefill)._get_reorder_info(seq)
@@ -498,6 +532,49 @@ def test_prefill_state_save_alignment_is_shared(hybrid, prefix_caching, store, e
     chunker = LongContextChunker(cache.max_prefill_token_num)
     chunker.set_seq(seq)
     for end in ends:
+        assert prefill._next_long_context_chunk_end(seq) == end
+        assert chunker.next_chunk_size()[0] == end - seq.num_history_ids
+        assert chunker.is_last_chunk() == (end == ends[-1])
+        seq.set_step(end)
+    scheduler.shutdown()
+
+
+@pytest.mark.parametrize(('history', 'budget', 'spans', 'mtp', 'save_step', 'ends'), [
+    (0, 6, (), False, 16, (6, 12, 16, 20)),
+    (0, 32, (), False, 16, (16, 24)),
+    (0, 32, (), False, None, (8,)),
+    (0, 32, (), False, None, (7,)),
+    (16, 6, (), False, 16, (20,)),
+    (17, 6, (), False, 16, (20,)),
+    (0, 32, ((14, 18),), False, 8, (8, 20)),
+    (0, 32, ((6, 10), (14, 18)), False, None, (20,)),
+    (0, 6, ((14, 18),), False, 8, (6, 8, 14, 20)),
+    (0, 32, ((16, 18),), True, 8, (8, 20)),
+])
+def test_last_only_prefill_boundaries(history, budget, spans, mtp, save_step, ends):
+    from lmdeploy.pytorch.engine.inputs_maker import LongContextChunker
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
+
+    strategy = ARSpecSequenceStrategy(recompute_blocks=0) if mtp else ARSequenceStrategy()
+    cache = CacheConfig(
+        max_batches=1, block_size=4, num_cpu_blocks=0, num_gpu_blocks=16,
+        max_prefill_token_num=budget, states_shapes=[((2,), torch.float32)], num_state_caches=6,
+        prefill_save_alignment=8, prefill_save_last_only=True, mooncake_state_save_slots=2,
+        kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_producer'))
+    scheduler = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache,
+                          seq_meta=SequenceMeta(4, strategy=strategy))
+    multimodals = {'image': [MultiModalData(torch.tensor([1]), *span) for span in spans]}
+    seq = scheduler.add_session(0).add_sequence(range(ends[-1]), multimodals=multimodals)
+    seq.set_step(history)
+    prefill = scheduler._prefill_scheduler
+    info = prefill_scheduler_module._PrefillReorderer(prefill)._get_reorder_info(seq)
+    assert info.estimated_long_chunks == len(ends)
+    assert info.prefill_token_count == ends[0] - history
+    chunker = LongContextChunker(budget)
+    chunker.set_seq(seq)
+    for end in ends:
+        assert get_last_prefill_save_step(seq) == save_step
         assert prefill._next_long_context_chunk_end(seq) == end
         assert chunker.next_chunk_size()[0] == end - seq.num_history_ids
         assert chunker.is_last_chunk() == (end == ends[-1])

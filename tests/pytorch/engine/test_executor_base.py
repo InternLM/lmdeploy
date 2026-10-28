@@ -71,10 +71,15 @@ def test_mooncake_state_budget_is_deployable_and_excluded_from_runtime(slots):
     from lmdeploy.cli.utils import ArgumentHelper
     parser = ArgumentParser()
     ArgumentHelper.prefill_save_alignment(parser)
+    ArgumentHelper.prefill_save_last_only(parser)
     ArgumentHelper.mooncake_state_save_slots(parser)
     defaults = parser.parse_args([])
-    assert (defaults.prefill_save_alignment, defaults.mooncake_state_save_slots) == (8192, 8)
-    args = parser.parse_args(['--mooncake-state-save-slots', str(slots), '--prefill-save-alignment', '4096'])
+    assert defaults.prefill_save_alignment == PytorchEngineConfig().prefill_save_alignment == 1024
+    assert CacheConfig.prefill_save_alignment == 1024
+    assert defaults.mooncake_state_save_slots == 8
+    assert not defaults.prefill_save_last_only
+    args = parser.parse_args(['--mooncake-state-save-slots', str(slots), '--prefill-save-alignment', '4096',
+                              '--prefill-save-last-only'])
     config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
         max_batch_size=2, prefix_cache_state_budget=1,
         kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_producer'),
@@ -84,6 +89,7 @@ def test_mooncake_state_budget_is_deployable_and_excluded_from_runtime(slots):
     executor.cache_config = config
     size = executor._get_state_cache_mem()
     assert config.prefill_save_alignment == 4096
+    assert config.prefill_save_last_only
     assert config.num_state_caches == 5 + slots
     assert size == config.num_state_caches * StateCacheEngine.get_state_slot_nbytes(config.states_shapes)
     manager = build_state_manager(config)
@@ -432,7 +438,11 @@ def test_executor_keeps_prefix_cache_after_deepseek_v4_window_normalization():
     assert cache_config.enable_prefix_caching
 
 
-def test_executor_keeps_prefix_cache_with_spec_decode():
+@pytest.mark.parametrize(('method', 'lookahead'), [
+    (None, 0), ('deepseek_mtp', 1), ('hy3_mtp', 1), ('qwen3_5_mtp', 1),
+    ('eagle', 0), ('eagle3', 0), ('dflash', 0), ('dspark', 0),
+])
+def test_executor_configures_prefix_cache_lookahead(method, lookahead):
     cache_config = CacheConfig(max_batches=1,
                                block_size=64,
                                num_cpu_blocks=0,
@@ -446,9 +456,11 @@ def test_executor_keeps_prefix_cache_with_spec_decode():
                  backend_config=SimpleNamespace(),
                  dist_config=SimpleNamespace(dp=1, world_size=1),
                  misc_config=SimpleNamespace(),
-                 specdecode_config=SimpleNamespace())
+                 specdecode_config=(SpecDecodeConfig(model='draft', method=method, num_speculative_tokens=3)
+                                    if method is not None else None))
 
     assert cache_config.enable_prefix_caching
+    assert cache_config.prefix_cache_token_lookahead == lookahead
 
 
 def test_executor_disables_prefix_cache_with_pd_role():

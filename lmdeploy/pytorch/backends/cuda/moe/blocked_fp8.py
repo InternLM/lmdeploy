@@ -159,6 +159,13 @@ class FusedMoELowLatency:
         self.out_dtype = out_dtype
         self.scale_fmt = scale_fmt
         self.output_scale = output_scale
+        from lmdeploy.pytorch.backends.cuda.blockedf8_modules import _has_gluon
+        from lmdeploy.pytorch.envs import blocked_fp8_gemm_backend
+
+        self._small_m_gluon = (blocked_fp8_gemm_backend == 'auto' and ep_size == 8
+                               and num_experts == 288 and hidden_dim == 4096
+                               and block_size == 128 and out_dtype == torch.bfloat16
+                               and scale_fmt is None and _has_gluon())
         self.token_dispatcher = DeepEPTokenDispatcherLowLatency(
             group=ep_group,
             num_experts=num_experts,
@@ -170,6 +177,22 @@ class FusedMoELowLatency:
 
     def _deepgemm_grouped_fp8_nt_masked(self, input_tuple, w_tuple, out: torch.Tensor, masked_m: torch.Tensor,
                                         expected_m: int):
+        aq, asc = input_tuple
+        bq, bsc = w_tuple
+        if (self._small_m_gluon and 0 <= expected_m <= 4
+                and get_step_ctx_manager().current_context().global_is_decoding()
+                and aq.ndim == bq.ndim == asc.ndim == bsc.ndim == 3
+                and aq.shape[0] == bq.shape[0] == 36
+                and aq.shape[1] % 8 == 0 and aq.shape[1] > 0
+                and aq.shape[2] in (2048, 4096) and bq.shape[1:] == (4096, aq.shape[2])
+                and aq.dtype == bq.dtype == torch.float8_e4m3fn
+                and asc.dtype == bsc.dtype == torch.float32 and out.dtype == torch.bfloat16
+                and aq.is_contiguous() and bq.is_contiguous() and out.is_contiguous()
+                and asc.stride(1) > 0 and asc.stride(2) > 0
+                and bsc.is_contiguous() and masked_m.dtype == torch.int32 and masked_m.is_contiguous()):
+            from lmdeploy.pytorch.kernels.cuda.blocked_fp8_gemm_gluon import grouped_fp8_gemm_nt_masked
+
+            return grouped_fp8_gemm_nt_masked(input_tuple, w_tuple, out, masked_m)
         from lmdeploy.pytorch.third_party.deep_gemm import m_grouped_fp8_gemm_nt_masked
         return m_grouped_fp8_gemm_nt_masked(input_tuple, w_tuple, out, masked_m, expected_m)
 

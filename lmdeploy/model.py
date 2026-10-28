@@ -862,6 +862,11 @@ class HFChatTemplate(BaseChatTemplate):
         if self.is_gpt_oss and not kwargs.get('tools'):
             # for gpt-oss model, remove this seems more conducive to instruction following.
             prompt = prompt.replace('commentary, ', '', 1)
+        if (self.is_glm5_next and add_generation_prompt and kwargs.get('enable_thinking') is False
+                and prompt.endswith('<think>')):
+            # Early GLM-5.3 templates unconditionally open a thinking block.
+            # Prefill its closing tag so disabled thinking starts at the answer.
+            prompt += '</think>'
         return prompt
 
     def _user_instruction(self):

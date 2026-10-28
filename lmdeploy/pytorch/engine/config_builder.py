@@ -86,6 +86,7 @@ class ConfigBuilder:
             prefix_cache_state_budget=engine_config.prefix_cache_state_budget,
             prefix_cache_decode_state_interval=engine_config.prefix_cache_decode_state_interval,
             prefill_save_alignment=engine_config.prefill_save_alignment,
+            prefill_save_last_only=engine_config.prefill_save_last_only,
             mooncake_state_save_slots=engine_config.mooncake_state_save_slots,
             quant_policy=engine_config.quant_policy,
             device_type=engine_config.device_type,

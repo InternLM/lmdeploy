@@ -162,7 +162,8 @@ class TestGlm5NextRoutedExperts:
         layer.self_attn = Attention()
         layer.mlp = nn.Identity() if dense else CaptureMoE()
         for name in ['hc_attn_fn', 'hc_attn_scale', 'hc_attn_base', 'hc_ffn_fn', 'hc_ffn_scale',
-                     'hc_ffn_base', 'input_layernorm', 'post_attention_layernorm']:
+                     'hc_ffn_base', 'hc_attn_projection', 'hc_ffn_projection',
+                     'input_layernorm', 'post_attention_layernorm']:
             setattr(layer, name, None)
         layer._hc_pre = lambda x, *a, **kw: (x, None, None)
         layer._hc_post = lambda x, *a: (x, None)

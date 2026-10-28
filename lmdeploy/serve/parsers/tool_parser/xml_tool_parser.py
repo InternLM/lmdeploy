@@ -213,14 +213,20 @@ class XmlToolParser(ToolParser):
         """Consume stable raw value text and finish on the configured
         marker."""
         close_tag = self.arg_value_close_tag
-        value_end = payload.find(close_tag, pos)
+        value_end = self._find_structure(payload, close_tag, pos)
         if value_end >= 0:
             self._consume_arg_delta(payload[pos:value_end], json_fragments)
             self._finish_arg(json_fragments)
             self._state.phase = 'arg_start'
             return value_end + len(close_tag)
 
-        raw_end = self._stable_arg_value_end(payload, pos)
+        if self._active_boundaries is None:
+            raw_end = self._stable_arg_value_end(payload, pos)
+        elif self._uses_token_ids(close_tag):
+            raw_end = len(payload)
+        else:
+            prefixes = tuple(close_tag[:i] for i in range(1, len(close_tag)))
+            raw_end = self._stable_prefix_end(payload, prefixes, pos)
         if raw_end == pos:
             # The entire remaining payload, i.e. payload[pos:], is a possible closing-tag prefix.
             # Keep it buffered until more input resolves the boundary.

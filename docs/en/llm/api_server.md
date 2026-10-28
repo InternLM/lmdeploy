@@ -64,7 +64,34 @@ You can overview and try out the offered RESTful APIs by the website `http://0.0
 
 If you need to integrate the service into your own projects or products, we recommend the following approach:
 
+### Inspect the rendered chat prompt
+
+Set `return_prompt_text=true` on `/v1/chat/completions` to include the rendered `prompt_text` in the response. With the Python OpenAI client, pass `extra_body={"return_prompt_text": True}`; raw JSON may use either the top-level field or the same nested object, with the top-level value taking precedence. Streaming includes the prompt in the first chunk of each choice. The value is the actual template output, so reasoning-effort markers depend on the model's template. Raw `input_ids` requests have no rendered prompt and return `null`. The field is omitted unless requested.
+
+### Return more chat logprobs with PyTorch
+
+Start with `--backend pytorch --logprobs-mode raw_logprobs`. Chat requests accept
+`0 <= top_logprobs <= vocab_size`, using the loaded model's output vocabulary,
+including multi-process engines. For a 154880-token model, add
+`"logprobs": true, "top_logprobs": 154880, "max_completion_tokens": 1` to a request.
+Oversized counts return HTTP 400; TurboMind retains its limit of 20.
+
+Raw logprobs precede temperature, penalties, and sampling filters. For distribution
+analysis, include the selected token's outer score when absent from `top_logprobs`.
+Low-precision scores have rounding error; a full returned distribution can be renormalized for analysis.
+Unmapped vocabulary IDs use `token_id:<id>` with unavailable bytes. Full-vocabulary
+responses are large; keep the output-token budget small.
+
+Streaming and non-streaming Chat are supported. Responses ignores `top_logprobs`;
+Messages' `return_logprob` returns only generated-token scores.
+
 ### Integrate with `OpenAI`
+
+With the default response parser, `json_object`, `json_schema`, and `regex_schema` constrain the entire generated sequence. These modes disable thinking through the chat template and return the constrained output in `content`, including in streams. Protocol-like strings inside the answer remain literal data. Required tool calls use their own tagged grammar and can still include reasoning.
+
+A nonempty final assistant message is treated as a continuation of that message. Plain-text prefills continue in `content`; a prefill ending inside an explicit `<think>` block continues in the reasoning channel.
+
+Raw JSON requests also accept `enable_thinking` and `media_io_kwargs` inside `extra_body`, with top-level values taking precedence. Prefer `chat_template_kwargs={"enable_thinking": false}` for new integrations; the top-level `enable_thinking` option is deprecated.
 
 Here is an example of interaction with the endpoint `v1/chat/completions` service via the openai package.
 Before running it, please install the openai package by `pip install openai`

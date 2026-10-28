@@ -28,6 +28,7 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
 )
 from lmdeploy.pytorch.kv_connector.mooncake.store.scheduler import MooncakeStoreScheduler
 from lmdeploy.pytorch.kv_connector.mooncake.store.worker import MooncakeStoreWorker
+from lmdeploy.pytorch.long_context import get_last_prefill_save_step, plan_long_context_chunk
 from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta
 from lmdeploy.pytorch.model_inputs import ModelInputs
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
@@ -140,11 +141,17 @@ def test_hybrid_save_slots_survive_request_finish_until_job_completion():
     scheduler.shutdown()
 
 
-@pytest.mark.parametrize(('lookup_alignment', 'expected_hit'), [(8, 24), (12, 24), (16, 16)])
-def test_hybrid_multimodal_save_lookup_and_load_without_local_prefix_cache(lookup_alignment, expected_hit):
-    cache_config = _hybrid_cache_config()
+@pytest.mark.parametrize(('last_only', 'lookup_alignment', 'mtp', 'expected_hit'), [
+    (False, 8, False, 24), (False, 12, False, 24), (False, 16, False, 16),
+    (True, 8, False, 24), (True, 16, False, 0),
+    (False, 8, True, 16), (True, 8, True, 0),
+])
+def test_hybrid_multimodal_save_lookup_and_load_without_local_prefix_cache(
+        last_only, lookup_alignment, mtp, expected_hit):
+    cache_config = replace(_hybrid_cache_config(), prefill_save_last_only=last_only)
+    strategy = ARSpecSequenceStrategy() if mtp else ARSequenceStrategy()
     paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache_config,
-                       seq_meta=SequenceMeta(4, strategy=ARSequenceStrategy()))
+                       seq_meta=SequenceMeta(4, strategy=strategy))
     producer = MooncakeStoreScheduler(cache_config)
     image = MultiModalData(torch.tensor([1]), start=2, end=10)
     source = paging.add_session(0).add_sequence(range(25), multimodals={'image': [image]})
@@ -156,7 +163,7 @@ def test_hybrid_multimodal_save_lookup_and_load_without_local_prefix_cache(looku
             (source,), (end,), (blocks,), (blocks,), (1,)))
         # The first boundary is inside the image; later saves cover its FA
         # blocks but only persist state at the exact safe boundaries.
-        if end == 8:
+        if end == 8 or (last_only and end != 24):
             assert result is None
             continue
         save = result.save_requests[0]
@@ -177,12 +184,15 @@ def test_hybrid_multimodal_save_lookup_and_load_without_local_prefix_cache(looku
         side_effect=lambda req_id, token_len, hashes, non_block, recompute_blocks: worker.lookup(
             token_len, hashes, recompute_blocks=recompute_blocks))
     consumer_paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), config,
-                                seq_meta=SequenceMeta(4, strategy=ARSequenceStrategy()), kv_connector=consumer)
+                                seq_meta=SequenceMeta(4, strategy=strategy), kv_connector=consumer)
     assert not consumer_paging.block_trie.enabled
     for session_id, (content, span_end, expected) in enumerate(
             ((1, 10, expected_hit), (2, 10, 0), (1, 11, 0)), start=1):
         image = MultiModalData(torch.tensor([content]), start=2, end=span_end)
-        request = consumer_paging.add_session(session_id).add_sequence(range(25), multimodals={'image': [image]})
+        # With block rewind, even an appended prompt cannot reuse state at 24
+        # without FA through 28; last-only saving has no earlier state fallback.
+        token_ids = range(29 if mtp else 25)
+        request = consumer_paging.add_session(session_id).add_sequence(token_ids, multimodals={'image': [image]})
         assert request.prefix_cache.multimodal_spans
         assert consumer.get_num_new_matched_tokens(request, 0) == (expected, expected > 0)
         if expected:
@@ -202,6 +212,75 @@ def test_hybrid_multimodal_save_lookup_and_load_without_local_prefix_cache(looku
     consumer_paging.shutdown()
     producer.shutdown()
     paging.shutdown()
+
+
+@pytest.mark.parametrize('mtp', [False, True])
+def test_last_only_prefill_saves_both_caches_and_reuses_across_turns(mtp):
+    cache = replace(_hybrid_cache_config(), num_gpu_blocks=24, num_state_caches=12,
+                    enable_prefix_caching=True, prefix_cache_block_aligned=True,
+                    prefix_cache_token_lookahead=int(mtp), prefill_save_last_only=True,
+                    max_prefill_token_num=8)
+    strategy = ARSpecSequenceStrategy(recompute_blocks=0) if mtp else ARSequenceStrategy()
+    paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache,
+                       seq_meta=SequenceMeta(4, strategy=strategy))
+    store = MooncakeStoreScheduler(cache)
+    checkpoints = paging.block_trie.state_checkpoints
+    multimodals = {'image': [MultiModalData(torch.tensor([1]), start=24, end=25)]}
+    seq = paging.add_session(0).add_sequence(range(25), multimodals=multimodals)
+    paging.state_manager.allocate(seq)
+    published = []
+    for expected_step in (16 if mtp else 24, 40):
+        paging.block_manager.allocate(seq)
+        paging.block_trie.allocate(seq)
+        assert get_last_prefill_save_step(seq) == expected_step
+        saved = []
+        while seq.num_token_ids:
+            end = plan_long_context_chunk(seq, cache.max_prefill_token_num).chunk_end
+            local = checkpoints.reserve_prefill_save_batch([seq], (end,))
+            blocks = tuple(range(end // cache.block_size))
+            meta = store.build_connector_meta(_connector_step(
+                (seq,), (end,), (blocks,), (blocks,), (seq.logical_state,)))
+            saves = () if meta is None else meta.save_requests
+            if end == expected_step:
+                save, = saves
+                assert save.start_block == 0
+                assert save.block_ids == blocks
+                assert len(save.block_hashes) == len(blocks)
+                assert save.state.boundary_tokens == end
+                assert local.state_pairs == ((seq.logical_state, seq.prefix_cache.pending_save.slot),)
+                assert save.state.source_slot == seq.logical_state
+                assert save.state.snapshot_slot != seq.prefix_cache.pending_save.slot
+                published.append(seq.prefix_cache.pending_save.node)
+                assert checkpoints.publish_save(seq)
+                saved.append(save.save_id)
+            else:
+                assert not local.state_pairs
+                assert not saves
+            seq.set_step(end)
+        assert len(saved) == 1
+        assert all(node.state_checkpoint.published for node in published)
+        store.update_connector_output(KVConnectorOutput(completed_save_ids=set(saved)))
+        assert store._state_slots.get_num_free() == cache.mooncake_state_save_slots
+        if seq.input_end_pos == 25:
+            seq.update_token_ids(range(25, 41))
+            store.on_new_request(seq)
+
+    # A hit at this turn's only save boundary still restores state, without
+    # reserving another checkpoint for its remaining input token.
+    paging.end_session(0)
+    warm = paging.add_session(1).add_sequence(range(41), multimodals=multimodals)
+    paging.block_trie.match(warm)
+    assert warm.num_history_ids == 40
+    paging.state_manager.allocate(warm)
+    restore = checkpoints.prepare_restore_batch([warm])
+    assert restore.state_pairs == ((published[-1].state_checkpoint.slot, warm.logical_state),)
+    assert not checkpoints.reserve_prefill_save_batch([warm], (41,)).state_pairs
+    blocks = tuple(range(10))
+    assert store.build_connector_meta(_connector_step(
+        (warm,), (41,), (blocks,), (blocks,), (warm.logical_state,))) is None
+    checkpoints.finish_forward_dispatch([warm], has_save_plan=False)
+    paging.shutdown()
+    store.shutdown()
 
 
 @pytest.mark.parametrize('invalid_slot', [-1, 0, 3, 4])
