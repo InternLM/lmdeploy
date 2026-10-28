@@ -101,7 +101,7 @@ class MooncakeStoreWorker:
         self._inflight_loads: set[RequestId] = set()
         self._completed_loads: dict[RequestId, bool] = {}
         self._inflight_save_ids: set[int] = set()
-        self._completed_save_ids: set[int] = set()
+        self._completed_saves: dict[int, bool] = {}
 
         extra_config = kv_transfer_config.kv_connector_extra_config
         self.key_metadata = MooncakeStoreKeyMetadata(
@@ -157,10 +157,10 @@ class MooncakeStoreWorker:
             self._inflight_loads.discard(request_id)
             self._completed_loads[request_id] = success
 
-    def _mark_save_finished(self, save_id: int) -> None:
+    def _mark_save_finished(self, save_id: int, success: bool) -> None:
         with self._completion_lock:
             self._inflight_save_ids.discard(save_id)
-            self._completed_save_ids.add(save_id)
+            self._completed_saves[save_id] = success
 
     def _start_receiver(self) -> None:
         if self.kv_role not in ('kv_consumer', 'kv_both') or self.kv_recv_thread is not None:
@@ -459,13 +459,13 @@ class MooncakeStoreWorker:
         for request in requests:
             save_id = request.save_id
             with self._completion_lock:
-                if save_id in self._inflight_save_ids or save_id in self._completed_save_ids:
+                if save_id in self._inflight_save_ids or save_id in self._completed_saves:
                     continue
                 self._inflight_save_ids.add(save_id)
             try:
                 sender.add_request(request, ready_event)
             except Exception:
-                self._mark_save_finished(save_id)
+                self._mark_save_finished(save_id, False)
                 raise
 
     def get_finished(self) -> KVConnectorOutput:
@@ -474,12 +474,14 @@ class MooncakeStoreWorker:
             completed_loads = set(self._completed_loads)
             failed_receiving = {request_id for request_id, success in self._completed_loads.items() if not success}
             self._completed_loads.clear()
-            completed_save_ids = set(self._completed_save_ids)
-            self._completed_save_ids.clear()
+            completed_save_ids = set(self._completed_saves)
+            failed_save_ids = {save_id for save_id, success in self._completed_saves.items() if not success}
+            self._completed_saves.clear()
         return KVConnectorOutput(
             completed_save_ids=completed_save_ids or None,
             finished_receiving=completed_loads or None,
             failed_receiving=failed_receiving,
+            failed_save_ids=failed_save_ids,
         )
 
     def lookup(self, token_len: int, block_hashes: Sequence[bytes], *, recompute_blocks: int = 0) -> int:
@@ -494,7 +496,7 @@ class MooncakeStoreWorker:
         full_blocks = min(token_len // block_size, len(block_hashes))
         is_hybrid = bool(self._cache_config.states_shapes)
         if is_hybrid:
-            state_interval_blocks = self._cache_config.prefill_save_alignment // block_size
+            state_interval_blocks = self._cache_config.state_lookup_alignment // block_size
             # Probe eligible state boundaries and the FA margin needed to reuse them.
             full_blocks = (max(0, full_blocks - recompute_blocks) // state_interval_blocks * state_interval_blocks
                            + recompute_blocks)

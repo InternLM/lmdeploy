@@ -134,19 +134,6 @@ class StateCheckpointLifecycle:
             kv_block_pairs=tuple(kv_block_pairs),
         )
 
-    def reserve_decode_save_batch(
-        self,
-        seqs: list[SchedulerSequence],
-        interval: int,
-    ) -> CheckpointCopyPlan:
-        """Reserve replaceable decode checkpoints for one forward batch."""
-        state_pairs = []
-        for seq in seqs:
-            state_idx = self.reserve_decode_save(seq, interval)
-            if state_idx >= 0:
-                state_pairs.append((int(seq.logical_state), int(state_idx)))
-        return CheckpointCopyPlan(state_pairs=tuple(state_pairs))
-
     def finish_forward_dispatch(
         self,
         seqs: list[SchedulerSequence],
@@ -158,7 +145,33 @@ class StateCheckpointLifecycle:
             self.publish_saves(seqs, pin_saves=True)
         self.unpin_restores(seqs)
 
-    def reserve_save(self, seq: SchedulerSequence, step: int = None, is_decode: bool = False):
+    def reserve_decode_snapshot(self) -> int:
+        """Reserve an unnamed slot before generated tokens have a cache identity."""
+        if not self._prefix_cache_enabled or not self._state_checkpoints_enabled:
+            return -1
+        if self._state_manager.get_num_free_checkpoint() == 0 and self.evict(1) == 0:
+            return -1
+        return self._state_manager.allocate_checkpoint_state()
+
+    def publish_decode_snapshot(self, seq: SchedulerSequence, step: int, slot: int) -> bool:
+        """Attach a completed snapshot after acceptance establishes its exact identity."""
+        node = self._find_checkpoint_node(seq, step)
+        if node is None or self._node_has_slot(node):
+            return False
+        if not self._release_replaceable_decode_checkpoint(seq, step):
+            return False
+        node.state_checkpoint = NodeStateCheckpoint(slot=slot, step=step)
+        try:
+            self._publish_checkpoint(node, seq)
+        except Exception:
+            # The caller retains slot ownership if publication fails.
+            node.state_checkpoint = None
+            raise
+        seq.prefix_cache.decode_checkpoint_node = node
+        seq.prefix_cache.last_decode_save_step = max(seq.prefix_cache.last_decode_save_step, step)
+        return True
+
+    def reserve_save(self, seq: SchedulerSequence, step: int = None):
         """Reserve a checkpoint at an exact safe prefill boundary."""
         self.discard_save(seq)
 
@@ -167,15 +180,15 @@ class StateCheckpointLifecycle:
 
         if step is None:
             step = seq.num_valid_ids
-        if not is_decode and seq._seq_meta.prefill_save_last_only and step != get_last_prefill_save_step(seq):
+        if seq._seq_meta.prefill_save_last_only and step != get_last_prefill_save_step(seq):
             return -1
         lookahead = seq._seq_meta.prefix_cache_token_lookahead
-        if lookahead and (is_decode or step + lookahead > seq.input_end_pos or seq.logprob_start_pos >= 0):
+        if lookahead and (step + lookahead > seq.input_end_pos or seq.logprob_start_pos >= 0):
             return -1
         alignment = seq._seq_meta.prefix_cache_checkpoint_block_size
         if alignment and step % alignment:
             return -1
-        if step <= 0 or (is_decode and step % self._block_size != 0):
+        if step <= 0:
             return -1
         if step > seq.num_valid_ids:
             return -1
@@ -191,40 +204,13 @@ class StateCheckpointLifecycle:
             slot = self._reserve_checkpoint(node, step)
         except MemoryError:
             return -1
-        except RuntimeError as e:
-            if 'No free states' not in str(e):
-                raise
-            return -1
         if slot < 0:
             return -1
 
-        seq.prefix_cache.pending_save.reserve(slot, step, node, is_decode)
-        logger.debug('Reserve SSM prefix-cache checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'is_decode=%s', seq.session_id, seq.seq_id, step, slot, is_decode)
+        seq.prefix_cache.pending_save.reserve(slot, step, node)
+        logger.debug('Reserve SSM prefix-cache checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s',
+                     seq.session_id, seq.seq_id, step, slot)
         return slot
-
-    def reserve_decode_save(self, seq: SchedulerSequence, interval: int, step: int = None):
-        """Reserve a bounded, replaceable decode checkpoint."""
-        if step is None:
-            step = seq.num_valid_ids
-        if interval <= 0 or step % interval != 0:
-            return -1
-        if not self._prefix_cache_enabled or not self._state_checkpoints_enabled:
-            return -1
-        if step <= 0 or step % self._block_size != 0:
-            return -1
-        if step > seq.num_valid_ids:
-            return -1
-        if seq.clamp_prefix_cache_match_step(step) != step:
-            return -1
-        node = self._find_checkpoint_node(seq, step)
-        if node is None or self._node_has_slot(node):
-            return -1
-
-        if not self._release_replaceable_decode_checkpoint(seq, step):
-            return -1
-
-        return self.reserve_save(seq, step=step, is_decode=True)
 
     def discard_save(self, seq: SchedulerSequence):
         """Discard an unpublished checkpoint reservation for a sequence."""
@@ -236,14 +222,10 @@ class StateCheckpointLifecycle:
         slot = pending_save.slot
         save_step = pending_save.step
         node = pending_save.node
-        is_decode = pending_save.is_decode
         pending_save.clear()
         if self._is_unpublished_reservation(node, slot):
-            if is_decode and prefix_cache.decode_checkpoint_node is node:
-                prefix_cache.decode_checkpoint_node = None
             logger.debug('Discard SSM prefix-cache checkpoint reservation: session_id=%s seq_id=%s step=%s '
-                         'state_idx=%s is_decode=%s', seq.session_id, seq.seq_id, save_step, slot,
-                         is_decode)
+                         'state_idx=%s', seq.session_id, seq.seq_id, save_step, slot)
             self.release_checkpoint(node)
             return True
         return False
@@ -257,31 +239,34 @@ class StateCheckpointLifecycle:
             return False
         slot = pending_save.slot
         save_step = pending_save.step
-        is_decode = pending_save.is_decode
         node = pending_save.node
 
         invalid_reason = self._publication_invalid_reason(node, slot, save_step)
         if invalid_reason is not None:
             pending_save.clear()
             logger.debug('Drop invalid SSM prefix-cache checkpoint publication: session_id=%s seq_id=%s step=%s '
-                         'state_idx=%s is_decode=%s reason=%s', seq.session_id, seq.seq_id, save_step, slot,
-                         is_decode, invalid_reason)
-            self._release_invalid_reservation(seq, node, slot, is_decode)
+                         'state_idx=%s reason=%s', seq.session_id, seq.seq_id, save_step, slot, invalid_reason)
+            self._release_invalid_reservation(node, slot)
             return False
 
         try:
             self._publish_checkpoint(node, seq)
         except Exception:
             pending_save.clear()
-            self._release_invalid_reservation(seq, node, slot, is_decode)
+            self._release_invalid_reservation(node, slot)
             raise
         pending_save.clear()
-        if is_decode:
+        # An aligned final prefill can already be the first decode checkpoint.
+        # Count that publication instead of copying the same state again.
+        meta = seq._seq_meta
+        if (meta.prefix_cache_decode_save_first and save_step == seq.input_end_pos
+                and save_step % meta.prefill_save_alignment == 0):
             prefix_cache.decode_checkpoint_node = node
+            prefix_cache.last_decode_save_step = max(prefix_cache.last_decode_save_step, save_step)
         if pin_save:
             self._pin_save(seq, node, slot)
-        logger.debug('Publish SSM prefix-cache checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s '
-                     'is_decode=%s', seq.session_id, seq.seq_id, save_step, slot, is_decode)
+        logger.debug('Publish SSM prefix-cache checkpoint: session_id=%s seq_id=%s step=%s state_idx=%s',
+                     seq.session_id, seq.seq_id, save_step, slot)
         return True
 
     def publish_saves(self, seqs: list[SchedulerSequence], pin_saves: bool = False):
@@ -554,7 +539,7 @@ class StateCheckpointLifecycle:
         checkpoint = node.state_checkpoint
         if checkpoint is None or checkpoint.slot < 0:
             raise RuntimeError('Cannot publish an unreserved state checkpoint.')
-        if checkpoint.pin_count != 0:
+        if checkpoint.pin_count:
             raise RuntimeError('Cannot publish a pinned SSM prefix-cache checkpoint.')
         if not node.is_attached_or_root():
             raise RuntimeError('Cannot publish a detached SSM prefix-cache checkpoint node.')
@@ -563,8 +548,7 @@ class StateCheckpointLifecycle:
                 raise RuntimeError('Cannot republish an SSM checkpoint with missing exact-match metadata.')
             return
 
-        match_data = self._snapshot_match_data(node, seq)
-        checkpoint.exact_match_data = match_data
+        checkpoint.exact_match_data = self._snapshot_match_data(node, seq)
         checkpoint.published = True
         checkpoint.last_access_time = time.perf_counter()
         try:
@@ -601,15 +585,9 @@ class StateCheckpointLifecycle:
         checkpoint.pin_count -= 1
         return node
 
-    def _release_invalid_reservation(self,
-                                     seq: SchedulerSequence,
-                                     node: Node | None,
-                                     slot: int,
-                                     is_decode: bool):
+    def _release_invalid_reservation(self, node: Node | None, slot: int):
         if not self._is_unpublished_reservation(node, slot):
             return
-        if is_decode and seq.prefix_cache.decode_checkpoint_node is node:
-            seq.prefix_cache.decode_checkpoint_node = None
         self.release_checkpoint(node)
 
     def _publication_invalid_reason(self, node: Node | None, slot: int, save_step: int):

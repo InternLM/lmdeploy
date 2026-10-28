@@ -141,6 +141,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
             self.cached_tokens = 0
             self.prefix_cache.suppress_match_stats = False
             self.prefix_cache.match_start_step = -1
+            self.prefix_cache.last_decode_save_step = -1
+            self.prefix_cache.decode_store_save_pending = False
             self._update_token_ids_inputs(token_ids)
         elif mode == UpdateTokenMode.PREFILL:
             self._update_token_ids_prefill(token_ids, draft_token_ids,

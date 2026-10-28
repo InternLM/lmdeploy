@@ -72,14 +72,18 @@ def test_mooncake_state_budget_is_deployable_and_excluded_from_runtime(slots):
     parser = ArgumentParser()
     ArgumentHelper.prefill_save_alignment(parser)
     ArgumentHelper.prefill_save_last_only(parser)
+    ArgumentHelper.prefix_cache_decode_save_first(parser)
+    ArgumentHelper.prefix_cache_decode_state_interval(parser)
     ArgumentHelper.mooncake_state_save_slots(parser)
     defaults = parser.parse_args([])
     assert defaults.prefill_save_alignment == PytorchEngineConfig().prefill_save_alignment == 1024
     assert CacheConfig.prefill_save_alignment == 1024
     assert defaults.mooncake_state_save_slots == 8
     assert not defaults.prefill_save_last_only
+    assert not defaults.prefix_cache_decode_save_first
     args = parser.parse_args(['--mooncake-state-save-slots', str(slots), '--prefill-save-alignment', '4096',
-                              '--prefill-save-last-only'])
+                              '--prefill-save-last-only', '--prefix-cache-decode-save-first',
+                              '--prefix-cache-decode-state-interval', '1024'])
     config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
         max_batch_size=2, prefix_cache_state_budget=1,
         kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_producer'),
@@ -90,6 +94,9 @@ def test_mooncake_state_budget_is_deployable_and_excluded_from_runtime(slots):
     size = executor._get_state_cache_mem()
     assert config.prefill_save_alignment == 4096
     assert config.prefill_save_last_only
+    assert config.prefix_cache_decode_save_first
+    assert config.enable_decode_checkpoints
+    assert config.state_lookup_alignment == 1024
     assert config.num_state_caches == 5 + slots
     assert size == config.num_state_caches * StateCacheEngine.get_state_slot_nbytes(config.states_shapes)
     manager = build_state_manager(config)
@@ -101,14 +108,15 @@ def test_mooncake_state_budget_is_deployable_and_excluded_from_runtime(slots):
 
 def test_mooncake_rejects_unsupported_hybrid_configuration():
     transfer = KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_producer')
-    with pytest.raises(ValueError, match='prefix_cache_decode_state_interval'):
-        ConfigBuilder.build_cache_config(PytorchEngineConfig(
-            max_batch_size=1, kv_transfer_config=transfer, prefix_cache_decode_state_interval=64))
+    config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
+        max_batch_size=1, kv_transfer_config=transfer, prefix_cache_decode_state_interval=64))
+    assert config.prefix_cache_decode_state_interval == 64
     for option in ('mooncake_state_save_slots', 'prefill_save_alignment'):
         with pytest.raises(AssertionError, match=option):
             PytorchEngineConfig(**{option: 0})
 
 
+@pytest.mark.parametrize('store', [False, True])
 @pytest.mark.parametrize(('model_type', 'method', 'no_drop', 'draft_states', 'draft_layers', 'error'), [
     ('qwen3_5', 'qwen3_5_mtp', True, [], 1, None),
     ('qwen3_5', 'qwen3_5_mtp', False, [], 1, None),
@@ -121,9 +129,11 @@ def test_mooncake_rejects_unsupported_hybrid_configuration():
     ('glm5_next', 'deepseek_mtp', True, [((2,), torch.float32)], 1, 'one MTP layer without state caches'),
     ('glm5_next', 'deepseek_mtp', True, [], 2, 'one MTP layer without state caches'),
 ])
-def test_hybrid_mooncake_mtp_validates_model_layout(model_type, method, no_drop, draft_states, draft_layers, error):
-    config = ConfigBuilder.build_cache_config(PytorchEngineConfig(max_batch_size=1, kv_transfer_config=KVTransferConfig(
-        kv_connector='MooncakeStoreConnector', kv_role='kv_producer')))
+def test_hybrid_checkpoints_validate_mtp_layout(store, model_type, method, no_drop, draft_states, draft_layers, error):
+    config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
+        max_batch_size=1, enable_prefix_caching=not store, prefix_cache_decode_save_first=not store,
+        kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_producer')
+        if store else None))
     model = SimpleNamespace(sliding_window=-1, states_shapes=[((2,), torch.float32)], is_gated_delta=True,
                             hf_config=SimpleNamespace(model_type=model_type))
     spec = SpecDecodeConfig(model='draft', method=method, disable_prefix_cache_block_drop=no_drop,
@@ -136,12 +146,15 @@ def test_hybrid_mooncake_mtp_validates_model_layout(model_type, method, no_drop,
         ExecutorBase(*args, specdecode_config=spec, device_type='cpu')
 
 
-def test_mooncake_requires_a_conv_backend_that_restores_prefill_state(monkeypatch):
+@pytest.mark.parametrize('store', [False, True])
+def test_hybrid_checkpoints_require_a_conv_backend_that_restores_prefill_state(monkeypatch, store):
     from lmdeploy.pytorch.backends.cuda import utils
 
     monkeypatch.setattr(utils, 'has_tilelang', lambda: False)
-    config = ConfigBuilder.build_cache_config(PytorchEngineConfig(max_batch_size=1, kv_transfer_config=KVTransferConfig(
-        kv_connector='MooncakeStoreConnector', kv_role='kv_producer')))
+    config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
+        max_batch_size=1, enable_prefix_caching=not store, prefix_cache_decode_save_first=not store,
+        kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_producer')
+        if store else None))
     model = SimpleNamespace(sliding_window=-1, states_shapes=[((2,), torch.float32)], is_gated_delta=True)
     with pytest.raises(RuntimeError, match='requires TileLang'):
         ExecutorBase('', model, config, SimpleNamespace(), SimpleNamespace(dp=1, world_size=1), SimpleNamespace())
@@ -641,17 +654,43 @@ def test_get_state_cache_mem_leaves_non_ssm_prefix_cache_enabled():
     assert executor.cache_config.enable_prefix_caching
 
 
-def test_build_cache_config_carries_prefix_cache_state_budget():
+@pytest.mark.parametrize(('save_first', 'interval'), [(False, 0), (True, 0), (True, 64), (False, 64)])
+def test_build_cache_config_carries_prefix_cache_policy(save_first, interval):
     engine_config = PytorchEngineConfig(max_batch_size=4,
                                         prefix_cache_state_budget=3,
-                                        prefix_cache_decode_state_interval=128)
+                                        enable_prefix_caching=True,
+                                        prefill_save_alignment=256,
+                                        prefix_cache_decode_save_first=save_first,
+                                        prefix_cache_decode_state_interval=interval)
 
     cache_config = ConfigBuilder.build_cache_config(engine_config)
 
     assert cache_config.prefix_cache_state_budget == 3
-    assert cache_config.prefix_cache_decode_state_interval == 128
+    assert cache_config.prefill_save_alignment == 256
+    assert cache_config.prefix_cache_decode_save_first == save_first
+    assert cache_config.prefix_cache_decode_state_interval == interval
+    assert cache_config.state_lookup_alignment == (64 if interval else 256)
+    assert not cache_config.enable_decode_checkpoints
+    cache_config.states_shapes = [((2,), torch.float32)]
+    assert cache_config.enable_decode_checkpoints == (save_first or interval > 0)
+    cache_config.enable_prefix_caching = False
+    assert not cache_config.enable_decode_checkpoints
 
 
 def test_engine_config_rejects_unaligned_prefix_cache_decode_state_interval():
     with pytest.raises(AssertionError):
         PytorchEngineConfig(max_batch_size=4, prefix_cache_decode_state_interval=96)
+
+
+@pytest.mark.parametrize('option', ['prefill_save_alignment', 'prefix_cache_decode_state_interval'])
+def test_checkpoint_alignment_uses_effective_block_size(option):
+    def use_128_token_blocks(config):
+        config.block_size = config.kernel_block_size = 128
+
+    cache = ConfigBuilder.build_cache_config(PytorchEngineConfig(
+        enable_prefix_caching=True, prefix_cache_decode_save_first=True, **{option: 192}))
+    model = SimpleNamespace(sliding_window=None, states_shapes=[((2,), torch.float32)], is_gated_delta=False,
+                            update_cache_config_func=use_128_token_blocks)
+    executor = ExecutorBase('', model, cache, None, DistConfig(), SimpleNamespace(memdecode_config=None))
+    with pytest.raises(ValueError, match=f'{option} must be a multiple of block_size'):
+        executor.update_configs()

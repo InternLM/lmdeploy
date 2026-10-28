@@ -128,7 +128,7 @@ class KVCacheStoreSendingThread(threading.Thread):
         global_rank: int,
         tp_rank: int,
         tp_size: int,
-        completion_callback: Callable[[int], None],
+        completion_callback: Callable[[int, bool], None],
         replicate_config: Any = None,
         state_registrations: tuple[MooncakeStoreStateRegistration, ...] = (),
     ) -> None:
@@ -406,7 +406,7 @@ class KVCacheStoreSendingThread(threading.Thread):
                         request.save_id,
                         request.request_id,
                     )
-                self.completion_callback(request.save_id)
+                self.completion_callback(request.save_id, success)
                 logger.info(
                     'Mooncake KV save completed: global_rank=%d tp_rank=%d tp_size=%d '
                     'save_id=%d request_id=%s status=%s',

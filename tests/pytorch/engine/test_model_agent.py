@@ -1311,12 +1311,14 @@ class TestDPForwardInputsMaker:
     def test_get_attaches_dummy_inputs_to_connector_only_step(self):
         async def _run():
             metadata = object()
+            cache_inputs = None
             connector_inputs = {
                 'inputs': None,
                 'delta': None,
                 'extra_inputs': None,
                 'return_logits': False,
                 'kv_connector_metadata': metadata,
+                'cache_inputs': cache_inputs,
             }
             dummy_inputs = {
                 'inputs': 'connector_dummy',
@@ -1333,6 +1335,7 @@ class TestDPForwardInputsMaker:
             assert result['extra_inputs'] == 'dummy_extra'
             assert result['return_logits'] is True
             assert result['kv_connector_metadata'] is metadata
+            assert result['cache_inputs'] is cache_inputs
 
         asyncio.run(_run())
 

@@ -130,6 +130,7 @@ class InputsMakerConfig:
     enable_prefix_caching: bool
     prefix_cache_decode_state_interval: int
     is_ssm: bool = False
+    enable_decode_checkpoints: bool = False
     dp: int = 1
     spec_decoding: bool = False
     enable_chunked_prefill: bool = False
@@ -158,6 +159,7 @@ class InputsMakerConfig:
             enable_prefix_caching=cache_config.enable_prefix_caching,
             prefix_cache_decode_state_interval=cache_config.prefix_cache_decode_state_interval,
             is_ssm=len(cache_config.states_shapes) > 0,
+            enable_decode_checkpoints=cache_config.enable_decode_checkpoints,
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
             use_mrope=model_config.use_mrope,
@@ -574,8 +576,7 @@ class _ForwardInputsTask:
         self.state.prefill = False
         delta, running, invalid_seqs = maker.create_model_inputs_delta()
         maker.to_evict_seqs = invalid_seqs
-        cache_inputs = maker._make_decode_cache_inputs(running, delta)
-        self.result.set_work(running, None, delta, None, cache_inputs=cache_inputs)
+        self.result.set_work(running, None, delta, None)
 
     def _schedule_prefill(self,
                           allow_long_prefill: bool = True,
@@ -1018,21 +1019,6 @@ class InputsMakerAsync:
                                      state_restore_plan=state_restore_plan,
                                      state_save_plan=state_save_plan)
 
-    def _make_decode_cache_inputs(self, valid_seqs: 'SeqList', delta: ModelInputsDelta | None):
-        """Build one-forward checkpoint operations for a decode step."""
-        if delta is None or len(valid_seqs) == 0 or not self._ssm_prefix_cache_enabled():
-            return None
-
-        decode_state_interval = self.config.prefix_cache_decode_state_interval
-        if (decode_state_interval <= 0 or self.spec_decoding or delta.max_q_seqlen != 1):
-            return None
-
-        copy_plan = self.state_checkpoints.reserve_decode_save_batch(valid_seqs, decode_state_interval)
-        state_save_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs)
-        if state_save_plan is None:
-            return None
-        return CacheCheckpointInputs(state_save_plan=state_save_plan)
-
     @torch.inference_mode()
     @record_function('create_model_inputs')
     def create_model_inputs(self, messages: 'SeqList', is_prefill: bool):
@@ -1361,6 +1347,12 @@ class InputsMakerAsync:
             logger.debug(f'Sending forward inputs: {inputs.log_info()}')
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
+        if self.config.enable_decode_checkpoints:
+            snapshot = self.scheduler.decode_checkpoints.prepare(next_running, inputs, forward_inputs['delta'])
+            if snapshot is not None:
+                batch_id, plan = snapshot
+                cache_inputs = forward_inputs['cache_inputs'] or CacheCheckpointInputs()
+                forward_inputs['cache_inputs'] = replace(cache_inputs, decode_save_plan=plan, decode_save_id=batch_id)
         await self.executor.forward_async(forward_inputs)
         self._last_forward_kind = self._forward_kind(inputs, forward_inputs['delta'])
         self.scheduler.tick()

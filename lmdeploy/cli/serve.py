@@ -120,6 +120,7 @@ class SubCliServe:
         ArgumentHelper.kernel_block_size(pt_group)
         ArgumentHelper.prefix_cache_state_budget(pt_group)
         ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
+        ArgumentHelper.prefix_cache_decode_save_first(pt_group)
         ArgumentHelper.prefill_save_alignment(pt_group)
         ArgumentHelper.prefill_save_last_only(pt_group)
         ArgumentHelper.mooncake_state_save_slots(pt_group)
@@ -267,6 +268,7 @@ class SubCliServe:
                 enable_prefix_caching=args.enable_prefix_caching,
                 prefix_cache_state_budget=args.prefix_cache_state_budget,
                 prefix_cache_decode_state_interval=args.prefix_cache_decode_state_interval,
+                prefix_cache_decode_save_first=args.prefix_cache_decode_save_first,
                 prefill_save_alignment=args.prefill_save_alignment,
                 prefill_save_last_only=args.prefill_save_last_only,
                 mooncake_state_save_slots=args.mooncake_state_save_slots,

@@ -597,6 +597,26 @@ def test_hybrid_lookup_finds_joint_boundary(tmp_path, state_boundaries, missing_
     worker.shutdown()
 
 
+@pytest.mark.parametrize(('interval', 'boundary'), [(0, 256), (192, 448), (192, 512), (1024, 1280)])
+def test_hybrid_lookup_finds_relative_and_retry_boundaries(tmp_path, interval, boundary):
+    config = replace(make_cache_config(write_store_config(tmp_path)), states_shapes=[((2,), torch.float32)],
+                     prefill_save_alignment=256, prefix_cache_decode_state_interval=interval,
+                     prefix_cache_decode_save_first=True)
+    store = FakeStore(existing_keys=set())
+    worker = MooncakeStoreWorker(config, tp_size=2, store_factory=lambda: store)
+    hashes = build_prefix_block_hashes(range(boundary + 64), 64)
+    store.existing_keys.update(build_store_key(worker.key_metadata, rank, h) for h in hashes for rank in range(2))
+    store.existing_keys.update(
+        build_store_key(worker.key_metadata, rank, hashes[end // 64 - 1], group_id=1)
+        for end in (256, boundary) for rank in range(2))
+    assert worker.lookup(boundary + 64, hashes) == boundary
+    # Save policy changes timing, not the payload identity or lookup namespace.
+    worker._cache_config = replace(config, prefix_cache_decode_save_first=False, prefill_save_last_only=True)
+    assert worker.lookup(boundary + 64, hashes) == boundary
+    assert store.lookup_calls[0] == store.lookup_calls[1]
+    worker.shutdown()
+
+
 @pytest.mark.parametrize(('token_len', 'hash_count', 'expected'), [
     (127, 5, 0),
     (320, 1, 0),
@@ -888,7 +908,8 @@ def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(tmp_pat
         sender = worker_threads_module.KVCacheStoreSendingThread(
             store=store, registrations=(MooncakeStoreRegistration('fa', 0x1000, 512),),
             row_block_sizes=(64,), num_gpu_blocks=8, key_metadata=metadata, global_rank=rank, tp_rank=rank,
-            tp_size=8, completion_callback=completed.append, replicate_config=object(),
+            tp_size=8, completion_callback=lambda save_id, success: completed.append((save_id, success)),
+            replicate_config=object(),
             state_registrations=(MooncakeStoreStateRegistration('state', 0x2000, 64, 4, 16),))
         state_key = f'prefix@model@tp_rank:{rank}@group:1@{hashes[-1].hex()}'
         entries = sender._owned_entries(request)
@@ -900,7 +921,7 @@ def test_hybrid_save_keeps_group_zero_format_and_writes_every_state_rank(tmp_pat
         sender.start()
         sender.add_request(request, FakeCudaEvent())
         sender.close()
-        assert completed == [1]
+        assert completed == [(1, True)]
         keys, addresses, sizes, _ = store.put_calls[0]
         state_index = keys.index(state_key)
         assert addresses[state_index] == [0x2000 + 3 * 16]
@@ -947,7 +968,8 @@ def test_hybrid_sender_reads_frozen_snapshot_across_all_pool_rows(put_result):
     sender = worker_threads_module.KVCacheStoreSendingThread(
         store=store, registrations=(MooncakeStoreRegistration('fa', 0x1000, 64),), row_block_sizes=(64,),
         num_gpu_blocks=1, key_metadata=MooncakeStoreKeyMetadata('model', '', 1, 64),
-        global_rank=0, tp_rank=0, tp_size=1, completion_callback=completed.append, replicate_config=object(),
+        global_rank=0, tp_rank=0, tp_size=1,
+        completion_callback=lambda save_id, success: completed.append((save_id, success)), replicate_config=object(),
         state_registrations=(
             MooncakeStoreStateRegistration('conv', conv.data_ptr(), conv.numel(), 4, 6),
             MooncakeStoreStateRegistration('recurrent', recurrent.data_ptr(), recurrent.numel(), 4, 5)))
@@ -963,7 +985,7 @@ def test_hybrid_sender_reads_frozen_snapshot_across_all_pool_rows(put_result):
                                       state=MooncakeStoreStateSave(1, 3, 64))
     sender.add_request(request, event)
     sender.close()
-    assert completed == [0]
+    assert completed == [(0, put_result >= 0)]
     assert observed == [(1, expected)]
     assert store.put_calls[0][2] == [[6, 5, 5]]
 
@@ -1070,7 +1092,7 @@ def test_async_save_failure_is_a_terminal_completion(
     assert event.record_calls == 1
     assert event.synchronize_calls == 1
     assert len(store.put_calls) == (0 if failure_stage == 'lookup' else 1)
-    assert worker.get_finished() == KVConnectorOutput(completed_save_ids={29})
+    assert worker.get_finished() == KVConnectorOutput(completed_save_ids={29}, failed_save_ids={29})
     worker.shutdown()
 
 
@@ -1141,13 +1163,14 @@ def test_hybrid_save_load_roundtrip_restores_all_rank_local_bytes(layout):
                       state_registrations=state_registrations)
         completed = []
         sender = worker_threads_module.KVCacheStoreSendingThread(
-            **kwargs, completion_callback=completed.append, replicate_config=object())
+            **kwargs, completion_callback=lambda save_id, success: completed.append((save_id, success)),
+            replicate_config=object())
         sender.start()
         sender.add_request(MooncakeStoreSaveRequest(
             rank, rank, 0, (0, 1, 2, 3), (0, 1, 2, 3), hashes,
             state=MooncakeStoreStateSave(1, 3, 16)), FakeCudaEvent())
         sender.close()
-        assert completed == [rank]
+        assert completed == [(rank, True)]
         rank_caches.append((fa, conv, recurrent, state_pools, kwargs))
 
     for rank, (fa, conv, recurrent, state_pools, kwargs) in enumerate(rank_caches):

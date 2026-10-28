@@ -214,13 +214,13 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         seq.set_step(save_step - 1)
         block_mgr.allocate(seq)
         block_trie.allocate(seq)
-        state_idx = block_trie.state_checkpoints.reserve_decode_save(seq, interval=block_size)
-        node = seq.prefix_cache.pending_save.node
+        state_idx = block_trie.state_checkpoints.reserve_decode_snapshot()
+        node = seq.prefix_cache.trie_cursor
 
         assert state_idx >= 0
         seq.update_token_ids([2], mode=UpdateTokenMode.DECODE)
 
-        assert block_trie.state_checkpoints.publish_save(seq)
+        assert block_trie.state_checkpoints.publish_decode_snapshot(seq, save_step, state_idx)
         assert seq.prefix_cache.decode_checkpoint_node is node
         assert node.state_checkpoint.published
 
@@ -248,7 +248,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert node.state_checkpoint is None
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
-    def test_ssm_checkpoint_publish_rejects_mismatched_sequence_cursor(self, ssm_scheduler):
+    def test_ssm_checkpoint_rejects_mismatched_sequence_cursor(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager
         block_trie = ssm_scheduler.block_trie
         sess = ssm_scheduler.add_session(0)
@@ -271,6 +271,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
             block_trie.state_checkpoints.publish_save(seq)
 
         assert seq.prefix_cache.pending_save.slot == -1
+        assert seq.prefix_cache.last_decode_save_step == -1
         assert node.state_checkpoint is None
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
@@ -308,130 +309,56 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert node.adapter_name not in block_trie._checkpoint_index._steps_by_adapter
         assert ssm_scheduler.state_manager.get_num_free_checkpoint() == free_states
 
-    def test_ssm_decode_checkpoint_replaces_previous_unpinned_state(self, ssm_scheduler):
-        block_mgr = ssm_scheduler.block_manager
-        block_trie = ssm_scheduler.block_trie
-        sess = ssm_scheduler.add_session(0)
-        block_size = sess.seq_meta.block_size
-        step = block_size * 2
+    @pytest.mark.parametrize('num_slots', [1, 8])
+    def test_ssm_decode_checkpoint_replaces_previous_unpinned_state(
+            self, ssm_cache_config, scheduler_config, seq_meta, num_slots):
+        ssm_cache_config.num_state_caches = num_slots + 1
+        ssm_cache_config.prefix_cache_state_budget = num_slots
+        scheduler = Scheduler(scheduler_config, ssm_cache_config, seq_meta=seq_meta)
+        checkpoints = scheduler.state_checkpoints
+        block_size = scheduler.seq_meta.block_size
+        seq = scheduler.add_session(0).add_sequence([1] * (2 * block_size))
+        for step in (2 * block_size, 3 * block_size):
+            scheduler.block_manager.allocate(seq)
+            scheduler.block_trie.allocate(seq)
+            slot = checkpoints.reserve_decode_snapshot()
+            assert slot >= 0
+            assert checkpoints.publish_decode_snapshot(seq, step, slot)
+            assert seq.prefix_cache.last_decode_save_step == step
+            assert scheduler.state_manager.get_num_allocated_checkpoint_states() == 1
+            seq.update_token_ids([2] * block_size, mode=UpdateTokenMode.DECODE)
 
-        seq = sess.add_sequence([1] * step)
-        seq.set_step(step - 1)
-        block_mgr.allocate(seq)
-        block_trie.allocate(seq)
-        state_idx_a = block_trie.state_checkpoints.reserve_decode_save(seq, interval=block_size)
-        node_a = seq.prefix_cache.pending_save.node
-
-        assert state_idx_a >= 0
-        assert seq.prefix_cache.pending_save.is_decode
-        assert block_trie.state_checkpoints.publish_save(seq)
-        assert seq.prefix_cache.decode_checkpoint_node is node_a
-        assert node_a.state_checkpoint.published
-
+    @pytest.mark.parametrize('blocked_by', ['pinned', 'pending', 'unallocated'])
+    def test_decode_publication_keeps_old_checkpoint_when_replacement_is_blocked(self, ssm_scheduler, blocked_by):
+        scheduler = ssm_scheduler
+        checkpoints = scheduler.state_checkpoints
+        block_size = scheduler.seq_meta.block_size
+        step = 2 * block_size
+        seq = scheduler.add_session(0).add_sequence([1] * step)
+        scheduler.block_manager.allocate(seq)
+        scheduler.block_trie.allocate(seq)
+        old_slot = checkpoints.reserve_decode_snapshot()
+        assert checkpoints.publish_decode_snapshot(seq, step, old_slot)
+        old_node = seq.prefix_cache.decode_checkpoint_node
         seq.update_token_ids([2] * block_size, mode=UpdateTokenMode.DECODE)
-        block_mgr.allocate(seq)
-        block_trie.allocate(seq)
-        state_idx_b = block_trie.state_checkpoints.reserve_decode_save(seq, interval=block_size)
-        node_b = seq.prefix_cache.pending_save.node
-
-        assert state_idx_b >= 0
-        assert node_a.state_checkpoint is None
-        assert seq.prefix_cache.decode_checkpoint_node is None
-        assert block_trie.state_checkpoints.publish_save(seq)
-        assert seq.prefix_cache.decode_checkpoint_node is node_b
-        assert node_b.state_checkpoint.published
-
-    def test_ssm_decode_checkpoint_skip_replacement_when_previous_is_pinned(self, ssm_scheduler):
-        block_mgr = ssm_scheduler.block_manager
-        block_trie = ssm_scheduler.block_trie
-        sess = ssm_scheduler.add_session(0)
-        block_size = sess.seq_meta.block_size
-        step = block_size * 2
-
-        seq = sess.add_sequence([1] * step)
-        seq.set_step(step - 1)
-        block_mgr.allocate(seq)
-        block_trie.allocate(seq)
-        state_idx = block_trie.state_checkpoints.reserve_decode_save(seq, interval=block_size)
-        node = seq.prefix_cache.pending_save.node
-        assert state_idx >= 0
-        assert block_trie.state_checkpoints.publish_save(seq)
-        node.state_checkpoint.pin_count = 1
-
-        seq.update_token_ids([2] * block_size, mode=UpdateTokenMode.DECODE)
-        block_mgr.allocate(seq)
-        block_trie.allocate(seq)
-
-        assert block_trie.state_checkpoints.reserve_decode_save(seq, interval=block_size) == -1
-        assert seq.prefix_cache.decode_checkpoint_node is node
-        assert node.state_checkpoint.slot == state_idx
-        assert node.state_checkpoint.published
-        assert seq.prefix_cache.pending_save.slot == -1
-
-    def test_ssm_decode_checkpoint_keeps_old_state_when_new_node_is_pending(self, ssm_scheduler):
-        block_mgr = ssm_scheduler.block_manager
-        block_trie = ssm_scheduler.block_trie
-        sess = ssm_scheduler.add_session(0)
-        block_size = sess.seq_meta.block_size
-        step = block_size * 2
-        old_tokens = [1] * step
-        new_tokens = [2] * block_size
-
-        seq = sess.add_sequence(old_tokens)
-        seq.set_step(step - 1)
-        block_mgr.allocate(seq)
-        block_trie.allocate(seq)
-        old_state_idx = block_trie.state_checkpoints.reserve_decode_save(seq, interval=block_size)
-        old_node = seq.prefix_cache.pending_save.node
-
-        assert old_state_idx >= 0
-        assert block_trie.state_checkpoints.publish_save(seq)
+        scheduler.block_manager.allocate(seq)
+        if blocked_by != 'unallocated':
+            scheduler.block_trie.allocate(seq)
+        if blocked_by == 'pinned':
+            old_node.state_checkpoint.pin_count = 1
+        elif blocked_by == 'pending':
+            other = scheduler.add_session(1).add_sequence([1] * step + [2] * block_size)
+            scheduler.block_manager.allocate(other)
+            scheduler.block_trie.allocate(other)
+            assert checkpoints.reserve_save(other) >= 0
+        slot = checkpoints.reserve_decode_snapshot()
+        assert slot >= 0
+        assert not checkpoints.publish_decode_snapshot(seq, step + block_size, slot)
+        scheduler.state_manager.free_checkpoint_state(slot)
         assert seq.prefix_cache.decode_checkpoint_node is old_node
+        assert old_node.state_checkpoint.slot == old_slot
         assert old_node.state_checkpoint.published
-
-        seq.update_token_ids(new_tokens, mode=UpdateTokenMode.DECODE)
-        block_mgr.allocate(seq)
-        block_trie.allocate(seq)
-        new_node = seq.prefix_cache.trie_cursor
-
-        pending_seq = sess.add_sequence(old_tokens + new_tokens)
-        block_mgr.allocate(pending_seq)
-        block_trie.allocate(pending_seq)
-        assert pending_seq.prefix_cache.trie_cursor is new_node
-        pending_state_idx = block_trie.state_checkpoints.reserve_save(pending_seq)
-        assert pending_state_idx >= 0
-        assert new_node.state_checkpoint.slot == pending_state_idx
-        assert not new_node.state_checkpoint.published
-
-        assert block_trie.state_checkpoints.reserve_decode_save(seq, interval=block_size) == -1
-        assert seq.prefix_cache.decode_checkpoint_node is old_node
-        assert old_node.state_checkpoint.slot == old_state_idx
-        assert old_node.state_checkpoint.published
-        assert seq.prefix_cache.pending_save.slot == -1
-
-    def test_ssm_decode_checkpoint_keeps_old_state_when_new_step_is_not_allocated(self, ssm_scheduler):
-        block_mgr = ssm_scheduler.block_manager
-        block_trie = ssm_scheduler.block_trie
-        sess = ssm_scheduler.add_session(0)
-        block_size = sess.seq_meta.block_size
-        step = block_size * 2
-
-        seq = sess.add_sequence([1] * step)
-        seq.set_step(step - 1)
-        block_mgr.allocate(seq)
-        block_trie.allocate(seq)
-        state_idx = block_trie.state_checkpoints.reserve_decode_save(seq, interval=block_size)
-        node = seq.prefix_cache.pending_save.node
-        assert state_idx >= 0
-        assert block_trie.state_checkpoints.publish_save(seq)
-
-        seq.update_token_ids([2] * block_size, mode=UpdateTokenMode.DECODE)
-        block_mgr.allocate(seq)
-
-        assert block_trie.state_checkpoints.reserve_decode_save(seq, interval=block_size) == -1
-        assert seq.prefix_cache.decode_checkpoint_node is node
-        assert node.state_checkpoint.slot == state_idx
-        assert node.state_checkpoint.published
+        assert seq.prefix_cache.last_decode_save_step == step
 
     def test_ssm_checkpoint_save_uses_explicit_chunk_step(self, ssm_scheduler):
         block_mgr = ssm_scheduler.block_manager

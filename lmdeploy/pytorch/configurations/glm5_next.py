@@ -36,8 +36,6 @@ def update_cache_config(cache_config):
     cache_config.block_size = 64
     cache_config.kernel_block_size = 64
     cache_config.prefix_cache_block_aligned = True
-    if cache_config.prefix_cache_token_lookahead and cache_config.prefix_cache_decode_state_interval:
-        raise ValueError('GLM-5.3 MTP prefix caching only publishes prefill checkpoints.')
     if cache_config.prefix_cache_decode_state_interval % 64:
         raise ValueError('GLM-5.3 prefix_cache_decode_state_interval must be a multiple of 64.')
 
@@ -264,9 +262,11 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         config.supports_mla_fp8_cache = True
         config.reserve_dsa_score_workspace = True
         config.k_head_dim = text_config.kv_lora_rank
-        # Reuse Qwen3.5's token ring for convolution; recurrent/KPool states
-        # keep a complete checkpoint after each verified token. Store resumes
-        # on 64-token boundaries, where the unfinished KPool tail is empty.
+        # Conv keeps the token history and recurrent state keeps one entry per
+        # verification position. A checkpoint copies both rings; restore uses
+        # the saved absolute position to select its entries, including an
+        # accepted boundary inside a verification step. On 64-token boundaries
+        # the unfinished KPool tail is empty and needs no checkpoint payload.
         ring_shape = (num_spec_tokens + 1,) if num_spec_tokens else ()
         config.state_cache_specs = [
             StateCacheSpec(
