@@ -439,7 +439,9 @@ class _TentativePrefixMatch:
         prefix_cache.restore.clear()
         prefix_cache.match_start_step = -1
         prefix_cache.recompute_overlap.clear_tracking()
-        seq.cached_tokens = 0
+        # Rejecting a replay attempt must not erase the original request hit.
+        if not prefix_cache.suppress_match_stats:
+            seq.cached_tokens = 0
 
     def _clear(self) -> None:
         self._stats_snapshot = None
