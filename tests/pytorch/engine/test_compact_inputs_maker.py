@@ -1842,6 +1842,7 @@ def test_decode_checkpoint_never_uses_unchanged_bank_elision(pending):
 @pytest.mark.parametrize('width', [1, 4, 6])
 @pytest.mark.parametrize('graph', [False, True])
 @torch.inference_mode()
+@pytest.mark.usefixtures('release_cuda_graph_cycles')
 def test_elided_host_delta_preserves_worker_advance_and_graph_ids(monkeypatch, width, graph):
     """Real host delta/H2D/reindex, all consumed counts, fixed-address staging.
 

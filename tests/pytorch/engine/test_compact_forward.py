@@ -212,6 +212,7 @@ def test_model_agent_consumes_one_forward_prefill_carrier(monkeypatch):
 
 
 @pytest.mark.parametrize('width', [1, 4])
+@pytest.mark.usefixtures('release_cuda_graph_cycles')
 def test_real_full_graph_runner_stages_versions_and_masks_retired_rows(monkeypatch, width):
     from lmdeploy.pytorch.backends.cuda.graph_runner.full_graph import CUDASingleGraphRunner
     model, config, cache, state_cache = _environment(monkeypatch, width)
@@ -303,6 +304,7 @@ def test_dummy_model_forward_never_writes_units(monkeypatch, prefill):
         torch.testing.assert_close(pool, initial, rtol=0, atol=0)
 
 
+@pytest.mark.usefixtures('release_cuda_graph_cycles')
 def test_piecewise_manager_replays_live_prefill_checkpoint_ids(monkeypatch):
     from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import PiecewiseGraphManager
     from lmdeploy.pytorch.backends.cuda.graph_runner.standard import StandardDecoderPiecewiseGraphRuntime
