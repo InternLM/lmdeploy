@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import pytest
+
 from lmdeploy.messages import KVTransferConfig, PytorchEngineConfig
 from lmdeploy.pytorch.engine.mp_engine.zmq_engine import ZMQMPEngine
 
@@ -106,11 +108,18 @@ def test_zmq_engine_close_reaps_force_killed_process():
     assert engine.proc is None
 
 
-def test_repeated_shutdown_signal_does_not_cancel_engine_drain(monkeypatch):
+@pytest.mark.parametrize('shutdown_reason', ['signal', 'return', 'error'])
+@pytest.mark.parametrize('drain_fails', [False, True])
+def test_shutdown_signal_does_not_cancel_engine_drain(monkeypatch, shutdown_reason, drain_fails):
     import asyncio
     import signal
     from types import SimpleNamespace
     from unittest.mock import Mock
+
+    from lmdeploy.pytorch.engine.mp_engine import zmq_engine
+
+    log_error = Mock(wraps=zmq_engine.logger.exception)
+    monkeypatch.setattr(zmq_engine.logger, 'exception', log_error)
 
     async def run():
         handlers = {}
@@ -121,11 +130,16 @@ def test_repeated_shutdown_signal_does_not_cancel_engine_drain(monkeypatch):
         events = []
 
         async def serve():
-            await asyncio.Event().wait()
+            if shutdown_reason == 'signal':
+                await asyncio.Event().wait()
+            elif shutdown_reason == 'error':
+                raise RuntimeError('RPC failed')
 
         async def wait():
             draining.set()
             await finish.wait()
+            if drain_fails:
+                raise RuntimeError('drain failed')
             events.append('drained')
 
         server = SimpleNamespace(register_method=Mock(), run=serve, stop=Mock())
@@ -133,15 +147,21 @@ def test_repeated_shutdown_signal_does_not_cancel_engine_drain(monkeypatch):
                                  engine_config=SimpleNamespace(max_batch_size=1))
         task = asyncio.create_task(ZMQMPEngine._mp_proc_async(server, engine))
         await asyncio.sleep(0)
-        handlers[signal.SIGTERM]()
+        if shutdown_reason == 'signal':
+            handlers[signal.SIGTERM]()
+            handlers[signal.SIGTERM]()
         await asyncio.wait_for(draining.wait(), timeout=2)
         handlers[signal.SIGTERM]()
+        handlers[signal.SIGINT]()
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         assert not task.done()
         finish.set()
         await task
-        assert events == ['drained']
+        assert events == ([] if drain_fails else ['drained'])
+        assert log_error.call_count == int(shutdown_reason == 'error') + int(drain_fails)
+        if drain_fails:
+            log_error.assert_any_call('Engine wait_tasks failed during shutdown.')
         engine.close.assert_called_once()
 
     asyncio.run(run())
