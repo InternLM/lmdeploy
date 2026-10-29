@@ -63,6 +63,8 @@ class ServerContext:
         self.enable_abort_handling = False
         self.response_parser_cls: type[ResponseParser] | None = None
         self.default_gen_config: dict = {}
+        # A successfully initialized context enables decision scoring; otherwise the endpoint returns 503.
+        self.decision_context = None
 
     @property
     def engine_config(self):
