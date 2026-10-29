@@ -1230,6 +1230,44 @@ class TestDrainQueues:
 
 class TestDPForwardInputsMaker:
 
+    @pytest.mark.parametrize('num_spec_tokens', [0, 3])
+    @pytest.mark.parametrize('compact', [False, True])
+    def test_dummy_uses_current_metadata_after_kv_wakeup(self, monkeypatch, num_spec_tokens, compact):
+        from lmdeploy.pytorch.disagg.config import EngineRole
+        from lmdeploy.pytorch.engine.model_agent.inputs_maker import DPForwardInputsMaker
+        from lmdeploy.pytorch.strategies.ar.model_inputs import ARModelInputsStrategy
+        from lmdeploy.pytorch.strategies.ar_spec.model_inputs import ARSpecModelInputsStrategy
+
+        strategy = (ARSpecModelInputsStrategy(num_spec_tokens) if num_spec_tokens else ARModelInputsStrategy())
+        config = SimpleNamespace(states_shapes=[(1,)], use_mrope=False, vocab_size=16)
+        agent = SimpleNamespace(model_config=config,
+                                cache_config=SimpleNamespace(role=EngineRole.Hybrid, max_batches=8),
+                                inputs_strategy=strategy, device='cpu',
+                                _pre_in_que=asyncio.Queue(), _in_que=asyncio.Queue(),
+                                dist_ctx=SimpleNamespace(dist_config=SimpleNamespace(enable_microbatch=False)),
+                                spec_agent=Mock())
+        agent.spec_agent.is_enabled.return_value = bool(num_spec_tokens)
+        BaseModelAgent.set_model_config(agent, config)
+        monkeypatch.setattr(torch.cuda, 'Event', Mock(return_value=Mock()))
+        maker = DPForwardInputsMaker(agent)
+        assert maker._make_dummy_forward_inputs()['inputs'].ssm_state_meta is None
+        extra = Mock(wraps=strategy.make_dummy_extra_inputs)
+        monkeypatch.setattr(strategy, 'make_dummy_extra_inputs', extra)
+
+        for _ in range(2):
+            old_meta = agent.make_dummy_meta
+            # KV wakeup replaces metadata; cache construction then binds the bank width.
+            BaseModelAgent.set_model_config(agent, config)
+            assert agent.make_dummy_meta is not old_meta
+            agent.make_dummy_meta.compact_bank_width = num_spec_tokens + 1 if compact else 0
+            forward = maker._make_dummy_forward_inputs()
+            inputs = forward['inputs']
+            assert inputs.is_dummy
+            assert (inputs.ssm_state_meta is not None) == compact
+            assert extra.call_args.kwargs['meta'] is agent.make_dummy_meta
+            assert forward['return_logits'] == bool(num_spec_tokens)
+
+
     @staticmethod
     def _make_ready_event():
 

@@ -224,6 +224,10 @@ class ExecutorBase:
         raise NotImplementedError('Not Implemented.')
 
 
+    async def drain_for_shutdown(self):
+        """Prove all model producers and connector I/O have stopped."""
+        raise NotImplementedError('Shutdown drain is not supported by this executor.')
+
     def release(self):
         """Release resources."""
         raise NotImplementedError('Not Implemented.')

@@ -446,6 +446,9 @@ class MPExecutor(ExecutorBase):
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
 
+    async def drain_for_shutdown(self):
+        await asyncio.wait_for(self.collective_rpc_async('drain_for_shutdown'), timeout=45.0)
+
     def release(self):
         """release."""
         for proc in self.procs:

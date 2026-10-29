@@ -110,6 +110,9 @@ class UniExecutor(ExecutorBase):
         """Stop engine loop."""
         self.model_agent.stop()
 
+    async def drain_for_shutdown(self):
+        await self.model_agent.drain_for_shutdown()
+
     def release(self):
         """Release resources."""
         self.model_agent.release()

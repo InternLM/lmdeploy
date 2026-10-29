@@ -363,6 +363,7 @@ class BaseModelAgent:
         self._out_que = None
         self._background_task = None
         self._preprocess_task = None
+        self._postprocess_task = None
         self._pending_h2d_transfers = deque()
         self.tasks = set()
 
@@ -1162,7 +1163,7 @@ class BaseModelAgent:
                 extra_outputs,
                 next_token_ids,
                 batched_output,
-            ) = await asyncio.shield(
+            ) = await self._shield_postprocess(
                 self._step_postprocess_with_output(
                     last_logits,
                     logits,
@@ -1184,7 +1185,7 @@ class BaseModelAgent:
                 next_token_ids,
                 extra_inputs,
                 extra_outputs,
-            ) = await asyncio.shield(
+            ) = await self._shield_postprocess(
                 self._step_postprocess_without_output(
                     inputs,
                     last_logits,
@@ -1536,6 +1537,27 @@ class BaseModelAgent:
             self.spec_agent.build_graph_runner()
             if self.memdecode_agent is not None:
                 self.memdecode_agent.build_graph_runner()
+
+    async def _shield_postprocess(self, coroutine):
+        # Parent cancellation must not orphan a producer still using cache storage.
+        task = self._postprocess_task = asyncio.create_task(coroutine)
+        try:
+            return await asyncio.shield(task)
+        finally:
+            if task.done():
+                self._postprocess_task = None
+
+    async def drain_for_shutdown(self):
+        """Stop model producers before draining connector I/O on this rank."""
+        tasks = tuple(self.tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if self._postprocess_task is not None:
+            # Keep collective postprocess alive even if shutdown itself times out.
+            await asyncio.shield(self._postprocess_task)
+            self._postprocess_task = None
+        self.shutdown_kv_connector()
 
     def shutdown_kv_connector(self):
         """Drain and close the local connector without releasing the model."""

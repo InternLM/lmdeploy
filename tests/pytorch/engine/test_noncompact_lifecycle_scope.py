@@ -133,7 +133,8 @@ def test_engine_finally_keeps_baseline_release(monkeypatch, compact):
     from lmdeploy.pytorch.engine.engine import Engine
 
     engine = Engine.__new__(Engine)
-    engine.cache_config = SimpleNamespace(compact_state_capacity=object() if compact else None)
+    engine.cache_config = SimpleNamespace(compact_state_capacity=object() if compact else None,
+                                         use_mooncake_store=False)
     events = []
     engine._loop_finally = lambda: events.append('release')
     async def wait():

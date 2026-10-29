@@ -530,6 +530,11 @@ class RayExecutor(ExecutorBase):
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
 
+    async def drain_for_shutdown(self):
+        # A timeout/dead rank is not a drain proof. The caller must retain leases.
+        await asyncio.wait_for(self.collective_rpc_async('drain_for_shutdown'),
+                               timeout=self._get_worker_release_timeout(self.cache_config))
+
     def release(self):
         """release."""
         if _envs.ray_timeline_enable:
