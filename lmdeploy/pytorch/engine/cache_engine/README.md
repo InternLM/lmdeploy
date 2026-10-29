@@ -277,6 +277,28 @@ identify weight contents. Reloading different weights into the same namespace
 can hit stale remote entries. No automatic weight-version isolation is provided.
 Unsupported configurations fail at startup; there is no legacy fallback.
 
+Compact state requires `num_cpu_blocks=0`, with or without Store; CPU KV
+paging is not implemented for this state layout. Positive CPU block counts are
+rejected rather than silently accepted as an unused setting.
+
+RayExecutor also supports DP: each DP frontend owns its own scheduler/state
+manager and worker-local pools, not one shared owner across DP ranks. The
+GLM-5.3 Flash validation includes TP1/DP4/EP4 with AR, MTP5 and piecewise CUDA
+graphs; this is not a guarantee for every topology or strict token equality
+across different batching/cache histories. Validation includes compact kernel
+UT on PyTorch 2.10/A100 and serving/accuracy checks on 2.11/H200. These are
+tested environments, not an exhaustive version matrix or a new PyTorch 2.10
+minimum requirement.
+
+Sleep does not have a complete watchdog: a stuck CUDA event, collective or
+connector I/O can prevent it from reaching the drain point. Existing shutdown
+RPC/process timeouts do not prove I/O completion, and the DP launcher's
+15-second termination fallback can shorten the worker shutdown grace period.
+Do not release pinned buffers or reuse cache storage merely because a wait
+has timed out. Hang recovery and consistent shutdown deadlines remain separate
+follow-up work; this change does not abandon I/O threads or add sleep-triggered
+backend termination.
+
 The executor derives request/checkpoint/Store capacities from the existing cache
 settings and the MTP width, with owner-validated input reuse enabled. Internal
 explicit capacity objects remain available for geometry tests.

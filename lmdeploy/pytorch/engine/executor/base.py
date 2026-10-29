@@ -103,9 +103,8 @@ class ExecutorBase:
             raise NotImplementedError('Compact state does not support PD/MemDecode.')
         if cache.kv_transfer_config is not None and not cache.use_mooncake_store:
             raise NotImplementedError('Compact state supports only the Mooncake Store connector.')
-        if cache.use_mooncake_store:
-            if cache.num_cpu_blocks > 0:
-                raise ValueError('Compact Store does not support CPU KV paging.')
+        if cache.num_cpu_blocks > 0:
+            raise ValueError('Compact state does not support CPU KV paging.')
         if cache.num_gpu_blocks < 0:
             raise ValueError('Compact state requires non-negative num_gpu_blocks (0 selects automatic sizing).')
         spec = self.specdecode_config

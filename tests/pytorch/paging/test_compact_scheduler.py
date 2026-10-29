@@ -151,12 +151,18 @@ def test_decode_expansion_invariant_failure_never_preempts_prefill(monkeypatch):
     scheduler.activate_seqs([seq])
     bank = owner.bank_for(seq)
     original, blocks = bank.unit_ids, seq.logical_blocks.get_real_blocks().copy()
-    monkeypatch.setattr(owner, 'promote_to_decode', lambda bank: False)
-    with pytest.raises(RuntimeError, match='reserved capacity'):
-        scheduler.schedule_running([seq])
+    # Exercise the real promotion and allocator failure, not a mocked promotion result.
+    with monkeypatch.context() as patch:
+        patch.setattr(owner, 'get_num_free', lambda: 0)
+        with pytest.raises(RuntimeError, match='reserved capacity'):
+            scheduler.schedule_running([seq])
     assert owner.bank_for(seq) is bank and bank.unit_ids is original
     assert (seq.logical_blocks.get_real_blocks() == blocks).all()
     assert seq.status == MessageStatus.RUNNING
+    assert bank.phase == 'prefill'
+    assert scheduler.schedule_running([seq]) == [True]
+    assert bank.phase == 'decode' and len(bank.unit_ids) == owner.capacity.bank_width
+    assert bank.unit_ids[:len(original)] == original
     scheduler.end_session(0)
 
 

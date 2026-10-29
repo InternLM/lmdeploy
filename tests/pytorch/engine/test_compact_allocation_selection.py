@@ -232,16 +232,17 @@ def test_internal_startup_accepts_apc_store_without_shrinking_request_or_kv_capa
     assert cache.enable_prefix_caching == apc
 
 
-@pytest.mark.parametrize('case', ['cpu_paging', 'unknown_connector'])
+@pytest.mark.parametrize('case', ['cpu_paging', 'cpu_paging_without_store', 'unknown_connector'])
 def test_store_startup_rejects_unsafe_config_before_model_construction(case):
     from lmdeploy.messages import KVTransferConfig
 
     model, cache, spec = _configs(4)
     extra = {}
-    cache.kv_transfer_config = KVTransferConfig(
-        kv_connector='UnknownConnector' if case == 'unknown_connector' else 'MooncakeStoreConnector',
-        kv_role='kv_consumer', kv_connector_extra_config=extra)
-    if case == 'cpu_paging':
+    if case != 'cpu_paging_without_store':
+        cache.kv_transfer_config = KVTransferConfig(
+            kv_connector='UnknownConnector' if case == 'unknown_connector' else 'MooncakeStoreConnector',
+            kv_role='kv_consumer', kv_connector_extra_config=extra)
+    if case.startswith('cpu_paging'):
         cache.num_cpu_blocks = 1
     with pytest.raises((ValueError, NotImplementedError), match='Compact'):
         _executor(model, cache, spec)
