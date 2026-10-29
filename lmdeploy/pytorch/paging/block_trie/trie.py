@@ -535,11 +535,10 @@ class BlockTrie:
         """Publish accepted current-prompt cache reuse for a sequence.
 
         Local trie matches and completed external loads share this final accounting step. Recompute-preemption matches
-        remain usable internally but deliberately suppress public cached-token statistics.
+        preserve the request's original usage without counting replayed tokens again.
         """
         prefix_cache = seq.prefix_cache
         if prefix_cache.suppress_match_stats:
-            seq.cached_tokens = 0
             prefix_cache.suppress_match_stats = False
             return
 
