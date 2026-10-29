@@ -59,14 +59,17 @@ def create_decision_context(engine, model_path: str) -> DecisionContext:
         raise ValueError(f'{TASK_NAME} does not support speculative decoding')
     if engine.backend_config.role != EngineRole.Hybrid:
         raise ValueError(f'{TASK_NAME} requires the hybrid engine role')
+
     tokenizer = engine.tokenizer.model.model
     if DECISION_TOKEN not in tokenizer.get_added_vocab():
         raise ValueError('Checkpoint must include its trained decision tokenizer')
     if not tokenizer.chat_template:
         raise ValueError('Decision checkpoint must supply its trained chat template')
+
     marker_id = tokenizer.convert_tokens_to_ids(DECISION_TOKEN)
     if tokenizer.encode(DECISION_TOKEN, add_special_tokens=False) != [marker_id]:
         raise ValueError('Decision marker must encode to exactly one registered token')
+
     symbol_ids = {}
     for symbol in ANSWER_SYMBOLS:
         ids = tokenizer.encode(symbol, add_special_tokens=False)
@@ -75,9 +78,11 @@ def create_decision_context(engine, model_path: str) -> DecisionContext:
         symbol_ids[symbol] = ids[0]
     if len(set(symbol_ids.values())) != len(ANSWER_SYMBOLS) or marker_id in symbol_ids.values():
         raise ValueError('Answer symbols must have distinct token IDs, separate from the decision marker')
+
     vocab_size = getattr(engine.hf_cfg, 'text_config', engine.hf_cfg).vocab_size
     if any(not 0 <= token < vocab_size for token in [marker_id, *symbol_ids.values()]):
         raise ValueError('Decision tokenizer ids exceed the model vocabulary')
+
     vision = getattr(engine, 'vl_encoder', None)
     image_token = None
     if vision is not None:
