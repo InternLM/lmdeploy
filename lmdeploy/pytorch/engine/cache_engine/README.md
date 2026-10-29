@@ -254,6 +254,117 @@ Consumer rows and layer rows are different identities:
 Layer rows are state-cache metadata. They are not used to give standard K/V or
 operator-requested block caches synthetic model-layer identities.
 
+### Indexed compact state
+
+CUDA Qwen3.5 and GLM-5.3 Flash use unified compact state as their only
+state implementation. `LMDEPLOY_ENABLE_COMPACT_STATE` has been removed: unset,
+`0` and `1` no longer select different paths. Stateless models allocate no state.
+Other models and non-CUDA backends retain their existing storage contracts.
+
+The current supported targets are CUDA Qwen3.5 and GLM-5.3 Flash with AR or
+matching single-layer MTP, using UniExecutor or RayExecutor. By default,
+`num_gpu_blocks=0` automatically sizes KV capacity using `cache_max_entry_count`
+after reserving each worker's actual compact/auxiliary state and runtime bytes.
+The shared block count fits both target and MTP draft KV on every rank.
+An explicit positive `num_gpu_blocks` (CLI `--num-gpu-blocks`) is optional and
+is never silently reduced. PD, MemDecode and deprecated MP execution are not
+supported. Mooncake Store uses the existing `model_name` / `cache_prefix`
+namespace; CPU KV paging and other connectors are unsupported. The caller must
+use separate namespaces for different weights/adapters. The compact fingerprint
+isolates legacy/compact formats and incompatible retained state/KV layouts,
+dtypes, TP, block size and target/draft execution contracts; it does **not**
+identify weight contents. Reloading different weights into the same namespace
+can hit stale remote entries. No automatic weight-version isolation is provided.
+Unsupported configurations fail at startup; there is no legacy fallback.
+
+Compact state requires `num_cpu_blocks=0`, with or without Store; CPU KV
+paging is not implemented for this state layout. Positive CPU block counts are
+rejected rather than silently accepted as an unused setting.
+
+RayExecutor also supports DP: each DP frontend owns its own scheduler/state
+manager and worker-local pools, not one shared owner across DP ranks. The
+GLM-5.3 Flash validation includes TP1/DP4/EP4 with AR, MTP5 and piecewise CUDA
+graphs; this is not a guarantee for every topology or strict token equality
+across different batching/cache histories. Validation includes compact kernel
+UT on PyTorch 2.10/A100 and serving/accuracy checks on 2.11/H200. These are
+tested environments, not an exhaustive version matrix or a new PyTorch 2.10
+minimum requirement.
+
+Sleep does not have a complete watchdog: a stuck CUDA event, collective or
+connector I/O can prevent it from reaching the drain point. Existing shutdown
+RPC/process timeouts do not prove I/O completion, and the DP launcher's
+15-second termination fallback can shorten the worker shutdown grace period.
+Do not release pinned buffers or reuse cache storage merely because a wait
+has timed out. Hang recovery and consistent shutdown deadlines remain separate
+follow-up work; this change does not abandon I/O threads or add sleep-triggered
+backend termination.
+
+The executor derives request/checkpoint/Store capacities from the existing cache
+settings and the MTP width, with owner-validated input reuse enabled. Internal
+explicit capacity objects remain available for geometry tests.
+
+The model builder declares canonical `StateCacheSpec.shape`: one exact-boundary
+recurrent state or ordered K-1 convolution history, not a speculative ring.
+Its internal `state_cache_is_indexed` contract also selects the matching backend
+at construction; it is not a public feature switch. Auxiliary KPool tails retain
+their own shapes. No legacy-to-compact shape conversion is performed.
+
+`SSMStatePlan.from_model_config()` compiles these declarations and retains
+the backend layouts for both sizing and allocation. Passing that plan as
+`StateCacheEngine(..., compact_plan=plan)` replaces the legacy allocation:
+
+- recoverable fields have `capacity.num_units` entries;
+- runtime-only auxiliary fields retain their shape and have
+  `capacity.request_slots` entries;
+- model-facing declaration order and names stay unchanged;
+- connector pools contain only the compact recovery fields, not auxiliary tails.
+
+The caller must select indexed kernels and validated per-forward unit IDs with
+this allocation. Auxiliary consumers still use request-slot IDs, not unit IDs.
+Legacy state copy/zero APIs reject compact mode; checkpoints retain references
+and kernels write new private outputs. Non-indexed model consumers retain their existing allocation.
+Stateless model plans allocate no state pools and do not select a backend.
+
+Standard AR/MTP uses a private decode
+bank of `W = 1 + num_speculative_tokens` units. A newly admitted prefill leases
+one private destination; protected capacity credits guarantee promotion to the
+full bank when decode is scheduled. Shared checkpoints and in-flight Store
+reads remain outside that writable bank. An already promoted bank is retained
+across later prefills while its submitted accesses still require it.
+
+This is phase-specific **unit-ID leasing**, not per-request GPU allocation:
+the owning pool is allocated up front with `1 + R * W + B + S` units, including
+the reserved zero unit, request capacity `R`, checkpoint budget `B`, and Store
+budget `S`. AR uses one unit; MTP3 uses four. No request or KV-block capacity
+is implicitly reduced. Only an owner-held private input may be reused as the
+last output, after all old-state reads. Shared checkpoints, in-flight Store
+units and the zero unit are read-only. Empty prefill rows do not write; a
+nonempty decode cannot roll back to an input already overwritten.
+
+`SSMStateManager` owns host-side allocation and lifetime. The worker's
+`SSMStateCursor` only tracks current unit IDs by stable request slot;
+`bind`, `advance`, and `rebind` are the execution-planning interface, not
+allocation or release operations. `SSMStateMetadata` carries submitted ID
+tables, while `SSMPrefillMetadata` carries one-forward token/chunk layout and
+checkpoint exports. Compact advancement requires the worker cursor; there is
+no metadata-only serving fallback that can leave its current IDs stale.
+
+RL weight updates reuse the existing sleep/update/wakeup lifecycle: drain GPU
+and Store work, drop local requests/checkpoints and cache registrations, then
+rebuild cache engines, compact cursor IDs and CUDA graphs after successful
+weight loading. Old state is not restored across weight updates. Compact has
+no separate reload transaction or per-model bucket ledger. General reload
+readiness/IPC fixes are deferred patches, not guarantees of this PR. In-flight
+non-DP sleep also retains the baseline limitation: callers must finish requests
+before sleeping. The sender's finished marker is not a server-side proof of
+complete parameter coverage.
+
+Rebuilding local caches does not delete remote Mooncake entries. Callers must
+isolate weight versions using the Store namespace or invalidate remote data
+before reuse. A remote deletion API is separate follow-up work, not part of this
+implementation. Capacity-denied Store saves reuse the existing skip counter,
+with credit/unit reasons counted only after CPU packet preparation succeeds.
+
 ## Runtime Ownership and Movement
 
 After CPU and accelerator allocation, `CacheEngine` resolves corresponding

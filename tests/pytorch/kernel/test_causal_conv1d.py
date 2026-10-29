@@ -2,6 +2,41 @@ import pytest
 import torch
 
 
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize('with_history', [False, True])
+@pytest.mark.parametrize('activation', [None, 'silu'])
+def test_tilelang_prefill_against_raw_history_oracle(dtype, with_history, activation):
+    pytest.importorskip('tilelang')
+    from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_fn
+
+    torch.manual_seed(20261028)
+    lengths, channels, width = [1, 5, 67], 128, 4
+    x = torch.randn(sum(lengths), channels + 64, device='cuda', dtype=dtype)[:, :channels].T[None]
+    weight = torch.randn(channels, width, device='cuda', dtype=dtype) / 8
+    bias = torch.randn(channels, device='cuda', dtype=dtype)
+    history = torch.randn(len(lengths), channels, width - 1, device='cuda', dtype=dtype)
+    if not with_history:
+        history.zero_()
+    before = history.clone()
+    seq = torch.repeat_interleave(torch.arange(len(lengths), device='cuda', dtype=torch.int32),
+                                  torch.tensor(lengths, device='cuda'))
+    actual = causal_conv1d_fn(x, weight, bias, seq_idx=seq,
+                              initial_states=history if with_history else None, activation=activation)
+    expected = []
+    start = 0
+    for row, length in enumerate(lengths):
+        raw = torch.cat((history[row], x[0, :, start:start + length]), dim=-1).float()
+        values = bias.float()[:, None].expand(-1, length).clone()
+        for j in range(width):
+            values += weight[:, j].float()[:, None] * raw[:, j:j + length]
+        if activation == 'silu':
+            values = values * torch.sigmoid(values)
+        expected.append(values.to(dtype))
+        start += length
+    torch.testing.assert_close(actual, torch.cat(expected, dim=-1)[None], rtol=0.008, atol=0.0001)
+    assert torch.equal(history, before)
+
+
 def do_test():
     try:
         import causal_conv1d  # noqa: F401

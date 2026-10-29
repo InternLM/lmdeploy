@@ -12,11 +12,13 @@ from torch.profiler import record_function
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.compact_state import SSMPrefillMetadata, SSMStateMetadata
 from lmdeploy.pytorch.config import CacheConfig, DLLMConfig, ModelConfig, QuantizationConfig
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.utils import CtxMgrBase, singleton
 
 if TYPE_CHECKING:
+    from lmdeploy.pytorch.compact_state import SSMStateCursor
     from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
 
 
@@ -165,6 +167,16 @@ class ModelInputsDelta:
     is_decoding: bool = True
     # sliding window
     num_ignored_history: torch.Tensor | None = None
+    # This forward's owner-held write permissions, in post-reindex row order.
+    # Current boundary IDs remain device-owned; no host acceptance readback.
+    ssm_state_ids: torch.Tensor | None = None
+    # One-forward AR checkpoint destination in post-reindex order; -1 uses the bank.
+    ssm_checkpoint_state_ids: torch.Tensor | None = None
+
+    def __post_init__(self):
+        ids = self.ssm_checkpoint_state_ids
+        if ids is not None and (ids.ndim != 1 or ids.dtype != torch.int64 or not ids.is_contiguous()):
+            raise ValueError('Compact decode binding requires contiguous per-request int64 IDs.')
 
     @property
     def seq_length(self):
@@ -242,7 +254,23 @@ class ModelInputs:
     # mrope, shape(3, sum_seqlens)
     mrope_pos_ids: torch.Tensor | None = None
 
-    def step(self, input_ids: torch.Tensor, step_seqlens: torch.Tensor = None):
+    # Persistent unit IDs; auxiliary slot identity stays in state_offsets.
+    ssm_state_meta: SSMStateMetadata | None = None
+    # One-forward prefill layout and source override; never retained for decode.
+    ssm_prefill_meta: SSMPrefillMetadata | None = None
+    # -1 keeps the cursor, 0 resets to zero state, >0 reads a checkpoint.
+    ssm_source_state_ids: torch.Tensor | None = None
+
+    def __post_init__(self):
+        ids = self.ssm_source_state_ids
+        if ids is not None and (ids.ndim != 1 or ids.dtype != torch.int64 or not ids.is_contiguous()):
+            raise ValueError('Compact source binding requires contiguous per-request int64 IDs.')
+
+    def step(self,
+             input_ids: torch.Tensor,
+             step_seqlens: torch.Tensor = None,
+             *,
+             ssm_state_cursor: 'SSMStateCursor | None' = None):
         """Update input ids."""
         assert self.is_decoding
         if step_seqlens is None:
@@ -256,6 +284,11 @@ class ModelInputs:
             mrope_pos_ids = mrope_pos_ids.unflatten(1, (-1, self.max_q_seqlen)) + step_seqlens[None, :, None]
             mrope_pos_ids = mrope_pos_ids.flatten(1, 2)
 
+        ssm_state_meta = self.ssm_state_meta
+        if ssm_state_meta is not None:
+            if ssm_state_cursor is None:
+                raise ValueError('Compact state advancement requires the worker cursor.')
+            ssm_state_meta = ssm_state_cursor.advance(ssm_state_meta, self.state_offsets, step_seqlens)
         return self.clone(
             input_ids=input_ids,
             history_lengths=self.history_lengths + step_seqlens,
@@ -264,6 +297,9 @@ class ModelInputs:
             logits_indices=None,
             seq_logit_length=None,
             mrope_pos_ids=mrope_pos_ids,
+            ssm_state_meta=ssm_state_meta,
+            ssm_prefill_meta=None,
+            ssm_source_state_ids=None,
         )
 
     @torch.inference_mode()
@@ -275,7 +311,7 @@ class ModelInputs:
             v = getattr(self, k)
             if isinstance(v, torch.Tensor):
                 v = v.to(device, non_blocking=non_blocking)
-            elif isinstance(v, VisionModelInputs):
+            elif isinstance(v, (VisionModelInputs, SSMStateMetadata, SSMPrefillMetadata)):
                 v = v.to_device(device, non_blocking=non_blocking)
             out_dict[k] = v
 
@@ -288,7 +324,7 @@ class ModelInputs:
             if isinstance(value, torch.Tensor):
                 if value.is_cuda:
                     value.record_stream(stream)
-            elif isinstance(value, VisionModelInputs):
+            elif isinstance(value, (VisionModelInputs, SSMStateMetadata, SSMPrefillMetadata)):
                 value.record_stream(stream)
 
     def build_dp_meta(self, num_tokens: list[int]):
@@ -366,6 +402,9 @@ class StepContext:
     is_first_chunk: bool = False
     is_last_chunk: bool = False
 
+    ssm_state_meta: SSMStateMetadata | None = None
+    ssm_prefill_meta: SSMPrefillMetadata | None = None
+
     @classmethod
     def new(
         cls,
@@ -430,6 +469,8 @@ class StepContext:
             enable_microbatch=inputs.enable_microbatch,
             state_caches=state_caches,
             state_offsets=inputs.state_offsets,
+            ssm_state_meta=inputs.ssm_state_meta,
+            ssm_prefill_meta=inputs.ssm_prefill_meta,
             target_hidden_states=inputs.target_hidden_states,
             target_inputs_embeds=inputs.target_inputs_embeds,
             mrope_position_ids=inputs.mrope_pos_ids,
@@ -525,6 +566,7 @@ class SpecModelBuildContext:
 class BuildModelContext:
     """Context for building model."""
     language_model_only: bool = False
+    state_cache_is_indexed: bool = False
     enable_deterministic: bool = False
     dllm_config: DLLMConfig = None
     strategy_factory: 'StrategyFactoryBase' = None

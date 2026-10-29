@@ -932,6 +932,7 @@ def test_hybrid_sender_reads_frozen_snapshot_across_all_pool_rows(put_result):
     recurrent[:, 1] = torch.arange(10).reshape(2, 5) + 10
     expected = bytes(conv[1].tolist()) + bytes(recurrent[:, 1].flatten().tolist())
     engine = object.__new__(StateCacheEngine)
+    engine.compact_plan = None
     engine.cache_config = SimpleNamespace(num_state_caches=4)
     engine._cache_tensors = [conv, recurrent]
     engine._slot_tensors = ((conv, 0), (recurrent, 1))

@@ -20,6 +20,7 @@ from lmdeploy.pytorch.paging.state_manager import StateAllocator
 from lmdeploy.utils import get_logger
 
 from .data import (
+    MooncakeStoreCompactStateSave,
     MooncakeStoreConnectorMetadata,
     MooncakeStoreLoadRequest,
     MooncakeStoreSaveRequest,
@@ -33,6 +34,7 @@ logger = get_logger('lmdeploy')
 if TYPE_CHECKING:
     from lmdeploy.pytorch.config import CacheConfig
     from lmdeploy.pytorch.messages import SchedulerSequence
+    from lmdeploy.pytorch.paging.compact_state import SSMStateManager, StateAccess
 
 
 @dataclass
@@ -79,7 +81,10 @@ class MooncakeStoreScheduler:
             raise ValueError('prefill_save_alignment must be a multiple of block_size')
         num_snapshots = cache_config.num_store_state_caches
         self._state_slots: StateAllocator | None = None
-        if num_snapshots:
+        self._compact_capacity = cache_config.compact_state_capacity
+        self._compact_owner: SSMStateManager | None = None
+        self._compact_loads: dict[RequestId, StateAccess] = {}
+        if num_snapshots and self._compact_capacity is None:
             num_states = cache_config.num_state_caches
             if num_states is None or num_states <= num_snapshots:
                 raise ValueError('Mooncake snapshot slots must be included in num_state_caches')
@@ -104,7 +109,21 @@ class MooncakeStoreScheduler:
         # The next block eligible for save in each request. Scheduling advances
         # it optimistically; save failures are retried only by a later request.
         self._next_save_block: dict[RequestId, int] = {}
-        self._inflight_saves: dict[int, int | None] = {}
+        self._inflight_saves: dict[int, int | StateAccess | None] = {}
+
+    def bind_compact_state_manager(self, owner: SSMStateManager) -> None:
+        """Inject paging's single unit owner before any compact Store
+        admission.
+
+        Connector construction precedes paging construction. This explicit bind avoids allocating a second owner or the
+        legacy snapshot tail. Worker records still carry only integer IDs, never these scheduler handles.
+        """
+        if self._compact_capacity is None or owner.capacity != self._compact_capacity:
+            raise ValueError('Compact Store binding must preserve the configured capacity.')
+        if (self._compact_owner is not None or self._lookup_plans or self._pending_loads
+                or self._inflight_loads or self._inflight_saves):
+            raise ValueError('Compact Store owner must be bound exactly once before admission.')
+        self._compact_owner = owner
 
     def get_num_new_matched_tokens(
         self,
@@ -120,6 +139,8 @@ class MooncakeStoreScheduler:
         """
         if not self._kv_transfer_config.is_kv_consumer:
             return 0, False
+        if self._compact_capacity is not None and self._compact_owner is None:
+            raise RuntimeError('Compact Store lookup requires the paging state owner.')
         if len(request.history_embeddings) > 0:
             return 0, False
 
@@ -263,8 +284,15 @@ class MooncakeStoreScheduler:
                 f'allocated load blocks ({len(block_ids)}) do not match external hashes '
                 f'({len(block_hashes)})')
 
-        state_slot = None
-        if self._is_hybrid:
+        state_slot = state_unit_id = None
+        load_access = None
+        if self._compact_capacity is not None:
+            if self._compact_owner is None:
+                raise RuntimeError('Compact Store requires the paging state owner before load admission.')
+            bank = self._compact_owner.bank_for(request)
+            # Remaining record validation precedes the owner lease below.
+            state_unit_id = bank.unit_ids[0]
+        elif self._is_hybrid:
             state_slot = int(request.logical_state)
             runtime_pool_end = self._cache_config.num_state_caches - self._cache_config.num_store_state_caches
             if not 0 < state_slot < runtime_pool_end:
@@ -276,11 +304,16 @@ class MooncakeStoreScheduler:
             block_hashes=block_hashes,
             remote_block_count=remote_block,
             state_slot=state_slot,
+            state_unit_id=state_unit_id,
         )
+        if state_unit_id is not None:
+            load_access = self._compact_owner.submit_load(bank, remote_token_len)
         # Commit only after every destination has been validated. A failed
         # binding leaves the lookup available for a later allocation attempt.
         self._lookup_plans.pop(req_id)
         self._pending_loads[req_id] = load_request
+        if load_access is not None:
+            self._compact_loads[req_id] = load_access
 
     def _build_save_requests(
         self,
@@ -290,6 +323,9 @@ class MooncakeStoreScheduler:
         token_lens = step_input.connector_token_lens
         if not self._kv_transfer_config.is_kv_producer or not token_lens:
             return ()
+
+        if self._compact_capacity is not None:
+            return self._build_compact_save_requests(step_input)
 
         running = step_input.running
         block_ids = step_input.connector_block_ids
@@ -356,6 +392,119 @@ class MooncakeStoreScheduler:
             self._inflight_saves[save_id] = state.snapshot_slot if state is not None else None
         return tuple(save_requests)
 
+    def plan_compact_save_steps(self, running, token_lens, checkpoint_steps, *, skipped=None):
+        """Select Store intent from the SAME c/e plan before reserving
+        producers.
+
+        No resource acquisition or high-water advancement occurs here. The CPU binder merges these intents with local
+        Trie reservations, submits one producer per row, then hands its physical references back below.
+        """
+        if not self._kv_transfer_config.is_kv_producer or not token_lens:
+            return (0,) * len(running)
+        owner = self._compact_owner
+        if owner is None:
+            raise RuntimeError('Compact Store saves require the paging state owner.')
+        if not (len(running) == len(token_lens) == len(checkpoint_steps)):
+            raise ValueError('Compact Store save plans must match model rows.')
+        credits = owner.get_num_free_store_saves()
+        steps = []
+        block_size = self._cache_config.block_size
+        for seq, end, boundary in zip(running, token_lens, checkpoint_steps):
+            pending = owner.bank_for(seq).pending_checkpoint
+            eligible = ((pending is None or pending.phase == 'reserved')
+                        and 0 < boundary <= end and not seq.history_embeddings
+                        and (not self._cache_config.prefill_save_last_only
+                             or boundary == get_last_prefill_save_step(seq))
+                        and boundary % self._cache_config.prefill_save_alignment == 0
+                        and seq.is_prefix_cache_boundary_safe(boundary)
+                        and boundary // block_size > self._next_save_block.get(int(seq.seq_id), 0))
+            if eligible and credits == 0:
+                if skipped is not None:
+                    skipped.append((int(seq.seq_id), boundary, 'credit'))
+                eligible = False
+            steps.append(boundary if eligible else 0)
+            credits -= int(eligible)
+        return tuple(steps)
+
+    def record_compact_save_skips(self, skipped):
+        """Count only committed preparation, never rolled-back CPU attempts."""
+        for request_id, boundary, reason in skipped:
+            self._num_skipped_state_saves += 1
+            logger.info('Mooncake state save skipped: request_id=%s boundary=%d reason=%s skipped=%d',
+                        request_id, boundary, reason, self._num_skipped_state_saves)
+
+    def _build_compact_save_requests(self, step_input):
+        """Atomically retain direct producer outputs and build c-keyed
+        saves."""
+        owner = self._compact_owner
+        if owner is None:
+            raise RuntimeError('Compact Store saves require the paging state owner.')
+        running, ends, references = (step_input.running, step_input.connector_token_lens,
+                                      step_input.compact_state_references)
+        blocks, logical = step_input.connector_block_ids, step_input.connector_logical_block_ids
+        if not (len(running) == len(ends) == len(references) == len(blocks) == len(logical)):
+            raise ValueError('Compact saves require one producer reference per model row.')
+        if len({int(seq.seq_id) for seq in running}) != len(running):
+            raise ValueError('Compact Store saves require distinct request rows.')
+        block_size = self._cache_config.block_size
+        requests, sources = [], []
+        for seq, end, reference, ids, logical_ids in zip(running, ends, references, blocks, logical):
+            if reference is None:
+                continue
+            boundary = reference.boundary
+            if (not reference.active or reference.phase not in ('submitted', 'ready')
+                    or not 0 < boundary <= end or boundary % self._cache_config.prefill_save_alignment
+                    or seq.history_embeddings or not seq.is_prefix_cache_boundary_safe(boundary)):
+                raise ValueError('Compact Store save requires an exact, safe, ordered-readable producer.')
+            request_id, full_blocks = int(seq.seq_id), int(end) // block_size
+            first_block = self._next_save_block.get(request_id, 0)
+            if full_blocks <= first_block:
+                continue
+            if full_blocks > len(ids) or full_blocks > len(logical_ids):
+                raise ValueError('Compact Store save KV extent exceeds allocated blocks.')
+            hashes = self._get_request_block_hashes(seq, request_id, full_blocks * block_size, block_size)
+            state = MooncakeStoreCompactStateSave(reference.unit_id, boundary, int(end),
+                                                  hashes[boundary // block_size - 1])
+            requests.append(MooncakeStoreSaveRequest(
+                self._next_save_id + len(requests), request_id, first_block,
+                tuple(ids[first_block:full_blocks]), tuple(logical_ids[first_block:full_blocks]),
+                hashes[first_block:full_blocks], state))
+            sources.append(reference)
+        leases = []
+        try:
+            for reference in sources:
+                retained = owner.retain(reference, 'store')
+                try:
+                    producer = retained.pending_producer
+                    waits = (producer,) if producer is not None else ()
+                    # Actual worker ready-event wait is reused, not a new CUDA
+                    # stream or RPC. The host dependency protects completion order.
+                    leases.append(owner.submit_save(retained, stream=-1, wait_for=waits))
+                except Exception:
+                    owner.release_reference(retained)
+                    raise
+        except Exception:
+            for lease in leases:
+                owner.cancel_unsubmitted_save(lease)
+            raise
+        for request, lease in zip(requests, leases):
+            self._inflight_saves[request.save_id] = lease
+            self._next_save_block[request.request_id] = request.start_block + len(request.block_ids)
+        self._next_save_id += len(requests)
+        return tuple(requests)
+
+    def rollback_compact_metadata(self, metadata):
+        """Undo ONLY a failed local CPU packet, before any worker can see
+        it."""
+        if self._compact_owner is None:
+            raise RuntimeError('Compact rollback requires the paging state owner.')
+        for request in reversed(metadata.save_requests):
+            lease = self._inflight_saves.pop(request.save_id)
+            self._compact_owner.cancel_unsubmitted_save(lease)
+            self._next_save_block[request.request_id] = request.start_block
+        for request in metadata.load_requests:
+            self._pending_loads[request.request_id] = self._inflight_loads.pop(request.request_id)
+
     def build_connector_meta(
         self,
         step_input: KVConnectorStepInput,
@@ -416,6 +565,10 @@ class MooncakeStoreScheduler:
             if request is None:
                 continue
             failed = req_id in self._failed_load_requests
+            access = self._compact_loads.pop(req_id, None)
+            if access is not None:
+                self._compact_owner.complete(access, success=not failed)
+                failed = failed or access.failed
             if failed:
                 if self._kv_transfer_config.is_kv_producer:
                     # Hybrid runtime state may be partially overwritten. Paging
@@ -444,26 +597,46 @@ class MooncakeStoreScheduler:
         self._request_hash_trackers.pop(req_id, None)
         self._lookup_plans.pop(req_id, None)
         self._pending_loads.pop(req_id, None)
-        self._inflight_loads.pop(req_id, None)
-        self._failed_load_requests.discard(req_id)
+        if req_id in self._compact_loads:
+            # Pending metadata has never been dispatched. An in-flight direct
+            # destination, however, survives even a premature terminal callback.
+            if req_id not in self._inflight_loads:
+                self._compact_owner.complete(self._compact_loads.pop(req_id), success=False)
+            else:
+                self._failed_load_requests.add(req_id)
+        else:
+            self._inflight_loads.pop(req_id, None)
+            self._failed_load_requests.discard(req_id)
         self._next_save_block.pop(req_id, None)
         return None
 
     def finish_transfers_after_worker_drain(self) -> None:
         """Forget completions whose worker outputs were discarded by sleep."""
+        for access in self._compact_loads.values():
+            self._compact_owner.complete(access, success=False)
+        self._compact_loads.clear()
         self._pending_loads.clear()
         self._inflight_loads.clear()
         self._release_save_slots(tuple(self._inflight_saves))
 
     def _release_save_slots(self, save_ids: Iterable[int]) -> None:
-        """Return snapshots only after all-rank completion or worker drain."""
+        """Release legacy snapshots or direct leases after all-rank
+        completion/drain."""
         for save_id in save_ids:
-            slot = self._inflight_saves.pop(save_id)
-            if slot is not None:
-                self._state_slots.free(slot)
+            lease = self._inflight_saves[save_id]
+            if self._compact_owner is not None and lease is not None:
+                # A failure notification or an early rank result cannot arrive
+                # here as terminal proof. Preserve the record if validation fails.
+                self._compact_owner.complete(lease)
+                self._compact_owner.release_reference(lease._store_reference)
+            elif lease is not None:
+                self._state_slots.free(lease)
+            del self._inflight_saves[save_id]
 
     def shutdown(self) -> None:
         """Cancel pending lookups and release the scheduler client."""
+        if self._compact_loads or (self._compact_owner is not None and self._inflight_saves):
+            raise RuntimeError('Compact Store shutdown requires actual I/O completion or worker drain.')
         if self.client is not None:
             self.client.close()
         self._request_hash_trackers.clear()

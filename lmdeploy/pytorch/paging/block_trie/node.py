@@ -11,6 +11,7 @@ import numpy as np
 from lmdeploy.pytorch.prefix_cache_state import PrefixCacheExtraIdentity
 
 if TYPE_CHECKING:
+    from ..compact_state import StateReference
     from .checkpoint import StateCheckpointMatchData
 
 
@@ -33,6 +34,8 @@ class NodeStateCheckpoint:
     exact_match_data: StateCheckpointMatchData | None = None
     pin_count: int = 0
     last_access_time: float = 0.0
+    # Unified mode owns a physical immutable unit, not a reusable snapshot slot.
+    state_reference: StateReference | None = None
 
 
 class Node:

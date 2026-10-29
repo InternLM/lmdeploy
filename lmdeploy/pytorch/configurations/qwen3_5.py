@@ -2,6 +2,7 @@
 import torch
 
 from lmdeploy.pytorch import envs as _envs
+from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.utils import get_logger, is_bf16_supported
 
 from .builder import AutoModelConfigBuilder
@@ -77,7 +78,15 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
         else:
             dtype = torch.float16
         ssm_dtype = dtype if not _envs.fp32_mamba_ssm_dtype else torch.float32
+        cfg.state_cache_is_indexed = (device_type in ('cuda', 'auto')
+                                      and hf_config.model_type in ('qwen3_5', 'qwen3_5_moe'))
+        if cfg.state_cache_is_indexed:
+            conv_state_shape = (num_delta_layers, conv_dim, text_config.linear_conv_kernel_dim - 1)
+            recurrent_state_shape = (num_delta_layers, num_v_heads, head_v_dim, head_k_dim)
         cfg.states_shapes = [(conv_state_shape, dtype), (recurrent_state_shape, ssm_dtype)]
+        if cfg.state_cache_is_indexed:
+            cfg.state_cache_specs = [StateCacheSpec('state_0', conv_state_shape, dtype),
+                                     StateCacheSpec('state_1', recurrent_state_shape, ssm_dtype)]
         cfg.is_gated_delta = True
         cfg.check_env_func = _check_env_qwen3_next
 
@@ -90,8 +99,10 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
 
         # draft model cfg
         if is_draft_model:
+            cfg.state_cache_is_indexed = False
             cfg.model_paradigm = 'ar_spec'
             cfg.states_shapes = []
+            cfg.state_cache_specs = []
 
             if spec_method == 'qwen3_5_mtp':
                 hf_config.architectures[0] = 'Qwen3_5MTPModel'
