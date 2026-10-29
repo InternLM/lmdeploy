@@ -2,12 +2,40 @@
 from collections.abc import Sequence
 from logging import Logger
 
+import torch
+
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.utils import get_logger
 
 from .base import ExecutorBase
+
+
+def _validate_replayssm_preallocation(cache_config: CacheConfig,
+                                      specdecode_config: SpecDecodeConfig = None) -> None:
+    """Reject unsupported ReplaySSM combinations before model/cache
+    allocation."""
+    if not cache_config.enable_replayssm:
+        return
+    if cache_config.device_type != 'cuda':
+        raise ValueError('ReplaySSM requires the PyTorch CUDA backend.')
+    if cache_config.role != EngineRole.Hybrid:
+        raise ValueError('ReplaySSM does not support P/D-disaggregated engine roles.')
+    transfer_config = cache_config.kv_transfer_config
+    if (transfer_config is not None and transfer_config.is_kv_transfer_instance
+            and not cache_config.use_mooncake_store):
+        raise ValueError('ReplaySSM does not support external KV-cache connectors other than MooncakeStoreConnector; '
+                         'disable ReplaySSM or remove kv_transfer_config.')
+    from lmdeploy.pytorch.config import validate_replayssm_config
+
+    num_spec_tokens = 0 if specdecode_config is None else specdecode_config.num_speculative_tokens
+    validate_replayssm_config(cache_config.replayssm_buffer_len, num_spec_tokens)
+    if specdecode_config is not None and specdecode_config.method not in ('qwen3_5_mtp', 'deepseek_mtp'):
+        raise ValueError(
+            'ReplaySSM speculative decoding supports only qwen3_5_mtp or GLM-5.3 deepseek_mtp, got '
+            f'{specdecode_config.method!r}.')
 
 
 def _finalize_sparse_mla_cache_policy(model_configs: Sequence[ModelConfig], cache_config: CacheConfig) -> None:
@@ -91,6 +119,7 @@ def build_executor(
     logger = get_logger('lmdeploy')
     dp = dist_config.dp
     world_size = dist_config.world_size
+    _validate_replayssm_preallocation(cache_config, specdecode_config)
 
     model_config = ModelConfig.from_pretrained(
         model_path,
@@ -104,8 +133,23 @@ def build_executor(
         model_format=misc_config.model_format,
         device_type=device_type,
         block_size=cache_config.block_size,
+        enable_replayssm=cache_config.enable_replayssm,
+        replayssm_buffer_len=cache_config.replayssm_buffer_len,
     )
 
+    if cache_config.enable_replayssm:
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] != 9:
+            capability = torch.cuda.get_device_capability()
+            raise ValueError(
+                'ReplaySSM is currently qualified only for SM90 CUDA GPUs, '
+                f'got SM{capability[0]}{capability[1]}.')
+        if not model_config.enable_replayssm:
+            raise ValueError('ReplaySSM requires a supported Gated DeltaNet or GLM-5.3 KDA model.')
+        if specdecode_config is not None:
+            expected = ('deepseek_mtp' if model_config.hf_config.model_type == 'glm5_next'
+                        else 'qwen3_5_mtp')
+            if specdecode_config.method != expected:
+                raise ValueError(f'ReplaySSM for this model requires {expected}.')
     # Finalize cache policy before any executor copies configs to workers or
     # builds backend operators. Target and memory models share CacheConfig.
     shared_cache_models = [model_config]

@@ -5,6 +5,15 @@ import torch
 
 from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.pytorch.consts import (
+    GDN_CONV_STATE_CACHE_NAME,
+    GDN_REPLAY_BETA_CACHE_NAME,
+    GDN_REPLAY_CHECKPOINT_CACHE_NAME,
+    GDN_REPLAY_CURSOR_CACHE_NAME,
+    GDN_REPLAY_D_CACHE_NAME,
+    GDN_REPLAY_G_CACHE_NAME,
+    GDN_REPLAY_K_CACHE_NAME,
+    GDN_REPLAY_RAW_K_CACHE_NAME,
+    GDN_REPLAY_RAW_V_CACHE_NAME,
     GLM5_KDA_CONV_STATE,
     GLM5_KDA_RECURRENT_STATE,
     GLM5_KPOOL_TAIL_K_STATE,
@@ -188,6 +197,44 @@ def _resolve_glm5_linear_config(text_config):
     return legacy, linear_layer_ids, full_attention_layer_ids
 
 
+def configure_kda_replayssm(config, layer_ids, heads, dim, conv_width,
+                           num_spec_tokens, buffer_len):
+    """Replace only KDA banks; KPool tails retain their upstream layout.
+
+    Unlike scalar GDN, decay is channelwise and scales the key factor. Keep transformed keys/deltas in FP32 so
+    reconstruction does not introduce a BF16 rounding at each retained KDA transition.
+    """
+    from lmdeploy.pytorch.config import validate_replayssm_config
+
+    validate_replayssm_config(buffer_len, num_spec_tokens)
+    config.replayssm_baseline_state_shapes = list(config.states_shapes)
+    config.enable_replayssm = True
+    config.replayssm_buffer_len = buffer_len
+    # W-1 accepted history + N+1 tentative inputs require W+N slots.
+    # This is convolution capacity, independent of the Replay history length.
+    conv_state_len = conv_width + num_spec_tokens
+    shapes = [
+        (GDN_CONV_STATE_CACHE_NAME, (3 * heads * dim, conv_state_len), torch.bfloat16),
+        (GDN_REPLAY_CHECKPOINT_CACHE_NAME, (heads, dim, dim), torch.float32),
+        (GDN_REPLAY_D_CACHE_NAME, (heads, buffer_len, dim), torch.float32),
+        (GDN_REPLAY_K_CACHE_NAME, (heads, buffer_len, dim), torch.float32),
+        (GDN_REPLAY_G_CACHE_NAME, (heads, buffer_len, dim), torch.float32),
+    ]
+    if num_spec_tokens:
+        shapes.extend([
+            (GDN_REPLAY_RAW_V_CACHE_NAME, (heads, buffer_len, dim), torch.bfloat16),
+            (GDN_REPLAY_RAW_K_CACHE_NAME, (heads, buffer_len, dim), torch.bfloat16),
+            (GDN_REPLAY_BETA_CACHE_NAME, (heads, buffer_len), torch.float32),
+        ])
+    tails = [spec for spec in config.state_cache_specs
+             if spec.name in (GLM5_KPOOL_TAIL_K_STATE, GLM5_KPOOL_TAIL_SCORE_STATE)]
+    config.state_cache_specs = [StateCacheSpec(name, shape, dtype, layer_ids=layer_ids)
+                                for name, shape, dtype in shapes]
+    config.state_cache_specs.extend([
+        StateCacheSpec(GDN_REPLAY_CURSOR_CACHE_NAME, (3,), torch.int32), *tails])
+    config.states_shapes = [(tuple(spec.shape), spec.dtype) for spec in config.state_cache_specs]
+
+
 def _check_env_glm5_next(device: str):
     """Validate the reused KDA, dense-MLA, and FA3 dependencies."""
     _check_env_qwen3_next(device)
@@ -235,10 +282,13 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
 
         linear_config, linear_layer_ids, full_attention_layer_ids = (
             _resolve_glm5_linear_config(text_config))
-        is_draft = kwargs.get('is_draft_model', False)
+        is_draft_model = kwargs.get('is_draft_model', False)
+        enable_replayssm = kwargs.get('enable_replayssm', False) and not is_draft_model
         num_spec_tokens = kwargs.get('num_spec_tokens', 0)
-        if is_draft and getattr(text_config, 'num_nextn_predict_layers', 0) != 1:
+        if is_draft_model and getattr(text_config, 'num_nextn_predict_layers', 0) != 1:
             raise ValueError('GLM-5.3 MTP requires one checkpoint predictor layer.')
+        if enable_replayssm and kwargs.get('spec_method') not in (None, 'deepseek_mtp'):
+            raise ValueError('GLM-5.3 ReplaySSM supports deepseek_mtp only.')
         config = DeepseekV32ModelConfigBuilder.build(
             text_config, model_path=model_path,
             **dict(kwargs, is_draft_model=False))
@@ -268,6 +318,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         # keep a complete checkpoint after each verified token. Store resumes
         # on 64-token boundaries, where the unfinished KPool tail is empty.
         ring_shape = (num_spec_tokens + 1,) if num_spec_tokens else ()
+        # Convolution retains W-1 history plus N+1 verification inputs.
         config.state_cache_specs = [
             StateCacheSpec(
                 GLM5_KDA_CONV_STATE,
@@ -306,6 +357,10 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             for spec in config.state_cache_specs
         ]
         config.is_gated_delta = True
+        if enable_replayssm:
+            configure_kda_replayssm(
+                config, linear_layer_ids, local_heads, head_dim, conv_kernel_size,
+                num_spec_tokens, kwargs.get('replayssm_buffer_len', 16))
         config.update_cache_config_func = update_cache_config
         if kwargs.get('spec_method') not in (None, 'deepseek_mtp'):
             config.prefix_caching_unsupported_reason = (
@@ -313,7 +368,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         config.check_env_func = _check_env_glm5_next
         config.hf_config = hf_config
         config.llm_config = text_config
-        if is_draft:
+        if is_draft_model:
             # The predictor has MLA/KPool but no KDA or mHC. Its unfinished
             # KPool tail is reconstructed from its own pageable token cache.
             hf_config.architectures = ['Glm5NextMTPModel']

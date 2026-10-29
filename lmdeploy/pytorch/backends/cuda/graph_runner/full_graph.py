@@ -109,6 +109,7 @@ def _make_graph_meta(
         use_fa3_decoding=(model_config.model_paradigm == 'ar_spec' and not model_config.use_flash_mla),
         is_ssm=bool(model_config.states_shapes),
         use_mrope=model_config.use_mrope,
+        needs_replayssm_force_flush=(model_config.enable_replayssm and model_config.model_paradigm == 'ar'),
         block_size=model_config.block_size,
         decode_query_len=decode_query_len,
         step_meta_plan=step_meta_plan,

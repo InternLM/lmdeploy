@@ -281,7 +281,7 @@ def test_get_num_gpu_blocks_rejects_empty_cache_block():
 def test_dsa_score_workspace_uses_configured_logits_budget(monkeypatch):
     monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', 7)
     executor = object.__new__(ExecutorBase)
-    executor.model_config = SimpleNamespace(mla_index_topk=2048)
+    executor.model_config = SimpleNamespace(mla_index_topk=2048, enable_replayssm=False)
 
     assert executor._get_dsa_score_workspace_size() == 7 << 20
 
@@ -292,7 +292,7 @@ def test_dsa_score_workspace_uses_configured_logits_budget(monkeypatch):
 def test_runtime_size_reserves_dsa_score_workspace(monkeypatch):
     monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', 1)
     executor = object.__new__(ExecutorBase)
-    executor.model_config = SimpleNamespace(mla_index_topk=2048)
+    executor.model_config = SimpleNamespace(mla_index_topk=2048, enable_replayssm=False)
     executor.cache_config = SimpleNamespace(
         cache_max_entry_count=1.0,
         max_prefill_token_num=16,
@@ -322,7 +322,7 @@ def test_get_min_num_gpu_blocks_rejects_worker_count_mismatch():
 def test_runtime_size_reserves_dcp_peak_phase(monkeypatch, draft_tokens, topk, score_mb, dtype):
     monkeypatch.setattr(executor_base._envs, 'dsa_indexer_max_logits_mb', score_mb)
     executor = object.__new__(ExecutorBase)
-    executor.model_config = SimpleNamespace(mla_index_topk=topk, head_dim=576, v_head_dim=0,
+    executor.model_config = SimpleNamespace(mla_index_topk=topk, enable_replayssm=False, head_dim=576, v_head_dim=0,
                                             num_attention_heads=64, dtype=dtype)
     executor.specdecode_config = SimpleNamespace(num_speculative_tokens=draft_tokens) if draft_tokens else None
     executor.dist_config = SimpleNamespace(attn_tp=8)
@@ -655,3 +655,83 @@ def test_build_cache_config_carries_prefix_cache_state_budget():
 def test_engine_config_rejects_unaligned_prefix_cache_decode_state_interval():
     with pytest.raises(AssertionError):
         PytorchEngineConfig(max_batch_size=4, prefix_cache_decode_state_interval=96)
+
+
+def test_runtime_size_includes_replayssm_scratch_before_kv_sizing(monkeypatch):
+    monkeypatch.setattr(ExecutorBase, '_get_replayssm_workspace_size', lambda self: 1 << 20)
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = SimpleNamespace(mla_index_topk=None, vocab_size=100)
+    executor.cache_config = SimpleNamespace(cache_max_entry_count=1.0, max_prefill_token_num=16,
+                                            max_batches=2, dcp=1)
+    executor.specdecode_config = None
+    free = 4 << 20
+    remaining = executor._reserve_runtime_mem([free], [_WorkerCachePlanSizes(target=1024)], None)
+    assert remaining == [free - (1 << 20) - (16 + 2 * 2) * 100 * 2]
+
+
+def test_replayssm_log_does_not_attribute_auxiliary_state_to_ring(monkeypatch):
+    from lmdeploy.pytorch.consts import GDN_CONV_STATE_CACHE_NAME, GDN_REPLAY_CHECKPOINT_CACHE_NAME
+    messages = []
+    monkeypatch.setattr(executor_base.logger, 'info', lambda fmt, *args: messages.append(fmt % args))
+    specs = [StateCacheSpec(GDN_CONV_STATE_CACHE_NAME, (2, 4), torch.bfloat16, layer_ids=[0]),
+             StateCacheSpec(GDN_REPLAY_CHECKPOINT_CACHE_NAME, (2, 4, 4), torch.float32, layer_ids=[0]),
+             StateCacheSpec('auxiliary_kpool_tail', (2, 4), torch.float32, layer_ids=[1])]
+    shapes = [(spec.shape, spec.dtype) for spec in specs]
+    executor = object.__new__(ExecutorBase)
+    executor.cache_config = SimpleNamespace(states_shapes=shapes, num_state_caches=3)
+    executor.model_config = SimpleNamespace(state_cache_specs=specs, enable_replayssm=True,
+                                            replayssm_baseline_state_shapes=shapes, model_paradigm='ar',
+                                            replayssm_buffer_len=16)
+    total = executor._get_state_cache_mem()
+    slot = StateCacheEngine.get_state_slot_nbytes(shapes, state_specs=specs)
+    base_slot = StateCacheEngine.get_state_slot_nbytes(shapes[:2], state_specs=specs[:2])
+    assert total == slot * 3
+    assert f'non_base_state_bytes_per_slot={slot - base_slot}' in messages[0]
+    assert ' ring_bytes_per_slot=' not in messages[0]
+
+
+@pytest.mark.parametrize('channelwise', [False, True], ids=['gdn', 'kda'])
+def test_workspace_budget_bounds_all_retained_capacities(channelwise):
+    from lmdeploy.pytorch.config import StateCacheSpec
+    from lmdeploy.pytorch.consts import (
+        GDN_REPLAY_BETA_CACHE_NAME,
+        GDN_REPLAY_G_CACHE_NAME,
+        GDN_REPLAY_RAW_K_CACHE_NAME,
+        GDN_REPLAY_RAW_V_CACHE_NAME,
+    )
+    from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import make_gdn_replayssm_spec_workspace
+
+    h, hv, ring, k, v, layers = 2, 4, 16, 128, 64, 3
+    shapes = [(hv, ring, v), (h, ring, k), (hv, ring, k) if channelwise else (hv, ring), (hv, ring)]
+    dtypes = [torch.bfloat16, torch.bfloat16, torch.float32, torch.float32]
+    names = [GDN_REPLAY_RAW_V_CACHE_NAME, GDN_REPLAY_RAW_K_CACHE_NAME,
+             GDN_REPLAY_G_CACHE_NAME, GDN_REPLAY_BETA_CACHE_NAME]
+    tensors = [torch.empty(1, *shape, dtype=dtype, device='meta') for shape, dtype in zip(shapes, dtypes)]
+    state = SimpleNamespace(checkpoint=torch.empty(1, hv, v, k, device='meta'), cursor=SimpleNamespace(R=ring),
+                            raw_v_ring=tensors[0], raw_k_ring=tensors[1], g_ring=tensors[2], beta_ring=tensors[3])
+    config = SimpleNamespace(enable_replayssm=True, model_paradigm='ar_spec', state_cache_specs=[
+        StateCacheSpec(name, shape, dtype, layer_ids=list(range(layers)))
+        for name, shape, dtype in zip(names, shapes, dtypes)])
+    actual = sum(((t.numel() * t.element_size() + 511) // 512) * 512 * layers
+                 for capacity in (1, 2, 4, 8)
+                 for t in make_gdn_replayssm_spec_workspace(state, capacity))
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = config
+    executor.cache_config = SimpleNamespace(max_batches=5)
+    assert executor._get_replayssm_workspace_size() == actual
+    config.model_paradigm = 'ar'
+    assert executor._get_replayssm_workspace_size() == 0
+
+
+def test_workspace_rejects_incomplete_enabled_spec_schema():
+    import pytest
+
+
+    config = SimpleNamespace(enable_replayssm=True, model_paradigm='ar_spec', state_cache_specs=[])
+    executor = object.__new__(ExecutorBase)
+    executor.model_config = config
+    executor.cache_config = SimpleNamespace(max_batches=8)
+    with pytest.raises(ValueError, match='all four raw-history'):
+        executor._get_replayssm_workspace_size()
+    config.enable_replayssm = False
+    assert executor._get_replayssm_workspace_size() == 0

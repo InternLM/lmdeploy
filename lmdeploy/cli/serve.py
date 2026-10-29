@@ -123,6 +123,8 @@ class SubCliServe:
         ArgumentHelper.prefill_save_alignment(pt_group)
         ArgumentHelper.prefill_save_last_only(pt_group)
         ArgumentHelper.mooncake_state_save_slots(pt_group)
+        ArgumentHelper.enable_replayssm(pt_group)
+        ArgumentHelper.replayssm_buffer_len(pt_group)
 
         # common engine args
         language_model_only = ArgumentHelper.language_model_only(pt_group)
@@ -270,6 +272,8 @@ class SubCliServe:
                 prefill_save_alignment=args.prefill_save_alignment,
                 prefill_save_last_only=args.prefill_save_last_only,
                 mooncake_state_save_slots=args.mooncake_state_save_slots,
+                enable_replayssm=args.enable_replayssm,
+                replayssm_buffer_len=args.replayssm_buffer_len,
                 device_type=args.device,
                 quant_policy=args.quant_policy,
                 eager_mode=args.eager_mode,

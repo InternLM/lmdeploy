@@ -484,6 +484,11 @@ class _PrefillAdmissionAttempt:
 
     def run(self):
         """Apply policy, acquire resources, and commit one admission."""
+        if self.seq.replayssm_recompute_pending:
+            # Accepted MTP inputs may extend beyond the retained stopped history,
+            # including a folded checkpoint. Drop the entire private cache tuple.
+            self.seq.state.release_paging_resources()
+            self.seq.replayssm_recompute_pending = False
         if self.load_coordinator.lookup_enabled and not self._load_ready:
             if self.load_coordinator.is_lookup_pending(self.seq):
                 self.prefill_scheduler.last_schedule_had_pending_lookup = True

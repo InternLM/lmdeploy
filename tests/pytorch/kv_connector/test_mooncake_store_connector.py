@@ -223,12 +223,13 @@ def test_worker_methods_delegate_arguments_and_results(cache_config):
     worker.register_kv_caches.assert_called_once_with(
         kv_caches,
         state_cache_pools=(),
+        cache_schema='',
     )
 
     state_pools = (KVCachePool(object(), 0), )
     assert connector.register_kv_caches(kv_caches, state_cache_pools=state_pools) is None
     assert worker.register_kv_caches.call_args_list[-1].args == (kv_caches, )
-    assert worker.register_kv_caches.call_args_list[-1].kwargs == {'state_cache_pools': state_pools}
+    assert worker.register_kv_caches.call_args_list[-1].kwargs == {'state_cache_pools': state_pools, 'cache_schema': ''}
 
     connector.bind_connector_metadata(metadata)
     assert connector.start_load_kv() is None

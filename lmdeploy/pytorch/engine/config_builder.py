@@ -88,6 +88,8 @@ class ConfigBuilder:
             prefill_save_alignment=engine_config.prefill_save_alignment,
             prefill_save_last_only=engine_config.prefill_save_last_only,
             mooncake_state_save_slots=engine_config.mooncake_state_save_slots,
+            enable_replayssm=engine_config.enable_replayssm,
+            replayssm_buffer_len=engine_config.replayssm_buffer_len,
             quant_policy=engine_config.quant_policy,
             device_type=engine_config.device_type,
             migration_backend=engine_config.migration_backend,
