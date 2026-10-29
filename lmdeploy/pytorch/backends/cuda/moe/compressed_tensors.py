@@ -289,16 +289,16 @@ class DeepEPFusedMoEW4A16Impl(FusedMoEW4A16Impl):
         """Dispatch, run local packed experts, and synchronously combine."""
         self._validate_local_weights(gate_up_packed, gate_up_scale,
                                      down_packed, down_scale)
-        hidden_states, topk_weights, topk_ids, split_size = (
-            split_inputs_by_attn_tp(hidden_states, topk_weights, topk_ids))
+        ctx_mgr = get_step_ctx_manager()
+        step_ctx = ctx_mgr.current_context() if ctx_mgr is not None else None
+        low_latency_mode = step_ctx is not None and step_ctx.global_is_decoding()
+        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(
+            hidden_states, topk_weights, topk_ids, mask_padding=low_latency_mode)
 
         # Renormalization belongs to the global Top-K domain. Applying it to
         # a rank-local route subset would independently rescale each rank.
         topk_weights = _renormalize(topk_weights, self.renormalize)
-        ctx_mgr = get_step_ctx_manager()
-        step_ctx = (ctx_mgr.current_context()
-                    if ctx_mgr is not None else None)
-        if step_ctx is not None and step_ctx.global_is_decoding():
+        if low_latency_mode:
             out_states = self._forward_low_latency(
                 hidden_states,
                 topk_weights,
