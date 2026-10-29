@@ -177,6 +177,8 @@ class BaseSpecProposer:
             mrope_pos_ids = model_inputs.mrope_pos_ids[:, extra_inputs.last_token_indices] + 1
 
         return model_inputs.clone(
+            ssm_prefill_meta=None,
+            ssm_source_state_ids=None,
             input_ids=next_input_ids,
             seq_length=model_inputs.seq_length.new_ones(batch_size),
             history_lengths=history_lengths,

@@ -79,6 +79,7 @@ class GatedDeltaMetaImpl(ABC):
 @dataclass(frozen=True)
 class GatedDeltaMetaBuildSpec(BuildSpec[GatedDeltaMetaImpl]):
     """Request construction of a gated-delta metadata operator."""
+    indexed_state: bool = False
 
 
 class GatedDeltaRuleImpl(ABC):
@@ -284,3 +285,4 @@ class GatedDeltaRuleImpl(ABC):
 @dataclass(frozen=True)
 class GatedDeltaRuleBuildSpec(BuildSpec[GatedDeltaRuleImpl]):
     """Request construction of a gated-delta-rule operator."""
+    indexed_state: bool = False

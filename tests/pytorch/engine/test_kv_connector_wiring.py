@@ -261,4 +261,4 @@ def test_engine_loop_finally_propagates_scheduler_shutdown_error():
     with pytest.raises(RuntimeError, match='scheduler shutdown failed'):
         engine._loop_finally()
 
-    engine.executor.release.assert_not_called()
+    engine.executor.release.assert_called_once_with()

@@ -423,10 +423,12 @@ def test_prepare_inputs_prefill_keeps_chunk_model_metas_across_interleaved_prefi
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.ssm_state_cursor = None
     prev_output = {'model_metas': [{'chunk': 1}]}
     agent._prev_chunk_output = prev_output
 
-    normal_prefill = SimpleNamespace(is_chunk=False,
+    normal_prefill = SimpleNamespace(ssm_state_meta=None, ssm_prefill_meta=None,
+                                     ssm_source_state_ids=None, is_chunk=False,
                                      is_first_chunk=False,
                                      is_last_chunk=False,
                                      model_metas=[{
@@ -438,7 +440,9 @@ def test_prepare_inputs_prefill_keeps_chunk_model_metas_across_interleaved_prefi
     assert agent._prev_chunk_output is prev_output
     assert normal_prefill.model_metas == [{'normal': 1}]
 
-    middle_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=False, model_metas=None)
+    middle_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=False,
+                                   model_metas=None, ssm_state_meta=None, ssm_prefill_meta=None,
+                                     ssm_source_state_ids=None)
 
     agent._prepare_inputs_prefill(middle_chunk, delta=None)
 
@@ -450,8 +454,11 @@ def test_prepare_inputs_prefill_final_chunk_consumes_chunk_model_metas():
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.ssm_state_cursor = None
     agent._prev_chunk_output = {'model_metas': [{'chunk': 1}]}
-    final_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=True, model_metas=None)
+    final_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=True,
+                                  model_metas=None, ssm_state_meta=None, ssm_prefill_meta=None,
+                                     ssm_source_state_ids=None)
 
     agent._prepare_inputs_prefill(final_chunk, delta=None)
 
@@ -481,12 +488,14 @@ def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
     agent.strategy_factory = _StrategyFactory()
     agent.spec_agent = _SpecAgent()
     agent.step_inputs = old_step_inputs
+    agent.ssm_state_cursor = object()
     agent._prev_chunk_output = {'model_metas': [object()]}
     agent._prev_chunk_last_logit = object()
 
     agent.reset_runtime_state()
 
     assert agent.step_inputs is new_step_inputs
+    assert agent.ssm_state_cursor is None
     assert agent._prev_chunk_output is None
     assert agent._prev_chunk_last_logit is None
     assert events == ['build_step_inputs', 'reset_spec']
@@ -698,6 +707,7 @@ def _make_minimal_build_agent(target_layer_ids, mask_token_id=99):
         custom_module_map=None,
         quant_config=None,
         fp32_lm_head=False,
+        state_cache_is_indexed=False,
         tie_word_embeddings=False,
     )
     agent.misc_config = SimpleNamespace(
@@ -825,6 +835,7 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
             events.append('kv_restore' if plan is restore_plan else 'kv_save')
 
     class _StateCacheEngine:
+        compact_plan = None
         state_caches = object()
         named_state_caches = {}
 
@@ -835,6 +846,8 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
 
     inputs = SimpleNamespace(
         is_dummy=is_dummy,
+        ssm_state_meta=None, ssm_prefill_meta=None,
+                                     ssm_source_state_ids=None,
         state_offsets=None,
         seq_length=torch.tensor([1]),
     )
@@ -1026,6 +1039,7 @@ def test_background_records_h2d_inputs_after_wait_and_before_forward(monkeypatch
     model_agent.stream = _Stream()
     model_agent.all_context = nullcontext
     model_agent._keep_h2d_transfer = lambda item: events.append('keep')
+    model_agent._release_completed_h2d_transfers = lambda: None
 
     async def _async_step(**forward_inputs):
         assert forward_inputs == {'inputs': 'device-inputs'}
@@ -1040,6 +1054,7 @@ def test_background_records_h2d_inputs_after_wait_and_before_forward(monkeypatch
 
     task = event_loop.create_task(model_agent._async_loop_background())
     event_loop.run_until_complete(asyncio.wait_for(forward_done.wait(), timeout=1))
+    assert not task.done()
     task.cancel()
     event_loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
 
@@ -1214,6 +1229,44 @@ class TestDrainQueues:
 
 
 class TestDPForwardInputsMaker:
+
+    @pytest.mark.parametrize('num_spec_tokens', [0, 3])
+    @pytest.mark.parametrize('compact', [False, True])
+    def test_dummy_uses_current_metadata_after_kv_wakeup(self, monkeypatch, num_spec_tokens, compact):
+        from lmdeploy.pytorch.disagg.config import EngineRole
+        from lmdeploy.pytorch.engine.model_agent.inputs_maker import DPForwardInputsMaker
+        from lmdeploy.pytorch.strategies.ar.model_inputs import ARModelInputsStrategy
+        from lmdeploy.pytorch.strategies.ar_spec.model_inputs import ARSpecModelInputsStrategy
+
+        strategy = (ARSpecModelInputsStrategy(num_spec_tokens) if num_spec_tokens else ARModelInputsStrategy())
+        config = SimpleNamespace(states_shapes=[(1,)], use_mrope=False, vocab_size=16)
+        agent = SimpleNamespace(model_config=config,
+                                cache_config=SimpleNamespace(role=EngineRole.Hybrid, max_batches=8),
+                                inputs_strategy=strategy, device='cpu',
+                                _pre_in_que=asyncio.Queue(), _in_que=asyncio.Queue(),
+                                dist_ctx=SimpleNamespace(dist_config=SimpleNamespace(enable_microbatch=False)),
+                                spec_agent=Mock())
+        agent.spec_agent.is_enabled.return_value = bool(num_spec_tokens)
+        BaseModelAgent.set_model_config(agent, config)
+        monkeypatch.setattr(torch.cuda, 'Event', Mock(return_value=Mock()))
+        maker = DPForwardInputsMaker(agent)
+        assert maker._make_dummy_forward_inputs()['inputs'].ssm_state_meta is None
+        extra = Mock(wraps=strategy.make_dummy_extra_inputs)
+        monkeypatch.setattr(strategy, 'make_dummy_extra_inputs', extra)
+
+        for _ in range(2):
+            old_meta = agent.make_dummy_meta
+            # KV wakeup replaces metadata; cache construction then binds the bank width.
+            BaseModelAgent.set_model_config(agent, config)
+            assert agent.make_dummy_meta is not old_meta
+            agent.make_dummy_meta.compact_bank_width = num_spec_tokens + 1 if compact else 0
+            forward = maker._make_dummy_forward_inputs()
+            inputs = forward['inputs']
+            assert inputs.is_dummy
+            assert (inputs.ssm_state_meta is not None) == compact
+            assert extra.call_args.kwargs['meta'] is agent.make_dummy_meta
+            assert forward['return_logits'] == bool(num_spec_tokens)
+
 
     @staticmethod
     def _make_ready_event():
@@ -1440,6 +1493,7 @@ class TestResetGraphRunner:
                 events.append('memdecode_reset')
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
         agent.patched_model = _PatchedModel()
         agent.spec_agent = _SpecAgent()
         agent.memdecode_agent = _MemDecodeAgent()
@@ -1482,6 +1536,7 @@ class TestResetGraphRunner:
         events = []
         model = object()
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
         agent._model_update_group = {'update': object()}
         agent.patched_model = SimpleNamespace(
             get_model=lambda: model,
@@ -1551,7 +1606,7 @@ class TestResetGraphRunner:
 class TestModelAgentWakeup:
 
     @staticmethod
-    def _make_level2_agent(rebuilt_block_nbytes):
+    def _make_level2_agent(rebuilt_block_nbytes, compact=False):
         from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
         events = []
@@ -1588,15 +1643,16 @@ class TestModelAgentWakeup:
             events.append(('build_cache_plans', received_cache_config, received_spec_cache_config))
             agent._cache_plan_block_nbytes = rebuilt_block_nbytes
             target_nbytes, spec_nbytes = rebuilt_block_nbytes
-            return target_nbytes, spec_nbytes, 0
+            return (target_nbytes, spec_nbytes, 0, 4096) if compact else (target_nbytes, spec_nbytes, 0)
 
         agent.build_model = _build_model
         agent.build_cache_plans = _build_cache_plans
         agent.build_graph_runner = lambda: events.append('build_graph_runner')
         return agent, events, cache_config, spec_cache_config
 
-    def test_level2_wakeup_rebuilds_cache_plans_before_graph_runner(self):
-        agent, events, cache_config, spec_cache_config = self._make_level2_agent((256, 128))
+    @pytest.mark.parametrize('compact', [False, True])
+    def test_level2_wakeup_rebuilds_cache_plans_before_graph_runner(self, compact):
+        agent, events, cache_config, spec_cache_config = self._make_level2_agent((256, 128), compact=compact)
 
         agent.wakeup(['weights'])
 
@@ -1779,6 +1835,7 @@ class TestCheckpointEngineWeightUpdate:
                 return self.model
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
         agent.patched_model = _PatchedModel()
         agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
         agent.spec_agent._enabled = False
@@ -1927,6 +1984,7 @@ class TestMemDecodeModelAgentLifecycle:
 
         monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
         agent, events = self._make_agent(enabled=True)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
 
         BaseModelAgent.release(agent)
 
@@ -2079,6 +2137,7 @@ class TestMemDecodeModelAgentLifecycle:
 @pytest.fixture(params=['flat', 'null_llm', 'nested', 'mirrored'])
 def weight_update_agent(request):
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.cache_config = SimpleNamespace(compact_state_capacity=None)
     config = SimpleNamespace(num_hidden_layers=5, num_nextn_predict_layers=2)
     # Follower ranks have the draft config but no local proposer.
     agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
