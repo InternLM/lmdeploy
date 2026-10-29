@@ -104,3 +104,44 @@ def test_zmq_engine_close_reaps_force_killed_process():
     assert process.join_timeouts == [60, None]
     assert process.closed
     assert engine.proc is None
+
+
+def test_repeated_shutdown_signal_does_not_cancel_engine_drain(monkeypatch):
+    import asyncio
+    import signal
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    async def run():
+        handlers = {}
+        loop = asyncio.get_running_loop()
+        monkeypatch.setattr(loop, 'add_signal_handler', lambda sig, callback: handlers.update({sig: callback}))
+        draining = asyncio.Event()
+        finish = asyncio.Event()
+        events = []
+
+        async def serve():
+            await asyncio.Event().wait()
+
+        async def wait():
+            draining.set()
+            await finish.wait()
+            events.append('drained')
+
+        server = SimpleNamespace(register_method=Mock(), run=serve, stop=Mock())
+        engine = SimpleNamespace(start_loop=Mock(), close=Mock(), wait_tasks=wait,
+                                 engine_config=SimpleNamespace(max_batch_size=1))
+        task = asyncio.create_task(ZMQMPEngine._mp_proc_async(server, engine))
+        await asyncio.sleep(0)
+        handlers[signal.SIGTERM]()
+        await asyncio.wait_for(draining.wait(), timeout=2)
+        handlers[signal.SIGTERM]()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not task.done()
+        finish.set()
+        await task
+        assert events == ['drained']
+        engine.close.assert_called_once()
+
+    asyncio.run(run())

@@ -163,7 +163,8 @@ class ZMQMPEngine(MPEngine):
 
         async def shutdown(loop, signame):
             logger.info(f'MP process received signal {signame}, stopping server.')
-            if current_task is not None:
+            # The launcher signals the group; frontend.close() can signal us again.
+            if current_task is not None and not current_task.cancelling():
                 current_task.cancel()
 
         for signame in {'SIGINT', 'SIGTERM'}:
