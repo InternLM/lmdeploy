@@ -12,7 +12,7 @@ import torch
 }, )
 def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x, has_init_states, num_warps,
                       ChunkSizeL=64, indexed_state=False, state_stride=None, index_dtype=torch.int32,
-                      has_checkpoint=False, weight_dtype=None, bias_dtype=None):
+                      weight_dtype=None, bias_dtype=None):
     """TileLang kernel for causal convolution forward pass.
 
     Each thread processes one output position for all channels sequentially. When has_init_states=True, the kernel reads
@@ -52,10 +52,6 @@ def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x,
         Out: T.StridedTensor([hidden_size, sum_seqlen], dtype=dtype, strides=(1, hidden_size)) = None,
         Final_States: T.Tensor([hidden_size, width - 1], dtype=dtype) = None,
         Input_ids: T.Tensor([n_seqs], dtype=index_dtype) = None,
-        Final_ids: T.Tensor([n_seqs], dtype=index_dtype) = None,
-        Cu_seqlens: T.Tensor([n_seqs + 1], dtype=index_dtype) = None,
-        Checkpoint_ids: T.Tensor([n_seqs], dtype=index_dtype) = None,
-        Checkpoint_offsets: T.Tensor([n_seqs], dtype=index_dtype) = None,
     ):
         # Process sum_seqlen output positions across all threads and blocks
         # every cta process (ChunkSizeC, ChunkSizeL) output tile
@@ -75,56 +71,6 @@ def causal_conv1d_fwd(hidden_size, width, has_bias, activation, dtype, stride_x,
                 gcidx = bc * ChunkSizeC + cidx
                 x_smem[lidx, cidx] = T.if_then_else(glidx >= 0 and glidx < sum_seqlen, X[gcidx, glidx],
                                                     T.cast(0.0, dtype))
-
-            if indexed_state:
-                # Most tiles contain no requested state boundary. Test this
-                # once per CTA, not once for every token/channel lane.
-                tile_start = bl * ChunkSizeL
-                tile_end = T.min(tile_start + ChunkSizeL, sum_seqlen)
-                first_row = seq_idx[tile_start]
-                last_row = seq_idx[tile_end - 1]
-                export_tile = T.alloc_var(T.bool)
-                export_tile = first_row != last_row
-                if first_row >= 0:
-                    final_boundary = Cu_seqlens[first_row + 1]
-                    export_tile = export_tile or (final_boundary > tile_start and final_boundary <= tile_end)
-                    if has_checkpoint:
-                        checkpoint_boundary = Cu_seqlens[first_row] + Checkpoint_offsets[first_row]
-                        export_tile = export_tile or (
-                            checkpoint_boundary > tile_start and checkpoint_boundary <= tile_end)
-                if export_tile:
-                    # Export from the already loaded raw window before it is reused
-                    # for activations. Keep metadata out of the unrolled math loop:
-                    # only the boundary-owning lanes load unit IDs and write history.
-                    for lidx, cidx in T.Parallel(ChunkSizeL, ChunkSizeC):
-                        position = bl * ChunkSizeL + lidx
-                        channel = bc * ChunkSizeC + cidx
-                        if position < sum_seqlen and channel < hidden_size:
-                            row = seq_idx[position]
-                            if row >= 0:
-                                start = Cu_seqlens[row]
-                                for destination in T.unroll(2 if has_checkpoint else 1):
-                                    boundary = T.alloc_var(index_dtype)
-                                    boundary = Cu_seqlens[row + 1]
-                                    if destination == 1:
-                                        boundary = start + Checkpoint_offsets[row]
-                                    if boundary > start and position == boundary - 1:
-                                        source = Input_ids[row]
-                                        output_id = T.alloc_var(index_dtype)
-                                        output_id = Final_ids[row]
-                                        if destination == 1:
-                                            output_id = Checkpoint_ids[row]
-                                            if output_id == Final_ids[row]:
-                                                output_id = -1
-                                        if (source >= 0 and source < n_units and output_id > 0
-                                                and output_id < n_units and output_id != source):
-                                            for j in T.unroll(width - 1):
-                                                history_position = position - (width - 2) + j
-                                                if history_position >= start:
-                                                    Init_states[output_id, channel, j] = x_smem[lidx + 1 + j, cidx]
-                                                else:
-                                                    Init_states[output_id, channel, j] = Init_states[
-                                                        source, channel, width - 1 + history_position - start]
 
             x_local = T.alloc_local((width - 1 + l_per_thread, ), T.float32)
             seq_idx_local = T.alloc_local((width - 1 + l_per_thread, ), seq_idx.dtype)
@@ -273,7 +219,7 @@ def causal_conv1d_fn(
         initial_states,
         out,
         None,
-        None, None, None, None, None,
+        None,
     )
 
     # Reshape back to original format: [1, hidden_size, sum_seqlen]
@@ -283,9 +229,8 @@ def causal_conv1d_fn(
 
 
 @tilelang.jit
-def _export_exclusive_conv_history(channels, width, dtype, stride_x, state_stride, index_dtype):
-    """Run after convolution readers finish; one thread owns a channel's
-    history."""
+def _export_conv_history(channels, width, dtype, stride_x, state_stride, index_dtype, has_checkpoint):
+    """Export both boundaries after all convolution readers have finished."""
     length, count, units = T.dynamic('length'), T.dynamic('count'), T.dynamic('units')
 
     @T.prim_func
@@ -295,24 +240,43 @@ def _export_exclusive_conv_history(channels, width, dtype, stride_x, state_strid
         Inputs: T.Tensor((count,), index_dtype),
         Finals: T.Tensor((count,), index_dtype),
         Lengths: T.Tensor((count + 1,), index_dtype),
+        Checkpoints: T.Tensor((count,), index_dtype) = None,
+        Offsets: T.Tensor((count,), index_dtype) = None,
     ):
         with T.Kernel(count, T.ceildiv(channels, 128), threads=128) as (row, block):
             channel = block * 128 + T.get_thread_binding(0)
             source, target = Inputs[row], Finals[row]
             start, end = Lengths[row], Lengths[row + 1]
-            if (channel < channels and source > 0 and source < units
-                    and target == source and end > start):
-                # All old-history reads precede any write, including short
-                # chunks. Other CTAs own different channels/requests.
-                history = T.alloc_local((width - 1,), dtype)
-                for j in T.unroll(width - 1):
-                    position = end - (width - 1) + j
-                    if position >= start:
-                        history[j] = X[channel, position]
-                    else:
-                        history[j] = State[source, channel, width - 1 + position - start]
-                for j in T.unroll(width - 1):
-                    State[target, channel, j] = history[j]
+            if channel < channels and source >= 0 and source < units and end > start:
+                final_history = T.alloc_local((width - 1,), dtype)
+                checkpoint_history = T.alloc_local((width - 1,), dtype)
+                checkpoint = T.alloc_var(index_dtype)
+                boundary = T.alloc_var(index_dtype)
+                checkpoint = -1
+                boundary = start
+                if has_checkpoint:
+                    checkpoint = Checkpoints[row]
+                    boundary = start + Offsets[row]
+                valid_final = target > 0 and target < units
+                valid_checkpoint = (checkpoint > 0 and checkpoint < units and checkpoint != source
+                                    and checkpoint != target and boundary > start and boundary <= end)
+                # Read both histories before an aliased final overwrites the source.
+                if valid_final:
+                    for j in T.unroll(width - 1):
+                        position = end - (width - 1) + j
+                        final_history[j] = T.if_then_else(position >= start, X[channel, position],
+                            State[source, channel, width - 1 + position - start])
+                if valid_checkpoint:
+                    for j in T.unroll(width - 1):
+                        position = boundary - (width - 1) + j
+                        checkpoint_history[j] = T.if_then_else(position >= start, X[channel, position],
+                            State[source, channel, width - 1 + position - start])
+                if valid_final:
+                    for j in T.unroll(width - 1):
+                        State[target, channel, j] = final_history[j]
+                if valid_checkpoint:
+                    for j in T.unroll(width - 1):
+                        State[checkpoint, channel, j] = checkpoint_history[j]
 
     return kernel
 
@@ -323,8 +287,8 @@ def indexed_causal_conv1d_fwd(x, weight, pool, input_ids, final_ids, *, seq_idx,
 
     The owner must validate private destinations against every input/holder and supply consistent token-to-row and
     cumulative-length metadata. A checkpoint offset is relative to this forward, not the request's absolute token count.
-    All metadata is prebuilt; this entrypoint never reads device IDs on the CPU. Explicit owner-authorized input reuse
-    defers only aliased final histories until all convolution readers finish. No persistent-state staging is used.
+    All metadata is prebuilt; this entrypoint never reads device IDs on the CPU. Final/checkpoint histories are exported
+    after all convolution readers finish, including owner-authorized input reuse. No persistent-state staging is used.
     """
     if x.ndim != 3 or x.shape[0] != 1 or x.stride(1) != 1:
         raise ValueError('Expected channel-last packed input [1,C,T].')
@@ -358,19 +322,18 @@ def indexed_causal_conv1d_fwd(x, weight, pool, input_ids, final_ids, *, seq_idx,
             raise ValueError('All tensors must be on the compute device.')
     out = x.new_empty(length, channels).T
     if length:
-        # Indexed export adds per-token metadata to the unrolled convolution.
-        # Keep that live range short; legacy no-export retains its 64-token tile.
+        # Keep indexed metadata/register pressure bounded; larger tiles regress
+        # short and ragged inputs even with history export outside the math loop.
         # A short packed input needs only one eight-token tile. This is a host
         # shape bound (also valid for ragged rows), not a device length readback.
         kernel = causal_conv1d_fwd(channels, width, bias is not None, activation, x.dtype, x.stride(2), True, 4,
                                   ChunkSizeL=8 if length <= 8 else 16, indexed_state=True, state_stride=pool.stride(),
-                                  index_dtype=input_ids.dtype, has_checkpoint=checkpoint_ids is not None,
+                                  index_dtype=input_ids.dtype,
                                   weight_dtype=weight.dtype, bias_dtype=bias.dtype if bias is not None else x.dtype)
-        kernel(x.squeeze(0), weight, seq_idx, bias, pool, out, None, input_ids, final_ids, cu_seqlens,
-               checkpoint_ids, checkpoint_offsets)
-        export = _export_exclusive_conv_history(channels, width, x.dtype, x.stride(2), pool.stride(),
-                                                   input_ids.dtype)
-        export(x.squeeze(0), pool, input_ids, final_ids, cu_seqlens)
+        kernel(x.squeeze(0), weight, seq_idx, bias, pool, out, None, input_ids)
+        export = _export_conv_history(channels, width, x.dtype, x.stride(2), pool.stride(),
+                                      input_ids.dtype, checkpoint_ids is not None)
+        export(x.squeeze(0), pool, input_ids, final_ids, cu_seqlens, checkpoint_ids, checkpoint_offsets)
     return out.unsqueeze(0)
 
 

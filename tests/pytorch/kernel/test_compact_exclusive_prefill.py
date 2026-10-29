@@ -25,6 +25,53 @@ def packed(lengths):
                                            dtype=torch.int32))
 
 
+@pytest.mark.parametrize('id_dtype', [torch.int32, torch.int64])
+def test_conv_export_reads_both_short_histories_before_alias_write(monkeypatch, id_dtype):
+    from lmdeploy.pytorch.kernels.cuda import causal_conv1d as module
+
+    torch.manual_seed(20261028)
+    lengths, channels = [0, 1, 2, 3, 65, 513], 192
+    x = torch.randn(sum(lengths), channels + 64, device='cuda', dtype=torch.bfloat16)[:, :channels].T[None]
+    weight = torch.randn(channels, 4, device='cuda', dtype=torch.float32) / 8
+    initial = torch.randn(12, 3, channels, 3, device='cuda', dtype=x.dtype)
+    initial[0].zero_()
+    backing, expected = initial.clone(), initial.clone()
+    sources, finals = [1, 2, 3, 0, 6, 6], [1, 2, 3, 4, 7, 8]
+    checkpoints, offsets = [0, 9, 3, 10, 11, -1], [0, 1, 2, 3, 64, 0]
+    start = 0
+    for row, length in enumerate(lengths):
+        if length:
+            destinations = [(finals[row], length)]
+            if checkpoints[row] > 0 and checkpoints[row] != finals[row]:
+                destinations.append((checkpoints[row], offsets[row]))
+            for target, end in destinations:
+                raw = torch.cat((initial[sources[row], 1], x[0, :, start:start + end]), -1)
+                expected[target, 1] = raw[:, -3:]
+        start += length
+
+    # Verify the compute kernel itself leaves every state byte untouched.
+    export_factory = module._export_conv_history
+    exports = []
+
+    def observe_export(*args, **kwargs):
+        exact(backing, initial)
+        exports.append(True)
+        return export_factory(*args, **kwargs)
+
+    monkeypatch.setattr(module, '_export_conv_history', observe_export)
+    def ids(values):
+        return torch.tensor(values, device='cuda', dtype=id_dtype)
+
+    module.indexed_causal_conv1d_fwd(
+        x, weight, backing[:, 1], ids(sources), ids(finals),
+        seq_idx=torch.repeat_interleave(torch.arange(len(lengths), device='cuda', dtype=torch.int32),
+                                        torch.tensor(lengths, device='cuda')),
+        cu_seqlens=ids([0, *itertools.accumulate(lengths)]), activation='silu',
+        checkpoint_ids=ids(checkpoints), checkpoint_offsets=ids(offsets))
+    assert exports == [True]
+    exact(backing, expected)
+
+
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize('width', [2, 4])
 @pytest.mark.parametrize('checkpoint', [False, True])
