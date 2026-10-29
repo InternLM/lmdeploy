@@ -405,6 +405,10 @@ class StepContext:
     ssm_state_meta: SSMStateMetadata | None = None
     ssm_prefill_meta: SSMPrefillMetadata | None = None
 
+    # Full-graph device scalar: zero for dummy DP steps, otherwise the
+    # unpadded token count. Its address stays fixed while replay values change.
+    moe_valid_token_count: torch.Tensor | None = None
+
     @classmethod
     def new(
         cls,
