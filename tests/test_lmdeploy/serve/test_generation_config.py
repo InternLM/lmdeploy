@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import json
 import warnings
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from pydantic import BaseModel, ConfigDict
 
 from lmdeploy.messages import GenerationConfig
@@ -12,6 +14,7 @@ from lmdeploy.serve.core.generation_config import (
     merge_gen_config,
     resolve_default_gen_config,
 )
+from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config
 from lmdeploy.serve.openai.endpoints.generate import check_request as check_generate_request
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, GenerateReqInput
 from lmdeploy.serve.openai.responses import ResponsesRequest
@@ -94,6 +97,47 @@ def test_build_generation_config_from_merged_values():
     assert gen_config.top_k == 5
     assert gen_config.max_new_tokens == 32
     assert gen_config.do_sample is True
+
+
+@pytest.mark.parametrize(
+    'field,default,override',
+    [
+        ('stop_words', ['default-stop'], ['request-stop']),
+        ('random_seed', 1, 2),
+        ('logprobs', 5, 2),
+        ('logprobs', 5, None),
+    ],
+)
+def test_build_generation_config_extra_kwargs_override_defaults(field, default, override):
+    request = CompletionRequest(model='test', prompt='hello', temperature=0.2)
+    defaults = {field: default, 'top_k': 7}
+
+    gen_config = build_generation_config(request, defaults, **{field: override})
+
+    assert getattr(gen_config, field) == override
+    assert gen_config.temperature == 0.2
+    assert gen_config.top_k == 7
+    assert defaults == {field: default, 'top_k': 7}
+
+
+@pytest.mark.parametrize('stop_words', [None, ['request-stop']])
+def test_serving_generation_config_overrides_custom_file_defaults(tmp_path, stop_words):
+    (tmp_path / 'generation_config.json').write_text(
+        json.dumps({'do_sample': True, 'temperature': 0.6, 'stop_words': ['default-stop']}),
+        encoding='utf-8',
+    )
+    defaults = resolve_default_gen_config(str(tmp_path), '/unused/model', False)
+    request = CompletionRequest(model='test', prompt='hello', stop=stop_words)
+
+    gen_config = build_serving_generation_config(
+        request,
+        SimpleNamespace(default_gen_config=defaults),
+        stop_words=request.stop,
+    )
+
+    assert gen_config.stop_words == stop_words
+    assert gen_config.temperature == 0.6
+    assert defaults['stop_words'] == ['default-stop']
 
 
 def test_build_generation_config_max_new_tokens_defaults_to_none():
