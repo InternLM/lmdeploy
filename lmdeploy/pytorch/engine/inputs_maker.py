@@ -17,6 +17,7 @@ import torch
 from torch.profiler import record_function
 
 from lmdeploy.pytorch import envs as _envs
+from lmdeploy.pytorch.compact_state import SSMPrefillMetadata, SSMStateMetadata
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.long_context import (
     get_long_context_chunk_capacity,
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs
     from lmdeploy.pytorch.paging import Scheduler
     from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import StateCheckpointLifecycle
+    from lmdeploy.pytorch.paging.compact_state import SSMStateManager
     from lmdeploy.pytorch.strategies.base.engine import EngineStrategy
     from lmdeploy.pytorch.strategies.base.model_agent import ModelAgentStrategy
     from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
@@ -414,6 +416,10 @@ class _ForwardInputsTask:
             connector_token_lens = self._get_connector_token_lens(result.inputs)
             if connector_token_lens and maker.config.is_ssm:
                 connector_state_ids = tuple(result.inputs.state_offsets.tolist())
+        if connector_enabled and maker.compact_state_manager is not None:
+            # Compact saves must name the actual producer reserved by binding,
+            # not a runtime slot snapshotted before that transaction.
+            return self._build_payload(compact_connector_token_lens=connector_token_lens)
         # Build metadata even without model work: a pending load/save still
         # needs executor steps to submit work and poll asynchronous completion.
         result.kv_connector_metadata = self.scheduler.build_connector_meta(
@@ -576,7 +582,8 @@ class _ForwardInputsTask:
         self.state.prefill = False
         delta, running, invalid_seqs = maker.create_model_inputs_delta()
         maker.to_evict_seqs = invalid_seqs
-        self.result.set_work(running, None, delta, None)
+        cache_inputs = maker._make_decode_cache_inputs(running, delta)
+        self.result.set_work(running, None, delta, None, cache_inputs=cache_inputs)
 
     def _schedule_prefill(self,
                           allow_long_prefill: bool = True,
@@ -693,7 +700,7 @@ class _ForwardInputsTask:
     def _need_ce_loss(self):
         return any(seq.return_ce_loss for seq in self.result.running)
 
-    def _build_payload(self):
+    def _build_payload(self, compact_connector_token_lens=None):
         maker = self.maker
         result = self.result
         has_model_work = result.inputs is not None or result.delta is not None
@@ -706,7 +713,7 @@ class _ForwardInputsTask:
         else:
             stopping_criteria = None
 
-        return dict(
+        payload = dict(
             running=result.running,
             inputs=result.inputs,
             delta=result.delta,
@@ -721,6 +728,17 @@ class _ForwardInputsTask:
             return_ce_loss=self._need_ce_loss(),
             kv_connector_metadata=result.kv_connector_metadata,
         )
+        # Take holds last: sampling/stopping/layout preparation can still fail,
+        # and no worker has seen this payload yet. Dispatch failures thereafter
+        # must retain holds until all workers are proven quiescent.
+        if maker.compact_state_manager is not None:
+            if compact_connector_token_lens is None:
+                maker._bind_compact_state(payload)
+            else:
+                maker._bind_compact_state(payload, connector_token_lens=compact_connector_token_lens)
+        if not has_model_work and payload['kv_connector_metadata'] is None:
+            return None
+        return payload
 
 
 class InputsMakerAsync:
@@ -768,10 +786,12 @@ class InputsMakerAsync:
         sampling_strategy: 'SamplingStrategy',
         model_agent_strategy: 'ModelAgentStrategy',
         config: InputsMakerConfig,
+        compact_state_manager: 'SSMStateManager | None' = None,
     ):
         self.executor = executor
         self.scheduler = scheduler
         self.state_checkpoints = state_checkpoints
+        self.compact_state_manager = compact_state_manager
         self.adapter_manager = adapter_manager
         self.config = config
         self.spec_decoding = config.spec_decoding
@@ -792,6 +812,7 @@ class InputsMakerAsync:
         """Initialize request-local scheduling state."""
         self._decode_count = 0
         self._last_forward_kind = None
+        self._last_compact_decode_banks = None
         self._short_prefill_turns_since_long_chunk = 0
         self.next_is_prefill = True
         self.forward_inputs = None
@@ -804,6 +825,7 @@ class InputsMakerAsync:
         sessions."""
         self._decode_count = 0
         self._last_forward_kind = None
+        self._last_compact_decode_banks = None
         self._short_prefill_turns_since_long_chunk = 0
         self.next_is_prefill = True
         self.forward_inputs = None
@@ -969,6 +991,230 @@ class InputsMakerAsync:
         """Check whether this input maker emits SSM checkpoint operations."""
         return self.config.is_ssm and self.config.enable_prefix_caching
 
+    def _bind_compact_state(self, payload, *, connector_token_lens=None):
+        """Bind final CPU metadata, then take exact whole-forward owner holds.
+
+        Compact sources are one-forward overrides. Checkpoints are direct kernel destinations outside private banks,
+        never state-copy plans. No GPU work can observe this payload until the transaction succeeds.
+        """
+        # Delta packets are delivered in order. The previous decode already
+        # advanced its current ID and planned outputs; an identical bank does
+        # not need a second planning kernel. Never infer this across a failed
+        # binding, prefill/merge, checkpoint, or reset.
+        previous_banks = self._last_compact_decode_banks
+        self._last_compact_decode_banks = None
+        inputs, delta = payload['inputs'], payload['delta']
+        if (inputs is None and delta is None) or (inputs is not None and inputs.is_dummy):
+            if connector_token_lens is not None:
+                payload['kv_connector_metadata'] = self.scheduler.build_connector_meta([])
+            return
+        owner = self.compact_state_manager
+        running = payload['running']
+        if not running:
+            raise ValueError('Compact model work requires admitted request banks.')
+        carrier = payload['cache_inputs'] or CacheCheckpointInputs()
+        if (payload['kv_connector_metadata'] is not None or carrier.state_restore_plan is not None
+                or carrier.state_save_plan is not None):
+            raise NotImplementedError('Compact checkpoint/connector state-copy binding is not supported.')
+        if (carrier.ssm_state_access_id is not None
+                or (inputs is not None and
+                    (inputs.ssm_prefill_meta is not None or inputs.ssm_source_state_ids is not None))
+                or (delta is not None and delta.ssm_checkpoint_state_ids is not None)):
+            raise ValueError('Compact forward carrier must not be bound twice.')
+        banks = tuple(owner.bank_for(seq) for seq in running)
+        steps = carrier.ssm_checkpoint_steps
+        if steps is not None and len(steps) != len(banks):
+            raise ValueError('Compact checkpoint boundaries require matching model rows.')
+        if any(bank.pending_checkpoint is not None and bank.pending_checkpoint.phase == 'reserved' for bank in banks):
+            raise ValueError('Compact prefill must own its checkpoint reservation transaction.')
+        loaded_inputs = tuple(bank.loaded_input for bank in banks)
+        if any(loaded_inputs) and inputs is None:
+            raise ValueError('A Store-loaded compact input must resume with a prefill.')
+        submitted_banks = tuple(bank.unit_ids for bank in banks)
+        bank_signature = tuple((seq.seq_id, bank.auxiliary_id, ids)
+                               for seq, bank, ids in zip(running, banks, submitted_banks))
+        unchanged_decode = inputs is None and steps is None and bank_signature == previous_banks
+        bank_ids = (None if inputs is not None or unchanged_decode else
+                    torch.tensor(submitted_banks, dtype=torch.int64))
+        state = None
+        prefill = None
+        if inputs is not None:
+            if inputs.is_decoding or inputs.ssm_state_meta is not None:
+                raise ValueError('Fresh compact packets must be unbound prefills; decode uses a delta.')
+            if (inputs.state_offsets is None or inputs.state_offsets.device.type != 'cpu'
+                    or inputs.state_offsets.tolist() != [bank.auxiliary_id for bank in banks]):
+                raise ValueError('Compact prefill auxiliary IDs must match admitted request order.')
+            if inputs.seq_length.device.type != 'cpu' or inputs.history_lengths.device.type != 'cpu':
+                raise ValueError('Compact prefill layout must be built from host lengths, without device readback.')
+            lengths, histories = inputs.seq_length.tolist(), inputs.history_lengths.tolist()
+            for seq, loaded, history in zip(running, loaded_inputs, histories):
+                if loaded is not None and (loaded[1] != history or seq.prefix_cache.restore.is_selected):
+                    raise ValueError('Store-loaded input must match history and cannot also restore a trie checkpoint.')
+            if steps is not None:
+                if any(length <= 0 for length in lengths):
+                    raise ValueError('Compact checkpoint prefills require positive token consumption.')
+                for seq, history in zip(running, histories):
+                    restore = seq.prefix_cache.restore
+                    if restore.is_selected:
+                        checkpoint = restore.node.state_checkpoint
+                        if checkpoint is None or checkpoint.step != history:
+                            raise ValueError('Compact source boundary must equal the prefill history length.')
+            offsets = None if steps is None else [step - history if step else 0
+                                                  for step, history in zip(steps, histories)]
+            # Validate every export BEFORE reserving units, binding sources or
+            # pinning KV. Actual unit IDs replace these validation placeholders.
+            prefill = SSMPrefillMetadata.from_lengths(
+                lengths, histories, checkpoint_ids=None if steps is None else [int(step > 0) for step in steps],
+                checkpoint_offsets=offsets)
+            if prefill.cu_seqlens.numel() != len(banks) + 1:
+                raise ValueError('Compact prefill lengths must match admitted request count.')
+        elif delta.block_offsets.shape[0] != len(banks) or delta.ssm_state_ids is not None:
+            raise ValueError('Compact decode delta must match admitted request count and be unbound.')
+        if inputs is None and steps is not None:
+            if self.spec_decoding or delta.max_q_seqlen != 1 or owner.capacity.max_update_tokens != 1:
+                raise ValueError('Compact decode checkpoint planning requires single-token AR.')
+            for seq, bank, step in zip(running, banks, steps):
+                expected = seq.num_valid_ids + sum(bool(access.bank_ids) for access in bank.accesses)
+                if step and step != expected:
+                    raise ValueError('Compact decode checkpoint boundary disagrees with queued target consumption.')
+        bound, checkpoints, decode_reservations = [], (), ()
+        store_only = []
+        store_skipped = []
+        metadata = None
+        access = None
+        try:
+            source_ids = decode_ids = None
+            if steps is not None and inputs is None:
+                decode_reservations = self.state_checkpoints.prepare_decode(running, steps)
+                if decode_reservations:
+                    by_bank = {reservation.bank.auxiliary_id: reservation.reference
+                               for reservation in decode_reservations}
+                    checkpoints = tuple(by_bank.get(bank.auxiliary_id) for bank in banks)
+                    decode_ids = torch.tensor([ref.unit_id if ref is not None else -1 for ref in checkpoints],
+                                              dtype=torch.int64)
+            elif steps is not None:
+                if carrier.kv_restore_plan is not None or carrier.kv_save_plan is not None:
+                    raise ValueError('Compact checkpoint planning owns its KV-tail copy plans.')
+                # A newly selected source must not overwrite a still-bound
+                # logical input; completion clears it after private progress.
+                for seq, bank in zip(running, banks):
+                    if seq.prefix_cache.restore.is_selected and bank.input_ref is not None:
+                        raise ValueError('Compact restore requires an unbound request input.')
+                # Acquire selected sources before save reservation: a new
+                # partial checkpoint can share the same mutable trie anchor.
+                sources = []
+                for seq, bank in zip(running, banks):
+                    restore = seq.prefix_cache.restore
+                    if not restore.is_selected:
+                        sources.append(-1)
+                        continue
+                    checkpoint, was_pinned = restore.node.state_checkpoint, restore.pinned
+                    sources.append(self.state_checkpoints.bind_restore(seq))
+                    bound.append((bank, restore, checkpoint, was_pinned))
+                restore_pairs, save_pairs = self.state_checkpoints.prepare_prefill(running, steps)
+                checkpoints = tuple(seq.prefix_cache.pending_save.node.state_checkpoint.state_reference
+                                    if seq.prefix_cache.pending_save.is_pending else None for seq in running)
+                if connector_token_lens is not None:
+                    store_steps = self.scheduler.kv_connector.plan_compact_save_steps(
+                        running, connector_token_lens, steps, skipped=store_skipped)
+                    checkpoints = list(checkpoints)
+                    for row, (bank, step) in enumerate(zip(banks, store_steps)):
+                        if step and checkpoints[row] is None and bank.pending_checkpoint is None:
+                            if not owner.get_num_free_optional():
+                                store_skipped.append((int(running[row].seq_id), step, 'unit'))
+                                continue
+                            reference = owner.reserve_checkpoint(bank, step)
+                            checkpoints[row] = reference
+                            store_only.append(reference)
+                    checkpoints = tuple(checkpoints)
+                ids = [reference.unit_id if reference is not None else -1 for reference in checkpoints]
+                prefill = replace(prefill, checkpoint_ids=torch.tensor(ids, dtype=torch.int64))
+                source_ids = torch.tensor(sources, dtype=torch.int64)
+                carrier = replace(carrier,
+                                  kv_restore_plan=(self._make_kv_prefix_cache_copy_plan(restore_pairs)
+                                                   if restore_pairs else None),
+                                  kv_save_plan=(self._make_kv_prefix_cache_copy_plan(save_pairs)
+                                                if save_pairs else None))
+            if any(loaded_inputs):
+                if source_ids is None:
+                    source_ids = torch.full((len(banks),), -1, dtype=torch.int64)
+                for row, loaded in enumerate(loaded_inputs):
+                    if loaded is not None:
+                        source_ids[row] = loaded[0]
+            carrier = replace(carrier, ssm_checkpoint_steps=None)
+            if inputs is not None:
+                bank_ids = torch.tensor(
+                    [bank.unit_ids + (-1,) * (owner.capacity.bank_width - len(bank.unit_ids)) for bank in banks],
+                    dtype=torch.int64)
+                state = SSMStateMetadata(bank_ids, torch.full((len(banks),), -1, dtype=torch.int64),
+                                           torch.full((len(banks), 1), -1, dtype=torch.int64), partial_bank=True)
+                access = owner.submit_prefill(banks, checkpoints=checkpoints)
+            else:
+                access = owner.submit_decode(banks, checkpoints=checkpoints)
+            carrier = replace(carrier, ssm_state_access_id=access.access_id)
+            if connector_token_lens is not None:
+                # Store eligibility is independent of local APC admission and
+                # credit. Only selected Store rows retain this shared producer.
+                store_references = (tuple(ref if step else None for ref, step in zip(checkpoints, store_steps))
+                                    if inputs is not None and steps is not None else ())
+                metadata = self.scheduler.build_connector_meta(
+                    running, connector_token_lens=connector_token_lens,
+                    compact_state_references=store_references)
+            if decode_reservations:
+                self.state_checkpoints.attach_forward(access, running, final_checkpoints=checkpoints,
+                                                      decode_reservations=decode_reservations)
+            elif steps is not None and inputs is not None:
+                # c=e uses one immutable producer as BOTH checkpoint and
+                # final, never exposing it in the next writable bank. Capture
+                # old input holds before binding the new final read identity.
+                final_checkpoints = tuple(reference if step == history + length else None
+                                          for reference, step, history, length in zip(
+                                              checkpoints, steps, histories, lengths))
+                self.state_checkpoints.attach_forward(access, running, final_checkpoints=final_checkpoints)
+        except Exception:
+            # This is a local preparation rollback, NOT RPC failure completion.
+            if metadata is not None:
+                self.scheduler.rollback_compact_connector_meta(metadata)
+            if access is not None:
+                owner.complete(access, success=False)
+            for reference in store_only:
+                if reference.phase == 'reserved':
+                    owner.cancel_checkpoint(reference)
+                else:
+                    owner.release_reference(reference)
+            for bank, restore, checkpoint, was_pinned in reversed(bound):
+                owner.clear_input(bank)
+                if not was_pinned:
+                    checkpoint.pin_count -= 1
+                    restore.pinned = False
+            self.state_checkpoints.discard_decode(decode_reservations)
+            if steps is not None and inputs is not None:
+                for seq in running:
+                    self.state_checkpoints.discard_save(seq)
+            raise
+        if store_skipped:
+            self.scheduler.kv_connector.record_compact_save_skips(store_skipped)
+        # Store-only reservation ownership transfers to its I/O access and,
+        # for c=e, the request's immutable final input. No TrieNode is required.
+        for reference in store_only:
+            owner.release_reference(reference)
+        if connector_token_lens is not None:
+            payload['kv_connector_metadata'] = metadata
+        if any(loaded_inputs):
+            owner.consume_loaded_inputs(access)
+        if state is not None:
+            inputs.ssm_state_meta = state
+            inputs.ssm_prefill_meta = prefill
+            inputs.ssm_source_state_ids = source_ids
+        else:
+            delta.ssm_state_ids = bank_ids
+            delta.ssm_checkpoint_state_ids = decode_ids
+        payload['cache_inputs'] = carrier
+        if inputs is None and steps is None:
+            # This is the submitted snapshot, not bank.unit_ids after a later
+            # freeze. Keep only host values; every dispatch still takes holds.
+            self._last_compact_decode_banks = bank_signature
+
     def _prepare_prefill_cache_restore(
             self, messages: 'SeqList') -> tuple[torch.LongTensor | None, StateCacheCopyPlan | None]:
         """Acquire checkpoints and build prefill restore plans."""
@@ -1004,9 +1250,29 @@ class InputsMakerAsync:
                                       save_steps: tuple[int, ...] | None = None):
         """Acquire and reserve one-forward prefill checkpoint operations."""
         if not self._ssm_prefix_cache_enabled():
-            return None
+            if (self.compact_state_manager is None
+                    or self.scheduler.cache_config.num_store_state_caches <= 0):
+                return None
         if save_steps is not None and len(save_steps) != len(messages):
             raise ValueError('save_steps must have one entry per prefill sequence.')
+
+        if self.compact_state_manager is not None:
+            steps = save_steps if save_steps is not None else tuple(seq.num_valid_ids for seq in messages)
+            planned_steps = []
+            for seq, end in zip(messages, steps):
+                if seq._seq_meta.compact_prefill_checkpoint_stride:
+                    plan = plan_long_context_chunk(seq, end - seq.num_history_ids, include_multimodals=False)
+                    if plan.chunk_end != end:
+                        raise ValueError('Compact checkpoint planning disagrees with the scheduled forward end.')
+                    planned_steps.append(plan.checkpoint_step)
+                else:
+                    planned_steps.append(end)
+            steps = tuple(planned_steps)
+            if self.spec_decoding and any(seq.logprob_start_pos >= 0 for seq in messages):
+                steps = (0,) * len(messages)
+            # No resources are acquired here: sampling/stopping preparation may
+            # still fail. The final binder owns the checkpoint transaction.
+            return CacheCheckpointInputs(ssm_checkpoint_steps=steps)
 
         kv_restore_plan, state_restore_plan = self._prepare_prefill_cache_restore(messages)
         kv_save_plan, state_save_plan = self._prepare_prefill_cache_save(messages, save_steps)
@@ -1018,6 +1284,30 @@ class InputsMakerAsync:
                                      kv_save_plan=kv_save_plan,
                                      state_restore_plan=state_restore_plan,
                                      state_save_plan=state_save_plan)
+
+    def _make_decode_cache_inputs(self, valid_seqs: 'SeqList', delta: ModelInputsDelta | None):
+        """Keep direct compact outputs for the absolute-interval AR policy.
+
+        Save-first, speculative and Store checkpoints require the accepted-output coordinator instead.
+        """
+        owner = self.compact_state_manager
+        if owner is None or delta is None or len(valid_seqs) == 0 or not self._ssm_prefix_cache_enabled():
+            return None
+
+        decode_state_interval = self.config.prefix_cache_decode_state_interval
+        if (decode_state_interval <= 0 or self.spec_decoding or delta.max_q_seqlen != 1):
+            return None
+
+        meta = valid_seqs[0]._seq_meta
+        if (owner.capacity.max_update_tokens != 1 or meta.prefix_cache_decode_save_first
+                or meta.enable_mooncake_store):
+            return None
+        # CPU token append follows the previous output event. Each queued
+        # single-token target forward contributes one not-yet-appended token.
+        steps = tuple(seq.num_valid_ids + sum(bool(access.bank_ids) for access in owner.bank_for(seq).accesses)
+                      for seq in valid_seqs)
+        steps = tuple(step if step % decode_state_interval == 0 else 0 for step in steps)
+        return CacheCheckpointInputs(ssm_checkpoint_steps=steps) if any(steps) else None
 
     @torch.inference_mode()
     @record_function('create_model_inputs')
@@ -1348,12 +1638,19 @@ class InputsMakerAsync:
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
         if self.config.enable_decode_checkpoints:
-            snapshot = self.scheduler.decode_checkpoints.prepare(next_running, inputs, forward_inputs['delta'])
+            carrier = forward_inputs['cache_inputs'] or CacheCheckpointInputs()
+            snapshot = self.scheduler.decode_checkpoints.prepare(
+                next_running, inputs, forward_inputs['delta'], access_id=carrier.ssm_state_access_id)
             if snapshot is not None:
                 batch_id, plan = snapshot
-                cache_inputs = forward_inputs['cache_inputs'] or CacheCheckpointInputs()
-                forward_inputs['cache_inputs'] = replace(cache_inputs, decode_save_plan=plan, decode_save_id=batch_id)
-        await self.executor.forward_async(forward_inputs)
+                forward_inputs['cache_inputs'] = replace(carrier, decode_save_plan=plan, decode_save_id=batch_id)
+        try:
+            await self.executor.forward_async(forward_inputs)
+        except BaseException:
+            # Failed/cancelled dispatch cannot establish a retained table.
+            # Its physical holds still require the existing worker drain.
+            self._last_compact_decode_banks = None
+            raise
         self._last_forward_kind = self._forward_kind(inputs, forward_inputs['delta'])
         self.scheduler.tick()
         self.forward_inputs = forward_inputs
@@ -1370,6 +1667,8 @@ class InputsMakerAsync:
 
 def build_inputs_maker(engine: 'Engine'):
     """Build inputs makers."""
+    from lmdeploy.pytorch.paging.compact_state import SSMStateManager
+
     config = InputsMakerConfig.from_engine(engine)
     return InputsMakerAsync(
         executor=engine.executor,
@@ -1380,4 +1679,6 @@ def build_inputs_maker(engine: 'Engine'):
         sampling_strategy=engine.sampling_strategy,
         model_agent_strategy=engine.model_agent_strategy,
         config=config,
+        compact_state_manager=(engine.scheduler.state_manager
+                               if isinstance(engine.scheduler.state_manager, SSMStateManager) else None),
     )

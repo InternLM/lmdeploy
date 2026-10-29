@@ -262,16 +262,15 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         config.supports_mla_fp8_cache = True
         config.reserve_dsa_score_workspace = True
         config.k_head_dim = text_config.kv_lora_rank
-        # Conv keeps the token history and recurrent state keeps one entry per
-        # verification position. A checkpoint copies both rings; restore uses
-        # the saved absolute position to select its entries, including an
-        # accepted boundary inside a verification step. On 64-token boundaries
-        # the unfinished KPool tail is empty and needs no checkpoint payload.
-        ring_shape = (num_spec_tokens + 1,) if num_spec_tokens else ()
+        # CUDA stores exact-boundary KDA units; KPool remains request-private.
+        # Store resumes on 64-token boundaries, where the KPool tail is empty.
+        config.state_cache_is_indexed = kwargs.get('device_type', 'cuda') in ('cuda', 'auto')
+        ring_shape = ((num_spec_tokens + 1,) if num_spec_tokens else ()) if not config.state_cache_is_indexed else ()
         config.state_cache_specs = [
             StateCacheSpec(
                 GLM5_KDA_CONV_STATE,
-                (num_linear_layers, conv_dim, conv_kernel_size + num_spec_tokens),
+                (num_linear_layers, conv_dim,
+                 conv_kernel_size - 1 if config.state_cache_is_indexed else conv_kernel_size + num_spec_tokens),
                 torch.bfloat16,
             ),
             StateCacheSpec(
@@ -320,6 +319,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             if hasattr(hf_config, 'auto_map'):
                 del hf_config.auto_map
             config.num_layers = 1
+            config.state_cache_is_indexed = False
             config.state_cache_specs = []
             config.states_shapes = []
             config.is_gated_delta = False

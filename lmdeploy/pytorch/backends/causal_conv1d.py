@@ -54,3 +54,4 @@ class CausalConv1dImpl(ABC):
 @dataclass(frozen=True)
 class CausalConv1dBuildSpec(BuildSpec[CausalConv1dImpl]):
     """Request construction of a causal-convolution operator."""
+    indexed_state: bool = False

@@ -175,8 +175,8 @@ class PrefixCacheState:
     groups the strategy requirement, one-shot allocation window, and canonical
     trie identities used when a cached suffix must be recomputed into fresh
     sequence-owned KV. ``suppress_match_stats`` is set while replaying work
-    after recompute eviction; cache reuse may still happen, but it should not
-    affect the public prefix-cache hit-rate metric.
+    after recompute eviction; cache reuse may still happen, but it must neither
+    add to public hit statistics nor erase the request's accepted cached tokens.
     """
 
     # Persistent request metadata used to build multimodal-aware trie keys.

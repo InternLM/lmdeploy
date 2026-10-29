@@ -83,6 +83,7 @@ def test_layer_scoped_state_cache_specs_reject_invalid_layer_ids():
 
 def _make_state_cache_engine(num_caches: int = 4):
     cache_engine = object.__new__(StateCacheEngine)
+    cache_engine.compact_plan = None
     cache_engine.cache_config = CacheConfig(max_batches=1,
                                             block_size=64,
                                             num_cpu_blocks=0,
@@ -98,6 +99,7 @@ def _make_state_cache_engine(num_caches: int = 4):
 
 def _make_multi_pool_state_cache_engine(num_caches: int = 4):
     cache_engine = object.__new__(StateCacheEngine)
+    cache_engine.compact_plan = None
     cache_engine.cache_config = CacheConfig(max_batches=1,
                                             block_size=64,
                                             num_cpu_blocks=0,
@@ -132,7 +134,8 @@ def glm_state_cache_engine(monkeypatch, request):
     hf_config = Glm5NextConfig(text_config=dict(
         num_hidden_layers=2, layer_types=['linear_attention', 'full_attention'],
         linear_num_heads=2, linear_head_dim=8, index_head_dim=8))
-    model_config = Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=3)
+    # This fixture exercises the legacy ring ABI, including on a CUDA test device.
+    model_config = Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=3, device_type='cpu')
     cache_config = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0,
                                num_gpu_blocks=0, num_state_caches=4, states_shapes=model_config.states_shapes)
     engine = StateCacheEngine(cache_config, model_config)
@@ -194,6 +197,54 @@ def test_glm_checkpoint_restores_the_selected_verification_position(
     expected_conv = torch.arange(boundary - conv_width + 1, boundary, dtype=conv.dtype, device=conv.device)
     torch.testing.assert_close(restored_conv, expected_conv.expand_as(restored_conv))
     assert (tail_keys[3] == -10).all() and (tail_scores[3] == -10).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+@pytest.mark.parametrize('boundary_offset', [1, 2, 4])
+def test_glm_compact_checkpoint_copies_exact_accepted_state_unit(monkeypatch, boundary_offset):
+    from lmdeploy.hf_configs.configuration_glm5_next import Glm5NextConfig
+    from lmdeploy.pytorch.config import SSMStateCapacity
+    from lmdeploy.pytorch.configurations.glm5_next import Glm5NextModelConfigBuilder
+    from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    monkeypatch.setattr('lmdeploy.pytorch.configurations.deepseek_v2.flash_mla_available', lambda: True)
+    model = Glm5NextModelConfigBuilder.build(Glm5NextConfig(text_config=dict(
+        num_hidden_layers=2, layer_types=['linear_attention', 'full_attention'],
+        linear_num_heads=2, linear_head_dim=8, index_head_dim=8)), num_spec_tokens=3)
+    cache = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=0,
+                        num_state_caches=4, states_shapes=model.states_shapes, prefix_cache_token_lookahead=1)
+    plan = state_module.SSMStatePlan.from_model_config(model, SSMStateCapacity(2, 4, 2))
+    engine = StateCacheEngine(cache, model, compact_plan=plan)
+    conv, recurrent, tail_keys, tail_scores = engine.state_caches
+    for tensor in engine.state_caches:
+        tensor.fill_(-10)
+    boundary = 256
+    history = boundary - boundary_offset
+    outputs = torch.tensor([[3, 1, 4, 2]], device='cuda')
+    for offset, unit in enumerate(outputs[0].tolist(), start=1):
+        recurrent[unit].fill_(history + offset)
+        conv[unit].copy_(torch.arange(history + offset - conv.shape[-1], history + offset,
+                                     device='cuda', dtype=conv.dtype).expand_as(conv[unit]))
+    agent = agent_module.BaseModelAgent.__new__(agent_module.BaseModelAgent)
+    agent.need_output, agent.cache_config, agent.state_cache_engine = True, cache, engine
+    monkeypatch.setattr(agent_module, 'get_dist_manager', lambda: SimpleNamespace(
+        current_context=lambda: SimpleNamespace(dist_config=SimpleNamespace(attn_tp=1))))
+    inputs = SimpleNamespace(history_lengths=torch.tensor([history], device='cuda'),
+                             seq_length=torch.tensor([4], device='cuda'), is_decoding=True,
+                             ssm_state_meta=SimpleNamespace(output_state_ids=outputs))
+    output = agent_module.BatchedOutputs(
+        next_token_ids=torch.tensor([[7] * boundary_offset + [-1] * (4 - boundary_offset)], device='cuda'),
+        stopped=torch.tensor([False], device='cuda'), stop_pos=torch.tensor([-1], device='cuda'))
+    copies = torch.tensor([[0, 0], [boundary, boundary + 4], [-1, -1], [5, 6]], device='cuda')
+    agent._save_decode_checkpoints(CacheCheckpointInputs(decode_save_plan=copies), inputs, output)
+    assert output.decode_checkpoint_mask.tolist() == [True, False]
+    conv[1:5].fill_(999)
+    recurrent[1:5].fill_(999)
+    assert (recurrent[5] == boundary).all() and (recurrent[6] == -10).all()
+    expected = torch.arange(boundary - conv.shape[-1], boundary, device='cuda', dtype=conv.dtype)
+    torch.testing.assert_close(conv[5], expected.expand_as(conv[5]))
+    assert (conv[6] == -10).all() and (tail_keys == -10).all() and (tail_scores == -10).all()
 
 
 def test_state_cache_engine_zero_slots_uses_each_pool_entry_axis():

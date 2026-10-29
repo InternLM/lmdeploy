@@ -7,6 +7,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
 import torch
@@ -15,6 +16,7 @@ from lmdeploy.pytorch.kv_connector.base import KVCachePool, KVCacheValue, KVConn
 from lmdeploy.utils import get_logger
 
 from .data import (
+    MooncakeStoreCompactStateSave,
     MooncakeStoreConfig,
     MooncakeStoreConnectorMetadata,
     MooncakeStoreKeyMetadata,
@@ -389,12 +391,36 @@ class MooncakeStoreWorker:
         kv_caches: Mapping[str, KVCacheValue],
         *,
         state_cache_pools: Sequence[KVCachePool] = (),
+        state_cache_schema: str | None = None,
     ) -> None:
         """Register standard KV rows and owning linear-attention pools."""
         if not kv_caches and not state_cache_pools:
             raise ValueError(
                 'No KV cache rows or state pools were provided for Mooncake Store registration')
 
+        compact = self._cache_config.compact_state_capacity is not None
+        if compact != (state_cache_schema is not None):
+            raise ValueError('Compact Store registration requires its explicit state schema; legacy must omit it.')
+        if compact:
+            capacity = self._cache_config.compact_state_capacity
+            if len(state_cache_pools) != 1:
+                raise ValueError('Compact Store requires one owning packed unit pool.')
+            pool = state_cache_pools[0]
+            tensor = pool.tensor
+            if (pool.entry_axis != 0 or tensor.ndim != 2 or tensor.dtype != torch.uint8
+                    or tensor.shape[0] != capacity.num_units
+                    or tensor.data_ptr() != tensor.untyped_storage().data_ptr()
+                    or tensor.numel() * tensor.element_size() != tensor.untyped_storage().nbytes()):
+                raise ValueError('Compact Store must register the entire unified owning unit pool.')
+            ranges = pool.transfer_ranges
+            end = 0
+            if not ranges:
+                raise ValueError('Compact Store requires explicit padding-free field ranges.')
+            for offset, size in ranges:
+                if offset < end or size <= 0 or offset + size > tensor.stride(0):
+                    raise ValueError('Compact Store field ranges must be ordered, disjoint and within each unit.')
+                end = offset + size
+        self.key_metadata = replace(self.key_metadata, state_schema=state_cache_schema)
         registrations, backing_storages = (
             self._build_registrations(kv_caches) if kv_caches else ((), 0))
         state_registrations, state_backing_storages = self._build_state_registrations(state_cache_pools)
@@ -429,11 +455,15 @@ class MooncakeStoreWorker:
 
     def start_load_kv(self, connector_metadata: MooncakeStoreConnectorMetadata) -> None:
         """Submit each new request to the background receiver once."""
+        for request in connector_metadata.load_requests:
+            if request.state_destination is not None:
+                if (request.state_unit_id is not None) != (self.key_metadata.state_schema is not None):
+                    raise ValueError('Store load state destination does not match registered schema mode.')
         receiver = self.kv_recv_thread
         if connector_metadata.load_requests and receiver is None:
             raise RuntimeError('Mooncake KV-cache receiver is not initialized')
         ready_event = None
-        if any(request.state_slot is not None for request in connector_metadata.load_requests):
+        if any(request.state_destination is not None for request in connector_metadata.load_requests):
             ready_event = torch.cuda.Event()
             ready_event.record()
         for request in connector_metadata.load_requests:
@@ -450,6 +480,11 @@ class MooncakeStoreWorker:
         requests = connector_metadata.save_requests
         if not requests:
             return
+        for request in requests:
+            if request.state is not None:
+                direct = isinstance(request.state, MooncakeStoreCompactStateSave)
+                if direct != (self.key_metadata.state_schema is not None):
+                    raise ValueError('Store save state source does not match registered schema mode.')
         sender = self.kv_send_thread
         if sender is None:
             raise RuntimeError('Mooncake KV-cache sender is not initialized')
@@ -492,6 +527,8 @@ class MooncakeStoreWorker:
             return 0
 
         key_metadata = self.key_metadata
+        if self._cache_config.compact_state_capacity is not None and key_metadata.state_schema is None:
+            raise RuntimeError('Compact Store lookup requires registered recovery schema.')
         block_size = key_metadata.block_size
         full_blocks = min(token_len // block_size, len(block_hashes))
         is_hybrid = bool(self._cache_config.states_shapes)

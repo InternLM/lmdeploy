@@ -18,6 +18,7 @@ import torch
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.messages import SchedulerSequence
+    from lmdeploy.pytorch.paging.compact_state import StateReference
 
 RequestId = int
 KVOperationId = int
@@ -56,6 +57,8 @@ class KVConnectorStepInput:
     # Already copied snapshots transferred to the connector after acceptance.
     connector_snapshot_ids: tuple[int, ...] = ()
     is_decode_checkpoint: bool = False
+    # Scheduler-local producer identities. Worker metadata serializes IDs only.
+    compact_state_references: tuple['StateReference | None', ...] = ()
 
 
 class KVConnectorMetadata(ABC):
@@ -261,6 +264,7 @@ class KVConnectorBase(ABC):
         kv_caches: Mapping[str, KVCacheValue],
         *,
         state_cache_pools: Sequence[KVCachePool] = (),
+        state_cache_schema: str | None = None,
     ) -> None:
         """Register GPU KV-cache tensors with the external store.
 

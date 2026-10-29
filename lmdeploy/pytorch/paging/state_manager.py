@@ -4,6 +4,8 @@ import numpy as np
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.messages import SchedulerSequence
 
+from .compact_state import SSMStateManager
+
 
 class StateAllocator:
     """State allocator."""
@@ -138,8 +140,11 @@ class StateManager:
         return len(self._checkpoint_states)
 
 
-def build_state_manager(cache_config: CacheConfig) -> StateManager:
-    """Build state manager."""
+def build_state_manager(cache_config: CacheConfig) -> StateManager | SSMStateManager:
+    """Select one state owner before allocation; never instantiate both
+    pools."""
+    if cache_config.compact_state_capacity is not None:
+        return SSMStateManager(cache_config.compact_state_capacity)
     # state is different from block, we always reserve one state for system use
     num_reserved = 1
     num_state_caches = cache_config.num_state_caches

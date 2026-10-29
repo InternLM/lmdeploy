@@ -31,6 +31,7 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
         """Post init."""
         super().__post_init__()
         self._num_valid_ids: int = len(self.history_cache)
+        self._recompute_compact_on_resume = False
         self._strategy: ARSpecSequenceStrategy = self._seq_meta.strategy
         # MTP cache identity includes the next token used to complete the
         # draft checkpoint. Other methods retain the configured rewind policy.
@@ -144,6 +145,9 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
             self.prefix_cache.last_decode_save_step = -1
             self.prefix_cache.decode_store_save_pending = False
             self._update_token_ids_inputs(token_ids)
+            if self._recompute_compact_on_resume:
+                self.state.release_paging_resources()
+                self._recompute_compact_on_resume = False
         elif mode == UpdateTokenMode.PREFILL:
             self._update_token_ids_prefill(token_ids, draft_token_ids,
                                            stop_pos=stop_pos, routed_experts=routed_experts)
@@ -231,6 +235,7 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
             all_routed_experts = batched_outputs.all_routed_experts.split(num_tokens, dim=0)
             all_routed_experts = [experts.numpy() for experts in all_routed_experts]
 
+        compact = batched_outputs.ssm_state_access_id is not None
         batch_size = len(running)
         next_token_ids = next_token_ids.view(batch_size, -1).numpy()
         if extra_outputs is None or extra_outputs.draft_token_ids is None:
@@ -248,6 +253,10 @@ class ARSpecSequenceStrategy(ARSequenceStrategy):
             if msg.status != MessageStatus.RUNNING:
                 continue
             cur_draft_tokens = draft_token_ids[idx]
+            if compact and is_decoding and 0 <= stop_pos[idx] < np.count_nonzero(token >= 0) - 1:
+                # The worker cursor advanced beyond the history retained by the host.
+                # Defer eviction until resume so this response and in-flight owners stay intact.
+                msg._recompute_compact_on_resume = True
             # fill token
             msg.update_token_ids(token,
                                  draft_token_ids=cur_draft_tokens,

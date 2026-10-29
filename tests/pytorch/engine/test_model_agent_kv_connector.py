@@ -87,6 +87,7 @@ def _bare_model_agent():
 
     agent = BaseModelAgent.__new__(BaseModelAgent)
     agent.all_context = nullcontext
+    agent.compact_state_plan = None
     agent.cache_config = _enabled_config()
     agent.model_config = SimpleNamespace(num_replicate_key_value_heads=4)
     agent.rank = 7
@@ -107,7 +108,7 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
     state_pools = (object(), )
     cache_engine = SimpleNamespace(connector_kv_caches=target_rows)
     mtp_cache_engine = SimpleNamespace(connector_kv_caches=mtp_rows)
-    state_cache_engine = SimpleNamespace(connector_state_cache_pools=state_pools)
+    state_cache_engine = SimpleNamespace(compact_plan=None, connector_state_cache_pools=state_pools)
 
     class _OldConnector:
 
@@ -193,7 +194,7 @@ def test_build_cache_engine_registers_state_pools_with_connector(monkeypatch):
     row_mapping = {'kv': object()}
     state_pools = (object(), )
     cache_engine = SimpleNamespace(connector_kv_caches=row_mapping)
-    state_cache_engine = SimpleNamespace(connector_state_cache_pools=state_pools)
+    state_cache_engine = SimpleNamespace(compact_plan=None, connector_state_cache_pools=state_pools)
 
     class _Connector:
 
@@ -253,7 +254,7 @@ def test_build_cache_engine_propagates_registration_error(monkeypatch):
     dist_ctx = SimpleNamespace(attn_tp_group=SimpleNamespace(rank=3))
     monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: cache_engine)
     monkeypatch.setattr(agent_module, 'StateCacheEngine',
-                        lambda *args, **kwargs: SimpleNamespace(connector_state_cache_pools=()))
+                        lambda *args, **kwargs: SimpleNamespace(compact_plan=None, connector_state_cache_pools=()))
     monkeypatch.setattr(agent_module, 'build_kv_connector', lambda *args, **kwargs: _Connector())
     monkeypatch.setattr(agent_module, 'get_dist_manager',
                         lambda: SimpleNamespace(current_context=lambda: dist_ctx))
@@ -285,7 +286,7 @@ def test_build_cache_engine_propagates_later_initialization_error(monkeypatch):
     cache_engine = SimpleNamespace(connector_kv_caches={'kv': object()})
     dist_ctx = SimpleNamespace(attn_tp_group=SimpleNamespace(rank=3))
     monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: cache_engine)
-    monkeypatch.setattr(agent_module, 'StateCacheEngine', lambda *args, **kwargs: object())
+    monkeypatch.setattr(agent_module, 'StateCacheEngine', lambda *args, **kwargs: SimpleNamespace(compact_plan=None))
     monkeypatch.setattr(agent_module, 'build_kv_connector',
                         lambda *args, **kwargs: events.append('factory'))
     monkeypatch.setattr(agent_module, 'get_dist_manager',
@@ -557,7 +558,8 @@ def test_model_agent_dp_connector_only_step_finishes_after_rendezvous(monkeypatc
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 @pytest.mark.parametrize('tp', [1, 2])
-def test_decode_snapshot_mask_is_shared_across_tp_ranks(monkeypatch, tp):
+@pytest.mark.parametrize('compact', [False, True])
+def test_decode_snapshot_mask_is_shared_across_tp_ranks(monkeypatch, tp, compact):
     from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
@@ -578,11 +580,14 @@ def test_decode_snapshot_mask_is_shared_across_tp_ranks(monkeypatch, tp):
     monkeypatch.setattr(agent_module, 'get_dist_manager', lambda: SimpleNamespace(
         current_context=lambda: SimpleNamespace(dist_config=SimpleNamespace(attn_tp=tp),
                                                  attn_tp_group=SimpleNamespace(gpu_group=group))))
-    plan = torch.tensor([[0, 1], [256, 256], [1, 2], [3, 4]], device='cuda')
+    plan = torch.tensor([[0, 1], [256, 256], [1, 2], [21, 22]], device='cuda')
     cache_inputs = CacheCheckpointInputs(decode_save_plan=plan)
     inputs = SimpleNamespace(history_lengths=torch.tensor([254, 254], device='cuda'),
                              seq_length=torch.tensor([4, 4], device='cuda'),
-                             is_decoding=True)
+                             is_decoding=True, ssm_state_meta=None)
+    if compact:
+        inputs.ssm_state_meta = SimpleNamespace(
+            output_state_ids=torch.tensor([[9, 8, 7, 6], [5, 4, 3, 2]], device='cuda'))
     output = agent_module.BatchedOutputs(next_token_ids=torch.tensor([[7, 8, 9, 10], [7, 8, 9, 10]], device='cuda'),
                                          stopped=torch.tensor([True, False]),
                                          stop_pos=torch.tensor([0, -1], device='cuda'))
@@ -592,6 +597,7 @@ def test_decode_snapshot_mask_is_shared_across_tp_ranks(monkeypatch, tp):
         agent.cache_config = SimpleNamespace(prefix_cache_token_lookahead=1)
         agent.state_cache_engine = SimpleNamespace(copy_decode_slots=lambda plan, mask: copies.append(mask.clone()))
         agent._save_decode_checkpoints(cache_inputs, inputs, output if rank == 0 else None)
+        assert plan[2].tolist() == ([8, 4] if compact else [1, 2])
     assert [mask.tolist() for mask in copies] == [[False, True]] * tp
     assert output.to_cpu().to_numpy().to_tensor().decode_checkpoint_mask.tolist() == [False, True]
 
@@ -692,6 +698,7 @@ def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(mo
     )
 
     agent = agent_module.BaseModelAgent.__new__(agent_module.BaseModelAgent)
+    agent.ssm_state_cursor = None
     agent.rank = 0
     agent.kv_connector = _Connector()
     agent.spec_agent = SimpleNamespace(is_enabled=lambda: True,
@@ -710,6 +717,7 @@ def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(mo
     agent._push_output = lambda output: pytest.fail('unexpected output')
 
     inputs = SimpleNamespace(
+        ssm_state_meta=None,
         is_dummy=False,
         is_decoding=False,
         input_ids=torch.tensor([1]),
@@ -752,6 +760,11 @@ def test_release_shuts_down_connector_before_dropping_cache(monkeypatch):
     agent.cache_engine = cache_engine
     agent.state_cache_engine = object()
     agent.patched_model = object()
+    agent.cache_config.compact_state_capacity = object()
+    agent._background_task = None
+    agent.compact_state_plan = object()
+    agent.ssm_state_cursor = object()
+    agent.step_inputs = SimpleNamespace(ssm_state_cursor=agent.ssm_state_cursor)
     agent.reset_graph_runner = lambda: events.append('reset-graph')
     monkeypatch.setattr(agent_module.torch.cuda, 'empty_cache', lambda: events.append('empty-cache'))
 
@@ -761,6 +774,7 @@ def test_release_shuts_down_connector_before_dropping_cache(monkeypatch):
     assert agent.kv_connector is None
     assert agent.cache_engine is None
     assert agent.state_cache_engine is None
+    assert agent.compact_state_plan is agent.ssm_state_cursor is agent.step_inputs is None
 
 
 def test_wakeup_rebuilds_connector_with_kv_cache():

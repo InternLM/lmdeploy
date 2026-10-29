@@ -218,6 +218,9 @@ class SequenceMeta:
     prefill_save_last_only: bool = False
     prefix_cache_decode_save_first: bool = False
     prefix_cache_decode_state_interval: int = 0
+    # Zero uses checkpoint-cut scheduling; positive enables direct internal
+    # exports at this relative chunk stride (final boundaries always work).
+    compact_prefill_checkpoint_stride: int = 0
     prefix_cache_checkpoint_block_size: int = 0
     prefix_cache_token_lookahead: int = 0
 

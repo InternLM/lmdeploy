@@ -63,21 +63,20 @@ class DPForwardInputsMaker:
         self._ready_event = torch.cuda.Event()
         self._ready_event.record()
 
-        # other
-        self.make_dummy_meta = model_agent.make_dummy_meta
-
     def _make_dummy_forward_inputs(self):
         """Make dummy forward inputs."""
         is_decoding = self.cache_config.role != EngineRole.Prefill
         dist_config = self.dist_ctx.dist_config
         batch_size = 2 if dist_config.enable_microbatch else 1
         batch_size = min(self.cache_config.max_batches, batch_size)
+        # KV wakeup can replace the agent metadata after empty initialization.
+        meta = self.model_agent.make_dummy_meta
         model_inputs = self.inputs_strategy.make_dummy(batch_size,
                                                        is_decoding,
                                                        device=self.device,
                                                        vocab_size=self.model_config.vocab_size,
-                                                       meta=self.make_dummy_meta)
-        extra_inputs = self.inputs_strategy.make_dummy_extra_inputs(model_inputs, meta=self.make_dummy_meta)
+                                                       meta=meta)
+        extra_inputs = self.inputs_strategy.make_dummy_extra_inputs(model_inputs, meta=meta)
         return_logits = self.model_agent.spec_agent.is_enabled()
         forward_inputs = dict(inputs=model_inputs, extra_inputs=extra_inputs, return_logits=return_logits)
         return forward_inputs

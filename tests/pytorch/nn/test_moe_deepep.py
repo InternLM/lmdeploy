@@ -667,13 +667,17 @@ def test_bf16_ep_build_and_forward(monkeypatch, fp32_acc, output_scale, decode):
         calls.append((args, kwargs))
         return SimpleNamespace(forward=forward)
 
+    def split_inputs(x, w, i, mask_padding=False):
+        assert mask_padding is decode
+        return x, w, i, None
+
     monkeypatch.setitem(sys.modules, 'deep_gemm', SimpleNamespace())
     monkeypatch.setattr(default, '_build_deepep_moe', build)
     monkeypatch.setattr(td, 'use_deepep', True)
     monkeypatch.setattr(td.DeepEPBuffer, 'set_explicitly_destroy', lambda: None)
     monkeypatch.setattr(default, 'get_deepep_state', lambda: SimpleNamespace(enable=lambda: None))
     monkeypatch.setattr(default, 'register_piecewise_graph_impl', lambda impl: None)
-    monkeypatch.setattr(default, 'split_inputs_by_attn_tp', lambda x, w, i: (x, w, i, None))
+    monkeypatch.setattr(default, 'split_inputs_by_attn_tp', split_inputs)
     monkeypatch.setattr(default, 'gather_outputs_by_attn_tp', lambda x, size: x)
     monkeypatch.setattr(default, 'get_step_ctx_manager', lambda: SimpleNamespace(
         current_context=lambda: SimpleNamespace(global_is_decoding=lambda: decode)))
