@@ -607,6 +607,10 @@ class Scheduler:
         for seq in seqs:
             if seq.status == MessageStatus.RUNNING:
                 seq.state.deactivate()
+            # A prefill retry can roll back retained blocks before another
+            # request reclaims them through the eviction helper.
+            if self.block_trie.enabled or self.kv_connector is not None:
+                seq.prefix_cache.suppress_match_stats = True
             self.kv_load_coordinator.release_tracking(seq)
             seq.state.evict()
 

@@ -351,35 +351,55 @@ def test_hybrid_hit_rate_counts_admitted_lookups_without_recounting_load_complet
 
 
 @pytest.mark.parametrize('apc', [False, True])
-@pytest.mark.parametrize('remote_hit', [0, 16])
-def test_hybrid_remote_recompute_does_not_count_hits_again(make_scheduler, apc, remote_hit):
-    scheduler, connector = make_scheduler(apc=apc, remote_hit=0, num_gpu_blocks=6, state_budget=0)
+@pytest.mark.parametrize('mtp', [False, True])
+@pytest.mark.parametrize('initial_hit', [0, 16])
+@pytest.mark.parametrize(('remote_hit', 'load_success'), [(0, True), (8, True), (16, True), (16, False)])
+def test_hybrid_recompute_preserves_usage_without_recounting_hits(
+        make_scheduler, apc, mtp, initial_hit, remote_hit, load_success):
+    scheduler, connector = make_scheduler(
+        apc=apc, mtp=mtp, remote_hit=initial_hit, num_gpu_blocks=6, state_budget=0)
     seq = scheduler.add_session(1).add_sequence(torch.arange(21))
-    assert scheduler.schedule(is_prefill=True).running == [seq]
-    seq.set_step(4)
+    output = scheduler.schedule(is_prefill=True)
+    if initial_hit:
+        assert output.running == []
+        connector.build_connector_meta(output)
+        scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+        output = scheduler.schedule(is_prefill=True)
+    assert output.running == [seq]
+    assert seq.cached_tokens == initial_hit
+    seq.set_step(min(seq.num_history_ids + 4, seq.input_end_pos))
     seq.state.evict()
     # Exercise real eviction with local caching disabled as well: the flag
     # must be set by paging, not supplied by the test.
     pressure = scheduler.add_session(2).add_sequence(torch.arange(24) + 100)
     assert scheduler.eviction_helper.try_make_capacity_for(pressure, [seq], 0)
     assert seq.prefix_cache.suppress_match_stats
+    assert seq.cached_tokens == initial_hit
     scheduler.end_session(2)
 
     connector.client.lookup.return_value = remote_hit
     output = scheduler.schedule(is_prefill=True)
     if remote_hit:
+        assert output.running == []
         connector.build_connector_meta(output)
-        scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
-        assert seq.cached_tokens == 0
+        scheduler.update_connector_output(KVConnectorOutput(
+            finished_receiving={seq.seq_id}, failed_receiving=set() if load_success else {seq.seq_id}))
+        assert seq.num_history_ids == (remote_hit if load_success else 0)
+        assert seq.cached_tokens == initial_hit
         assert scheduler.schedule(is_prefill=True).running == [seq]
     else:
         assert output.running == [seq]
-    assert seq.cached_tokens == 0
+    assert seq.cached_tokens == initial_hit
     assert not seq.prefix_cache.suppress_match_stats
     assert scheduler.block_trie.stats.num_query_tokens == (21 if apc else 0)
     assert scheduler.block_trie.stats.num_hit_tokens == 0
     assert scheduler.schedule_metrics.external_prefix_cache_queries == 21
-    assert scheduler.schedule_metrics.external_prefix_cache_hits == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == initial_hit
+
+    seq.state.stop()
+    seq.update_token_ids(torch.tensor([22]))
+    assert seq.cached_tokens == 0
+    assert not seq.prefix_cache.suppress_match_stats
 
 
 def test_hybrid_load_waits_for_pinned_local_restore_before_reusing_checkpoint_slot(make_scheduler):
