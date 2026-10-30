@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import json
 
+import pytest
+
 from lmdeploy.deepseek_v4_encoding import (
     REASONING_EFFORT_MAX,
     bos_token,
@@ -321,3 +323,10 @@ def test_deepseek_v4_response_parser_reasoning_effort_does_not_enable_thinking()
     assert tool_emitted is False
     assert delta.content == 'hello'
     assert delta.reasoning_content is None
+
+
+def test_deepseek_v4_parse_completion_text_malformed_raises_value_error():
+    with pytest.raises(ValueError, match='missing EOS token'):
+        parse_message_from_completion_text('partial answer, no terminal token', thinking_mode='chat')
+    with pytest.raises(ValueError, match='missing </think>'):
+        parse_message_from_completion_text(f'no end of thinking{eos_token}', thinking_mode='thinking')
