@@ -260,7 +260,8 @@ class SSMStateCheckpointLifecycle(StateCheckpointLifecycle):
         return tuple(reservations)
 
     def reserve_decode_snapshot(self, seq, step, *, access_id):
-        """Reserve a snapshot, reclaiming old checkpoints under unit pressure."""
+        """Reserve a snapshot, reclaiming old checkpoints under unit
+        pressure."""
         owner = self._state_manager
         bank = owner.bank_for(seq)
         self.collect_completed()
