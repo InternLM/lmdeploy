@@ -22,8 +22,8 @@ from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
 
 
 def _scheduler(local=True, store=False, *, speculative=True, alignment=128, interval=64,
-               save_first=True, last_only=True, compact=False):
-    cache = CacheConfig(max_batches=2, block_size=64, num_cpu_blocks=0, num_gpu_blocks=32,
+               save_first=True, last_only=True, compact=False, num_gpu_blocks=32):
+    cache = CacheConfig(max_batches=2, block_size=64, num_cpu_blocks=0, num_gpu_blocks=num_gpu_blocks,
                         num_state_caches=16, states_shapes=[((2,), torch.float32)],
                         enable_prefix_caching=local, prefix_cache_state_budget=8,
                         prefix_cache_token_lookahead=int(speculative), prefix_cache_block_aligned=True,
@@ -38,6 +38,133 @@ def _scheduler(local=True, store=False, *, speculative=True, alignment=128, inte
     return Scheduler(SchedulerConfig(max_batches=2, max_session_len=4096), cache,
                      seq_meta=SequenceMeta(64, strategy=strategy),
                      kv_connector=MooncakeStoreScheduler(cache) if store else None)
+
+
+def _full_compact_checkpoint_pool(store=False, *, complete=True):
+    scheduler = _scheduler(store=store, compact=True, alignment=64, interval=1024,
+                           last_only=False, num_gpu_blocks=128)
+    owner = scheduler.state_manager
+    count = owner.capacity.num_units - 1 - owner.capacity.bank_width
+    seq = scheduler.add_session(0).add_sequence(list(range((count + 1) * 64 - 2)))
+    owner.allocate(seq)
+    bank = owner.bank_for(seq)
+    assert owner.promote_to_decode(bank)
+    scheduler.block_manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    nodes = []
+    for step in range(64, (count + 1) * 64, 64):
+        assert scheduler.state_checkpoints.reserve_save(seq, step=step) > 0
+        node = seq.prefix_cache.pending_save.node
+        reference = node.state_checkpoint.state_reference
+        access = owner.submit_prefill((bank,), checkpoints=(reference,))
+        assert scheduler.state_checkpoints.publish_save(seq)
+        if complete:
+            owner.acknowledge(access.access_id)
+        nodes.append(node)
+    assert owner.get_num_free_optional() == 0
+    seq._seq_meta.prefill_save_last_only = True
+    seq.update_token_ids([50], draft_token_ids=[51, 52, 53], mode=UpdateTokenMode.PREFILL)
+    scheduler.block_manager.allocate(seq, prealloc_size=8)
+    return scheduler, seq, nodes
+
+
+@pytest.mark.parametrize('store', [False, True])
+@pytest.mark.parametrize('retained_reader', [False, True])
+def test_compact_decode_reclaims_full_pool_and_next_request_hits(store, retained_reader):
+    scheduler, seq, nodes = _full_compact_checkpoint_pool(store)
+    owner = scheduler.state_manager
+    reader = owner.retain(nodes[0].state_checkpoint.state_reference, 'request') if retained_reader else None
+    access = owner.submit_decode((owner.bank_for(seq),))
+    reserved = scheduler.decode_checkpoints.prepare(
+        [seq], None, SimpleNamespace(max_q_seqlen=4), access_id=access.access_id)
+    assert reserved is not None
+    batch_id, plan = reserved
+    step = seq.input_end_pos + 2
+    assert plan[1].tolist() == [step]
+    assert nodes[0].state_checkpoint is None
+    if reader is not None:
+        # Dropping the first trie reference cannot recycle a reader's unit.
+        assert reader.unit_id in owner._units and reader.unit_id != plan[3].item()
+        assert nodes[1].state_checkpoint is None
+    owner.acknowledge(access.access_id)
+    seq.update_token_ids([51, 52], draft_token_ids=[53, 54, 55], mode=UpdateTokenMode.DECODE)
+    scheduler.decode_checkpoints.finish(batch_id, torch.tensor([True]))
+    assert seq.prefix_cache.decode_checkpoint_node.state_checkpoint.step == step
+    if store:
+        saved = scheduler.build_connector_meta([]).save_requests[0]
+        assert saved.state.boundary_tokens == step
+        assert saved.state.unit_id == plan[3].item()
+        scheduler.update_connector_output(KVConnectorOutput(completed_save_ids={saved.save_id}))
+        assert owner._store_refs == 0 and not scheduler.kv_save_coordinator.has_pending()
+    repeat = scheduler.add_session(1).add_sequence(seq.history_cache[:seq.num_valid_ids].tolist() + [99])
+    scheduler.block_trie.match(repeat)
+    assert repeat.num_history_ids == step
+    if reader is not None:
+        owner.release_reference(reader)
+        assert reader.unit_id not in owner._units
+
+
+def test_compact_decode_pressure_preserves_previous_checkpoint_until_accepted():
+    scheduler, seq, _ = _full_compact_checkpoint_pool()
+    owner = scheduler.state_manager
+    checkpoints = scheduler.state_checkpoints
+    # Establish an accepted decode checkpoint before applying replacement pressure.
+    assert checkpoints.evict(1) == 1
+    access = owner.submit_decode((owner.bank_for(seq),))
+    batch_id, _ = scheduler.decode_checkpoints.prepare(
+        [seq], None, SimpleNamespace(max_q_seqlen=4), access_id=access.access_id)
+    owner.acknowledge(access.access_id)
+    seq.update_token_ids([51, 52], draft_token_ids=[53, 54, 55], mode=UpdateTokenMode.DECODE)
+    scheduler.decode_checkpoints.finish(batch_id, torch.tensor([True]))
+    old_node = seq.prefix_cache.decode_checkpoint_node
+    old = old_node.state_checkpoint
+    old.last_access_time = 0  # The previous checkpoint would otherwise be the LRU victim.
+    others = [node for node in scheduler.block_trie._checkpoint_index.unique_nodes() if node is not old_node]
+    for node in others:
+        node.state_checkpoint.pin_count += 1
+    seq.update_token_ids([51] * 1022, draft_token_ids=[52, 53, 54], mode=UpdateTokenMode.DECODE)
+    scheduler.block_manager.allocate(seq, prealloc_size=8)
+    access = owner.submit_decode((owner.bank_for(seq),))
+    assert scheduler.decode_checkpoints.prepare(
+        [seq], None, SimpleNamespace(max_q_seqlen=4), access_id=access.access_id) is None
+    assert old_node.state_checkpoint is old and old.state_reference.active
+    assert owner.get_num_free_optional() == 0 and not scheduler.decode_checkpoints._batches
+    # One unrelated checkpoint becomes evictable; the previous decode value must survive a rejected copy.
+    others[0].state_checkpoint.pin_count -= 1
+    reserved = scheduler.decode_checkpoints.prepare(
+        [seq], None, SimpleNamespace(max_q_seqlen=4), access_id=access.access_id)
+    assert reserved is not None
+    batch_id, plan = reserved
+    assert plan[1].tolist() == [old.step + 1024]
+    assert others[0].state_checkpoint is None and old_node.state_checkpoint is old
+    owner.acknowledge(access.access_id)
+    scheduler.decode_checkpoints.finish(batch_id, torch.tensor([False]))
+    assert old_node.state_checkpoint is old and old.state_reference.active
+    assert seq.prefix_cache.last_decode_save_step == old.step
+    assert plan[3].item() not in owner._units and owner.get_num_free_optional() == 1
+    for node in others[1:]:
+        node.state_checkpoint.pin_count -= 1
+
+
+def test_compact_decode_pressure_waits_for_checkpoint_producer_completion():
+    scheduler, seq, nodes = _full_compact_checkpoint_pool(complete=False)
+    owner = scheduler.state_manager
+    access = owner.submit_decode((owner.bank_for(seq),))
+    assert scheduler.decode_checkpoints.prepare(
+        [seq], None, SimpleNamespace(max_q_seqlen=4), access_id=access.access_id) is None
+    assert all(node.state_checkpoint is not None for node in nodes)
+    owner.acknowledge(nodes[0].state_checkpoint.state_reference.pending_producer.access_id)
+    reserved = scheduler.decode_checkpoints.prepare(
+        [seq], None, SimpleNamespace(max_q_seqlen=4), access_id=access.access_id)
+    assert reserved is not None
+    batch_id, plan = reserved
+    assert nodes[0].state_checkpoint is None
+    assert all(node.state_checkpoint.state_reference.producing for node in nodes[1:])
+    owner.acknowledge(access.access_id)
+    scheduler.decode_checkpoints.finish(batch_id, torch.tensor([False]))
+    assert plan[3].item() not in owner._units
+    for node in nodes[1:]:
+        owner.acknowledge(node.state_checkpoint.state_reference.pending_producer.access_id)
 
 
 @pytest.mark.parametrize(('local', 'store'), [(True, False), (False, True), (True, True)])

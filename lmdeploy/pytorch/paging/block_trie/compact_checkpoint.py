@@ -259,6 +259,21 @@ class SSMStateCheckpointLifecycle(StateCheckpointLifecycle):
             raise
         return tuple(reservations)
 
+    def reserve_decode_snapshot(self, seq, step, *, access_id):
+        """Reserve a snapshot, reclaiming old checkpoints under unit pressure."""
+        owner = self._state_manager
+        bank = owner.bank_for(seq)
+        self.collect_completed()
+        old_node = seq.prefix_cache.decode_checkpoint_node
+        while owner.get_num_free_optional() == 0:
+            # Do not evict this request's last accepted checkpoint to make room
+            # for an unconfirmed replacement.
+            # Readers/Store may retain an evicted unit, so recheck physical capacity.
+            candidates = (node for node in self._index.unique_nodes() if node is not old_node)
+            if self._evict_checkpoints(candidates, 1) == 0:
+                return None
+        return owner.reserve_decode_snapshot(access_id, bank, step)
+
     def publish_decode_snapshot(self, seq, step, reference):
         """Publish an accepted exact-boundary unit after its forward
         completes."""

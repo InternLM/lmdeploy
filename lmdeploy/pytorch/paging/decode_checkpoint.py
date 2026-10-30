@@ -94,9 +94,9 @@ class DecodeCheckpointCoordinator:
                          and not seq.prefix_cache.decode_store_save_pending)
                 if not local and not store:
                     continue
-                if owner.get_num_free_optional() == 0:
+                reference = checkpoints.reserve_decode_snapshot(seq, step, access_id=access_id)
+                if reference is None:
                     continue
-                reference = owner.reserve_decode_snapshot(access_id, owner.bank_for(seq), step)
                 blocks = seq.logical_blocks.get_real_blocks()[:step // self.block_trie.block_size].copy()
                 self.block_manager.pin_logical_blocks(blocks)
                 snapshots.append(_Snapshot(seq, seq.input_end_pos, step, int(seq.logical_state),
