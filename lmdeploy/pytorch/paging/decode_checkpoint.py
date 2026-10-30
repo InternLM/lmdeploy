@@ -72,7 +72,9 @@ class DecodeCheckpointCoordinator:
             if seq.logical_state <= 0:
                 continue
             if inputs is not None:
-                minimum = maximum = seq.input_end_pos
+                # Prefill retains only its final state. Recompute can extend
+                # beyond the original prompt without changing input_end_pos.
+                minimum = maximum = seq.num_all_ids
             else:
                 minimum = seq.num_history_ids + 1
                 # The previous forward may still be running. num_all_ids
@@ -83,14 +85,15 @@ class DecodeCheckpointCoordinator:
             if step is None:
                 continue
             pending = seq.prefix_cache.pending_save
+            # Embedding-only inputs do not yet have a Store content identity.
+            store = self.connector is not None and not seq.history_embeddings
             if compact:
                 owner = self.state_manager
                 if (owner.capacity.max_update_tokens == 1 and not seq._seq_meta.prefix_cache_decode_save_first
                         and not seq._seq_meta.enable_mooncake_store):
                     continue  # InputsMaker retains the direct-output AR interval path.
-                local = (self.block_trie.enabled and owner.capacity.checkpoint_budget > 0
-                         and not (pending.is_pending and pending.step == step))
-                store = (self.connector is not None and owner.get_num_free_store_saves() > 0
+                local = self.block_trie.enabled and not (pending.is_pending and pending.step == step)
+                store = (store and owner.get_num_free_store_saves() > 0
                          and not seq.prefix_cache.decode_store_save_pending)
                 if not local and not store:
                     continue
@@ -107,7 +110,7 @@ class DecodeCheckpointCoordinator:
                 continue
             local_slot = (-1 if pending.is_pending and pending.step == step
                           else checkpoints.reserve_decode_snapshot())
-            store_slot = -1 if self.connector is None else self.connector.reserve_decode_snapshot(seq)
+            store_slot = self.connector.reserve_decode_snapshot(seq) if store else -1
             if local_slot < 0 and store_slot < 0:
                 continue
             blocks = seq.logical_blocks.get_real_blocks()[:step // self.block_trie.block_size].copy()

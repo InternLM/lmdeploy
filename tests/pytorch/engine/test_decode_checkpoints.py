@@ -15,17 +15,18 @@ from lmdeploy.pytorch.kv_connector import KVConnectorOutput
 from lmdeploy.pytorch.kv_connector.base import KVConnectorOutputAggregator
 from lmdeploy.pytorch.kv_connector.mooncake.store.scheduler import MooncakeStoreScheduler
 from lmdeploy.pytorch.long_context import get_decode_save_step
-from lmdeploy.pytorch.messages import SequenceMeta, UpdateTokenMode
+from lmdeploy.pytorch.messages import InputEmbeddings, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
 from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
 
 
 def _scheduler(local=True, store=False, *, speculative=True, alignment=128, interval=64,
-               save_first=True, last_only=True, compact=False, num_gpu_blocks=32):
+               save_first=True, last_only=True, compact=False, num_gpu_blocks=32,
+               state_budget=8, num_state_caches=16):
     cache = CacheConfig(max_batches=2, block_size=64, num_cpu_blocks=0, num_gpu_blocks=num_gpu_blocks,
-                        num_state_caches=16, states_shapes=[((2,), torch.float32)],
-                        enable_prefix_caching=local, prefix_cache_state_budget=8,
+                        num_state_caches=num_state_caches, states_shapes=[((2,), torch.float32)],
+                        enable_prefix_caching=local, prefix_cache_state_budget=state_budget,
                         prefix_cache_token_lookahead=int(speculative), prefix_cache_block_aligned=True,
                         prefill_save_alignment=alignment, prefill_save_last_only=last_only,
                         prefix_cache_decode_save_first=save_first, prefix_cache_decode_state_interval=interval,
@@ -555,6 +556,124 @@ def test_first_checkpoint_can_use_final_prefill_but_not_an_intermediate_chunk(sp
     assert seq.prefix_cache.last_decode_save_step == 256
     inputs.is_dummy = True
     assert coordinator.prepare([seq], inputs, None) is None
+
+
+@pytest.mark.parametrize('compact', [False, True])
+@pytest.mark.parametrize('speculative', [False, True])
+@pytest.mark.parametrize(('local', 'store'), [(True, False), (False, True), (True, True)])
+@pytest.mark.parametrize('end', [270, 320])
+def test_recomputed_prefill_saves_only_its_retained_final_state(compact, speculative, local, store, end):
+    scheduler = _scheduler(local, store, compact=compact, speculative=speculative, alignment=64)
+    seq = scheduler.add_session(0).add_sequence(list(range(256)))
+    # The first save was missed. Preemption later replays accepted generated
+    # tokens as well as the prompt, but must preserve the original turn end.
+    seq.update_token_ids([50], draft_token_ids=[], mode=UpdateTokenMode.PREFILL)
+    seq.update_token_ids([51] * (end - 257), draft_token_ids=[], mode=UpdateTokenMode.DECODE)
+    seq.set_step(128)
+    assert seq.input_end_pos == 256 and seq.num_all_ids == end
+    owner = scheduler.state_manager
+    owner.allocate(seq)
+    scheduler.block_manager.allocate(seq)
+    access = owner.submit_prefill((owner.bank_for(seq),)) if compact else None
+    reserved = scheduler.decode_checkpoints.prepare(
+        [seq], SimpleNamespace(is_dummy=False, is_chunk=False), None,
+        access_id=access.access_id if access is not None else None)
+    if access is not None:
+        owner.acknowledge(access.access_id)
+    seq.update_token_ids([52], draft_token_ids=[], mode=UpdateTokenMode.PREFILL)
+    if end == 270:
+        assert reserved is None
+        assert seq.prefix_cache.last_decode_save_step == -1
+        assert seq.prefix_cache.decode_checkpoint_node is None
+        assert not scheduler.kv_save_coordinator.has_pending()
+    else:
+        batch_id, plan = reserved
+        assert plan[1].tolist() == [end] * plan.size(1)
+        scheduler.decode_checkpoints.finish(batch_id, torch.ones(plan.size(1), dtype=torch.bool))
+        if local:
+            assert seq.prefix_cache.decode_checkpoint_node.state_checkpoint.step == end
+        if store:
+            saved = scheduler.build_connector_meta([]).save_requests[0]
+            assert saved.state.boundary_tokens == end
+            scheduler.update_connector_output(KVConnectorOutput(completed_save_ids={saved.save_id}))
+        assert seq.prefix_cache.last_decode_save_step == end
+    scheduler.shutdown()
+
+
+@pytest.mark.parametrize('compact', [False, True])
+@pytest.mark.parametrize('local', [False, True])
+@pytest.mark.parametrize('prefill', [False, True])
+def test_embedding_inputs_skip_store_decode_snapshot(compact, local, prefill):
+    scheduler = _scheduler(local, store=True, compact=compact, alignment=64)
+    seq = scheduler.add_session(0).add_sequence(
+        list(range(256 if prefill else 254)),
+        input_embeddings=[InputEmbeddings(torch.zeros(1, 1).numpy(), 0, 1)])
+    owner = scheduler.state_manager
+    owner.allocate(seq)
+    if prefill:
+        inputs, delta = SimpleNamespace(is_dummy=False, is_chunk=False), None
+        access = owner.submit_prefill((owner.bank_for(seq),)) if compact else None
+    else:
+        seq.update_token_ids([50], draft_token_ids=[51, 52, 53], mode=UpdateTokenMode.PREFILL)
+        inputs, delta = None, SimpleNamespace(max_q_seqlen=4)
+        if compact:
+            assert owner.promote_to_decode(owner.bank_for(seq))
+        access = owner.submit_decode((owner.bank_for(seq),)) if compact else None
+    scheduler.block_manager.allocate(seq, prealloc_size=8)
+    reserved = scheduler.decode_checkpoints.prepare(
+        [seq], inputs, delta, access_id=access.access_id if access is not None else None)
+    if access is not None:
+        owner.acknowledge(access.access_id)
+    seq.update_token_ids([51] if prefill else [51, 52], draft_token_ids=[53, 54, 55],
+                         mode=UpdateTokenMode.PREFILL if prefill else UpdateTokenMode.DECODE)
+    if local:
+        batch_id, plan = reserved
+        assert plan.size(1) == 1
+        scheduler.decode_checkpoints.finish(batch_id, torch.tensor([True]))
+        assert seq.prefix_cache.decode_checkpoint_node.state_checkpoint.step == 256
+    else:
+        assert reserved is None
+    assert not scheduler.kv_connector._ready_decode_saves
+    assert not scheduler.kv_save_coordinator.has_pending()
+    assert not seq.prefix_cache.decode_store_save_pending
+    if compact:
+        assert owner._store_refs == 0
+    else:
+        assert scheduler.kv_connector._state_slots.get_num_free() == 2
+    scheduler.shutdown()
+
+
+@pytest.mark.parametrize(('speculative', 'save_first'), [(False, True), (True, True), (True, False)])
+def test_compact_decode_borrows_idle_capacity_with_default_budget(speculative, save_first):
+    scheduler = _scheduler(compact=True, speculative=speculative, save_first=save_first,
+                           alignment=64, interval=64, state_budget=0, num_state_caches=None)
+    seq = scheduler.add_session(0).add_sequence(list(range(190)))
+    owner = scheduler.state_manager
+    assert owner.capacity.checkpoint_budget == 0
+    assert owner.capacity.request_slots == scheduler.cache_config.max_batches + 2
+    owner.allocate(seq)
+    bank = owner.bank_for(seq)
+    assert owner.promote_to_decode(bank)
+    draft = [51, 52, 53] if speculative else []
+    seq.update_token_ids([50], draft_token_ids=draft, mode=UpdateTokenMode.PREFILL)
+    for step in (192, 256):
+        seq.update_token_ids([51] * (step - 1 - seq.num_history_ids), draft_token_ids=draft,
+                             mode=UpdateTokenMode.DECODE)
+        scheduler.block_manager.allocate(seq, prealloc_size=8)
+        assert owner.get_num_free_optional() > 0
+        access = owner.submit_decode((bank,))
+        batch_id, plan = scheduler.decode_checkpoints.prepare(
+            [seq], None, SimpleNamespace(max_q_seqlen=1 + len(draft)), access_id=access.access_id)
+        assert plan[1].tolist() == [step]
+        owner.acknowledge(access.access_id)
+        seq.update_token_ids([52], draft_token_ids=draft, mode=UpdateTokenMode.DECODE)
+        scheduler.decode_checkpoints.finish(batch_id, torch.tensor([True]))
+        assert seq.prefix_cache.last_decode_save_step == step
+        assert seq.prefix_cache.decode_checkpoint_node.state_checkpoint.step == step
+    repeat = scheduler.add_session(1).add_sequence(seq.history_cache[:seq.num_valid_ids].tolist() + [99])
+    scheduler.block_trie.match(repeat)
+    assert repeat.num_history_ids == 256
+    scheduler.shutdown()
 
 
 def test_first_checkpoint_retries_after_state_capacity_recovers():

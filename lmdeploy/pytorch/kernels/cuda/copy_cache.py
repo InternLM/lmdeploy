@@ -93,6 +93,9 @@ def _decode_save_mask_kernel(plan, history, query_lengths, tokens, stop_pos, mas
     computed = start + (accepted if IS_DECODING else query_length)
     valid = ((accepted > 0) & (boundary > start) & (boundary <= computed)
              & (boundary <= start + query_length) & (boundary + LOOKAHEAD <= computed + 1))
+    if not IS_DECODING:
+        # Prefill exposes one final state, not every intermediate token state.
+        valid = valid & (boundary == computed)
     tl.store(mask + index, valid)
 
 

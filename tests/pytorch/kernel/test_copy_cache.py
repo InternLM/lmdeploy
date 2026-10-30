@@ -55,5 +55,42 @@ def test_decode_save_mask_checks_retention_acceptance_and_stop(is_decoding):
     rows = torch.arange(7, device='cuda')
     plan = torch.stack((rows, torch.full_like(rows, 64), rows, rows + 7))
     mask = decode_save_mask(plan, history, lengths, tokens, stops, is_decoding=is_decoding, lookahead=1)
-    expected = [False, True, False, True, False, False, False] if is_decoding else [True] * 4 + [False, False, True]
+    expected = [False, True, False, True, False, False, False] if is_decoding else [False] * 6 + [True]
     assert mask.tolist() == expected
+
+
+@pytest.mark.parametrize('graph', [False, True])
+@pytest.mark.parametrize('lookahead', [0, 1])
+def test_recomputed_prefill_snapshot_copies_only_the_final_state(graph, lookahead):
+    history = torch.tensor([128, 128, 0], device='cuda')
+    lengths = torch.tensor([142, 192, 256], device='cuda')
+    tokens = torch.tensor([[7], [8], [9]], device='cuda')
+    stops = torch.full((3,), -1, device='cuda')
+    # Replaying a 256-token prompt through token 270 has only the 270 state.
+    # A replay ending at 320 and an initial 256-token prefill remain saveable.
+    plan = torch.tensor([[0, 0, 1, 2], [256, 270, 320, 256], [1, 1, 2, 3], [4, 5, 6, 7]], device='cuda')
+    cache = torch.full((8, 32), -1., device='cuda')
+    cache[1].fill_(270)
+    cache[2].fill_(320)
+    cache[3].fill_(256)
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+
+    def save():
+        mask = decode_save_mask(plan, history, lengths, tokens, stops, is_decoding=False, lookahead=lookahead)
+        copy_cache_blocks(cache, 0, plan[2], plan[3], 1, mask)
+        return mask
+
+    with torch.cuda.stream(stream):
+        mask = save()
+        if graph:
+            captured = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(captured, stream=stream):
+                mask = save()
+            cache[4:].fill_(-1)
+            captured.replay()
+        cache[1:4].fill_(999)
+    torch.cuda.current_stream().wait_stream(stream)
+    assert mask.tolist() == [False, True, True, True]
+    expected = torch.tensor([-1., 270., 320., 256.], device='cuda')[:, None].expand_as(cache[4:])
+    torch.testing.assert_close(cache[4:], expected, rtol=0, atol=0)
