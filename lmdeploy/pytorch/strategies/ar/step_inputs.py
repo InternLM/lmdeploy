@@ -160,7 +160,7 @@ class ARStepInputs(StepInputs):
         """Add prefill result into accumulated decode state."""
         # convert prefill inputs → first decode step
         inputs = get_model_inputs_next_decoding(
-            inputs, next_token_ids, max_q_seqlen=1, model_metas=model_metas)
+            inputs, next_token_ids, max_q_seqlen=1, model_metas=model_metas, ssm_state_cursor=self.ssm_state_cursor)
 
         # advance sampling state
         stopping_criteria = stopping_criteria.clone()
@@ -200,7 +200,8 @@ class ARStepInputs(StepInputs):
         # advance model state
         model_inputs.is_decoding = True
         model_inputs.model_metas = model_metas
-        self.model_inputs = model_inputs.step(next_token_ids, model_inputs.seq_length)
+        self.model_inputs = model_inputs.step(next_token_ids, model_inputs.seq_length,
+                                              ssm_state_cursor=self.ssm_state_cursor)
         self.extra_inputs = extra_inputs
 
         # advance sampling state

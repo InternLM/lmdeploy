@@ -15,11 +15,12 @@ from torch.profiler import record_function
 from lmdeploy.messages import ScheduleMetrics
 from lmdeploy.pytorch import envs as _envs
 
-from ..config import CacheConfig, SchedulerConfig
+from ..config import CacheConfig, SchedulerConfig, SSMStateCapacity
 from ..kv_connector import KVConnectorStepInput
 from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, SequenceManager, SequenceMeta
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
+from .compact_state import SSMStateManager
 from .eviction_helper import build_eviction_helper
 from .kv_load_coordinator import KVLoadCoordinator
 from .kv_save_coordinator import KVSaveCoordinator
@@ -75,6 +76,17 @@ class Scheduler:
         seq_meta: SequenceMeta | None = None,
         kv_connector: 'KVConnectorBase | None' = None,
     ) -> None:
+        compact_capacity = cache_config.compact_state_capacity
+        if compact_capacity is not None:
+            if cache_config.use_mooncake_store or kv_connector is not None:
+                if (not cache_config.use_mooncake_store
+                        or not callable(getattr(kv_connector, 'bind_compact_state_manager', None))):
+                    raise NotImplementedError('Compact scheduler requires the configured Store scheduler connector.')
+            expected = SSMStateCapacity.from_state_slots(
+                cache_config.num_state_caches, cache_config.prefix_cache_state_budget,
+                cache_config.num_store_state_caches, compact_capacity.max_update_tokens)
+            if not cache_config.states_shapes or compact_capacity != expected:
+                raise ValueError('Compact scheduler capacity must preserve the stateful request geometry.')
         self.scheduler_config = scheduler_config
         self.cache_config = cache_config
         self.sessions: dict[int, SchedulerSession] = OrderedDict()
@@ -92,10 +104,19 @@ class Scheduler:
             if cache_config.enable_prefix_caching and cache_config.prefix_cache_block_aligned else 0)
         seq_meta.prefix_cache_token_lookahead = (cache_config.prefix_cache_token_lookahead
                                                if cache_config.enable_prefix_caching else 0)
+        # Selected compact GDN/KDA backends export recurrent state at relative
+        # 64-token chunk boundaries; conv supports these same boundaries.
+        seq_meta.compact_prefill_checkpoint_stride = (
+            64 if compact_capacity is not None and (cache_config.enable_prefix_caching
+                                                   or cache_config.num_store_state_caches) else 0)
         self.seq_meta = seq_meta
         self.seq_manager = SequenceManager(seq_meta)
 
         self.state_manager = build_state_manager(self.cache_config)
+        if compact_capacity is not None and kv_connector is not None:
+            # The connector is constructed first; paging owns the only unit
+            # allocator. Bind before creating any admission/lifecycle consumer.
+            kv_connector.bind_compact_state_manager(self.state_manager)
         self.block_manager = build_block_manager(cache_config)
         transfer_config = cache_config.kv_transfer_config
         # A producer-only connector still needs the save path below, but must
@@ -167,11 +188,16 @@ class Scheduler:
         harmless and prevents any later scheduling path from starting new external work.
         """
         connector = self.kv_connector
+        # Fail closed before dropping paging records if compact Store still
+        # owns a destination. Shutdown is not itself a worker-drain proof.
+        compact = self.cache_config.compact_state_capacity is not None
+        if compact and connector is not None:
+            connector.shutdown()
         self.kv_connector = None
         self.sequence_lifecycle.disable_connector()
         self.kv_load_coordinator.shutdown()
         self.kv_save_coordinator.clear()
-        if connector is not None:
+        if not compact and connector is not None:
             connector.shutdown()
 
     @property
@@ -357,6 +383,13 @@ class Scheduler:
             if seq.status != MessageStatus.RUNNING:
                 valid_mask[idx] = False
                 continue
+            if isinstance(self.state_manager, SSMStateManager):
+                # Prefill admission reserved expansion capacity. Do this even
+                # when KV needs no new block; masking a live promotion failure
+                # would send the completed prefill down the eviction path.
+                bank = self.state_manager.bank_for(seq)
+                if not self.state_manager.promote_to_decode(bank):
+                    raise RuntimeError('Admitted compact decode expansion lost its reserved capacity.')
             num_required_blocks = self.block_manager.num_required_blocks(seq, num_required_tokens)
             if num_required_blocks == 0:
                 continue
@@ -436,6 +469,7 @@ class Scheduler:
         running: SeqList,
         connector_token_lens: tuple[int, ...] = (),
         connector_state_ids: tuple[int, ...] = (),
+        compact_state_references=(),
     ):
         """Build and lease one connector payload after work selection.
 
@@ -467,13 +501,25 @@ class Scheduler:
             connector_block_ids=block_ids,
             connector_logical_block_ids=logical_block_ids,
             connector_state_ids=connector_state_ids,
+            compact_state_references=compact_state_references,
         )
         metadata = connector.build_connector_meta(step_input)
         if metadata is not None:
             # Acquire before the caller queues metadata. Sequence cleanup may
             # otherwise release the last block reference before save starts.
-            self.kv_save_coordinator.acquire(metadata)
+            try:
+                self.kv_save_coordinator.acquire(metadata)
+            except Exception:
+                if isinstance(self.state_manager, SSMStateManager):
+                    self.rollback_compact_connector_meta(metadata)
+                raise
         return metadata
+
+    def rollback_compact_connector_meta(self, metadata):
+        """Release a CPU packet's leases; never call after worker dispatch."""
+        self.kv_connector.rollback_compact_metadata(metadata)
+        self.kv_save_coordinator.release_completed_leases(
+            frozenset(lease.operation_id for lease in metadata.get_save_block_leases()))
 
     def has_kv_connector(self) -> bool:
         """Whether connector work can be produced or polled."""
@@ -502,8 +548,19 @@ class Scheduler:
         Engine sleep may discard prefetched completion outputs. Worker drain is
         the alternate terminal proof: deferred ended loads can be removed and
         save leases can be released even without their normal output events.
+        Full cache invalidation belongs to reset_cache_after_worker_drain,
+        after these model/Store accesses and KV save leases have retired.
         """
+        # The caller has proved BOTH model and connector quiescence. Deferred
+        # sequence removal closes banks, but their physical I/O holds survive
+        # until connector retirement; only then may compact host reset run.
         self.kv_load_coordinator.finish_deferred_loads_after_worker_drain()
+        if isinstance(self.state_manager, SSMStateManager):
+            if self.sessions:
+                raise RuntimeError('Compact cache drain requires all scheduler sessions to be ended.')
+            # Discarded model acknowledgments must retire before their Store
+            # dependents; this phase cannot release any Store read/write hold.
+            self.state_manager.finish_cancelled_forwards_after_worker_drain(preserve_store=True)
         if self.kv_connector is not None:
             self.kv_connector.finish_transfers_after_worker_drain()
         self.kv_save_coordinator.clear()
@@ -517,7 +574,10 @@ class Scheduler:
         self.finish_kv_transfers_after_worker_drain()
         if self.sessions:
             raise RuntimeError('Cannot reset cache before all sessions have ended.')
-        self.block_trie.clear()
+        if isinstance(self.state_manager, SSMStateManager):
+            self.block_trie.reset_compact_after_worker_drain()
+        else:
+            self.block_trie.clear()
 
     def get_block_tables(self, seqs: SeqList):
         """Get block tables for the sequences."""
@@ -547,6 +607,10 @@ class Scheduler:
         for seq in seqs:
             if seq.status == MessageStatus.RUNNING:
                 seq.state.deactivate()
+            # A prefill retry can roll back retained blocks before another
+            # request reclaims them through the eviction helper.
+            if self.block_trie.enabled or self.kv_connector is not None:
+                seq.prefix_cache.suppress_match_stats = True
             self.kv_load_coordinator.release_tracking(seq)
             seq.state.evict()
 

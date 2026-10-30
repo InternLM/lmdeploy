@@ -88,6 +88,22 @@ LMDeploy 的 RESTful API 兼容了 OpenAI 以下 3 个接口：
 
 向 `/v1/chat/completions` 传入 `return_prompt_text=true`，响应会包含实际渲染的 `prompt_text`。使用 Python OpenAI 客户端时传入 `extra_body={"return_prompt_text": True}`；原始 JSON 同时支持顶层字段和该嵌套对象，顶层值优先。流式响应在每个 choice 的首个 chunk 中返回 prompt。该值来自实际模板输出，推理强度标记取决于模型模板；原始 `input_ids` 请求没有渲染 prompt，返回 `null`。未请求时不返回此字段。
 
+### 使用 PyTorch 返回更多 Chat logprobs
+
+使用 `--backend pytorch --logprobs-mode raw_logprobs` 启动服务。Chat 请求允许
+`0 <= top_logprobs <= vocab_size`，上限取自已加载模型的输出词表，多进程引擎同样适用。
+对于 154880 词表的模型，在请求中添加
+`"logprobs": true, "top_logprobs": 154880, "max_completion_tokens": 1` 即可验证。
+越界请求返回 HTTP 400；TurboMind 的上限仍为 20。
+
+原始 logprobs 在 temperature、惩罚及采样过滤前计算。分析分布时，若已选 token 不在
+`top_logprobs` 中，应合并外层的分数。无 tokenizer 映射的 ID 使用 `token_id:<id>` 标识，
+不提供 bytes。全词表响应较大，建议限制输出 token 数。
+低精度分数存在舍入误差，分析时可对完整返回分布重新归一化。
+
+支持 Chat 的流式和非流式请求。Responses 忽略 `top_logprobs`；
+Messages 的 `return_logprob` 仅返回已生成 token 的分数。
+
 ### 使用 openai 接口
 
 使用默认响应解析器时，`json_object`、`json_schema` 和 `regex_schema` 约束整个生成序列。这些模式通过聊天模板关闭思考，并将受约束的输出放入 `content`，流式响应同样如此；答案中的协议标签字符串按普通数据保留。强制工具调用使用独立的标签语法，仍可包含思考。
