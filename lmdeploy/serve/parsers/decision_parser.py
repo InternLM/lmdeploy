@@ -136,7 +136,7 @@ class DecisionParser:
         self.expected_score_rows = 0
 
     @staticmethod
-    def _adapt_openai_input(value: str | list[DecisionInputMessage]) -> tuple[Any, list[str]]:
+    def _extract_state_and_images(value: str | list[DecisionInputMessage]) -> tuple[Any, list[str]]:
         """Extract images in encounter order and retain one-based references in state."""
         if isinstance(value, str):
             return value, []
@@ -189,7 +189,7 @@ class DecisionParser:
                                     for level in question.levels]
             questions[key] = item
             mappings.append(_QuestionMapping(key, question.type, question.name, choice_keys, choice_values, labels))
-        state, images = self._adapt_openai_input(request.input)
+        state, images = self._extract_state_and_images(request.input)
         internal = DecisionRequest(model=request.model, state=state, questions=questions, images=images)
         self._question_mappings = tuple(mappings)
         return internal

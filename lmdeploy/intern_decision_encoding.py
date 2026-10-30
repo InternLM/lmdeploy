@@ -153,7 +153,14 @@ def validate_temperature(temperature) -> float:
 
 
 def resolve_temperature(model_path: str | Path) -> float:
-    """Read a local checkpoint constant without executing code or downloading files."""
+    """Read calibration for local Intern-Decision family checkpoints.
+
+    This reader follows the Intern-Decision-specific convention of a top-level
+    numeric DEFAULT_TEMPERATURE in the checkpoint's inference.py. It is not a
+    general checkpoint metadata format. Parse the constant without importing or
+    executing the module or downloading files. Missing or invalid metadata falls
+    back to the official Intern-Decision-4B calibration.
+    """
     source = Path(model_path) / 'inference.py'
     try:
         tree = ast.parse(source.read_text(encoding='utf-8'), filename=str(source))
