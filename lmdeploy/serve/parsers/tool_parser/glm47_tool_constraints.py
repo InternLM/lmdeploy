@@ -3,10 +3,10 @@
 
 Constrain declared top-level names for plain object schemas. As a tool-calling
 policy, omitted ``additionalProperties`` is treated as false here, unlike its
-JSON Schema default. Explicitly open or composed schemas stay open. This is
-not full JSON Schema validation: required fields, duplicates and values retain
-their existing behavior. Auto choice still permits reasoning, ordinary text,
-zero calls and multiple calls.
+JSON Schema default. Explicitly open, composed, conditional or dependent
+schemas stay open. This is not full JSON Schema validation: required fields,
+duplicates and values retain their existing behavior. Auto choice still
+permits reasoning, ordinary text, zero calls and multiple calls.
 
 Dispatch on control IDs, not their spellings: an ordinary-token literal such
 as ``</arg_value>`` in a shell command must remain ordinary argument text.
@@ -26,8 +26,13 @@ def _closed_properties(schema: dict[str, Any] | None) -> tuple[str, ...] | None:
         return None
     properties = schema.get('properties')
     if (not isinstance(properties, dict) or not properties
-            or schema.get('additionalProperties', False) is not False
-            or any(key in schema for key in ('$ref', 'allOf', 'anyOf', 'oneOf', 'patternProperties'))):
+            or schema.get('additionalProperties', False) is not False):
+        return None
+    # Subschemas and dependencies can allow or require names outside root properties.
+    if any(key in schema for key in (
+        '$ref', 'allOf', 'anyOf', 'oneOf', 'patternProperties',
+        'if', 'then', 'else', 'dependentSchemas', 'dependentRequired', 'dependencies',
+    )):
         return None
     return tuple(properties)
 

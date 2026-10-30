@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 import xgrammar as xgr
+from jsonschema import Draft7Validator, Draft202012Validator
 from tokenizers import AddedToken, Tokenizer, decoders, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
@@ -72,7 +73,7 @@ def context():
         return compile_response_format(compiler, build_auto_tool_format(tools, tokenizer))
 
     return SimpleNamespace(
-        tokenizer=tokenizer, ordinary=ordinary, compile_tools=compile_tools,
+        tokenizer=tokenizer, ordinary=ordinary, compiler=compiler, compile_tools=compile_tools,
         grammar=compile_tools(_request().tools),
     )
 
@@ -186,6 +187,62 @@ def test_open_or_composed_schemas_keep_free_argument_names(context, schema_chang
     grammar = context.compile_tools(tools)
     assert _accepts(context, grammar=grammar, text=_call(arguments=[('description', 'value')]))
     assert not _accepts(context, grammar=grammar, text=_call('save_note', [('description', 'value')]))
+
+
+@pytest.mark.parametrize('schema_change,validator_cls', [
+    pytest.param({
+        'if': {'properties': {'mode': {'const': 'file'}}, 'required': ['mode']},
+        'then': {'properties': {'path': {'type': 'string'}}, 'required': ['path']},
+    }, Draft202012Validator, id='if-then'),
+    pytest.param({
+        'if': {'properties': {'mode': {'const': 'directory'}}, 'required': ['mode']},
+        'else': {'properties': {'path': {'type': 'string'}}, 'required': ['path']},
+    }, Draft202012Validator, id='if-else'),
+    pytest.param({
+        'dependentSchemas': {
+            'mode': {'properties': {'path': {'type': 'string'}}, 'required': ['path']},
+        },
+    }, Draft202012Validator, id='dependent-schema'),
+    pytest.param({
+        'dependentRequired': {'mode': ['path']},
+    }, Draft202012Validator, id='dependent-required'),
+    pytest.param({
+        'dependencies': {
+            'mode': {'properties': {'path': {'type': 'string'}}, 'required': ['path']},
+        },
+    }, Draft7Validator, id='legacy-schema-dependency'),
+    pytest.param({
+        'dependencies': {'mode': ['path']},
+    }, Draft7Validator, id='legacy-property-dependency'),
+])
+@pytest.mark.parametrize('mixed_tools', [False, True], ids=['single-tool', 'mixed-tools'])
+def test_conditional_schemas_allow_names_outside_root_properties(context, schema_change, validator_cls, mixed_tools):
+    """Keep valid conditional arguments reachable alongside constrained
+    tools."""
+    schema = {
+        'type': 'object',
+        'properties': {'mode': {'type': 'string'}},
+        'required': ['mode'],
+        **schema_change,
+    }
+    arguments = {'mode': 'file', 'path': '/tmp/input.txt'}
+    validator_cls.check_schema(schema)
+    validator = validator_cls(schema)
+    validator.validate(arguments)
+    assert not validator.is_valid({'mode': 'file'})
+    assert 'path' not in schema['properties']
+
+    tools = _tools() if mixed_tools else _tools()[:1]
+    tools[0]['function']['parameters'] = schema
+    response_format = _parser(context, tools=tools).request.response_format
+    if not mixed_tools:
+        assert response_format is None
+        return
+
+    grammar = compile_response_format(context.compiler, response_format)
+    assert _accepts(context, grammar=grammar, text=_call(arguments=arguments.items()))
+    assert _accepts(context, grammar=grammar, text=_call('save_note', [('text', 'Done')]))
+    assert not _accepts(context, grammar=grammar, text=_call('save_note', [('path', '/tmp/input.txt')]))
 
 
 def test_does_not_add_full_schema_validation(context):
