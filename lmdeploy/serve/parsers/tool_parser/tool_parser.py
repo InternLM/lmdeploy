@@ -14,6 +14,8 @@ from lmdeploy.serve.openai.protocol import (
 )
 
 if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
+
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool
 
     from ..token_id_buffer import BoundaryView
@@ -111,6 +113,13 @@ class ToolParser:
         request = dump_tools(request)
         self._allowed_tool_names = self._get_allowed_tool_names(request)
         return request
+
+    @classmethod
+    def build_auto_response_format(
+        cls, tools: list[Tool], *, tokenizer: PreTrainedTokenizerBase | None,
+    ) -> dict[str, Any] | None:
+        """Optionally constrain auto tool calls without requiring a call."""
+        return None
 
     @classmethod
     def build_required_response_format(cls, tools: list[Tool], *, reasoning: bool) -> dict[str, Any]:

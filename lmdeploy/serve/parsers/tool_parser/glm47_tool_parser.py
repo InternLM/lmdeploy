@@ -1,10 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .tool_parser import ToolParserManager
 from .xml_tool_parser import XmlToolParser
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
+
+    from lmdeploy.serve.openai.protocol import Tool
 
 
 @ToolParserManager.register_module(['glm47'])
@@ -27,6 +32,16 @@ class Glm47ToolParser(XmlToolParser):
     arg_value_close_tag = '</arg_value>'
     # The complete closing marker is one token in supported GLM tokenizers.
     arg_value_close_prefixes = ()
+
+    @classmethod
+    def build_auto_response_format(
+        cls, tools: list[Tool], *, tokenizer: PreTrainedTokenizerBase | None,
+    ) -> dict[str, Any] | None:
+        """Constrain declared argument names while keeping tool calls
+        optional."""
+        from .glm47_tool_constraints import build_auto_tool_format
+
+        return build_auto_tool_format(tools, tokenizer)
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:
