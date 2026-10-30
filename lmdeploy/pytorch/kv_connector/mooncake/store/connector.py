@@ -115,6 +115,15 @@ class MooncakeStoreConnector(KVConnectorBase):
     def on_new_request(self, request: SchedulerSequence) -> None:
         return self._require_scheduler().on_new_request(request)
 
+    def reserve_decode_snapshot(self, request: SchedulerSequence) -> int:
+        return self._require_scheduler().reserve_decode_snapshot(request)
+
+    def release_decode_snapshot(self, slot: int) -> None:
+        self._require_scheduler().release_decode_snapshot(slot)
+
+    def queue_decode_save(self, step_input: KVConnectorStepInput) -> MooncakeStoreConnectorMetadata | None:
+        return self._require_scheduler().queue_decode_save(step_input)
+
     def is_lookup_pending(self, request_id: RequestId) -> bool:
         return self._require_scheduler().is_lookup_pending(request_id)
 

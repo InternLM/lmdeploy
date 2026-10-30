@@ -132,6 +132,7 @@ class InputsMakerConfig:
     enable_prefix_caching: bool
     prefix_cache_decode_state_interval: int
     is_ssm: bool = False
+    enable_decode_checkpoints: bool = False
     dp: int = 1
     spec_decoding: bool = False
     enable_chunked_prefill: bool = False
@@ -160,6 +161,7 @@ class InputsMakerConfig:
             enable_prefix_caching=cache_config.enable_prefix_caching,
             prefix_cache_decode_state_interval=cache_config.prefix_cache_decode_state_interval,
             is_ssm=len(cache_config.states_shapes) > 0,
+            enable_decode_checkpoints=cache_config.enable_decode_checkpoints,
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
             use_mrope=model_config.use_mrope,
@@ -1284,31 +1286,28 @@ class InputsMakerAsync:
                                      state_save_plan=state_save_plan)
 
     def _make_decode_cache_inputs(self, valid_seqs: 'SeqList', delta: ModelInputsDelta | None):
-        """Build one-forward checkpoint operations for a decode step."""
-        if delta is None or len(valid_seqs) == 0 or not self._ssm_prefix_cache_enabled():
+        """Keep direct compact outputs for the absolute-interval AR policy.
+
+        Save-first, speculative and Store checkpoints require the accepted-output coordinator instead.
+        """
+        owner = self.compact_state_manager
+        if owner is None or delta is None or len(valid_seqs) == 0 or not self._ssm_prefix_cache_enabled():
             return None
 
         decode_state_interval = self.config.prefix_cache_decode_state_interval
         if (decode_state_interval <= 0 or self.spec_decoding or delta.max_q_seqlen != 1):
             return None
 
-        owner = self.compact_state_manager
-        if owner is not None:
-            if owner.capacity.max_update_tokens != 1:
-                return None
-            # CPU token append follows the previous output event. Each queued
-            # single-token target forward contributes one not-yet-appended
-            # token. An idle/re-entering request has no such outstanding work.
-            steps = tuple(seq.num_valid_ids + sum(bool(access.bank_ids) for access in owner.bank_for(seq).accesses)
-                          for seq in valid_seqs)
-            steps = tuple(step if step % decode_state_interval == 0 else 0 for step in steps)
-            return CacheCheckpointInputs(ssm_checkpoint_steps=steps) if any(steps) else None
-
-        copy_plan = self.state_checkpoints.reserve_decode_save_batch(valid_seqs, decode_state_interval)
-        state_save_plan = _make_state_checkpoint_copy_plan(copy_plan.state_pairs)
-        if state_save_plan is None:
+        meta = valid_seqs[0]._seq_meta
+        if (owner.capacity.max_update_tokens != 1 or meta.prefix_cache_decode_save_first
+                or meta.enable_mooncake_store):
             return None
-        return CacheCheckpointInputs(state_save_plan=state_save_plan)
+        # CPU token append follows the previous output event. Each queued
+        # single-token target forward contributes one not-yet-appended token.
+        steps = tuple(seq.num_valid_ids + sum(bool(access.bank_ids) for access in owner.bank_for(seq).accesses)
+                      for seq in valid_seqs)
+        steps = tuple(step if step % decode_state_interval == 0 else 0 for step in steps)
+        return CacheCheckpointInputs(ssm_checkpoint_steps=steps) if any(steps) else None
 
     @torch.inference_mode()
     @record_function('create_model_inputs')
@@ -1638,6 +1637,13 @@ class InputsMakerAsync:
             logger.debug(f'Sending forward inputs: {inputs.log_info()}')
             session_ids = [seq.session_id for seq in next_running]
             logger.debug(f'Forward session_ids: {session_ids}')
+        if self.config.enable_decode_checkpoints:
+            carrier = forward_inputs['cache_inputs'] or CacheCheckpointInputs()
+            snapshot = self.scheduler.decode_checkpoints.prepare(
+                next_running, inputs, forward_inputs['delta'], access_id=carrier.ssm_state_access_id)
+            if snapshot is not None:
+                batch_id, plan = snapshot
+                forward_inputs['cache_inputs'] = replace(carrier, decode_save_plan=plan, decode_save_id=batch_id)
         try:
             await self.executor.forward_async(forward_inputs)
         except BaseException:

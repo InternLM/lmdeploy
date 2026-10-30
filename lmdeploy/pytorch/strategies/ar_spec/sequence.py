@@ -142,6 +142,8 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
             self.cached_tokens = 0
             self.prefix_cache.suppress_match_stats = False
             self.prefix_cache.match_start_step = -1
+            self.prefix_cache.last_decode_save_step = -1
+            self.prefix_cache.decode_store_save_pending = False
             self._update_token_ids_inputs(token_ids)
             if self._recompute_compact_on_resume:
                 self.state.release_paging_resources()

@@ -413,7 +413,7 @@ def test_connector_output_aggregator_waits_for_every_tp_rank():
         KVConnectorOutput(failed_receiving={12}),
     ])
     second = aggregator.aggregate([
-        KVConnectorOutput(completed_save_ids={23}),
+        KVConnectorOutput(completed_save_ids={23}, failed_save_ids={23}),
         KVConnectorOutput(finished_receiving={11}),
     ])
     third = aggregator.aggregate([
@@ -425,6 +425,7 @@ def test_connector_output_aggregator_waits_for_every_tp_rank():
     assert first.failed_receiving == {11, 12}
     assert second.finished_receiving == {11}
     assert second.completed_save_ids is None
+    assert second.failed_save_ids == {23}
     assert third.completed_save_ids == {23}
 
 
@@ -441,6 +442,9 @@ def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(mon
 
         def start_load_kv(self):
             events.append('start_load')
+
+        def start_save_kv(self):
+            events.append('start_save')
 
         def get_finished(self):
             events.append('finished')
@@ -475,6 +479,7 @@ def test_model_agent_connector_only_step_returns_progress_on_nonzero_tp_rank(mon
     assert events == [
         ('bind', metadata),
         'start_load',
+        'start_save',
         'finished',
         'clear',
     ]
@@ -500,6 +505,9 @@ def test_model_agent_dp_connector_only_step_finishes_after_rendezvous(monkeypatc
 
         def start_load_kv(self):
             events.append('start_load')
+
+        def start_save_kv(self):
+            events.append('start_save')
 
         def get_finished(self):
             events.append('finished')
@@ -537,6 +545,7 @@ def test_model_agent_dp_connector_only_step_finishes_after_rendezvous(monkeypatc
         ('bind', metadata),
         'start_load',
         ('prepare_dp', dummy_inputs),
+        'start_save',
         'finished',
         'clear',
     ]
@@ -545,6 +554,52 @@ def test_model_agent_dp_connector_only_step_finishes_after_rendezvous(monkeypatc
     assert outputs[0].kv_connector_output == KVConnectorOutput(
         finished_receiving={11},
     )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+@pytest.mark.parametrize('tp', [1, 2])
+@pytest.mark.parametrize('compact', [False, True])
+def test_decode_snapshot_mask_is_shared_across_tp_ranks(monkeypatch, tp, compact):
+    from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    shared_mask = None
+    copies = []
+    group = object()
+
+    def broadcast(mask, src, group):
+        nonlocal shared_mask
+        assert src == 0
+        if shared_mask is None:
+            shared_mask = mask.clone()
+        else:
+            mask.copy_(shared_mask)
+
+    monkeypatch.setattr(agent_module.dist, 'broadcast', broadcast)
+    monkeypatch.setattr(agent_module.dist, 'get_global_rank', lambda group, rank: rank)
+    monkeypatch.setattr(agent_module, 'get_dist_manager', lambda: SimpleNamespace(
+        current_context=lambda: SimpleNamespace(dist_config=SimpleNamespace(attn_tp=tp),
+                                                 attn_tp_group=SimpleNamespace(gpu_group=group))))
+    plan = torch.tensor([[0, 1], [256, 256], [1, 2], [21, 22]], device='cuda')
+    cache_inputs = CacheCheckpointInputs(decode_save_plan=plan)
+    inputs = SimpleNamespace(history_lengths=torch.tensor([254, 254], device='cuda'),
+                             seq_length=torch.tensor([4, 4], device='cuda'),
+                             is_decoding=True, ssm_state_meta=None)
+    if compact:
+        inputs.ssm_state_meta = SimpleNamespace(
+            output_state_ids=torch.tensor([[9, 8, 7, 6], [5, 4, 3, 2]], device='cuda'))
+    output = agent_module.BatchedOutputs(next_token_ids=torch.tensor([[7, 8, 9, 10], [7, 8, 9, 10]], device='cuda'),
+                                         stopped=torch.tensor([True, False]),
+                                         stop_pos=torch.tensor([0, -1], device='cuda'))
+    for rank in range(tp):
+        agent = agent_module.BaseModelAgent.__new__(agent_module.BaseModelAgent)
+        agent.need_output = rank == 0
+        agent.cache_config = SimpleNamespace(prefix_cache_token_lookahead=1)
+        agent.state_cache_engine = SimpleNamespace(copy_decode_slots=lambda plan, mask: copies.append(mask.clone()))
+        agent._save_decode_checkpoints(cache_inputs, inputs, output if rank == 0 else None)
+        assert plan[2].tolist() == ([8, 4] if compact else [1, 2])
+    assert [mask.tolist() for mask in copies] == [[False, True]] * tp
+    assert output.to_cpu().to_numpy().to_tensor().decode_checkpoint_mask.tolist() == [False, True]
 
 
 def test_model_agent_connector_save_hook_runs_between_forward_and_progress_poll():
@@ -598,7 +653,8 @@ def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(mo
 
     events = []
     checkpoint = CacheCheckpointInputs(kv_restore_plan=torch.tensor([[3], [4]]),
-                                       kv_save_plan=None if scoring else torch.tensor([[4], [5]]))
+                                       kv_save_plan=None if scoring else torch.tensor([[4], [5]]),
+                                       decode_save_plan=None if scoring else torch.tensor([[0], [64], [1], [2]]))
 
     def copy_mtp_blocks(plan):
         if plan is checkpoint.kv_restore_plan:
@@ -657,6 +713,7 @@ def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(mo
     agent._async_model_forward = target_forward
     agent._prepare_inputs_prefill = lambda value, delta: value
     agent._step_postprocess_without_output = speculative_forward
+    agent._save_decode_checkpoints = lambda *args: events.append('decode_snapshot')
     agent._push_output = lambda output: pytest.fail('unexpected output')
 
     inputs = SimpleNamespace(
@@ -683,7 +740,7 @@ def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(mo
     ))
 
     assert events == [('bind', metadata), 'load', 'mtp_restore', 'target'] + (
-        [] if scoring else ['mtp', 'mtp_save']) + ['save', 'poll', 'clear']
+        [] if scoring else ['mtp', 'decode_snapshot', 'mtp_save']) + ['save', 'poll', 'clear']
 
 
 def test_release_shuts_down_connector_before_dropping_cache(monkeypatch):

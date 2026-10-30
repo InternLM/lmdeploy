@@ -66,3 +66,17 @@ class CacheBackend(ABC):
                          pages_per_block: int) -> BlockCacheCopy:
         """Build the local logical-block copy primitive."""
         raise NotImplementedError
+
+    @staticmethod
+    def get_decode_save_mask(plan: torch.Tensor, history: torch.Tensor, query_lengths: torch.Tensor,
+                             tokens: torch.Tensor, stop_pos: torch.Tensor, *, is_decoding: bool,
+                             lookahead: int) -> torch.Tensor:
+        """Check retained state boundaries against accepted output on
+        device."""
+        raise NotImplementedError('This cache backend does not support decode snapshots.')
+
+    @staticmethod
+    def copy_decode_slots(slot_tensors: tuple[tuple[torch.Tensor, int], ...],
+                          plan: torch.Tensor, copy_mask: torch.Tensor) -> None:
+        """Copy selected state slots on the forward stream."""
+        raise NotImplementedError('This cache backend does not support decode snapshots.')

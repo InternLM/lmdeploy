@@ -3,6 +3,7 @@ import enum
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from math import gcd
 from typing import Any
 
 import torch
@@ -173,6 +174,7 @@ class CacheConfig:
     compact_state_capacity: 'SSMStateCapacity | None' = None
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
+    prefix_cache_decode_save_first: bool = False
     prefill_save_alignment: int = 1024
     prefill_save_last_only: bool = False
     mooncake_state_save_slots: int = 8
@@ -196,8 +198,6 @@ class CacheConfig:
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         assert self.prefill_save_alignment > 0, 'invalid prefill_save_alignment'
         assert self.mooncake_state_save_slots > 0, 'invalid mooncake_state_save_slots'
-        if self.use_mooncake_store and self.prefix_cache_decode_state_interval > 0:
-            raise ValueError('Mooncake Store and prefix_cache_decode_state_interval cannot be enabled together')
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
@@ -228,6 +228,18 @@ class CacheConfig:
     def needs_prefix_cache_identity(self) -> bool:
         """Local APC and Mooncake Store need stable multimodal identities."""
         return self.enable_prefix_caching or self.use_mooncake_store
+
+    @property
+    def enable_decode_checkpoints(self) -> bool:
+        """Whether an SSM cache owner can save accepted decode states."""
+        return bool(self.states_shapes and (self.enable_prefix_caching or self.num_store_state_caches)
+                    and (self.prefix_cache_decode_save_first or self.prefix_cache_decode_state_interval))
+
+    @property
+    def state_lookup_alignment(self) -> int:
+        """Cover prefill, decode and retry boundaries; interval 0 keeps prefill
+        alignment."""
+        return gcd(self.prefill_save_alignment, self.prefix_cache_decode_state_interval)
 
 
 class TPMode(enum.Enum):

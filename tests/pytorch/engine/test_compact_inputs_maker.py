@@ -1632,7 +1632,8 @@ def test_compact_store_shutdown_drain_retires_model_before_io_without_lost_ack()
     payload = maker._make_forward_inputs(True)
     ticket = payload['cache_inputs'].ssm_state_access_id
     producer = owner._accesses[ticket]
-    io, = store._inflight_saves.values()
+    operation, = store._inflight_saves.values()
+    io = operation.lease
     scheduler.state_checkpoints.publish_forward(ticket)
     scheduler.end_session(0)
     with pytest.raises(RuntimeError, match='actual I/O completion'):

@@ -470,7 +470,8 @@ class EngineLoop:
                                running: 'SeqList',
                                model_inputs: 'ModelInputs | None',
                                delta: 'ModelInputsDelta | None'):
-        """Apply connector progress and publish model outputs."""
+        """Apply connector progress and return the completed model
+        responses."""
         if out is None:
             return
         # Connector-only polls have no token output; apply completions before
@@ -482,7 +483,7 @@ class EngineLoop:
         # _make_infer_outputs advances history; only then can soft reservations
         # be released.
         self.scheduler.release_completed_prefill_reservations(running)
-        self.resp_queue.put_nowait(step_outputs)
+        return step_outputs
 
     async def _main_loop_get_outputs(
         self,
@@ -547,7 +548,12 @@ class EngineLoop:
                 self.state_checkpoints.complete_forward(ssm_state_access_id)
         elif has_model_work:
             self.state_checkpoints.unpin_saves(running)
-        self._finish_forward_output(out, running, model_inputs, delta)
+        step_outputs = self._finish_forward_output(out, running, model_inputs, delta)
+        if cache_inputs is not None and cache_inputs.decode_save_id is not None:
+            self.scheduler.decode_checkpoints.finish(
+                cache_inputs.decode_save_id, out.decode_checkpoint_mask if out is not None else None)
+        if step_outputs is not None:
+            self.resp_queue.put_nowait(step_outputs)
         # out might come from shared memory, need to explicitly delete to release memory in time
         del out
 

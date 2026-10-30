@@ -325,6 +325,13 @@ Legacy state copy/zero APIs reject compact mode; checkpoints retain references
 and kernels write new private outputs. Non-indexed model consumers retain their existing allocation.
 Stateless model plans allocate no state pools and do not select a backend.
 
+Decode save-first and MTP checkpoints reserve an optional unit outside the
+writable bank. After sampling, the worker copies the accepted boundary's exact
+output unit before the next forward; the same forward completion ticket holds
+the destination. Local prefix caching and Mooncake Store retain independent
+references to this frozen unit. Rejected, cancelled or stale-turn candidates
+never publish token identity or advance the successful save position.
+
 Standard AR/MTP uses a private decode
 bank of `W = 1 + num_speculative_tokens` units. A newly admitted prefill leases
 one private destination; protected capacity credits guarantee promotion to the

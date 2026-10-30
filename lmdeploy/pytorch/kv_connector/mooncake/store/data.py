@@ -456,7 +456,8 @@ class MooncakeStoreLoadRequest:
 
 @dataclass(frozen=True)
 class MooncakeStoreStateSave:
-    """An exact prefill state copied into a save-owned snapshot slot."""
+    """An exact verified state; equal source/destination means already
+    frozen."""
 
     source_slot: int
     snapshot_slot: int
@@ -508,7 +509,8 @@ class MooncakeStoreConnectorMetadata(KVConnectorMetadata):
 
     def get_state_save_copies(self) -> tuple[tuple[int, int], ...]:
         return tuple((request.state.source_slot, request.state.snapshot_slot)
-                     for request in self.save_requests if isinstance(request.state, MooncakeStoreStateSave))
+                     for request in self.save_requests if isinstance(request.state, MooncakeStoreStateSave)
+                     and request.state.source_slot != request.state.snapshot_slot)
 
     def get_save_block_leases(self) -> tuple[KVSaveBlockLease, ...]:
         return tuple(

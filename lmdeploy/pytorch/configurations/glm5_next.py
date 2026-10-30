@@ -36,8 +36,6 @@ def update_cache_config(cache_config):
     cache_config.block_size = 64
     cache_config.kernel_block_size = 64
     cache_config.prefix_cache_block_aligned = True
-    if cache_config.prefix_cache_token_lookahead and cache_config.prefix_cache_decode_state_interval:
-        raise ValueError('GLM-5.3 MTP prefix caching only publishes prefill checkpoints.')
     if cache_config.prefix_cache_decode_state_interval % 64:
         raise ValueError('GLM-5.3 prefix_cache_decode_state_interval must be a multiple of 64.')
 

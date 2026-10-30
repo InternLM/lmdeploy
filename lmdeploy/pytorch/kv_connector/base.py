@@ -54,6 +54,9 @@ class KVConnectorStepInput:
     connector_block_ids: tuple[tuple[int, ...], ...] = ()
     connector_logical_block_ids: tuple[tuple[int, ...], ...] = ()
     connector_state_ids: tuple[int, ...] = ()
+    # Already copied snapshots transferred to the connector after acceptance.
+    connector_snapshot_ids: tuple[int, ...] = ()
+    is_decode_checkpoint: bool = False
     # Scheduler-local producer identities. Worker metadata serializes IDs only.
     compact_state_references: tuple['StateReference | None', ...] = ()
 
@@ -92,14 +95,15 @@ class KVConnectorOutput:
     because chunked prefill can enqueue several concurrent saves for the same
     request. Save completion is terminal whether the Store write succeeded or
     failed, allowing the scheduler to release its block lease in either case.
-    ``failed_receiving`` may arrive before all workers finish the request.
-    The scheduler-side connector retains these failures until completion;
+    ``failed_save_ids`` and ``failed_receiving`` may arrive before all workers
+    finish. The scheduler-side connector retains these failures until completion;
     state slots and FA block IDs need not share an address space.
     """
 
     completed_save_ids: set[KVOperationId] | None = None
     finished_receiving: set[RequestId] | None = None
     failed_receiving: set[RequestId] = field(default_factory=set)
+    failed_save_ids: set[KVOperationId] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -192,9 +196,8 @@ class KVConnectorOutputAggregator:
     ) -> KVConnectorOutput:
         """Merge one rank-local output per worker into all-rank progress.
 
-        Save/load completions wait for every worker. Failed request IDs are unioned and published immediately because
-        one rank failure makes a load unusable. The scheduler-side connector retains failures until completion, when
-        every worker has stopped writing the request's destinations.
+        Save/load completions wait for every worker. Failures are published immediately and retained by the scheduler
+        until every worker has stopped accessing the operation's buffers.
         """
         if len(outputs) != self.world_size:
             raise ValueError(
@@ -202,6 +205,7 @@ class KVConnectorOutputAggregator:
         saving_by_rank: list[set[KVOperationId] | None] = []
         receiving_by_rank: list[set[RequestId] | None] = []
         failed_receiving = set()
+        failed_save_ids = set()
         for output in outputs:
             if output is None:
                 saving_by_rank.append(None)
@@ -210,6 +214,7 @@ class KVConnectorOutputAggregator:
             saving_by_rank.append(output.completed_save_ids)
             receiving_by_rank.append(output.finished_receiving)
             failed_receiving.update(output.failed_receiving)
+            failed_save_ids.update(output.failed_save_ids)
         return KVConnectorOutput(
             completed_save_ids=self._aggregate_completions(
                 saving_by_rank,
@@ -220,6 +225,7 @@ class KVConnectorOutputAggregator:
                 self._receiving_ranks,
             ),
             failed_receiving=failed_receiving,
+            failed_save_ids=failed_save_ids,
         )
 
     def clear(self) -> None:
@@ -333,6 +339,20 @@ class KVConnectorBase(ABC):
     def on_new_request(self, request: 'SchedulerSequence') -> None:
         """Record a newly admitted request when connector bookkeeping needs
         it."""
+        return None
+
+    def reserve_decode_snapshot(self, request: 'SchedulerSequence') -> int:
+        """Reserve a destination for a conditional decode copy, or return
+        -1."""
+        return -1
+
+    def release_decode_snapshot(self, slot: int) -> None:
+        """Release an unused decode snapshot after its forward completes."""
+        raise NotImplementedError
+
+    def queue_decode_save(self, step_input: KVConnectorStepInput) -> KVConnectorMetadata | None:
+        """Adopt frozen snapshots and queue their saves on the next normal
+        step."""
         return None
 
     def is_lookup_pending(self, request_id: RequestId) -> bool:

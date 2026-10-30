@@ -59,7 +59,8 @@ class StateManager:
 
         self.num_runtime_states = num_runtime_states
         self.allocator = StateAllocator(num_available, offset=num_reserved)
-        self._runtime_states: set[int] = set()
+        # A dispatched checkpoint copy can outlive its source sequence.
+        self._runtime_state_refs: dict[int, int] = {}
         self._checkpoint_states: set[int] = set()
 
     def is_allocated(self, seq: SchedulerSequence):
@@ -71,16 +72,24 @@ class StateManager:
         if self.get_num_free_runtime() <= 0:
             raise RuntimeError('No free states.')
         state_id = int(self.allocator.allocate())
-        self._runtime_states.add(state_id)
+        self._runtime_state_refs[state_id] = 1
         return state_id
 
+    def retain_state(self, state_id: int):
+        """Keep a runtime source allocated until its checkpoint copy
+        finishes."""
+        self._runtime_state_refs[int(state_id)] += 1
+
     def free_state(self, state_id: int):
-        """Free one state-cache slot."""
+        """Release a runtime owner, freeing the slot after its last
+        reference."""
         state_id = int(state_id)
-        if state_id not in self._runtime_states:
+        if state_id not in self._runtime_state_refs:
             raise RuntimeError(f'State {state_id} is not a runtime state.')
-        self._runtime_states.remove(state_id)
-        self.allocator.free(state_id)
+        self._runtime_state_refs[state_id] -= 1
+        if self._runtime_state_refs[state_id] == 0:
+            del self._runtime_state_refs[state_id]
+            self.allocator.free(state_id)
 
     def allocate_checkpoint_state(self):
         """Allocate one frozen prefix-cache checkpoint state slot."""
@@ -115,7 +124,7 @@ class StateManager:
 
     def get_num_free_runtime(self):
         """Get slots still available under the runtime-state cap."""
-        free_runtime_capacity = self.num_runtime_states - len(self._runtime_states)
+        free_runtime_capacity = self.num_runtime_states - len(self._runtime_state_refs)
         return max(0, min(free_runtime_capacity, self.allocator.get_num_free()))
 
     def get_num_free_checkpoint(self):
@@ -124,7 +133,7 @@ class StateManager:
 
     def get_num_runtime_states(self):
         """Get num allocated runtime states."""
-        return len(self._runtime_states)
+        return len(self._runtime_state_refs)
 
     def get_num_allocated_checkpoint_states(self):
         """Get num allocated checkpoint states."""

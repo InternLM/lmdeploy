@@ -305,6 +305,30 @@ class SSMStateManager:
         unit.producer_bank = None
         self.release_reference(reference)
 
+    def reserve_decode_snapshot(self, access_id: int, bank: StateBank, boundary: int) -> StateReference:
+        """Add a conditional snapshot destination before dispatching a bound
+        forward.
+
+        Unlike direct prefill exports, adjacent prefetched forwards may attempt the same boundary. Each owns a private
+        destination, held by its existing completion ticket even when acceptance or cancellation discards the snapshot.
+        """
+        access = self._accesses[access_id]
+        self._check_bank(bank)
+        if access.finished or access.failed or bank not in access._banks or not access.bank_ids:
+            raise ValueError('Decode snapshots require this bank\'s live model forward.')
+        if boundary <= 0 or self.get_num_free_optional() == 0:
+            raise ValueError('Decode snapshots require a positive boundary and optional capacity.')
+        unit = self._allocate_unit()
+        unit.boundary = boundary
+        unit.phase = 'submitted'
+        unit.producer = access
+        unit.producer_bank = bank
+        unit.accesses.add(access)
+        unit.writers.add(access)
+        access._units += (unit,)
+        access._writes += (unit,)
+        return self._reference(unit, 'reservation')
+
 
     def retain(self, reference: StateReference, owner: Owner) -> StateReference:
         """Acquire immutable ownership; submitted producers still need

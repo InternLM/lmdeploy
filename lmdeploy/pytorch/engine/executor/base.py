@@ -68,20 +68,26 @@ class ExecutorBase:
             specdecode_config is not None
             and specdecode_config.method in ('deepseek_mtp', 'qwen3_5_mtp', 'hy3_mtp'))
         self._validate_compact_state_config()
-        if cache_config.use_mooncake_store and model_config.states_shapes and specdecode_config is not None:
+        needs_state_checkpoints = (
+            cache_config.use_mooncake_store
+            or (cache_config.enable_prefix_caching
+                and (cache_config.prefix_cache_decode_save_first
+                     or cache_config.prefix_cache_decode_state_interval > 0))
+        ) and bool(model_config.states_shapes)
+        if specdecode_config is not None and needs_state_checkpoints:
             supported_mtp = (specdecode_config.method == 'qwen3_5_mtp'
                              or (specdecode_config.method == 'deepseek_mtp'
                                  and model_config.hf_config.model_type == 'glm5_next'))
             if (not supported_mtp or not model_config.is_gated_delta
                     or specdecode_config.model_config.states_shapes or specdecode_config.model_config.num_layers != 1):
-                raise ValueError('Hybrid Mooncake Store speculative decoding requires Qwen3.5 with qwen3_5_mtp '
+                raise ValueError('Hybrid Store and decode checkpoints require Qwen3.5 with qwen3_5_mtp '
                                  'or GLM-5.3 with deepseek_mtp, a gated-delta target, '
                                  'and one MTP layer without state caches')
-        if (cache_config.use_mooncake_store and model_config.states_shapes
-                and model_config.is_gated_delta and device_type == 'cuda'):
+        if (needs_state_checkpoints and model_config.is_gated_delta and device_type == 'cuda'
+                and cache_config.compact_state_capacity is None):
             from lmdeploy.pytorch.backends.cuda.utils import has_tilelang
             if not has_tilelang():
-                raise RuntimeError('Hybrid Mooncake Store requires TileLang causal convolution on CUDA: '
+                raise RuntimeError('Hybrid prefix-cache restore requires TileLang causal convolution on CUDA: '
                                    'the Dao backend does not restore prefill initial states')
         self._maybe_disable_unsupported_prefix_caching(check_window=not self._has_cache_update_hook())
 
@@ -539,6 +545,9 @@ class ExecutorBase:
         if (self.cache_config.states_shapes and self.cache_config.needs_prefix_cache_identity
                 and self.cache_config.prefill_save_alignment % self.cache_config.block_size != 0):
             raise ValueError('prefill_save_alignment must be a multiple of block_size')
+        # Model/backend hooks may change block size after constructor validation.
+        if self.cache_config.prefix_cache_decode_state_interval % self.cache_config.block_size != 0:
+            raise ValueError('prefix_cache_decode_state_interval must be a multiple of block_size')
 
         spec_cache_config, spec_model_config = self._get_spec_configs()
         cache_block_sizes = self._prepare_worker_cache_plans(self.cache_config, spec_cache_config)

@@ -125,10 +125,11 @@ class BatchedOutputs:
     all_routed_experts: torch.Tensor | None = None
     ce_loss: torch.Tensor | None = None
     kv_connector_output: KVConnectorOutput | None = None
+    decode_checkpoint_mask: torch.Tensor | None = None
     ssm_state_access_id: int | None = None
 
     @classmethod
-    def connector_only(cls, output: KVConnectorOutput) -> 'BatchedOutputs':
+    def connector_only(cls, output: KVConnectorOutput | None) -> 'BatchedOutputs':
         """Build a lightweight envelope for a no-model-forward step."""
         return cls(
             next_token_ids=None,
@@ -991,6 +992,33 @@ class BaseModelAgent:
 
         return inputs, next_token_ids, extra_inputs, extra_outputs
 
+    def _save_decode_checkpoints(self, cache_inputs: CacheCheckpointInputs, inputs: ModelInputs,
+                                 output: BatchedOutputs | None) -> None:
+        """Freeze states on the forward stream using one TP-consistent
+        acceptance mask."""
+        plan = cache_inputs.decode_save_plan
+        if self.need_output:
+            cache_backend = get_backend().get_cache_backend()
+            mask = cache_backend.get_decode_save_mask(
+                plan, inputs.history_lengths, inputs.seq_length, output.next_token_ids, output.stop_pos,
+                is_decoding=inputs.is_decoding, lookahead=self.cache_config.prefix_cache_token_lookahead)
+        else:
+            mask = torch.empty(plan.size(1), dtype=torch.bool, device=plan.device)
+        dist_ctx = get_dist_manager().current_context()
+        if dist_ctx.dist_config.attn_tp > 1:
+            group = dist_ctx.attn_tp_group.gpu_group
+            # Stopping criteria are leader-owned. Broadcast their final decision
+            # on the GPU so every rank saves exactly the same accepted prefix.
+            dist.broadcast(mask, src=dist.get_global_rank(group, 0), group=group)
+        if inputs.ssm_state_meta is not None:
+            outputs = inputs.ssm_state_meta.output_state_ids
+            rows = plan[0]
+            offsets = (plan[1] - inputs.history_lengths[rows] - 1).clamp(0, outputs.shape[1] - 1)
+            plan[2].copy_(outputs[rows, offsets])
+        self.state_cache_engine.copy_decode_slots(plan, mask)
+        if output is not None:
+            output.decode_checkpoint_mask = mask
+
     async def _async_step(
         self,
         inputs: ModelInputs,
@@ -1029,9 +1057,10 @@ class BaseModelAgent:
             assert dp == 1, 'DP connector-only steps must carry dummy model inputs.'
             # Loads and saves finish asynchronously, so progress must still be
             # returned when the scheduler has no model work to dispatch.
+            start_kv_connector_save(self.kv_connector, connector_step)
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
-            assert connector_output is not None
-            self._push_output(BatchedOutputs.connector_only(connector_output))
+            if connector_output is not None:
+                self._push_output(BatchedOutputs.connector_only(connector_output))
             return
 
         if inputs is None:
@@ -1065,6 +1094,7 @@ class BaseModelAgent:
             inputs, is_all_sleeping = await self._prepare_dp_v1(inputs)
             # skip dummy forward.
             if inputs is None:
+                start_kv_connector_save(self.kv_connector, connector_step)
                 connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
                 if connector_output is not None:
                     self._push_output(BatchedOutputs.connector_only(connector_output))
@@ -1193,6 +1223,9 @@ class BaseModelAgent:
                     sampling_inputs,
                     need_broadcast_next,
                 ))
+
+        if cache_inputs is not None and cache_inputs.decode_save_plan is not None:
+            self._save_decode_checkpoints(cache_inputs, inputs, batched_output)
 
         # Partial checkpoints share logical block IDs across target and MTP.
         # Copy the MTP rows only after its prefill writes have completed.

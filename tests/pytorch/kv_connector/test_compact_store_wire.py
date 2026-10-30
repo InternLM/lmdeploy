@@ -277,7 +277,7 @@ def test_real_cuda_event_and_direct_pool_addresses_survive_delayed_store_reader(
 
     from lmdeploy.pytorch.paging.compact_state import SSMStateManager
 
-    runtime = ctypes.CDLL('libcudart.so.12')
+    runtime = ctypes.CDLL(f'libcudart.so.{torch.version.cuda.split(".")[0]}')
     runtime.cudaMemcpy.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
     runtime.cudaMemcpy.restype = ctypes.c_int
     entered, allow = threading.Event(), threading.Event()
