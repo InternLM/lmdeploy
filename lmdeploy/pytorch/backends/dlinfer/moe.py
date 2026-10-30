@@ -52,12 +52,22 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
         self.ep_group = ep_group
         self.expert_ids_per_ep_rank = None
         self.chunked_moe_layout = None
-        if self.ep_size > 1:
+
+    def _get_expert_ids_per_ep_rank(self, device: torch.device):
+        """Build the expert-id map of the current rank on the given device.
+
+        The map is created from the input device instead of a CUDA device index, so the non-CUDA accelerators served by
+        this backend (Ascend NPU, MACA, Cambricon) do not have to be CUDA at construction time.
+        """
+        if self.ep_size <= 1:
+            return None
+        if self.expert_ids_per_ep_rank is None or self.expert_ids_per_ep_rank.device != device:
             self.expert_ids_per_ep_rank = torch.tensor(
-                [i % (self.num_experts // self.ep_size) for i in range(num_experts)],
+                [i % (self.num_experts // self.ep_size) for i in range(self.num_experts)],
                 dtype=torch.int32,
-                device=torch.cuda.current_device(),
+                device=device,
             )
+        return self.expert_ids_per_ep_rank
 
     def ep_expert_list(self, world_size: int, rank: int):
         """Experts list of current rank."""
@@ -110,7 +120,7 @@ class DlinferFusedMoEImpl(FusedMoEImpl):
         step_context = get_step_ctx_manager().current_context()
         moe_metadata = getattr(step_context, 'moe_metadata', None)
         if moe_metadata is not None:
-            moe_metadata.expert_ids_per_ep_rank = self.expert_ids_per_ep_rank
+            moe_metadata.expert_ids_per_ep_rank = self._get_expert_ids_per_ep_rank(hidden_states.device)
         return fused_moe(hidden_states, gate_up_weights, down_weights, topk_weights, topk_ids, self.top_k,
                          self.renormalize, moe_metadata, self.chunked_moe_layout)
 
@@ -169,7 +179,7 @@ class DlinferFusedMoEW8A8Impl(DlinferFusedMoEImpl, FusedMoEW8A8Impl):
         moe_metadata = getattr(step_context, 'moe_metadata', None)
         if moe_metadata is None:
             raise RuntimeError('Dlinfer W8A8 MoE requires moe_metadata in the current step context.')
-        moe_metadata.expert_ids_per_ep_rank = self.expert_ids_per_ep_rank
+        moe_metadata.expert_ids_per_ep_rank = self._get_expert_ids_per_ep_rank(hidden_states.device)
         return fused_moe_w8a8(hidden_states, gate_up_weights, gate_up_scale, down_weights, down_scale, topk_weights,
                               topk_ids, self.top_k, self.renormalize, moe_metadata)
 
