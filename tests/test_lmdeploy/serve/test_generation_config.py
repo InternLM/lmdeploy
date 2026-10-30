@@ -3,6 +3,7 @@ import warnings
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from pydantic import BaseModel, ConfigDict
 
 from lmdeploy.messages import GenerationConfig
@@ -107,6 +108,18 @@ def test_build_generation_config_uses_generation_config_defaults():
     gen_config = build_generation_config(request, {})
     assert gen_config.temperature == _DEFAULTS.temperature
     assert gen_config.top_k == _DEFAULTS.top_k
+
+
+@pytest.mark.parametrize('request_top_k, defaults, expected', [
+    (None, {}, 0),
+    (None, {'temperature': 1.0, 'top_p': 0.95}, 0),
+    (None, {'top_k': 20}, 20),
+    (0, {'top_k': 20}, 0),
+    (5, {'top_k': 20}, 5),
+])
+def test_build_generation_config_top_k_fallback_and_overrides(request_top_k, defaults, expected):
+    request = CompletionRequest(model='test', prompt='hello', top_k=request_top_k)
+    assert build_generation_config(request, defaults).top_k == expected
 
 
 def test_build_generation_config_ignores_unsupported_defaults():
