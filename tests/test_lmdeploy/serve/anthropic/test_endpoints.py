@@ -1,3 +1,4 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
 import asyncio
@@ -119,7 +120,7 @@ class _FakeEngine:
 
     async def preprocess(self, *args, **kwargs):
         self.preprocess_calls.append((args, kwargs))
-        return SimpleNamespace(args=args, kwargs=kwargs)
+        return SimpleNamespace(args=args, kwargs=kwargs, inputs={'input_ids': list(range(8))})
 
     def generate(self, request, **kwargs):
         self.generate_calls.append((request, kwargs))

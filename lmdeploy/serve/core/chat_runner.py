@@ -77,6 +77,7 @@ class ChatRunner:
     result_generator: Any
     session_manager: Any
     prompt_text: str | None = None
+    prompt_token_ids: list[int] | None = None
     _closed: bool = False
 
     @classmethod
@@ -127,6 +128,7 @@ class ChatRunner:
         )
         if getattr(response_parser, 'requires_output_chunks', False):
             response_parser.bind_generation_config(preprocessed.gen_config)
+        prompt_token_ids = list(preprocessed.inputs['input_ids']) if parsed_request.return_token_ids else None
         result_generator = server_context.async_engine.generate(preprocessed, stream_response=True)
         return cls(
             request=parsed_request,
@@ -136,6 +138,7 @@ class ChatRunner:
             result_generator=result_generator,
             session_manager=server_context.session_manager,
             prompt_text=preprocessed.inputs.get('prompt') if parsed_request.return_prompt_text else None,
+            prompt_token_ids=prompt_token_ids,
         )
 
     async def close(self) -> None:
