@@ -60,9 +60,15 @@ pip download --no-deps --only-binary=:all: -d /wheels \
     "flash-attn-3==3.0.0" \
     --index-url "https://download.pytorch.org/whl/${FA3_CUDA_VERSION}"
 
-# lmdeploy-router: resolve the latest stable release when this script runs.
-ROUTER_TAG=$(curl -fsSL https://api.github.com/repos/caikun-pjlab/router/releases/latest \
-    | python -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])') || exit 1
+# Resolve the latest stable release via its redirect, avoiding the GitHub API's
+# unauthenticated rate limit on shared Docker/CI builders.
+ROUTER_RELEASE_URL=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' \
+    https://github.com/caikun-pjlab/router/releases/latest) || exit 1
+if [[ "${ROUTER_RELEASE_URL}" != https://github.com/caikun-pjlab/router/releases/tag/* ]]; then
+    echo "Unexpected router release URL: ${ROUTER_RELEASE_URL}" >&2
+    exit 1
+fi
+ROUTER_TAG=${ROUTER_RELEASE_URL##*/}
 ROUTER_VERSION=${ROUTER_TAG#v}
 ROUTER_WHEEL="lmdeploy_router-${ROUTER_VERSION}-py3-none-linux_x86_64.whl"
 wget -q -O "/wheels/${ROUTER_WHEEL}" \
