@@ -5,6 +5,7 @@ helpers."""
 from __future__ import annotations
 
 import dataclasses
+import json
 from typing import Any
 
 from pydantic import BaseModel
@@ -21,12 +22,15 @@ def _filter_gen_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_hf_generation_config(path: str, trust_remote_code: bool) -> dict[str, Any]:
-    from transformers import GenerationConfig
+    from transformers.utils import GENERATION_CONFIG_NAME, cached_file
 
     try:
-        cfg = GenerationConfig.from_pretrained(path, trust_remote_code=trust_remote_code)
-        return cfg.to_diff_dict()
-    except OSError:
+        config_file = cached_file(path, GENERATION_CONFIG_NAME)
+        # Keep explicit values, even when they match Transformers defaults.
+        # Instantiating GenerationConfig also adds defaults for absent fields.
+        with open(config_file, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
 
 

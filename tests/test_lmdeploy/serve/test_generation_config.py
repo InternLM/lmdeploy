@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import json
 import warnings
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -194,6 +195,31 @@ def test_resolve_default_gen_config_auto(mock_load):
 def test_resolve_default_gen_config_lmdeploy():
     config = resolve_default_gen_config('lmdeploy', '/fake/model', False)
     assert config == {}
+
+
+@pytest.mark.parametrize('source', ['auto', 'path'])
+@pytest.mark.parametrize('top_k', [None, 0, 20, 50])
+def test_resolve_default_gen_config_preserves_explicit_top_k(tmp_path, source, top_k):
+    config = {'do_sample': True, 'temperature': 1.0}
+    if top_k is not None:
+        config['top_k'] = top_k
+    (tmp_path / 'generation_config.json').write_text(json.dumps(config))
+
+    defaults = resolve_default_gen_config('auto' if source == 'auto' else str(tmp_path), str(tmp_path), False)
+    assert defaults['temperature'] == 1.0
+    assert ('top_k' in defaults) == (top_k is not None)
+    request = CompletionRequest(model='test', prompt='hello')
+    assert build_generation_config(request, defaults).top_k == (0 if top_k is None else top_k)
+
+    override = CompletionRequest(model='test', prompt='hello', top_k=5)
+    assert build_generation_config(override, defaults).top_k == 5
+
+
+@pytest.mark.parametrize('contents', [None, '{invalid json'])
+def test_resolve_default_gen_config_missing_or_invalid_file(tmp_path, contents):
+    if contents is not None:
+        (tmp_path / 'generation_config.json').write_text(contents)
+    assert resolve_default_gen_config('auto', str(tmp_path), False) == {}
 
 
 def test_completion_request_sampling_merge():
