@@ -57,11 +57,17 @@ class DlinferAttentionImpl(AttentionImpl[DlinferAttentionMetadata]):
             **kwargs,
         )
 
-        from lmdeploy.pytorch.kernels.dlinfer import fill_kv_cache, paged_attention_fwd, sparse_attention_fwd
+        from lmdeploy.pytorch.kernels.dlinfer import (
+            fill_kv_cache,
+            paged_attention_fwd,
+            sparse_attention_fwd,
+            sparse_attention_fwd_split,
+        )
 
         self.fill_kv_cache = fill_kv_cache
         self.paged_attention_fwd = paged_attention_fwd
         self.sparse_attention_fwd = sparse_attention_fwd
+        self.sparse_attention_fwd_split = sparse_attention_fwd_split
 
     def forward(
         self,
