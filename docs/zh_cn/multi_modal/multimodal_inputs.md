@@ -94,6 +94,8 @@ Chat 的 `tool` 消息、Messages 的 `tool_result` 块和 Responses 的 `functi
 
 针对 GLM-5.3-Flash 的默认模板，预处理会将调用 ID 明确、无歧义的工具结果分组按 assistant 的调用顺序排列，再进行模板渲染和图片收集。该排序规则仅用于 `Glm5NextForConditionalGeneration`，其他架构保留输入顺序；它不会自动推导任意或自定义 Jinja 模板的排序规则。InternVL3 和 InternVL3.5 会处理 user 和 tool 消息中的图片，并保留工具元数据；另一条消息中的旧式 `<IMAGE_TOKEN>` 占位符也不会影响当前消息的图片处理。
 
+GLM-5.3-Flash 使用 **Transformers 5.20.0 及以上版本**时，纯文本和多模态聊天会启用 `apply_chat_template(..., sanitize_control_tokens=True)`，将内容中的 `<tool_call>`、`<|image|>` 等字面量编码为普通文本，保留模板自身生成的控制 token ID。图片和视频应保留为结构化内容块：LMDeploy 沿用上述工具结果排序，再根据媒体预处理得到的尺寸展开媒体 ID。旧版 Transformers 继续使用原有字符串编码路径。该功能遵循 HF 的处理规则，不覆盖字典键，也不保证与训练编码器逐 token 一致；模型模板原有的 assistant 内容解释逻辑（包括内联思考标记）仍然适用。
+
 对应的工具结果格式见 [Messages API](../llm/api_server_anthropic.md) 和 [Responses API](../llm/api_server_responses.md) 文档。
 
 ## 多张图像
