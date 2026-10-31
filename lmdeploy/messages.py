@@ -90,7 +90,8 @@ class GenerationConfig:
             nucleus sampling, where the model considers the results of the
             tokens with top_p probability mass
         top_k: An alternative to sampling with temperature, where
-            the model considers the top_k tokens with the highest probability
+            the model considers the top_k tokens with the highest probability.
+            Defaults to 0, which disables top-k filtering.
         min_p: Minimum token probability, which will be scaled by the
             probability of the most likely token. It must be a value between
             0 and 1. Typical values are in the 0.01-0.2 range, comparably
@@ -180,7 +181,7 @@ class GenerationConfig:
     max_new_tokens: int = 512
     do_sample: bool = False
     top_p: float = 1.0
-    top_k: int = 50
+    top_k: int = 0
     min_p: float = 0.0
     temperature: float = 0.8
     repetition_penalty: float = 1.0

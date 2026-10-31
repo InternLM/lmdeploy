@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import json
 import warnings
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from pydantic import BaseModel, ConfigDict
 
 from lmdeploy.messages import GenerationConfig
@@ -109,6 +111,18 @@ def test_build_generation_config_uses_generation_config_defaults():
     assert gen_config.top_k == _DEFAULTS.top_k
 
 
+@pytest.mark.parametrize('request_top_k, defaults, expected', [
+    (None, {}, 0),
+    (None, {'temperature': 1.0, 'top_p': 0.95}, 0),
+    (None, {'top_k': 20}, 20),
+    (0, {'top_k': 20}, 0),
+    (5, {'top_k': 20}, 5),
+])
+def test_build_generation_config_top_k_fallback_and_overrides(request_top_k, defaults, expected):
+    request = CompletionRequest(model='test', prompt='hello', top_k=request_top_k)
+    assert build_generation_config(request, defaults).top_k == expected
+
+
 def test_build_generation_config_ignores_unsupported_defaults():
     request = CompletionRequest(model='test', prompt='hello')
     gen_config = build_generation_config(
@@ -181,6 +195,31 @@ def test_resolve_default_gen_config_auto(mock_load):
 def test_resolve_default_gen_config_lmdeploy():
     config = resolve_default_gen_config('lmdeploy', '/fake/model', False)
     assert config == {}
+
+
+@pytest.mark.parametrize('source', ['auto', 'path'])
+@pytest.mark.parametrize('top_k', [None, 0, 20, 50])
+def test_resolve_default_gen_config_preserves_explicit_top_k(tmp_path, source, top_k):
+    config = {'do_sample': True, 'temperature': 1.0}
+    if top_k is not None:
+        config['top_k'] = top_k
+    (tmp_path / 'generation_config.json').write_text(json.dumps(config))
+
+    defaults = resolve_default_gen_config('auto' if source == 'auto' else str(tmp_path), str(tmp_path), False)
+    assert defaults['temperature'] == 1.0
+    assert ('top_k' in defaults) == (top_k is not None)
+    request = CompletionRequest(model='test', prompt='hello')
+    assert build_generation_config(request, defaults).top_k == (0 if top_k is None else top_k)
+
+    override = CompletionRequest(model='test', prompt='hello', top_k=5)
+    assert build_generation_config(override, defaults).top_k == 5
+
+
+@pytest.mark.parametrize('contents', [None, '{invalid json'])
+def test_resolve_default_gen_config_missing_or_invalid_file(tmp_path, contents):
+    if contents is not None:
+        (tmp_path / 'generation_config.json').write_text(contents)
+    assert resolve_default_gen_config('auto', str(tmp_path), False) == {}
 
 
 def test_completion_request_sampling_merge():
