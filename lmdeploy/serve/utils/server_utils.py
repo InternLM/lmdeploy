@@ -50,6 +50,8 @@ class EngineSleepingMiddleware:
         ('POST', '/v1/completions'),
         ('POST', '/v1/responses'),
         ('POST', '/v1/messages'),
+        ('POST', '/v1/decisions'),
+        ('POST', '/v1/jev'),
         ('POST', '/generate'),
     })
 

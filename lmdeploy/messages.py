@@ -121,6 +121,11 @@ class GenerationConfig:
             model-processed input after multimodal expansion. Rows are returned
             for tokens after this boundary. ``-1`` disables input logprobs
             while preserving generated-token logprobs.
+        logprob_extra_token_ids: Extra token ids whose logprobs are returned in
+            every input-logprob row, in addition to the target and top-k
+            entries. Requires ``logprob_start_len >= 0``. Useful for scoring a
+            fixed candidate set (e.g. answer symbols) at prompt positions.
+            PyTorch engine only.
         response_format: Generate responses according to given formatting.
             Examples:
 
@@ -195,6 +200,7 @@ class GenerationConfig:
     spaces_between_special_tokens: bool = True
     logprobs: int = None
     logprob_start_len: int = -1
+    logprob_extra_token_ids: list[int] | None = None
     response_format: dict | None = None
     logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
@@ -268,6 +274,11 @@ class GenerationConfig:
             raise ValueError('logprob_start_len must be greater than or equal to -1')
         if self.logprob_start_len >= 0 and (self.logprobs is None or self.logprobs < 0):
             raise ValueError('logprobs must be non-negative when logprob_start_len is non-negative')
+        if self.logprob_extra_token_ids is not None:
+            if self.logprob_start_len < 0:
+                raise ValueError('logprob_extra_token_ids requires logprob_start_len >= 0')
+            if not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in self.logprob_extra_token_ids):
+                raise ValueError('logprob_extra_token_ids must be a list of non-negative ints')
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
             self.repetition_ngram_size = 0
             self.repetition_ngram_threshold = 0

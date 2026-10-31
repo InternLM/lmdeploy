@@ -179,6 +179,12 @@ class ARSamplingStrategy(SamplingStrategy):
 
         max_num_logprobs = max(num_logprobs)
 
+        # rows share one column layout, so batch requests use the union of ids
+        logprob_extra_token_ids = set()
+        for seq in seqs:
+            logprob_extra_token_ids.update(seq.sampling_param.logprob_extra_token_ids or ())
+        logprob_extra_token_ids = torch.tensor(sorted(logprob_extra_token_ids)) if logprob_extra_token_ids else None
+
         session_ctx = [{
             'session_id': seq.session.session_id,
             'seq_id': seq.seq_id,
@@ -214,6 +220,7 @@ class ARSamplingStrategy(SamplingStrategy):
             min_top_p=min_top_p,
             logits_processors=logits_processors,
             max_num_logprobs=max_num_logprobs,
+            logprob_extra_token_ids=logprob_extra_token_ids,
             batch_size=batch_size,
             session_ctx=session_ctx,
             session_to_cleanup=session_to_cleanup,

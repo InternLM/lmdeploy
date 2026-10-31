@@ -450,7 +450,7 @@ def test_async_step_continues_chunks_from_final_with_current_bank(monkeypatch, w
     agent._out_que = asyncio.Queue()
     agent.agent_strategy = SimpleNamespace(slice_extra_inputs=lambda extra, *_: extra)
     agent._slice_outs = lambda logits, lengths: logits[-1:]
-    agent._get_outputs_with_logprobs = lambda *_: SimpleNamespace(kv_connector_output=None)
+    agent._get_outputs_with_logprobs = lambda *_, **kwargs: SimpleNamespace(kv_connector_output=None)
     actual = []
     merged = []
     updates = []
@@ -490,7 +490,7 @@ def test_async_step_continues_chunks_from_final_with_current_bank(monkeypatch, w
     agent._async_model_forward = forward
     agent._step_postprocess_with_output = sample
     agent._step_postprocess_without_output = without_output
-    sampling = SimpleNamespace(max_num_logprobs=0, get_delta=lambda: None)
+    sampling = SimpleNamespace(max_num_logprobs=0, logprob_extra_token_ids=None, get_delta=lambda: None)
     previous_final = torch.ones(1, device='cuda', dtype=torch.long)
     history = 2048
     frozen = None

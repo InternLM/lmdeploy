@@ -76,6 +76,7 @@ class SamplingParam:
     out_ce_loss: bool = False
     num_logprobs: int = -1
     logprob_start_len: int = -1
+    logprob_extra_token_ids: tuple[int, ...] | None = None
     return_routed_experts: bool = False
 
     # ngram
@@ -174,6 +175,8 @@ class SamplingParam:
             out_ce_loss=gen_config.return_ppl,
             num_logprobs=logprobs,
             logprob_start_len=gen_config.logprob_start_len,
+            logprob_extra_token_ids=(tuple(gen_config.logprob_extra_token_ids)
+                               if gen_config.logprob_extra_token_ids is not None else None),
             return_routed_experts=gen_config.return_routed_experts,
             repetition_ngram_size=repetition_ngram_size,
             repetition_ngram_threshold=repetition_ngram_threshold,
