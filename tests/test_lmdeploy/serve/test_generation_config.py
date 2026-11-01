@@ -222,6 +222,65 @@ def test_resolve_default_gen_config_missing_or_invalid_file(tmp_path, contents):
     assert resolve_default_gen_config('auto', str(tmp_path), False) == {}
 
 
+@pytest.mark.parametrize('source', ['auto', 'path'])
+@pytest.mark.parametrize('field', ['top_k', 'top_p', 'temperature', 'min_p'])
+def test_resolve_default_gen_config_null_sampling_value_is_unset(tmp_path, source, field):
+    (tmp_path / 'generation_config.json').write_text(json.dumps({field: None}))
+
+    defaults = resolve_default_gen_config('auto' if source == 'auto' else str(tmp_path), str(tmp_path), False)
+    assert field not in defaults
+    request = CompletionRequest(model='test', prompt='hello')
+    assert getattr(build_generation_config(request, defaults), field) == getattr(_DEFAULTS, field)
+
+
+@pytest.mark.parametrize('source', ['auto', 'path'])
+@pytest.mark.parametrize('field', ['top_k', 'temperature', 'min_p'])
+def test_resolve_default_gen_config_preserves_zero_sampling_value(tmp_path, source, field):
+    (tmp_path / 'generation_config.json').write_text(json.dumps({field: 0}))
+
+    defaults = resolve_default_gen_config('auto' if source == 'auto' else str(tmp_path), str(tmp_path), False)
+    assert defaults[field] == 0
+    request = CompletionRequest(model='test', prompt='hello')
+    assert getattr(build_generation_config(request, defaults), field) == 0
+
+
+@pytest.mark.parametrize('source', ['auto', 'path'])
+def test_resolve_default_gen_config_mixed_null_and_explicit_values(tmp_path, source):
+    config = {'top_k': 50, 'top_p': 0.95, 'temperature': 0, 'min_p': None}
+    (tmp_path / 'generation_config.json').write_text(json.dumps(config))
+
+    defaults = resolve_default_gen_config('auto' if source == 'auto' else str(tmp_path), str(tmp_path), False)
+    assert defaults == {'top_k': 50, 'top_p': 0.95, 'temperature': 0}
+    request = CompletionRequest(model='test', prompt='hello')
+    gen_config = build_generation_config(request, defaults)
+    assert gen_config.top_k == 50
+    assert gen_config.top_p == 0.95
+    assert gen_config.temperature == 0
+    assert gen_config.min_p == _DEFAULTS.min_p
+
+
+@pytest.mark.parametrize('source', ['auto', 'path'])
+@pytest.mark.parametrize('export', ['dict', 'json_file'])
+def test_resolve_default_gen_config_full_hf_export_with_nulls(tmp_path, source, export):
+    from transformers import GenerationConfig as HFGenerationConfig
+
+    hf_config = HFGenerationConfig(top_k=None, top_p=None, temperature=None, min_p=None, repetition_penalty=1.1)
+    config_file = tmp_path / 'generation_config.json'
+    if export == 'dict':
+        config_file.write_text(json.dumps(hf_config.to_dict()))
+    else:
+        hf_config.to_json_file(config_file, use_diff=False)
+    contents = json.loads(config_file.read_text())
+    assert all(field in contents and contents[field] is None for field in ('top_k', 'top_p', 'temperature', 'min_p'))
+
+    defaults = resolve_default_gen_config('auto' if source == 'auto' else str(tmp_path), str(tmp_path), False)
+    request = CompletionRequest(model='test', prompt='hello')
+    gen_config = build_generation_config(request, defaults)
+    for field in ('top_k', 'top_p', 'temperature', 'min_p'):
+        assert getattr(gen_config, field) == getattr(_DEFAULTS, field)
+    assert gen_config.repetition_penalty == 1.1
+
+
 def test_completion_request_sampling_merge():
     request = CompletionRequest(model='test', prompt='hello')
     gen_config = build_generation_config(request, {'temperature': 0.9})

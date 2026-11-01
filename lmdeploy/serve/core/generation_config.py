@@ -18,7 +18,7 @@ _GENERATION_CONFIG_FIELDS = {field.name for field in dataclasses.fields(Generati
 
 
 def _filter_gen_config(config: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in config.items() if key in _GENERATION_CONFIG_FIELDS}
+    return {key: value for key, value in config.items() if key in _GENERATION_CONFIG_FIELDS and value is not None}
 
 
 def _load_hf_generation_config(path: str, trust_remote_code: bool) -> dict[str, Any]:
