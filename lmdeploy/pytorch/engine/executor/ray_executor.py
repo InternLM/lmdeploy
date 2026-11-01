@@ -312,7 +312,7 @@ class RayExecutor(ExecutorBase):
             self.remote_outs: asyncio.Queue = None
             # Forwards and outputs are consumed in FIFO order. Remember which
             # queued steps need all TP outputs instead of only the TP leader's.
-            self._connector_steps: deque[bool] = deque()
+            self._output_steps: deque[tuple[bool, int | None]] = deque()
             # Rank-local connector completions may arrive on different steps.
             # Keep partial reports here until every worker has reported an ID.
             self._kv_output_aggregator = KVConnectorOutputAggregator(len(self.workers))
@@ -442,7 +442,7 @@ class RayExecutor(ExecutorBase):
         await self.collective_rpc_async('sleep', (level, ))
         # Workers drain their queues while sleeping, so their driver-side step
         # markers and partially aggregated completions are stale as well.
-        self._connector_steps.clear()
+        self._output_steps.clear()
         self._kv_output_aggregator.clear()
 
     def wakeup(self, tags: list[str] | None = None):
@@ -530,6 +530,11 @@ class RayExecutor(ExecutorBase):
         if self._prefetch_task is not None:
             self._prefetch_task.cancel()
 
+    async def drain_for_shutdown(self):
+        # A timeout/dead rank is not a drain proof. The caller must retain leases.
+        await asyncio.wait_for(self.collective_rpc_async('drain_for_shutdown'),
+                               timeout=self._get_worker_release_timeout(self.cache_config))
+
     def release(self):
         """release."""
         if _envs.ray_timeline_enable:
@@ -603,13 +608,17 @@ class RayExecutor(ExecutorBase):
         self._prev_out = [
             worker.forward_async.remote(self._prev_inputs) for worker in self.workers
         ]
-        self._connector_steps.append(inputs.get('kv_connector_metadata') is not None)
+        cache_inputs = inputs.get('cache_inputs')
+        access_id = cache_inputs.ssm_state_access_id if cache_inputs is not None else None
+        self._output_steps.append((inputs.get('kv_connector_metadata') is not None, access_id))
 
     async def get_output_async(self):
         """Get output async."""
-        connector_step = self._connector_steps.popleft()
-        if not connector_step:
+        connector_step, access_id = self._output_steps.popleft()
+        if not connector_step and access_id is None:
             ret = await self.workers[0].get_outputs.remote()
+            if ret.ssm_state_access_id is not None:
+                raise RuntimeError('Unexpected compact completion on a legacy worker step.')
             return ret.to_tensor()
 
         outputs = await asyncio.gather(*[
@@ -617,14 +626,16 @@ class RayExecutor(ExecutorBase):
             for worker in self.workers
         ])
         outputs = [output.to_tensor() for output in outputs]
-        connector_output = self._kv_output_aggregator.aggregate([
-            output.kv_connector_output
-            for output in outputs
-        ])
-        # Model output is produced by the TP leader; only connector progress
-        # needs to be replaced with the all-worker aggregate.
+        if any(output.ssm_state_access_id != access_id for output in outputs):
+            raise RuntimeError('Compact access completion identity mismatch across workers.')
+        # Each worker get_outputs has crossed its own CUDA event. Return the
+        # owner identity only after every shard completes; dispatch RPCs and
+        # leader-only D2H do not establish this condition.
         output = outputs[0]
-        output.kv_connector_output = connector_output
+        if connector_step:
+            output.kv_connector_output = self._kv_output_aggregator.aggregate([
+                rank_output.kv_connector_output for rank_output in outputs
+            ])
         return output
 
     @contextlib.contextmanager

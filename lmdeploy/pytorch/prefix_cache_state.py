@@ -72,26 +72,23 @@ class StateCheckpointSaveReservation:
     slot: int = -1
     step: int = 0
     node: Any = field(default=None, repr=False)
-    is_decode: bool = False
 
     @property
     def is_pending(self) -> bool:
         """Whether a save destination is currently reserved."""
         return self.slot >= 0
 
-    def reserve(self, slot: int, step: int, node: Any, is_decode: bool) -> None:
+    def reserve(self, slot: int, step: int, node: Any) -> None:
         """Record the slot and trie identity that a forward will save."""
         self.slot = slot
         self.step = step
         self.node = node
-        self.is_decode = is_decode
 
     def clear(self) -> None:
         """Forget a published or discarded save reservation."""
         self.slot = -1
         self.step = 0
         self.node = None
-        self.is_decode = False
 
 
 @dataclass
@@ -178,8 +175,8 @@ class PrefixCacheState:
     groups the strategy requirement, one-shot allocation window, and canonical
     trie identities used when a cached suffix must be recomputed into fresh
     sequence-owned KV. ``suppress_match_stats`` is set while replaying work
-    after recompute eviction; cache reuse may still happen, but it should not
-    affect the public prefix-cache hit-rate metric.
+    after recompute eviction; cache reuse may still happen, but it must neither
+    add to public hit statistics nor erase the request's accepted cached tokens.
     """
 
     # Persistent request metadata used to build multimodal-aware trie keys.
@@ -197,6 +194,10 @@ class PrefixCacheState:
 
     # Latest decode checkpoint node owned by this sequence.
     decode_checkpoint_node: Any = field(default=None, repr=False)
+    # Successful local publication or all-rank Store completion in this input turn.
+    last_decode_save_step: int = -1
+    # A Store snapshot is awaiting completion; it has not advanced the position above.
+    decode_store_save_pending: bool = False
 
     # Tentative match state used for chunking, recompute overlap, and metrics.
     match_start_step: int = -1

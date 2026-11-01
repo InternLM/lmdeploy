@@ -4,7 +4,7 @@ import torch
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 
 
-def test_cache_checkpoint_inputs_to_device_moves_only_kv_plans():
+def test_cache_checkpoint_inputs_to_device_moves_device_consumed_plans():
     kv_restore_plan = torch.tensor([[1, 2], [3, 4]])
     kv_save_plan = torch.tensor([[5], [6]])
     state_restore_plan = ((7, 8), (9, 10))
@@ -14,6 +14,8 @@ def test_cache_checkpoint_inputs_to_device_moves_only_kv_plans():
         kv_save_plan=kv_save_plan,
         state_restore_plan=state_restore_plan,
         state_save_plan=state_save_plan,
+        decode_save_plan=torch.tensor([[0], [64], [1], [2]]),
+        decode_save_id=7,
     )
 
     device_inputs = cache_inputs.to_device('meta', non_blocking=True)
@@ -21,11 +23,13 @@ def test_cache_checkpoint_inputs_to_device_moves_only_kv_plans():
     assert device_inputs is not cache_inputs
     assert device_inputs.kv_restore_plan.device.type == 'meta'
     assert device_inputs.kv_save_plan.device.type == 'meta'
+    assert device_inputs.decode_save_plan.device.type == 'meta'
+    assert device_inputs.decode_save_id == 7
     assert device_inputs.state_restore_plan is state_restore_plan
     assert device_inputs.state_save_plan is state_save_plan
 
 
-def test_cache_checkpoint_inputs_record_stream_records_only_kv_plans():
+def test_cache_checkpoint_inputs_record_stream_records_device_consumed_plans():
     recorded = []
 
     class _CudaTensor(torch.Tensor):
@@ -44,9 +48,11 @@ def test_cache_checkpoint_inputs_record_stream_records_only_kv_plans():
     stream = object()
     restore_plan = _CudaTensor()
     save_plan = _CudaTensor()
+    decode_plan = _CudaTensor()
     cache_inputs = CacheCheckpointInputs(
         kv_restore_plan=restore_plan,
         kv_save_plan=save_plan,
+        decode_save_plan=decode_plan,
         state_restore_plan=((1, ), (2, )),
         state_save_plan=((3, ), (4, )),
     )
@@ -56,4 +62,5 @@ def test_cache_checkpoint_inputs_record_stream_records_only_kv_plans():
     assert recorded == [
         (id(restore_plan), stream),
         (id(save_plan), stream),
+        (id(decode_plan), stream),
     ]

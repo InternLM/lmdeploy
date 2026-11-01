@@ -1,9 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Shared planning helpers for long-context prefill chunks."""
+"""Shared planning helpers for prefill chunks and state checkpoints."""
 
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import chain
+from math import gcd
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -48,6 +49,9 @@ class LongContextChunkPlan:
     chunk_size: int
     is_last_chunk: bool
     multimodals: 'MultiModalInputs|None'
+    # Exact compact-state boundary c, independent of the model-forward end e.
+    # Zero means no compact checkpoint candidate; legacy uses chunk_end.
+    checkpoint_step: int = 0
 
 
 def sort_long_context_multimodals(multimodals: 'MultiModalInputs') -> 'MultiModalInputs':
@@ -120,15 +124,54 @@ def get_last_prefill_save_step(seq: 'SchedulerSequence') -> int | None:
     return step or None
 
 
+def get_decode_save_step(seq: 'SchedulerSequence', min_step: int, max_step: int) -> int | None:
+    """Choose a checkpoint within the state history retained by one forward.
+
+    The inclusive bounds describe retained states, not accepted tokens. The caller must verify acceptance and lookahead
+    before saving. Planning never advances the last successful save position.
+
+    A missed first save retries on prefill alignment. Later retries use the same gcd alignment as Store lookups so every
+    saved boundary remains discoverable. An overwritten state cannot be saved retroactively.
+    """
+    meta = seq._seq_meta
+    if not meta.prefill_save_alignment or seq.logprob_start_pos >= 0:
+        return None
+    if not meta.enable_prefix_caching and seq.prefix_cache.decode_store_save_pending:
+        return None
+    interval = meta.prefix_cache_decode_state_interval
+    last_step = seq.prefix_cache.last_decode_save_step
+    if meta.prefix_cache_decode_save_first:
+        if last_step < 0:
+            alignment = meta.prefill_save_alignment
+            step = (seq.input_end_pos + alignment - 1) // alignment * alignment
+        elif interval:
+            alignment = gcd(meta.prefill_save_alignment, interval)
+            step = last_step + interval
+        else:
+            return None
+    elif interval:
+        alignment = interval
+        step = (seq.input_end_pos // interval + 1) * interval
+    else:
+        return None
+    if step < min_step:
+        step = (min_step + alignment - 1) // alignment * alignment
+    if 0 < step <= max_step and seq.is_prefix_cache_boundary_safe(step):
+        return step
+    return None
+
+
 def limit_long_context_checkpoint(seq: 'SchedulerSequence', limit: int) -> int:
-    """Cut the final prefill suffix after a reusable aligned checkpoint."""
+    """Cut only when an internal checkpoint cannot be exported directly."""
     alignment = seq._seq_meta.prefill_save_alignment
     if alignment and seq._seq_meta.enable_prefix_caching and not seq._seq_meta.prefill_save_last_only:
         # Matching leaves at least one input for logits, so an identical prompt
         # can reuse the preceding aligned state instead of its final state.
         step = ((seq.input_end_pos - 1) // alignment) * alignment
         if seq.num_history_ids < step and seq.is_prefix_cache_boundary_safe(step):
-            limit = min(limit, step - seq.num_history_ids)
+            stride = seq._seq_meta.compact_prefill_checkpoint_stride
+            if not stride or (step - seq.num_history_ids) % stride:
+                limit = min(limit, step - seq.num_history_ids)
     return limit
 
 
@@ -164,19 +207,34 @@ def plan_long_context_chunk(seq: 'SchedulerSequence',
             end = span_start
             break
 
+    checkpoint_step = 0
+    stride = seq._seq_meta.compact_prefill_checkpoint_stride
     save_alignment = seq._seq_meta.prefill_save_alignment
+    save_end = None
     if seq._seq_meta.prefill_save_last_only:
         save_end = get_last_prefill_save_step(seq)
-        if save_end is not None and start < save_end < end:
-            end = save_end
     # Embedding-only inputs do not yet have a Store content identity.
     elif save_alignment and len(seq.history_embeddings) == 0:
-        save_end = end // save_alignment * save_alignment
+        # An identical prompt still needs a logits token. Compact mode can
+        # keep the normal final interval while exporting its preceding prefix.
+        candidate_end = end
+        if stride and seq._seq_meta.enable_prefix_caching and end == seq.input_end_pos:
+            candidate_end -= 1
+        save_end = candidate_end // save_alignment * save_alignment
         for span_start, span_end in reversed(chunk_spans):
             if span_start < save_end < span_end:
                 save_end = span_start // save_alignment * save_alignment
-        if save_end > start:
+    if save_end is not None and start < save_end <= end:
+        if stride and (save_end == end or (save_end - start) % stride == 0):
+            checkpoint_step = save_end
+        else:
+            # Unsupported internal offsets keep the legacy cut. Last-only
+            # policy still selects the same turn-wide checkpoint in both modes.
             end = save_end
+            if stride:
+                checkpoint_step = end
+    if stride and not checkpoint_step and end > start and not seq._seq_meta.prefill_save_last_only:
+        checkpoint_step = end
 
     chunk_size = end - start
     out_multimodals = None
@@ -190,4 +248,5 @@ def plan_long_context_chunk(seq: 'SchedulerSequence',
                                 chunk_end=end,
                                 chunk_size=chunk_size,
                                 is_last_chunk=chunk_size == seq.num_token_ids,
-                                multimodals=out_multimodals)
+                                multimodals=out_multimodals,
+                                checkpoint_step=checkpoint_step)

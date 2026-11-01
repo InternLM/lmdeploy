@@ -73,7 +73,10 @@ class SequenceLifecycle:
             seq.prefix_cache.trie_cursor = None
             seq.prefix_cache.match_start_step = -1
             seq.prefix_cache.recompute_overlap.clear_tracking()
-        seq.cached_tokens = 0
+        # Recompute releases local ownership, not the current request's
+        # already accepted prompt-cache usage.
+        if not seq.prefix_cache.suppress_match_stats:
+            seq.cached_tokens = 0
         seq.kv_token_limit = None
         if seq.num_blocks > 0:
             self._block_manager.free(seq)

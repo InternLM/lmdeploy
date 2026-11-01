@@ -932,7 +932,7 @@ def test_worker_drain_discards_save_ids_whose_outputs_were_dropped():
     scheduler.finish_transfers_after_worker_drain()
 
     assert scheduler.build_connector_meta(_connector_step()) is None
-    assert scheduler.build_connector_meta(output) is None
+    assert scheduler.build_connector_meta(output).save_requests[0].start_block == 0
 
     next_request = _request(range(9), seq_id=18)
     scheduler.on_new_request(next_request)

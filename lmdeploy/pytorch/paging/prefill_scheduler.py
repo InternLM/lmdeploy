@@ -151,13 +151,16 @@ class _PrefillReorderer:
     def _estimate_long_chunks(self, seq: SchedulerSequence, chunk_limit: int, first_chunk_end: int):
         """Estimate chunk count without walking the remaining text chunks.
 
-        The continuation accounts for save alignment but treats future tokens as text. Later multimodal spans can change
-        its boundaries, so this remains an ordering estimate, never an allocation or execution plan.
+        Legacy continuation accounts for save alignment. Direct compact exports use the normal token-budget estimate;
+        unsupported internal offsets or future multimodal spans can add cuts. This is an ordering estimate, never an
+        allocation or execution plan.
         """
         chunk_limit = max(1, chunk_limit)
         end = seq.num_history_ids + seq.num_token_ids
         remaining = end - first_chunk_end
         ordinary_chunks = 1 + (remaining + chunk_limit - 1) // chunk_limit
+        if seq._seq_meta.compact_prefill_checkpoint_stride:
+            return ordinary_chunks
         if seq._seq_meta.prefill_save_last_only:
             save_step = get_last_prefill_save_step(seq)
             if save_step is None or save_step <= first_chunk_end:
@@ -439,7 +442,9 @@ class _TentativePrefixMatch:
         prefix_cache.restore.clear()
         prefix_cache.match_start_step = -1
         prefix_cache.recompute_overlap.clear_tracking()
-        seq.cached_tokens = 0
+        # Rejecting a replay attempt must not erase the original request hit.
+        if not prefix_cache.suppress_match_stats:
+            seq.cached_tokens = 0
 
     def _clear(self) -> None:
         self._stats_snapshot = None

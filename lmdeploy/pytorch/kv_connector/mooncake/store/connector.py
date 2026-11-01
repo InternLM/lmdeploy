@@ -24,6 +24,7 @@ from .worker import MooncakeStoreWorker
 if TYPE_CHECKING:
     from lmdeploy.pytorch.config import CacheConfig
     from lmdeploy.pytorch.messages import SchedulerSequence
+    from lmdeploy.pytorch.paging.compact_state import SSMStateManager
 
 
 class MooncakeStoreConnector(KVConnectorBase):
@@ -78,6 +79,9 @@ class MooncakeStoreConnector(KVConnectorBase):
 
     # Scheduler-side methods.
 
+    def bind_compact_state_manager(self, owner: SSMStateManager) -> None:
+        self._require_scheduler().bind_compact_state_manager(owner)
+
     def get_num_new_matched_tokens(
         self,
         request: SchedulerSequence,
@@ -99,8 +103,26 @@ class MooncakeStoreConnector(KVConnectorBase):
     ) -> MooncakeStoreConnectorMetadata | None:
         return self._require_scheduler().build_connector_meta(step_input)
 
+    def plan_compact_save_steps(self, running, token_lens, checkpoint_steps, *, skipped=None):
+        return self._require_scheduler().plan_compact_save_steps(running, token_lens, checkpoint_steps, skipped=skipped)
+
+    def record_compact_save_skips(self, skipped):
+        self._require_scheduler().record_compact_save_skips(skipped)
+
+    def rollback_compact_metadata(self, metadata):
+        self._require_scheduler().rollback_compact_metadata(metadata)
+
     def on_new_request(self, request: SchedulerSequence) -> None:
         return self._require_scheduler().on_new_request(request)
+
+    def reserve_decode_snapshot(self, request: SchedulerSequence) -> int:
+        return self._require_scheduler().reserve_decode_snapshot(request)
+
+    def release_decode_snapshot(self, slot: int) -> None:
+        self._require_scheduler().release_decode_snapshot(slot)
+
+    def queue_decode_save(self, step_input: KVConnectorStepInput) -> MooncakeStoreConnectorMetadata | None:
+        return self._require_scheduler().queue_decode_save(step_input)
 
     def is_lookup_pending(self, request_id: RequestId) -> bool:
         return self._require_scheduler().is_lookup_pending(request_id)
@@ -130,10 +152,12 @@ class MooncakeStoreConnector(KVConnectorBase):
         kv_caches: Mapping[str, KVCacheValue],
         *,
         state_cache_pools: Sequence[KVCachePool] = (),
+        state_cache_schema: str | None = None,
     ) -> None:
         return self._require_worker().register_kv_caches(
             kv_caches,
             state_cache_pools=state_cache_pools,
+            **({'state_cache_schema': state_cache_schema} if state_cache_schema is not None else {}),
         )
 
     def start_load_kv(self) -> None:

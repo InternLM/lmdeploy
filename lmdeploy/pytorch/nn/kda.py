@@ -15,7 +15,7 @@ class Kda(nn.Module):
     def __init__(self):
         super().__init__()
         self.impl = get_backend().build_op(
-            KdaBuildSpec(),
+            KdaBuildSpec(indexed_state=get_build_model_context().state_cache_is_indexed),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 

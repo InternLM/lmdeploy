@@ -36,8 +36,6 @@ def update_cache_config(cache_config):
     cache_config.block_size = 64
     cache_config.kernel_block_size = 64
     cache_config.prefix_cache_block_aligned = True
-    if cache_config.prefix_cache_token_lookahead and cache_config.prefix_cache_decode_state_interval:
-        raise ValueError('GLM-5.3 MTP prefix caching only publishes prefill checkpoints.')
     if cache_config.prefix_cache_decode_state_interval % 64:
         raise ValueError('GLM-5.3 prefix_cache_decode_state_interval must be a multiple of 64.')
 
@@ -264,14 +262,15 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         config.supports_mla_fp8_cache = True
         config.reserve_dsa_score_workspace = True
         config.k_head_dim = text_config.kv_lora_rank
-        # Reuse Qwen3.5's token ring for convolution; recurrent/KPool states
-        # keep a complete checkpoint after each verified token. Store resumes
-        # on 64-token boundaries, where the unfinished KPool tail is empty.
-        ring_shape = (num_spec_tokens + 1,) if num_spec_tokens else ()
+        # CUDA stores exact-boundary KDA units; KPool remains request-private.
+        # Store resumes on 64-token boundaries, where the KPool tail is empty.
+        config.state_cache_is_indexed = kwargs.get('device_type', 'cuda') in ('cuda', 'auto')
+        ring_shape = ((num_spec_tokens + 1,) if num_spec_tokens else ()) if not config.state_cache_is_indexed else ()
         config.state_cache_specs = [
             StateCacheSpec(
                 GLM5_KDA_CONV_STATE,
-                (num_linear_layers, conv_dim, conv_kernel_size + num_spec_tokens),
+                (num_linear_layers, conv_dim,
+                 conv_kernel_size - 1 if config.state_cache_is_indexed else conv_kernel_size + num_spec_tokens),
                 torch.bfloat16,
             ),
             StateCacheSpec(
@@ -320,6 +319,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             if hasattr(hf_config, 'auto_map'):
                 del hf_config.auto_map
             config.num_layers = 1
+            config.state_cache_is_indexed = False
             config.state_cache_specs = []
             config.states_shapes = []
             config.is_gated_delta = False

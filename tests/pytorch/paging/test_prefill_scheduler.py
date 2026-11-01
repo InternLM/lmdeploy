@@ -387,7 +387,9 @@ def test_scheduler_cached_tokens_only_count_current_prompt_after_session_evictio
     assert seq.cached_tokens == 0
 
 
-def test_scheduler_excludes_recompute_eviction_prefix_hits_from_stats():
+@pytest.mark.parametrize('initial_hit', [False, True])
+@pytest.mark.parametrize('reject_resume', [False, True])
+def test_scheduler_preserves_usage_without_recounting_recompute_hits(monkeypatch, initial_hit, reject_resume):
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 16
     seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
@@ -402,26 +404,113 @@ def test_scheduler_excludes_recompute_eviction_prefix_hits_from_stats():
                                        eviction_type='recompute')
     scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
 
+    if initial_hit:
+        cached = scheduler.add_session(2).add_sequence([1] * block_size + [2] * block_size + [9])
+        assert scheduler.schedule(is_prefill=True).running == [cached]
+        scheduler.end_session(2)
+
     seq = scheduler.add_session(0).add_sequence([1] * block_size + [2] * block_size + [3])
     output = scheduler.schedule(is_prefill=True)
     assert output.running == [seq]
+    expected_cached_tokens = block_size * 2 if initial_hit else 0
+    assert seq.cached_tokens == expected_cached_tokens
 
-    seq.state.evict()
-    pressure = scheduler.add_session(1).add_sequence([9] * block_size * 3)
     scheduler.block_trie.stats.reset()
+    for _ in range(2):
+        seq.state.evict()
+        pressure = scheduler.add_session(1).add_sequence([9] * block_size * 3)
+        assert scheduler.eviction_helper.try_make_capacity_for(pressure, [seq], 0)
+        assert seq.prefix_cache.suppress_match_stats
+        assert seq.cached_tokens == expected_cached_tokens
+        scheduler.end_session(1)
 
-    assert scheduler.eviction_helper.try_make_capacity_for(pressure, [seq], 0)
+        if reject_resume:
+            with monkeypatch.context() as patch:
+                patch.setattr(scheduler.eviction_helper, 'try_make_capacity_for', Mock(return_value=False))
+                assert scheduler.schedule(is_prefill=True).running == []
+            assert seq.num_history_ids == seq.num_blocks == 0
+            assert seq.cached_tokens == expected_cached_tokens
+            assert seq.prefix_cache.suppress_match_stats
+
+        output = scheduler.schedule(is_prefill=True)
+
+        assert output.running == [seq]
+        assert seq.num_history_ids >= block_size
+        assert seq.cached_tokens == expected_cached_tokens
+        assert not seq.prefix_cache.suppress_match_stats
+        assert scheduler.block_trie.stats.num_query_tokens == 0
+        assert scheduler.block_trie.stats.num_hit_tokens == 0
+
+    seq.state.stop()
+    seq.update_token_ids(torch.tensor([5]))
+    assert seq.cached_tokens == 0
+
+
+@pytest.mark.parametrize('initial_hit', [False, True])
+@pytest.mark.parametrize('mtp', [False, True])
+@pytest.mark.parametrize('ssm', [False, True])
+def test_scheduler_preserves_usage_after_decode_preemption_and_admission_rollback(initial_hit, mtp, ssm):
+    from lmdeploy.pytorch.config import SpecDecodeConfig
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
+
+    block_size = 4
+    strategy = ARSequenceStrategy()
+    if mtp:
+        strategy = ARSpecStrategyFactory(SimpleNamespace(bos_token_id=0), SpecDecodeConfig(
+            model='draft', method='qwen3_5_mtp', disable_prefix_cache_block_drop=True)).build_sequence_strategy()
+    cache_config = CacheConfig(max_batches=2,
+                               block_size=block_size,
+                               num_cpu_blocks=0,
+                               num_gpu_blocks=5,
+                               enable_prefix_caching=True,
+                               states_shapes=[((1,), torch.float32)] if ssm else [],
+                               num_state_caches=4 if ssm else 0,
+                               prefix_cache_state_budget=1 if ssm else 0)
+    scheduler = Scheduler(SchedulerConfig(max_batches=2, max_session_len=64, max_request_output_len=32),
+                          cache_config, SequenceMeta(block_size, strategy=strategy))
+    prefix = [1] * block_size + [2] * block_size
+    if initial_hit:
+        cached = scheduler.add_session(0).add_sequence(prefix)
+        assert scheduler.schedule(is_prefill=True).running == [cached]
+        if ssm:
+            assert scheduler.state_checkpoints.reserve_save(cached) > 0
+            assert scheduler.state_checkpoints.publish_save(cached)
+        scheduler.end_session(0)
+
+    seq = scheduler.add_session(1).add_sequence(prefix + [3] * block_size)
+    pressure = scheduler.add_session(2).add_sequence([9] * block_size * 2)
+    assert scheduler.schedule(is_prefill=True).running == [seq, pressure]
+    expected_cached_tokens = len(prefix) if initial_hit else 0
+    assert seq.cached_tokens == expected_cached_tokens
+    stats = scheduler.block_trie.stats.snapshot()
+    scheduler.activate_seqs([seq, pressure])
+    seq.update_token_ids([4], mode=UpdateTokenMode.PREFILL, draft_token_ids=[])
+
+    # Both requests own all five blocks. Decode needs a sixth block, and
+    # the immediate prefill retry cannot reclaim the other running request.
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 0
+    assert scheduler.schedule_running([seq]) == [False]
+    assert seq.status == MessageStatus.WAITING
+    assert seq.num_blocks == 3
+    assert seq.cached_tokens == expected_cached_tokens
+    assert scheduler.schedule(is_prefill=True).running == []
+    assert seq.num_history_ids == seq.num_blocks == 0
+    assert seq.cached_tokens == expected_cached_tokens
     assert seq.prefix_cache.suppress_match_stats
-    pressure.session.remove_sequence(pressure)
+    assert scheduler.block_trie.stats == stats
+    assert pressure.status == MessageStatus.RUNNING
 
-    output = scheduler.schedule(is_prefill=True)
+    scheduler.end_session(2)
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert seq.cached_tokens == expected_cached_tokens
+    assert not seq.prefix_cache.suppress_match_stats
+    assert scheduler.block_trie.stats == stats
 
-    assert output.running == [seq]
-    assert seq.num_history_ids >= block_size
+    seq.state.stop()
+    seq.update_token_ids([5])
     assert seq.cached_tokens == 0
     assert not seq.prefix_cache.suppress_match_stats
-    assert scheduler.block_trie.stats.num_query_tokens == 0
-    assert scheduler.block_trie.stats.num_hit_tokens == 0
 
 
 def _make_scheduler_for_long_context_chunks(num_gpu_blocks: int = 6):

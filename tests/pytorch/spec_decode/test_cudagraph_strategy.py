@@ -1,3 +1,5 @@
+import pytest
+
 from lmdeploy.pytorch.strategies.ar_spec.cudagraph import ARSpecCudagraphStrategy
 
 
@@ -20,7 +22,8 @@ def test_arspec_cudagraph_keeps_full_spec_capture_for_eagle3():
     assert strategy.get_max_tokens(batch_size=8, origin_batch_size=8, num_tokens=40) == 40
 
 
-def test_cudagraph_step_metadata_plan_owns_single_token_capture_buffers(monkeypatch):
+@pytest.mark.parametrize('has_context', [False, True])
+def test_cudagraph_step_metadata_plan_owns_single_token_capture_buffers(monkeypatch, has_context):
     from types import SimpleNamespace
 
     import torch
@@ -28,7 +31,8 @@ def test_cudagraph_step_metadata_plan_owns_single_token_capture_buffers(monkeypa
     from lmdeploy.pytorch.models.utils import cudagraph as cudagraph_mod
     from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta, CudaGraphMixin
 
-    step_context = SimpleNamespace(model_config=SimpleNamespace(sliding_window=4096))
+    step_context = (SimpleNamespace(model_config=SimpleNamespace(sliding_window=4096), ssm_state_meta=None)
+                    if has_context else None)
     monkeypatch.setattr(cudagraph_mod, 'get_step_ctx_manager',
                         lambda: SimpleNamespace(current_context=lambda: step_context))
 
