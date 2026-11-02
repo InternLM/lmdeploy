@@ -172,8 +172,8 @@ def _validate_sampling_request(request: ResponsesRequest) -> JSONResponse | None
         return error_response(HTTPStatus.BAD_REQUEST, 'temperature must be in [0, 2].', param='temperature')
     if request.top_p is not None and not (0 <= request.top_p <= 1):
         return error_response(HTTPStatus.BAD_REQUEST, 'top_p must be in [0, 1].', param='top_p')
-    if request.top_k is not None and request.top_k < 0:
-        return error_response(HTTPStatus.BAD_REQUEST, 'top_k cannot be a negative integer.', param='top_k')
+    if request.top_k is not None and request.top_k < -1:
+        return error_response(HTTPStatus.BAD_REQUEST, 'top_k must be -1, 0, or a positive integer.', param='top_k')
     if request.min_p is not None and not (0 <= request.min_p <= 1):
         return error_response(HTTPStatus.BAD_REQUEST, 'min_p must be in [0, 1].', param='min_p')
     return None

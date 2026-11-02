@@ -360,7 +360,7 @@ class ArgumentHelper:
                                    'with the highest probability')
 
     @staticmethod
-    def temperature(parser, default: float = 0.8):
+    def temperature(parser, default: float = 1.0):
         return parser.add_argument('-temp', '--temperature', type=float, default=default, help='Sampling temperature')
 
     @staticmethod
