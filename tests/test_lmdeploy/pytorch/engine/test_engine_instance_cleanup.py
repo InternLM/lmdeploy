@@ -1,8 +1,9 @@
 import asyncio
 
 import numpy as np
+import pytest
 
-from lmdeploy.messages import ResponseType
+from lmdeploy.messages import GenerationConfig, ResponseType
 from lmdeploy.pytorch.engine.engine_instance import EngineInstance
 from lmdeploy.pytorch.engine.mp_engine.base import MPEngineInstance, SessionState
 from lmdeploy.pytorch.engine.request import RequestType, Response
@@ -38,6 +39,7 @@ class _FakeReqManager:
 
 class _FakeEngine:
     max_session_len = 1024
+    vocab_size = 1000
 
     class _Config:
         enable_transfer_obj_ref = False
@@ -133,6 +135,49 @@ def test_engine_instance_input_length_error_does_not_touch_backend_session():
     assert outputs[-1].status == ResponseType.INPUT_LENGTH_ERROR
     assert RequestType.ADD_SESSION not in [req_type for req_type, _ in req_sender.sent_async]
     assert RequestType.END_SESSION not in [req_type for req_type, _ in req_sender.sent_async]
+
+
+@pytest.mark.parametrize('candidate_ids', [[1000], [1001], [0, 1000]])
+def test_engine_instance_rejects_candidate_ids_before_submitting_requests(candidate_ids):
+    req_sender = _FakeReqSender([
+        _response(ResponseType.FINISH, data={'token_ids': np.array([], dtype=np.int64)}),
+    ])
+    instance = EngineInstance.__new__(EngineInstance)
+    instance.engine = _FakeEngine()
+    instance.req_sender = req_sender
+    instance.max_input_len = 1024
+    instance._enable_transfer_obj_ref = False
+    config = GenerationConfig(max_new_tokens=0, logprobs=0, logprob_start_len=0,
+                              logprob_extra_token_ids=candidate_ids)
+
+    with pytest.raises(ValueError, match=r'logprob_extra_token_ids must be in \[0, 1000\)'):
+        asyncio.run(_consume(instance.async_stream_infer(8, [1, 2], gen_config=config)))
+
+    assert req_sender.sent_async == []
+    # A rejected request must leave the same instance usable for a valid one.
+    config.logprob_extra_token_ids = [0, 999]
+    outputs = asyncio.run(_consume(instance.async_stream_infer(8, [1, 2], gen_config=config)))
+    assert outputs[-1].status == ResponseType.FINISH
+
+
+@pytest.mark.parametrize('candidate_ids', [[], [0, 999], [999, 999]])
+def test_engine_instance_forwards_valid_candidate_ids(candidate_ids):
+    req_sender = _FakeReqSender([
+        _response(ResponseType.FINISH, data={'token_ids': np.array([], dtype=np.int64)}),
+    ])
+    instance = EngineInstance.__new__(EngineInstance)
+    instance.engine = _FakeEngine()
+    instance.req_sender = req_sender
+    instance.max_input_len = 1024
+    instance._enable_transfer_obj_ref = False
+    config = GenerationConfig(max_new_tokens=0, logprobs=0, logprob_start_len=0,
+                              logprob_extra_token_ids=candidate_ids)
+
+    outputs = asyncio.run(_consume(instance.async_stream_infer(8, [1, 2], gen_config=config)))
+
+    assert outputs[-1].status == ResponseType.FINISH
+    message = next(data for req_type, data in req_sender.sent_async if req_type == RequestType.ADD_MESSAGE)
+    assert message['sampling_param'].logprob_extra_token_ids == tuple(candidate_ids)
 
 
 def test_engine_instance_rejected_add_session_does_not_end_session():
