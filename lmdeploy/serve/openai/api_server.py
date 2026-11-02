@@ -63,6 +63,8 @@ class ServerContext:
         self.enable_abort_handling = False
         self.response_parser_cls: type[ResponseParser] | None = None
         self.default_gen_config: dict = {}
+        # A successfully initialized context enables decision scoring; otherwise the endpoint returns 503.
+        self.decision_context = None
 
     @property
     def engine_config(self):
@@ -281,6 +283,7 @@ def serve(model_path: str,
           speculative_config: SpeculativeConfig | None = None,
           allowed_media_domains: list[str] | None = None,
           generation_config: str = 'auto',
+          task: str | None = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -334,10 +337,16 @@ def serve(model_path: str,
         allow_terminate_by_client (bool): Allow request from client to terminate server.
         allowed_media_domains (list[str] | None): Optional exact hostname
             allowlist for HTTP(S) media URLs.
+        task (str | None): Set to ``'intern-decision'`` to enable decision scoring
+            on the PyTorch backend. Temperature is read from local checkpoint
+            metadata when available, otherwise the 4B default is used.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
+
+    if task not in (None, 'intern-decision'):
+        raise ValueError(f'Unknown task: {task!r}. Use task="intern-decision".')
 
     server_context = ServerContext()
     server_context.allow_terminate_by_client = allow_terminate_by_client
@@ -357,6 +366,13 @@ def serve(model_path: str,
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
+
+    if task is not None:
+        if backend_config is not None and not isinstance(backend_config, PytorchEngineConfig):
+            raise ValueError(f'{task} requires the PyTorch backend')
+        # input logprobs are PyTorch-only; like the CLI, the task selects that backend
+        backend = 'pytorch'
+        backend_config = backend_config or PytorchEngineConfig()
 
     handle_torchrun()
     _, pipeline_class = get_task(backend,
@@ -380,6 +396,13 @@ def serve(model_path: str,
         allowed_media_domains=allowed_media_domains,
         **kwargs)
     set_parsers(server_context, reasoning_parser, tool_call_parser)
+    if task is not None:
+        from lmdeploy.serve.parsers.decision_parser import create_decision_context
+        try:
+            server_context.decision_context = create_decision_context(server_context.async_engine, model_path)
+        except BaseException:
+            server_context.async_engine.close()
+            raise
 
     # create FastAPI lifespan events
     lifespan = create_lifespan_handler(backend_config,
