@@ -14,6 +14,8 @@ from lmdeploy.serve.core.generation_config import (
     merge_gen_config,
     resolve_default_gen_config,
 )
+from lmdeploy.serve.openai.chat_completions.validation import check_request as check_chat_request
+from lmdeploy.serve.openai.endpoints.completions import check_request as check_completion_request
 from lmdeploy.serve.openai.endpoints.generate import check_request as check_generate_request
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, CompletionRequest, GenerateReqInput
 from lmdeploy.serve.openai.responses import ResponsesRequest
@@ -32,6 +34,8 @@ class _FakeSessionManager:
 
 
 class _FakeServerContext:
+
+    response_parser_cls = None
 
     def __init__(self):
         self.async_engine = SimpleNamespace(
@@ -109,6 +113,53 @@ def test_build_generation_config_uses_generation_config_defaults():
     gen_config = build_generation_config(request, {})
     assert gen_config.temperature == _DEFAULTS.temperature
     assert gen_config.top_k == _DEFAULTS.top_k
+
+
+@pytest.mark.parametrize('request_cls, payload, check_request', [
+    (ChatCompletionRequest, {'model': 'test', 'messages': [{'role': 'user', 'content': 'hi'}]}, check_chat_request),
+    (CompletionRequest, {'model': 'test', 'prompt': 'hi'}, check_completion_request),
+    (GenerateReqInput, {'prompt': 'hi'}, check_generate_request),
+])
+@pytest.mark.parametrize('top_k', [None, -2, -1, 0, 1, 20])
+def test_request_top_k_validation_and_merge(request_cls, payload, check_request, top_k):
+    request = request_cls(**payload, top_k=top_k)
+    error = check_request(request, _FakeServerContext())
+    if top_k == -2:
+        assert 'top_k' in error
+        return
+    assert error == ''
+    config = build_generation_config(request, {'top_k': 10, 'temperature': 0.6})
+    assert config.top_k == (10 if top_k is None else max(0, top_k))
+    assert config.temperature == 0.6
+
+
+@pytest.mark.parametrize('request_temperature, defaults, expected', [
+    (None, {}, 1.0),
+    (None, {'temperature': 0.6}, 0.6),
+    (0.0, {'temperature': 0.6}, 0.0),
+    (0.8, {'temperature': 0.6}, 0.8),
+    (1.0, {'temperature': 0.6}, 1.0),
+])
+def test_temperature_fallback_and_overrides(request_temperature, defaults, expected):
+    request = CompletionRequest(model='test', prompt='hi', temperature=request_temperature)
+    assert build_generation_config(request, defaults).temperature == expected
+
+
+@pytest.mark.parametrize('source', ['auto', 'path'])
+def test_model_sampling_defaults_and_request_overrides(tmp_path, source):
+    (tmp_path / 'generation_config.json').write_text(json.dumps({
+        'do_sample': True, 'temperature': 0.6, 'top_k': -1,
+    }))
+    defaults = resolve_default_gen_config('auto' if source == 'auto' else str(tmp_path), str(tmp_path), False)
+    request = CompletionRequest(model='test', prompt='hi')
+    config = build_generation_config(request, defaults)
+    assert config.top_k == 0
+    assert config.temperature == 0.6
+
+    override = CompletionRequest(model='test', prompt='hi', top_k=5, temperature=0.8)
+    config = build_generation_config(override, defaults)
+    assert config.top_k == 5
+    assert config.temperature == 0.8
 
 
 @pytest.mark.parametrize('request_top_k, defaults, expected', [

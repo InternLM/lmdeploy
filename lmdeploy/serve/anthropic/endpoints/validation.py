@@ -91,10 +91,10 @@ def _validate_sampling_request(request: MessagesRequest):
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
             f'top_p {request.top_p!r} must be in [0, 1].')
-    if request.top_k is not None and request.top_k < 0:
+    if request.top_k is not None and request.top_k < -1:
         return create_error_response(
             HTTPStatus.BAD_REQUEST,
-            f'top_k {request.top_k!r} cannot be a negative integer.')
+            f'top_k {request.top_k!r} must be -1, 0, or a positive integer.')
     return None
 
 

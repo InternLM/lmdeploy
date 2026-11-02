@@ -61,7 +61,7 @@ class SamplingParam:
     top_p: float = 1.0
     top_k: int = 1
     min_p: float = 0.0
-    temperature: float = 0.8
+    temperature: float = 1.0
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None

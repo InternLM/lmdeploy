@@ -84,6 +84,18 @@ LMDeploy 的 RESTful API 兼容了 OpenAI 以下 3 个接口：
 
 若需要把服务集成到自己的项目或者产品中，我们推荐以下用法：
 
+### 采样默认值
+
+请求中显式指定的采样参数优先于模型或服务端默认值。如果两者均未提供温度，
+LMDeploy 使用 `temperature=1.0`。要保留之前的兜底行为，请显式设置
+`temperature=0.8`。贪心解码行为不变。
+
+设置 `top_k=0` 或 `top_k=-1` 均可关闭 top-k 过滤，也可覆盖模型或服务端的正整数默认值。
+两种写法都会在进入推理后端前统一为 `0`。小于 `-1` 的值会被拒绝。
+该行为适用于 Chat Completions、Completions、Responses、Anthropic Messages、
+`/generate` 和 Python `GenerationConfig`。使用 OpenAI Python 客户端时，传入
+`extra_body={"top_k": -1}`。
+
 ### 查看渲染后的 chat prompt
 
 向 `/v1/chat/completions` 传入 `return_prompt_text=true`，响应会包含实际渲染的 `prompt_text`。使用 Python OpenAI 客户端时传入 `extra_body={"return_prompt_text": True}`；原始 JSON 同时支持顶层字段和该嵌套对象，顶层值优先。流式响应在每个 choice 的首个 chunk 中返回 prompt。该值来自实际模板输出，推理强度标记取决于模型模板；原始 `input_ids` 请求没有渲染 prompt，返回 `null`。未请求时不返回此字段。

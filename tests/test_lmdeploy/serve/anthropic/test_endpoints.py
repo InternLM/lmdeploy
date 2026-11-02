@@ -400,7 +400,7 @@ def test_http_unknown_extension_block_is_preserved_as_text(stream):
         pytest.param('temperature', 1.1, id='temperature-above-range'),
         pytest.param('top_p', -0.1, id='top-p-below-range'),
         pytest.param('top_p', 1.1, id='top-p-above-range'),
-        pytest.param('top_k', -1, id='negative-top-k'),
+        pytest.param('top_k', -2, id='top-k-below-minus-one'),
     ],
 )
 def test_messages_rejects_invalid_sampling_parameter(field_name, value):
@@ -410,6 +410,18 @@ def test_messages_rejects_invalid_sampling_parameter(field_name, value):
     data = response.json()
     assert data['type'] == 'error'
     assert field_name in data['error']['message']
+
+
+@pytest.mark.parametrize('top_k', [-1, 0, 20])
+def test_messages_normalizes_top_k_override(top_k):
+    client, context = _make_client(return_context=True)
+    context.default_gen_config = {'top_k': 10}
+    response = _post_messages(client, top_k=top_k)
+
+    assert response.status_code == 200
+    config = context.async_engine.preprocess_calls[0][1]['gen_config']
+    assert config.top_k == max(0, top_k)
+    assert config.temperature == 1.0
 
 
 def test_messages_count_tokens_rejects_empty_messages():

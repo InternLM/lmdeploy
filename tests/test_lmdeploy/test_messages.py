@@ -15,6 +15,28 @@ def test_generation_config_repetition_ngram_clamped():
     assert c.repetition_ngram_threshold == 0
 
 
+@pytest.mark.parametrize('top_k, expected', [(-1, 0), (0, 0), (1, 1), (20, 20)])
+def test_sampling_defaults_and_top_k_normalization(top_k, expected):
+    config = GenerationConfig(do_sample=True, top_k=top_k)
+    assert config.temperature == 1.0
+    assert config.top_k == expected
+    sampling = SamplingParam.from_gen_config(config)
+    assert sampling.temperature == 1.0
+    assert sampling.top_k == expected
+
+
+def test_zero_temperature_remains_greedy_with_top_k_disabled():
+    sampling = SamplingParam.from_gen_config(GenerationConfig(do_sample=True, top_k=-1, temperature=0))
+    assert sampling.top_k == 1
+    assert sampling.temperature == 1.0
+
+
+@pytest.mark.parametrize('top_k', [-2, -10])
+def test_generation_config_rejects_top_k_below_minus_one(top_k):
+    with pytest.raises(AssertionError, match='top_k'):
+        GenerationConfig(top_k=top_k)
+
+
 def test_input_logprobs_contract_and_sampling_conversion():
     assert GenerationConfig().logprob_start_len == -1
 

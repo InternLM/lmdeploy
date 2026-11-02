@@ -92,12 +92,14 @@ class GenerationConfig:
         top_k: An alternative to sampling with temperature, where
             the model considers the top_k tokens with the highest probability.
             Defaults to 0, which disables top-k filtering.
+            Set to 0 or -1 to disable top-k filtering; -1 is normalized to 0.
         min_p: Minimum token probability, which will be scaled by the
             probability of the most likely token. It must be a value between
             0 and 1. Typical values are in the 0.01-0.2 range, comparably
             selective as setting `top_p` in the 0.99-0.8 range (use the
             opposite of normal `top_p` values)
-        temperature: Sampling temperature
+        temperature: Sampling temperature. Defaults to 1.0, which leaves
+            the logits unscaled. Set to 0.8 to retain the previous default.
         repetition_penalty: Penalty to prevent the model from
             generating repeated words or phrases. A value larger than
             1 discourages repetition
@@ -183,7 +185,7 @@ class GenerationConfig:
     top_p: float = 1.0
     top_k: int = 0
     min_p: float = 0.0
-    temperature: float = 0.8
+    temperature: float = 1.0
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
@@ -261,7 +263,9 @@ class GenerationConfig:
         """Check input validation."""
         assert type(self.n) is int and self.n > 0, 'n is not a positive integer'
         assert self.top_p >= 0 and self.top_p <= 1  # [0, 1]
-        assert self.top_k >= 0, 'top_k can not be a negative integer'
+        assert self.top_k >= -1, 'top_k must be -1, 0, or a positive integer'
+        if self.top_k == -1:
+            self.top_k = 0
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
