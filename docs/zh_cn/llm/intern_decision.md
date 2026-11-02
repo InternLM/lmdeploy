@@ -82,7 +82,7 @@ Base64 必须采用带标准填充的规范编码，不能带 data URL 前缀。
 ```
 
 `input` 也接受非空的 `user` 消息数组。每条消息的内容可以是字符串，也可以是非空的
-`input_text` / `input_image` 内容块数组；`type: "message"` 可省略。例如：
+`input_text` / `input_image` / `input_json` 内容块数组；`type: "message"` 可省略。例如：
 
 ```json
 {
@@ -103,10 +103,10 @@ HTTP 下载沿用公共加载器的传输行为，下载完成后检查文件字
 沿用 a8fe089 的单图 1024、整组 4096 视觉 token 预算；整组预算按图片出现次数分配。
 
 解析器按图片在所有消息中的出现顺序收集图片，并在内部状态中写入从 1 开始的 `image_index` 引用。
-重复引用占据独立的位置。编译器会将实际图片统一放在状态与问题定义文本之前，因此保留的是文本引用关系，
+重复引用占据独立的位置。编译器会将 input 中的实际图片统一放在状态与问题定义文本之前，因此保留的是文本引用关系，
 并不保持图文 token 的交错位置。仅含一条字符串内容消息时，提示与直接传入字符串相同，响应映射规则也相同。
 
-当前子集支持 1–16 个问题、字符串形式的题目说明、2–62 个不重复的字符串或布尔选项，以及 2–62 个评分等级。
+当前子集支持 1–16 个问题、字符串或内容块数组形式的题目说明、2–62 个不重复的字符串或布尔选项，以及 2–62 个评分等级。
 62 个评分等级是对齐参考部署仓库的本地扩展，OpenAI 官方当前文档的上限仍为 10。
 答案按请求顺序以数组返回。题目名称可以省略或为 `null`；显式提供的名称必须非空白且不重复。
 未命名时响应中的名称为 `null`。字符串选项值不能为空白，顶层字符串 `input` 不能为空字符串。
@@ -115,12 +115,38 @@ HTTP 下载沿用公共加载器的传输行为，下载完成后检查文件字
 评分使用从 0 开始的等级索引，并在响应中恢复原始等级标签。
 本地 choice/score 的 `confidence` 是温度校准后的最大候选概率，与 OpenAI 的置信度校准语义不同。
 
+题目的 `instructions` 支持字符串或非空的 `input_text`、`input_image`、`input_json` 内容块数组。
+题目图片在 instructions 中原位展开；input 图片仍沿用前述前置方式。两处图片共享请求内解码/缩放缓存，
+8 次图片出现上限和 4096 token 对应的像素预算按 input 加所有 questions 合并计算，重复图片分别计数。
+仅题目含图的请求也在线程池中准备图片。
+
+相邻指令文本块按顺序拼接；`input_json.data` 渲染成紧凑 JSON 文本，其中的字符串不会被识别为图片引用。
+JSON 块接受对象或对象数组，每块最多 32 层容器、10000 个值（包含容器）和 256 KiB 紧凑 UTF-8 JSON。
+choice/score 的选项 description 仍是字符串。例如：
+
+```json
+{
+  "model": "Intern-Decision-4B",
+  "input": "检查配送物品。",
+  "questions": [{
+    "type": "predicate", "name": "damaged",
+    "instructions": [
+      {"type": "input_text", "text": "图片中的包裹是否破损？"},
+      {"type": "input_image", "image_url": "https://example.com/package.png"},
+      {"type": "input_json", "data": {"expected_condition": "完好"}}
+    ]
+  }]
+}
+```
+
+这是在 a8fe089 适配基础上增加的官方内容块子集；保留当前 checkpoint 的题数/候选数限制及 `detail=auto` 策略。
+
 `model` 必填，接受 `/v1/models` 返回的服务模型名、`InternLM/<服务模型名>` 或
 `internlm/<转为小写的服务模型名>`，不用于切换权重。
 模型身份由 HTTP 端点处理，两种协议共用同一个 `DecisionContext` 和实际读取或回退得到的温度。
 可选的 `safety_identifier` 接受最长 64 字符的字符串或 `null`，表示调用方提供的终端用户标识。
 本服务仅兼容接收并校验；它不是鉴权凭据，不进入提示，也不影响评分。
-其他消息角色、音频/视频/文件内容块、结构化题目说明、工具记录、缓存控制和未知字段均返回 422。
+其他消息角色、音频/视频/文件内容块、工具记录、缓存控制和未知字段均返回 422。
 `/v1/systemone` 仅接受 Systemone 协议，混用原生字段与 OpenAI 字段会被拒绝。
 
 OpenAI 格式与 Systemone 格式均将 assistant 答案骨架分词后的 token 数计入 `output_tokens`，

@@ -115,9 +115,61 @@ class _OpenAIDecisionSchema(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True, allow_inf_nan=False)
 
 
+class DecisionInputText(_OpenAIDecisionSchema):
+    type: Literal['input_text']
+    text: str
+
+
+class DecisionInputImage(_OpenAIDecisionSchema):
+    type: Literal['input_image']
+    image_url: str
+    # Use the local processor's default policy; other detail profiles are not mapped.
+    detail: Literal['auto'] | None = None
+
+    @field_validator('image_url')
+    @classmethod
+    def supported_reference(cls, value):
+        url = urlsplit(value)
+        if url.scheme in ('http', 'https') and url.netloc:
+            return value
+        if value.lower().startswith('data:image/') and 'base64' in value.partition(',')[0].lower().split(';'):
+            return value
+        raise ValueError('image_url must be an HTTP(S) URL or an inline base64 image data URL')
+
+
+class DecisionInputJSON(_OpenAIDecisionSchema):
+    """Structured evidence rendered as compact JSON text, never as image references."""
+
+    type: Literal['input_json']
+    data: dict[str, JsonValue] | list[dict[str, JsonValue]]
+
+    @field_validator('data')
+    @classmethod
+    def bounded_json(cls, value):
+        pending, count = [(value, 1)], 0
+        while pending:
+            item, depth = pending.pop()
+            count += 1
+            if count > 10_000:
+                raise ValueError('JSON evidence must contain at most 10000 values.')
+            if isinstance(item, (dict, list)):
+                if depth > 32:
+                    raise ValueError('JSON evidence must contain at most 32 container levels.')
+                children = item.values() if isinstance(item, dict) else item
+                pending.extend((child, depth + 1) for child in children)
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
+        if len(encoded) > 256 * 1024:
+            raise ValueError('JSON evidence must not exceed 256 KiB of compact UTF-8 JSON.')
+        return value
+
+
+DecisionContentPart = Annotated[DecisionInputText | DecisionInputImage | DecisionInputJSON,
+                                Field(discriminator='type')]
+
+
 class DecisionQuestionBase(_OpenAIDecisionSchema):
     name: str | None = None
-    instructions: str
+    instructions: str | Annotated[list[DecisionContentPart], Field(min_length=1)]
 
     @field_validator('name')
     @classmethod
@@ -166,33 +218,10 @@ class DecisionScoreQuestion(DecisionQuestionBase):
     levels: list[DecisionScoreLevel] = Field(min_length=2, max_length=len(ANSWER_SYMBOLS))
 
 
-class DecisionInputText(_OpenAIDecisionSchema):
-    type: Literal['input_text']
-    text: str
-
-
-class DecisionInputImage(_OpenAIDecisionSchema):
-    type: Literal['input_image']
-    image_url: str
-    # Use the local processor's default policy; other detail profiles are not mapped.
-    detail: Literal['auto'] | None = None
-
-    @field_validator('image_url')
-    @classmethod
-    def supported_reference(cls, value):
-        url = urlsplit(value)
-        if url.scheme in ('http', 'https') and url.netloc:
-            return value
-        if value.lower().startswith('data:image/') and 'base64' in value.partition(',')[0].lower().split(';'):
-            return value
-        raise ValueError('image_url must be an HTTP(S) URL or an inline base64 image data URL')
-
-
 class DecisionInputMessage(_OpenAIDecisionSchema):
     type: Literal['message'] = 'message'
     role: Literal['user']
-    content: str | list[Annotated[DecisionInputText | DecisionInputImage, Field(discriminator='type')]] = Field(
-        min_length=1)
+    content: str | list[DecisionContentPart] = Field(min_length=1)
 
 
 class OpenAIDecisionRequest(_OpenAIDecisionSchema):
@@ -207,15 +236,27 @@ class OpenAIDecisionRequest(_OpenAIDecisionSchema):
     # Caller-supplied metadata; excluded from the scoring prompt by the parser.
     safety_identifier: str | None = Field(default=None, max_length=64)
 
-    @field_validator('input')
-    @classmethod
-    def image_count(cls, value):
-        if not isinstance(value, str):
-            count = sum(isinstance(part, DecisionInputImage) for message in value
-                        if isinstance(message.content, list) for part in message.content)
-            if count > 8:
-                raise ValueError('At most 8 images are supported per request.')
-        return value
+    def image_inputs(self):
+        """Yield every image occurrence and its wire location in input/question order."""
+        contents = []
+        if not isinstance(self.input, str):
+            contents.extend((message.content, ('input', i, 'content')) for i, message in enumerate(self.input))
+        contents.extend((question.instructions, ('questions', i, 'instructions'))
+                        for i, question in enumerate(self.questions))
+        for content, location in contents:
+            if not isinstance(content, str):
+                for index, part in enumerate(content):
+                    if isinstance(part, DecisionInputImage):
+                        yield part.image_url, (*location, index, 'image_url')
+
+    @model_validator(mode='after')
+    def image_count(self):
+        for index, (_, location) in enumerate(self.image_inputs()):
+            if index == 8:
+                raise ValidationError.from_exception_data(type(self).__name__, [dict(
+                    type='value_error', loc=location,
+                    ctx={'error': ValueError('At most 8 images are supported per request, including instructions.')})])
+        return self
 
     @field_validator('questions')
     @classmethod

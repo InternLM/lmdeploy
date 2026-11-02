@@ -241,38 +241,46 @@ def prepare_assets(row) -> dict[str, Image.Image]:
     return images
 
 
-def prepare_evidence(row):
-    """Replace only evidence values with temporary sentinels before serialization.
+def image_sentinels(refs, original):
+    """Assign collision-free placeholders before compiling text; return ref -> token."""
+    while True:
+        prefix = 'ASSET_' + uuid4().hex + '_'
+        if prefix not in original:
+            return {ref: prefix + str(i) + '_END' for i, ref in enumerate(dict.fromkeys(refs))}
 
-    Sentinels never reach the tokenizer. This prevents accidental replacement in
-    JSON keys, prompt scaffolding, or serialized escape sequences.
-    """
+
+def prepare_evidence(row):
+    """Replace only evidence values before serialization, never keys or prompt scaffolding."""
     assets = row.get('assets') or {}
     if not assets:
         return row, {}
     pattern = reference_pattern(assets)
     original = json.dumps({k: row[k] for k in ('state', 'questions')}, ensure_ascii=False)
-    while True:
-        prefix = 'ASSET_' + uuid4().hex + '_'
-        if prefix not in original:
-            break
-    tokens = {ref: prefix + str(i) + '_END' for i, ref in enumerate(assets)}
+    tokens = image_sentinels(assets, original)
     def replace(value):
         return tokens[value] if value in assets else pattern.sub(lambda m: tokens[m.group()], value)
     return map_evidence(row, replace), {token: ref for ref, token in tokens.items()}
 
 
 def image_content(text, sentinels, images_by_ref):
-    """Expand sentinels into image blocks without re-encoding or decoding assets."""
-    if not sentinels:
-        return text
-    pattern = re.compile('(' + '|'.join(re.escape(s) for s in sentinels) + ')')
+    """Materialize compiled image URLs and inline sentinels from the same request cache."""
+    if isinstance(text, str):
+        if not sentinels:
+            return text
+        text = [dict(type='text', text=text)]
+    pattern = re.compile('(' + '|'.join(re.escape(s) for s in sentinels) + ')') if sentinels else None
     content = []
-    for fragment in pattern.split(text):
-        if fragment in sentinels:
-            content.append({'type': 'image_data', 'image_data': {'data': images_by_ref[sentinels[fragment]]}})
-        elif fragment:
-            content.append({'type': 'text', 'text': fragment})
+    for part in text:
+        if part['type'] == 'image_url':
+            content.append(dict(type='image_data', image_data=dict(data=images_by_ref[part['image_url']['url']])))
+        elif part['type'] == 'text' and pattern is not None:
+            for fragment in pattern.split(part['text']):
+                if fragment in sentinels:
+                    content.append(dict(type='image_data', image_data=dict(data=images_by_ref[sentinels[fragment]])))
+                elif fragment:
+                    content.append(dict(type='text', text=fragment))
+        else:
+            content.append(part)
     return content
 
 

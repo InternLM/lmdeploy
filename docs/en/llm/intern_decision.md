@@ -99,7 +99,7 @@ send `model`, a string or message-array `input`, and a `questions` array to `/v1
 ```
 
 `input` also accepts a nonempty array of `user` messages. Each message has string content or a nonempty list of
-`input_text` / `input_image` blocks; `type: "message"` is optional. For example:
+`input_text` / `input_image` / `input_json` blocks; `type: "message"` is optional. For example:
 
 ```json
 {
@@ -114,7 +114,7 @@ send `model`, a string or message-array `input`, and a `questions` array to `/v1
 
 Image references accept HTTP(S) URLs and inline `data:image/...;base64,...` URLs, using the shared media loader's
 URL restrictions and configured domain allowlist. Server file paths are not accepted. Image `detail` may be omitted,
-`null`, or `"auto"`; other profiles are rejected. Each request accepts at most eight image occurrences, including repeats.
+`null`, or `"auto"`; other profiles are rejected. Each request accepts at most eight image occurrences across `input` and all question `instructions`, including repeats.
 Inline and downloaded images must be static PNG, JPEG, WEBP or GIF, at most 10 MiB of decoded file bytes,
 20 million pixels, 20000 pixels on either side, and a 200:1 aspect ratio. Invalid image content returns 422 with
 the source field location. HTTP downloads retain the shared loader's transport behavior; the byte limit is checked
@@ -122,11 +122,37 @@ after download. Images are converted to RGB and resized on a 32-pixel grid with 
 a 4096-token total budget, divided by the number of image occurrences, following a8fe089.
 
 The parser collects images in encounter order across all messages and writes one-based `image_index` references
-into the internal state. Repeated references occupy separate positions. The compiler places actual images before
+into the internal state. Repeated references occupy separate positions. The compiler places these input images before
 the state/schema text, so this preserves textual references, not interleaved image-token positions. A single message
 with string content keeps the same prompt as a plain string input. Response mapping is unchanged.
 
-Requests contain 1–16 questions, with string `instructions`. Choice questions have 2–62 unique string or boolean
+Question images expand at their positions within `instructions`, using the same request-owned cache as input images.
+The input-image placement described above stays unchanged. Adjacent instruction text blocks concatenate in order;
+`input_json.data` is rendered as compact JSON text and does not interpret strings as image references.
+JSON evidence accepts an object or an array of objects, with at most 32 container levels, 10000 values (including
+containers), and 256 KiB of compact UTF-8 JSON per block. Choice/level descriptions remain strings.
+For example, a question can carry its own image and structured evidence:
+
+```json
+{
+  "model": "Intern-Decision-4B",
+  "input": "Inspect the delivery.",
+  "questions": [{
+    "type": "predicate", "name": "damaged",
+    "instructions": [
+      {"type": "input_text", "text": "Does this package look damaged? "},
+      {"type": "input_image", "image_url": "https://example.com/package.png"},
+      {"type": "input_json", "data": {"expected_condition": "intact"}}
+    ]
+  }]
+}
+```
+
+These content blocks extend the a8fe089 deployment adapter; existing checkpoint limits and `detail=auto` policy
+remain in effect. They do not add tool records, prompt-cache controls or other image detail profiles.
+
+Requests contain 1–16 questions. Each `instructions` accepts a string or a nonempty array of
+`input_text`, `input_image` and `input_json` blocks. Choice questions have 2–62 unique string or boolean
 values; `true` and `"true"` are distinct. String choice values must not be blank.
 Score questions have 2–62 ordered levels with a label and optional description. The 62-level limit is a local extension
 matching the reference deployment; the OpenAI API currently documents a maximum of 10.
@@ -157,7 +183,7 @@ Model identity is handled by the HTTP endpoint, outside that context. Responses 
 `safety_identifier` is optional caller-supplied end-user metadata (a string of at most 64 characters, or `null`).
 It is accepted for compatibility, is not an authentication credential, and does not enter the prompt or affect scoring.
 
-Other message roles, audio/video/file blocks, structured instructions, tool records, prompt cache controls, and
+Other message roles, audio/video/file blocks, tool records, prompt cache controls, and
 other unsupported fields are rejected with 422. Requests mixing `input` with native
 `state`/`images` are rejected. `/v1/systemone` does not accept OpenAI requests. These input limits, confidence and cache-write
 semantics mean this is a supported subset, not full API equivalence. Both decision endpoints return schema and

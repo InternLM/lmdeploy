@@ -206,7 +206,7 @@ def test_decision_error_format_does_not_change_chat_validation(http_service):
     {'input': 1}, {'model': None}, {'state': 'mixed protocols'}, {'images': []},
     {'prompt_cache_key': 'unsupported'}, {'questions': []},
     {'questions': [dict(type='predicate', instructions='x')] * 17},
-    {'questions': [dict(type='predicate', instructions=[{'type': 'input_text', 'text': 'x'}])]},
+    {'questions': [dict(type='predicate', instructions=[])]},
     {'questions': [dict(type='predicate', instructions='x', unexpected=True)]},
     {'questions': [dict(type='choice', instructions='x', choices=[{'value': 'a'}])]},
     {'questions': [dict(type='choice', instructions='x', choices=[{'value': 'a'}, {'value': 'a'}])]},

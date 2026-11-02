@@ -21,6 +21,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.decision_protocol import (
     DecisionInputImage,
+    DecisionInputJSON,
     DecisionInputMessage,
     OpenAIDecisionRequest,
     OpenAIDecisionResponse,
@@ -29,6 +30,7 @@ from lmdeploy.serve.openai.decision_protocol import (
 )
 from lmdeploy.serve.parsers.decision_assets import (
     image_content,
+    image_sentinels,
     prepare_assets,
     prepare_decision_images,
     prepare_evidence,
@@ -172,6 +174,9 @@ class DecisionParser:
                     if isinstance(part, DecisionInputImage):
                         images.append(part.image_url)
                         content.append(dict(type='image', image_index=len(images)))
+                    elif isinstance(part, DecisionInputJSON):
+                        content.append(dict(type='text', text=json.dumps(
+                            part.data, ensure_ascii=False, separators=(',', ':'))))
                     else:
                         content.append(dict(type='text', text=part.text))
             state.append(dict(role=message.role, content=content))
@@ -192,7 +197,9 @@ class DecisionParser:
                 key = f'question_{index}'
                 while key in reserved or key in questions:
                     key = '_' + key
-            item = dict(type=question.type, instructions=question.instructions)
+            instructions = question.instructions
+            item = dict(type=question.type, instructions=instructions if isinstance(instructions, str)
+                        else [part.model_dump() for part in instructions])
             choice_keys, choice_values, labels = (), (), ()
             if question.type == 'predicate':
                 item['type'] = 'noul'
@@ -210,14 +217,41 @@ class DecisionParser:
             questions[key] = item
             mappings.append(_QuestionMapping(key, question.type, question.name, choice_keys, choice_values, labels))
         state, images = self._extract_state_and_images(request.input)
-        if not isinstance(request.input, str):
-            self._image_inputs = tuple(
-                (part.image_url, ('input', i, 'content', j, 'image_url'))
-                for i, message in enumerate(request.input) if isinstance(message.content, list)
-                for j, part in enumerate(message.content) if isinstance(part, DecisionInputImage))
+        self._image_inputs = tuple(request.image_inputs())
         internal = _DecisionRow(state=state, questions=questions, images=images)
         self._question_mappings = tuple(mappings)
         return internal
+
+    @property
+    def has_images(self) -> bool:
+        return bool(self.request.assets) if self.systemone else bool(self._image_inputs)
+
+    @staticmethod
+    def _prepare_instructions(row):
+        """Lower typed content into compiler text, preserving image positions and literal JSON."""
+        refs = [part['image_url'] for question in row['questions'].values()
+                if isinstance(question['instructions'], list) for part in question['instructions']
+                if part['type'] == 'input_image']
+        # Adjacent text parts concatenate; a reserved prefix may span their boundary.
+        literal_text = ''.join(part['text'] for question in row['questions'].values()
+                               if isinstance(question['instructions'], list) for part in question['instructions']
+                               if part['type'] == 'input_text')
+        tokens = image_sentinels(refs, json.dumps(row, ensure_ascii=False) + literal_text) if refs else {}
+        questions = {}
+        for key, question in row['questions'].items():
+            instruction = question['instructions']
+            if isinstance(instruction, list):
+                chunks = []
+                for part in instruction:
+                    if part['type'] == 'input_image':
+                        chunks.append(tokens[part['image_url']])
+                    elif part['type'] == 'input_json':
+                        chunks.append(json.dumps(part['data'], ensure_ascii=False, separators=(',', ':')))
+                    else:
+                        chunks.append(part['text'])
+                question = {**question, 'instructions': ''.join(chunks)}
+            questions[key] = question
+        return {**row, 'questions': questions}, {token: ref for ref, token in tokens.items()}
 
     def prepare_input(self, *, tokenizer, allowed_media_domains=None) -> DecisionInput:
         """Prepare request-owned data; wire protocols require a tokenizer for usage."""
@@ -237,18 +271,15 @@ class DecisionParser:
                     question['criteria'] = {
                         key: '' if value is None else value for key, value in question['criteria'].items()
                         if question['type'] != 'noul' or value is not None}
+        else:
+            row, sentinels = self._prepare_instructions(row)
         if self._image_inputs:
             self._images_by_ref = prepare_decision_images(
                 self._image_inputs, allowed_media_domains=allowed_media_domains)
         self.compiled = compile_row(row)
-        if sentinels:
+        if sentinels or self._image_inputs:
             message = self.compiled.messages[1]
             message['content'] = image_content(message['content'], sentinels, self._images_by_ref)
-        elif self._image_inputs:
-            message = self.compiled.messages[1]
-            message['content'] = [
-                dict(type='image_data', image_data=dict(data=self._images_by_ref[part['image_url']['url']]))
-                if part['type'] == 'image_url' else part for part in message['content']]
         self._assistant_output_tokens = sum(
             len(tokenizer.encode(message['content'], add_bos=False, add_special_tokens=False))
             for message in self.compiled.messages if message['role'] == 'assistant')
@@ -274,8 +305,7 @@ class DecisionParser:
             raise ValueError('Decision marker count or position mismatch')
         if self.context.image_token_id is not None:
             slots = [i for i, token in enumerate(ids) if token == self.context.image_token_id]
-            has_images = bool(self.request.assets) if self.systemone else bool(self.request.images)
-            if (not has_images and slots) or any(i >= markers[0] for i in slots):
+            if (not self.has_images and slots) or any(i >= markers[0] for i in slots):
                 raise ValueError('Image placeholder count or position mismatch')
         # Scoring row 0 predicts the token at start + 1 in the expanded input.
         start = markers[0] - 1

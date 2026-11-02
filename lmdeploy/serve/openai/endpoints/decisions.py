@@ -44,11 +44,13 @@ def _validation_error_response(exc: RequestValidationError, *, systemone: bool) 
             if len(loc) > 1 and isinstance(loc[1], str) and (
                     loc[1] in ('str', 'constrained-str') or loc[1].startswith('list[')):
                 del loc[1]
-            if len(loc) > 3 and loc[2] == 'content' and isinstance(loc[3], str):
-                if loc[3] == 'str' or loc[3].startswith('list['):
-                    del loc[3]
-                if len(loc) > 5 and loc[4] in ('input_text', 'input_image'):
-                    del loc[4]
+        if not systemone and len(loc) > 3 and (
+                (loc[0] == 'input' and loc[2] == 'content')
+                or (loc[0] == 'questions' and loc[2] == 'instructions')):
+            if isinstance(loc[3], str) and (loc[3] == 'str' or loc[3].startswith('list[')):
+                del loc[3]
+            if len(loc) > 5 and loc[4] in ('input_text', 'input_image', 'input_json'):
+                del loc[4]
         if error['type'] in ('union_tag_invalid', 'union_tag_not_found'):
             loc.append('type')
         message = error['msg']
@@ -151,7 +153,7 @@ async def _score_request(server_context, parser: DecisionParser, raw_request=Non
     """
     tokenizer = server_context.async_engine.tokenizer
     try:
-        if parser.systemone or parser.request.images:
+        if parser.systemone or parser.has_images:
             processor = getattr(server_context.async_engine, 'prompt_processor', None)
             inputs = await asyncio.to_thread(
                 parser.prepare_input, tokenizer=tokenizer,

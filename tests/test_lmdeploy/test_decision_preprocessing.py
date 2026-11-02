@@ -165,3 +165,50 @@ def test_systemone_assets_keep_positions_and_visual_budget(checkpoint, preproces
         assert [(image.mode, image.size, image.tobytes()) for image in images] == before
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('with_input_image', [False, True])
+def test_openai_instruction_images_match_explicit_multimodal_prompt(checkpoint, preprocessing_engine, with_input_image):
+    from lmdeploy.intern_decision_encoding import compile_row
+    from lmdeploy.serve.parsers.decision_parser import DecisionParser, create_decision_context
+
+    with BytesIO() as buffer, Image.new('RGB', (320, 320), 'blue') as image:
+        image.save(buffer, format='PNG')
+        url = 'data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode()
+    input_value = ([dict(role='user', content=[dict(type='input_image', image_url=url)])]
+                   if with_input_image else 'Evidence')
+    body = dict(model='local', input=input_value, questions=[dict(type='predicate', name='q', instructions=[
+        dict(type='input_text', text='Before '), dict(type='input_image', image_url=url),
+        dict(type='input_text', text=' after')])])
+    context = create_decision_context(preprocessing_engine, checkpoint)
+    parser = DecisionParser(body, context)
+    inputs = parser.prepare_input(tokenizer=preprocessing_engine.tokenizer)
+    assert parser.has_images
+    state = ([dict(role='user', content=[dict(type='image', image_index=1)])]
+             if with_input_image else 'Evidence')
+    reference = compile_row(dict(state=state, images=[url] if with_input_image else [], questions={
+        'q': dict(type='noul', instructions='Before <question-image> after')})).messages
+    content = reference[1]['content']
+    content = content if isinstance(content, list) else [dict(type='text', text=content)]
+    expanded = []
+    for part in content:
+        if part['type'] == 'text':
+            before, after = part['text'].split('<question-image>')
+            expanded.extend([dict(type='text', text=before), dict(type='image_url', image_url=dict(url=url)),
+                             dict(type='text', text=after)])
+        else:
+            expanded.append(part)
+    reference[1]['content'] = expanded
+
+    async def run():
+        actual = await preprocessing_engine.prompt_processor.get_prompt_input(
+            inputs.messages, **inputs.preprocess_kwargs)
+        expected = await preprocessing_engine.prompt_processor.get_prompt_input(reference, **inputs.preprocess_kwargs)
+        assert actual['input_ids'] == expected['input_ids']
+        parser.finalize_input(SimpleNamespace(inputs=actual, gen_config=inputs.gen_config))
+        assert actual['input_ids'].count(context.image_token_id) == 100 * (1 + with_input_image)
+        assert len(parser.score_row_indices) == 1
+        assert inputs.gen_config.logprob_start_len == actual['input_ids'].index(context.marker_id) - 1
+        assert 'ASSET_' not in preprocessing_engine.tokenizer.decode(actual['input_ids'])
+
+    asyncio.run(run())
