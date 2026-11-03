@@ -98,3 +98,42 @@ def test_invalid_checkpoint_closes_engine(server_startup, tmp_path):
         api_server.serve(str(tmp_path), task='intern-decision', generation_config='lmdeploy')
     engine.close.assert_called_once()
     run.assert_not_called()
+
+
+@pytest.mark.parametrize('size, temperature', [
+    ('0.8B', 2.747760550703), ('2B', 2.100509348278), ('4B', 1.99241824),
+])
+@pytest.mark.parametrize('model_name', [None, 'custom-name'])
+def test_remote_checkpoint_uses_resolved_calibration(
+        server_startup, monkeypatch, tmp_path, size, temperature, model_name):
+    api_server, build, run = server_startup
+    context = api_server.ServerContext()
+    monkeypatch.setattr(api_server, 'ServerContext', lambda: context)
+    monkeypatch.chdir(tmp_path)
+    checkpoint = tmp_path / 'cached-snapshot'
+    checkpoint.mkdir()
+    (checkpoint / 'inference.py').write_text(f'DEFAULT_TEMPERATURE = {temperature}')
+    download = Mock(return_value=str(checkpoint))
+    monkeypatch.setattr(api_server, 'get_model', download)
+    model_id = f'internlm/Intern-Decision-{size}'
+    backend_config = PytorchEngineConfig(download_dir=str(tmp_path / 'cache'), revision='pinned-revision')
+
+    api_server.serve(model_id, model_name=model_name, backend_config=backend_config,
+                     task='intern-decision', generation_config='lmdeploy')
+
+    download.assert_called_once_with(model_id, backend_config.download_dir, 'pinned-revision')
+    assert build.call_args.kwargs['model_path'] == str(checkpoint)
+    assert build.call_args.kwargs['model_name'] == (model_name or model_id)
+    assert context.decision_context.temperature == temperature
+    run.assert_called_once()
+
+
+def test_missing_calibration_closes_engine_without_starting_server(server_startup, monkeypatch, tmp_path):
+    api_server, build, run = server_startup
+    download = Mock(side_effect=AssertionError('Local checkpoints must not be downloaded'))
+    monkeypatch.setattr(api_server, 'get_model', download)
+    with pytest.raises(ValueError, match='Cannot read decision temperature'):
+        api_server.serve(str(tmp_path), task='intern-decision', generation_config='lmdeploy')
+    download.assert_not_called()
+    build.return_value.close.assert_called_once()
+    run.assert_not_called()

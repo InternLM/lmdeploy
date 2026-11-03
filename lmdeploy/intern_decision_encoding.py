@@ -22,7 +22,7 @@ logger = logging.getLogger('lmdeploy')
 
 DECISION_TOKEN = '<decision>'
 ANSWER_SYMBOLS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-# Fall back to the official 4B calibration when checkpoint metadata is unavailable.
+# Official 4B calibration, also used by standalone scoring helpers.
 DEFAULT_TEMPERATURE = 1.99241824
 SYSTEM_PROMPT = ('You are a careful decision assistant. Use the state and decision schema in '
                  'the user message to make the requested decisions. For every field, choose '
@@ -160,8 +160,9 @@ def resolve_temperature(model_path: str | Path) -> float:
     This reader follows the Intern-Decision-specific convention of a top-level
     numeric DEFAULT_TEMPERATURE in the checkpoint's inference.py. It is not a
     general checkpoint metadata format. Parse the constant without importing or
-    executing the module or downloading files. Missing or invalid metadata falls
-    back to the official Intern-Decision-4B calibration.
+    executing the module or downloading files. The caller must resolve remote
+    model IDs first. Missing or invalid metadata is an error: calibration from a
+    different checkpoint must not be substituted.
     """
     source = Path(model_path) / 'inference.py'
     try:
@@ -183,9 +184,8 @@ def resolve_temperature(model_path: str | Path) -> float:
             raise ValueError('DEFAULT_TEMPERATURE must be a numeric constant')
         temperature = validate_temperature(value)
     except (OSError, UnicodeError, SyntaxError, ValueError, TypeError, OverflowError) as exc:
-        logger.warning(f'Cannot read decision temperature from {source}: {exc}; '
-                       f'using the 4B default {DEFAULT_TEMPERATURE}.')
-        return DEFAULT_TEMPERATURE
+        raise ValueError(f'Cannot read decision temperature from {source}: {exc}. '
+                         'Provide a checkpoint with a finite positive DEFAULT_TEMPERATURE in inference.py.') from exc
     logger.info(f'Decision temperature from {source}: {temperature}.')
     return temperature
 

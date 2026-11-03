@@ -56,6 +56,7 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 
 |             Model              |      Size       | Type | FP16/BF16 | KV INT8 | KV INT4 | W8A8 | W4A16 |
 | :----------------------------: | :-------------: | :--: | :-------: | :-----: | :-----: | :--: | :---: |
+| [Intern-Decision](../llm/intern_decision.md) | 0.8B, 2B, 4B | MLLM | BF16 | - | - | - | - |
 |             Llama              |    7B - 65B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |             Llama2             |    7B - 70B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |             Llama3             |     8B, 70B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
@@ -125,6 +126,8 @@ The following tables detail the models supported by LMDeploy's TurboMind engine 
 |         GLM-4.7-Flash          |       30B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |             GLM-5              |      754B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
 |            GLM-5.2             |      754B       | LLM  |    Yes    |   No    |   No    |  No  |  No   |
+
+Intern-Decision requires `--task intern-decision` and exposes the OpenAI Decisions subset and Systemone HTTP APIs. Its row describes decision scoring; BF16 is the tested GPU precision, and `-` marks unvalidated quantization modes. See the [checkpoint and validation matrix](../llm/intern_decision.md#supported-checkpoints).
 
 ```{note}
 * [1] PyTorch engine removes the support of original llava models after v0.6.4. Please use their corresponding transformers models instead, which can be found in https://huggingface.co/llava-hf

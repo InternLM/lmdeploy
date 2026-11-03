@@ -76,6 +76,7 @@ class SamplingParam:
     out_ce_loss: bool = False
     num_logprobs: int = -1
     logprob_start_len: int = -1
+    # Token IDs whose scores must be returned regardless of top-k selection.
     logprob_extra_token_ids: tuple[int, ...] | None = None
     return_routed_experts: bool = False
 

@@ -57,6 +57,7 @@
 
 |             Model              |      Size       | Type | FP16/BF16 | KV INT8 | KV INT4 | W8A8 | W4A16 |
 | :----------------------------: | :-------------: | :--: | :-------: | :-----: | :-----: | :--: | :---: |
+| [Intern-Decision](../llm/intern_decision.md) | 0.8B, 2B, 4B | MLLM | BF16 | - | - | - | - |
 |             Llama              |    7B - 65B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |             Llama2             |    7B - 70B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
 |             Llama3             |     8B, 70B     | LLM  |    Yes    |   Yes   |   Yes   | Yes  |  Yes  |
@@ -126,6 +127,8 @@
 |          Phi-3.5-MoE           |     16x3.8B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
 |         Phi-3.5-vision         |      4.2B       | MLLM |    Yes    |   Yes   |   No    |  -   |   -   |
 |              SDAR              |    1.7B-30B     | LLM  |    Yes    |   Yes   |   No    |  -   |   -   |
+
+Intern-Decision 需通过 `--task intern-decision` 启用，提供 OpenAI Decisions 子集和 Systemone HTTP 接口。该行描述决策评分能力，GPU 已测精度为 BF16，`-` 表示量化模式尚未验证。模型与验证范围见 [Intern-Decision 文档](../llm/intern_decision.md)。
 
 ```{note}
 * [1] 自 0.6.4 之后，PyTorch 引擎移除了对 llava 模型原始格式的支持。我们建议使用它们对应的 transformers 格式的模型。这些模型可以在 https://huggingface.co/llava-hf 中找到

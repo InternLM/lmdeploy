@@ -41,7 +41,7 @@ from lmdeploy.serve.utils.server_utils import (
     EngineSleepingMiddleware,
     protocol_error_response,
 )
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, get_model
 
 if TYPE_CHECKING:
     from lmdeploy.serve.managers import Session
@@ -338,8 +338,8 @@ def serve(model_path: str,
         allowed_media_domains (list[str] | None): Optional exact hostname
             allowlist for HTTP(S) media URLs.
         task (str | None): Set to ``'intern-decision'`` to enable decision scoring
-            on the PyTorch backend. Temperature is read from local checkpoint
-            metadata when available, otherwise the 4B default is used.
+            on the PyTorch backend. Temperature is read from the resolved
+            checkpoint metadata; missing or invalid calibration is rejected.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -373,6 +373,10 @@ def serve(model_path: str,
         # input logprobs are PyTorch-only; like the CLI, the task selects that backend
         backend = 'pytorch'
         backend_config = backend_config or PytorchEngineConfig()
+        if not os.path.exists(model_path):
+            # Load weights and calibration metadata from the same resolved checkpoint.
+            model_name = model_name if model_name is not None else model_path
+            model_path = get_model(model_path, backend_config.download_dir, backend_config.revision)
 
     handle_torchrun()
     _, pipeline_class = get_task(backend,

@@ -1,6 +1,6 @@
 # Intern-Decision
 
-[Intern-Decision-0.8B](https://huggingface.co/internlm/Intern-Decision-0.8B) 通过**打分**而不是生成来回答结构化问题。一个 Systemone 请求包含
+Intern-Decision 系列（0.8B、2B、4B）通过**打分**而不是生成来回答结构化问题。一个 Systemone 请求包含
 `state`、最多 16 个 `questions` 和可选图片 `assets`。模型读取一个以 JSON 骨架结尾的提示，骨架中每个问题对应一个 `<decision>`
 标记；取每个标记前一位置的 logits，并限定在该问题的答案符号（`A`、`B`……）上，即得到答案分布。
 
@@ -12,6 +12,20 @@ LMDeploy 在 PyTorch 引擎上以 `intern-decision` 任务提供该模型。模�
 Parser 将 OpenAI 请求转换成私有 `_DecisionRow`，只保存 `state`、`questions` 和 `images`；
 不再接受旧原生请求格式或返回旧响应封装。
 
+## 支持的模型
+
+| 模型权重 | 校准温度 | 后端 | HTTP 协议 |
+| --- | ---: | --- | --- |
+| [Intern-Decision-0.8B](https://huggingface.co/internlm/Intern-Decision-0.8B) | 2.747760550703 | PyTorch | OpenAI Decisions 子集 / Systemone |
+| [Intern-Decision-2B](https://huggingface.co/internlm/Intern-Decision-2B) | 2.100509348278 | PyTorch | OpenAI Decisions 子集 / Systemone |
+| [Intern-Decision-4B](https://huggingface.co/internlm/Intern-Decision-4B) | 1.99241824 | PyTorch | OpenAI Decisions 子集 / Systemone |
+
+三种模型共用解析器和评分实现。本地 checkpoint 元数据、tokenizer 和 processor 检查覆盖三种规模；
+这些 CPU 检查不加载模型权重。三种模型均已在 A100 上完成完整权重的文本评测（七套件，每模型 10,751 条请求、
+12,351 个决策字段）；这些结果不代表与发布参考逐值等价，也不能替代带图 GPU 准确率验收。
+GPU 已测精度为 BF16，量化决策评分尚未验证；
+暂不支持 TurboMind 决策评分及 Python Pipeline 决策入口。
+
 ## HTTP
 
 ```shell
@@ -21,9 +35,13 @@ lmdeploy serve api_server /path/to/Intern-Decision-0.8B --task intern-decision -
 `--task intern-decision` 只启用决策评分并选择 PyTorch 后端，不再接受旧的模型检查点名称作为任务名。
 其余 PyTorch 参数（批大小、TP、前缀缓存等）照常可用，决策请求只做输入评分，不生成 token。
 
-启动时用 AST 尝试读取本地模型检查点的 `inference.py` 中有限且为正的 `DEFAULT_TEMPERATURE` 常量，
-不执行该文件。文件或常量缺失、读取/解析失败、数值非法时记录警告，回退到 4B 温度 `1.99241824`。
-不为温度单独下载远程模型文件，也不验证温度与权重的对应关系。警告遵循 `--log-level`（命令行默认 `WARNING`）。
+支持本地 checkpoint 目录和远程模型 ID。决策任务启动时，先按配置的下载目录和 revision 将远程 ID 解析为
+本地路径，再将同一路径用于引擎加载和温度读取。显式指定的 `--model-name` 保持不变；未指定时，服务名称仍为
+传入的模型 ID。例如，可以将上面的本地路径替换为 `internlm/Intern-Decision-2B`，并设置
+`--model-name Intern-Decision-2B`。
+
+启动时用 AST 读取该 checkpoint 的 `inference.py` 中有限且为正的 `DEFAULT_TEMPERATURE` 常量，不执行该文件。
+文件或常量缺失、读取/解析失败、数值非法时拒绝启动，不再套用其他模型的温度；自定义 checkpoint 需提供自己的校准常量。
 
 只读共享对象 `DecisionContext` 仅保存标记 ID、答案符号 ID、图片 token ID 和温度，复用已有引擎资源初始化一次；
 对象存在即表示决策端点已启用。
@@ -143,7 +161,7 @@ choice/score 的选项 description 仍是字符串。例如：
 
 `model` 必填，接受 `/v1/models` 返回的服务模型名、`InternLM/<服务模型名>` 或
 `internlm/<转为小写的服务模型名>`，不用于切换权重。
-模型身份由 HTTP 端点处理，两种协议共用同一个 `DecisionContext` 和实际读取或回退得到的温度。
+模型身份由 HTTP 端点处理，两种协议共用同一个 `DecisionContext` 和从 checkpoint 读取的温度。
 可选的 `safety_identifier` 接受最长 64 字符的字符串或 `null`，表示调用方提供的终端用户标识。
 本服务仅兼容接收并校验；它不是鉴权凭据，不进入提示，也不影响评分。
 其他消息角色、音频/视频/文件内容块、工具记录、缓存控制和未知字段均返回 422。
@@ -165,8 +183,8 @@ OpenAI 格式与 Systemone 格式均将 assistant 答案骨架分词后的 token
 
 响应仅包含 `model`、`answers` 和 `usage`。choice 和 score 答案包含 `probabilities`、`confidence`，
 以及对应的 `choice` 或 `score`/`legend` 字段。noul 答案仅包含 `type` 和 `noul`（P(yes)）。
-候选 softmax 与温度校准沿用模型检查点的 `inference.py`；官方 0.8B 检查点的温度为 2.747760550703，
-读取失败时使用上文所述的 4B 默认值。响应不返回温度和耗时元数据。
+候选 softmax 与温度校准沿用模型检查点的 `inference.py`，三种模型的温度见上表。
+响应不返回温度和耗时元数据。
 不同推理内核与浮点精度可能使结果与官方 `DecisionEngine` 存在小幅数值差异。
 `usage.output_tokens` 统计包含决策标记的 assistant 答案骨架分词后的 token 数，实际不生成 token。
 

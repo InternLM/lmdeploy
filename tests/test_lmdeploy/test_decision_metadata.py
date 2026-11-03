@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from lmdeploy.intern_decision_encoding import DEFAULT_TEMPERATURE, resolve_temperature
+from lmdeploy.intern_decision_encoding import resolve_temperature
 
 
 @pytest.mark.parametrize('assignment, expected', [
@@ -28,29 +28,20 @@ def test_checkpoint_temperature_without_executing_source(tmp_path, assignment, e
     'DEFAULT_TEMPERATURE = 1e999', 'DEFAULT_TEMPERATURE: float',
     'DEFAULT_TEMPERATURE = 2\nDEFAULT_TEMPERATURE = 3',
 ])
-def test_unreadable_temperature_warns_and_falls_back(tmp_path, monkeypatch, source):
-    from lmdeploy import intern_decision_encoding as encoding
-
+def test_unreadable_temperature_rejected(tmp_path, source):
     if source is not None:
         (tmp_path / 'inference.py').write_bytes(source if isinstance(source, bytes) else source.encode())
-    warning = Mock()
-    monkeypatch.setattr(encoding.logger, 'warning', warning)
-    assert resolve_temperature(tmp_path) == DEFAULT_TEMPERATURE
-    warning.assert_called_once()
-    message = warning.call_args.args[0]
-    assert str(tmp_path / 'inference.py') in message
-    assert str(DEFAULT_TEMPERATURE) in message
+    with pytest.raises(ValueError, match='Cannot read decision temperature') as exc:
+        resolve_temperature(tmp_path)
+    assert str(tmp_path / 'inference.py') in str(exc.value)
 
 
 def test_remote_id_does_not_download_temperature(tmp_path, monkeypatch):
-    from lmdeploy import intern_decision_encoding as encoding
     from lmdeploy import utils
 
     monkeypatch.chdir(tmp_path)
     download = Mock(side_effect=AssertionError('Temperature reading must not download models'))
-    warning = Mock()
     monkeypatch.setattr(utils, 'get_model', download)
-    monkeypatch.setattr(encoding.logger, 'warning', warning)
-    assert resolve_temperature('organization/decision-model') == DEFAULT_TEMPERATURE
+    with pytest.raises(ValueError, match='Cannot read decision temperature'):
+        resolve_temperature('organization/decision-model')
     download.assert_not_called()
-    warning.assert_called_once()

@@ -1,6 +1,6 @@
 # Intern-Decision
 
-[Intern-Decision-0.8B](https://huggingface.co/internlm/Intern-Decision-0.8B) answers structured questions by
+The Intern-Decision family (0.8B, 2B and 4B) answers structured questions by
 **scoring** instead of generating. A Systemone request holds a `state`, up to 16 `questions` and optional image `assets`. The model
 reads one prompt that ends in a JSON skeleton with a `<decision>` marker per question, and the logits right before
 each marker, restricted to that question's answer symbols (`A`, `B`, ...), give the answer distribution.
@@ -15,6 +15,21 @@ Only `SystemoneRequest` / `SystemoneResponse` and `OpenAIDecisionRequest` / `Ope
 are wire schemas. The parser adapts OpenAI input into a private `_DecisionRow` containing `state`, `questions`
 and `images`; it does not accept the former native request format or emit its response envelope.
 
+## Supported checkpoints
+
+| Checkpoint weights | Calibration temperature | Backend | HTTP protocols |
+| --- | ---: | --- | --- |
+| [Intern-Decision-0.8B](https://huggingface.co/internlm/Intern-Decision-0.8B) | 2.747760550703 | PyTorch | OpenAI Decisions subset / Systemone |
+| [Intern-Decision-2B](https://huggingface.co/internlm/Intern-Decision-2B) | 2.100509348278 | PyTorch | OpenAI Decisions subset / Systemone |
+| [Intern-Decision-4B](https://huggingface.co/internlm/Intern-Decision-4B) | 1.99241824 | PyTorch | OpenAI Decisions subset / Systemone |
+
+All three checkpoints share the parser and scoring implementation. Local checkpoint metadata, tokenizer and
+processor checks cover all three sizes; these CPU checks do not load model weights or establish GPU accuracy
+or latency parity. Full-weight text evaluation on A100 covers all three sizes (seven suites, 10,751 requests /
+12,351 decision fields per model). These checks do not
+establish numerical parity with the published reference or full-image GPU accuracy. The tested GPU precision
+is BF16; quantized decision scoring has not been validated. TurboMind decision scoring and a Python Pipeline decision entry point are not supported.
+
 ## HTTP
 
 ```shell
@@ -25,10 +40,15 @@ lmdeploy serve api_server /path/to/Intern-Decision-0.8B --task intern-decision -
 no longer accepted. All PyTorch engine options (batch size, TP, prefix caching, ...) remain available. Decision
 requests use input scoring and generate no tokens.
 
-Startup reads a finite positive `DEFAULT_TEMPERATURE` constant from the local checkpoint's `inference.py` using
-AST parsing, without executing that file. Missing, unreadable or invalid metadata produces a warning and falls
-back to the 4B temperature `1.99241824`. This is a best-effort read: it does not download metadata for remote IDs
-or verify that calibration belongs to the loaded weights. Warnings follow `--log-level` (CLI default: `WARNING`).
+Local checkpoint directories and remote model IDs are accepted. For the decision task, startup first resolves
+a remote ID with the configured download directory and revision, then uses that same local path for the engine
+and calibration metadata. An explicit `--model-name` is preserved; otherwise the supplied model ID remains the
+service name. For example, use `internlm/Intern-Decision-2B` instead of the local path above, with
+`--model-name Intern-Decision-2B`.
+
+Startup reads a finite positive `DEFAULT_TEMPERATURE` constant from that checkpoint's `inference.py` using AST
+parsing, without executing the file. Missing, unreadable or invalid metadata prevents startup; no other model's
+temperature is substituted. Custom checkpoints must provide this constant for their own calibration.
 
 A read-only `DecisionContext` holds only the marker ID, answer-symbol IDs, image-token ID and temperature.
 It is initialized once from existing engine resources; its presence enables the decision endpoints.
@@ -213,7 +233,7 @@ Shape of a response (values are illustrative):
 ```
 
 Probabilities use the same candidate softmax and temperature calibration as the checkpoint's `inference.py`
-(`2.747760550703` when read from the official Intern-Decision-0.8B checkpoint), with the fallback described above.
+(see the checkpoint temperatures above).
 Different inference kernels and floating-point dtypes can introduce small numerical differences from the official
 `DecisionEngine`. `score` is the probability-weighted mean of numeric option keys (or list indices); `noul` is
 P(yes). The response contains only `model`, `answers` and `usage`; temperature and timing metadata are not returned.
