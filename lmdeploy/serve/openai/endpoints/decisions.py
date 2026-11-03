@@ -80,6 +80,9 @@ class _DecisionRoute(APIRoute):
             try:
                 return await handler(request)
             except RequestValidationError as exc:
+                # Shared dependencies can emit message-only errors handled by the app.
+                if any(not isinstance(error, dict) for error in exc.errors()):
+                    raise
                 return _validation_error_response(exc, systemone=self.systemone)
 
         return decision_route

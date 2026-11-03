@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import copy
+import json
 import math
 import socket
 import threading
@@ -199,6 +200,18 @@ def test_decision_error_format_does_not_change_chat_validation(http_service):
     response = client.post('/v1/chat/completions', json={})
     assert response.status_code == 400
     assert 'detail' not in response.json()
+
+
+@pytest.mark.parametrize('content_type', [None, 'text/plain', 'application/octet-stream'])
+def test_non_json_content_type_uses_shared_error_response(http_service, content_type):
+    client, context = http_service
+    headers = {'content-type': content_type} if content_type is not None else {}
+    response = client.post('/v1/decisions', content=json.dumps(request()), headers=headers)
+    assert response.status_code == 400
+    assert response.json() == dict(
+        message="Unsupported Media Type: Only 'application/json' is allowed",
+        type='invalid_request_error', code=400, param=None, object='error')
+    assert not context.async_engine.requests and not context.session_manager.sessions
 
 
 @pytest.mark.parametrize('change', [
