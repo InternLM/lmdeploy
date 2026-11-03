@@ -2,6 +2,7 @@
 """Request validation for the ``/v1/chat/completions`` endpoint."""
 from __future__ import annotations
 
+from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 # Upper bound for `n` (number of choices). Each choice is a separate
@@ -74,8 +75,13 @@ def check_request(request: ChatCompletionRequest,
             return f'The max_tokens {max_tokens!r} must be a positive integer.'
     if request.min_new_tokens is not None and request.min_new_tokens < 0:
         return f'The min_new_tokens {request.min_new_tokens!r} cannot be a negative integer.'
-    if request.top_logprobs is not None and request.top_logprobs > 20:
-        return f'The top_logprobs {request.top_logprobs!r} must be in [0, 20].'
+    if request.top_logprobs is not None:
+        # PyTorch can return the full model vocabulary. Keep TurboMind's
+        # existing API limit; its native logprob buffers have a separate cap.
+        max_logprobs = (server_context.async_engine.engine.vocab_size
+                       if isinstance(engine_config, PytorchEngineConfig) else 20)
+        if not 0 <= request.top_logprobs <= max_logprobs:
+            return f'The top_logprobs {request.top_logprobs!r} must be in [0, {max_logprobs}].'
 
     # Validate input_ids and image_data constraints.
     # messages has higher priority. input_ids and image_data are only used when

@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """PyTorch engine configuration for GLM-5.3-Flash."""
 
+from dataclasses import replace
+
 import torch
 
 from lmdeploy.pytorch.config import StateCacheSpec
@@ -207,7 +209,8 @@ def configure_kda_replayssm(config, layer_ids, heads, dim, conv_width,
     from lmdeploy.pytorch.config import validate_replayssm_config
 
     validate_replayssm_config(buffer_len, num_spec_tokens)
-    config.replayssm_baseline_state_shapes = list(config.states_shapes)
+    # Shared exact checkpoints use unit IDs; Replay runtime uses auxiliary IDs.
+    config.state_cache_is_indexed = True
     config.enable_replayssm = True
     config.replayssm_buffer_len = buffer_len
     # W-1 accepted history + N+1 tentative inputs require W+N slots.
@@ -232,6 +235,19 @@ def configure_kda_replayssm(config, layer_ids, heads, dim, conv_width,
                                 for name, shape, dtype in shapes]
     config.state_cache_specs.extend([
         StateCacheSpec(GDN_REPLAY_CURSOR_CACHE_NAME, (3,), torch.int32), *tails])
+    from lmdeploy.pytorch.consts import GDN_REPLAY_SHARED_CONV_CACHE_NAME, GDN_REPLAY_SHARED_STATE_CACHE_NAME
+
+    runtime_specs = [replace(spec, prefix_checkpoint=False, store_cacheable=False) for spec in config.state_cache_specs]
+    conv_spec = next(spec for spec in runtime_specs if spec.name == GDN_CONV_STATE_CACHE_NAME)
+    recurrent_spec = next(spec for spec in runtime_specs if spec.name == GDN_REPLAY_CHECKPOINT_CACHE_NAME)
+    config.state_cache_specs = [
+        *runtime_specs,
+        replace(conv_spec, name=GDN_REPLAY_SHARED_CONV_CACHE_NAME,
+                shape=(conv_spec.shape[0], conv_width - 1),
+                prefix_checkpoint=True, store_cacheable=True),
+        replace(recurrent_spec, name=GDN_REPLAY_SHARED_STATE_CACHE_NAME,
+                prefix_checkpoint=True, store_cacheable=True),
+    ]
     config.states_shapes = [(tuple(spec.shape), spec.dtype) for spec in config.state_cache_specs]
 
 
@@ -314,15 +330,15 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         config.supports_mla_fp8_cache = True
         config.reserve_dsa_score_workspace = True
         config.k_head_dim = text_config.kv_lora_rank
-        # Reuse Qwen3.5's token ring for convolution; recurrent/KPool states
-        # keep a complete checkpoint after each verified token. Store resumes
-        # on 64-token boundaries, where the unfinished KPool tail is empty.
-        ring_shape = (num_spec_tokens + 1,) if num_spec_tokens else ()
-        # Convolution retains W-1 history plus N+1 verification inputs.
+        # CUDA stores exact-boundary KDA units; KPool remains request-private.
+        # Store resumes on 64-token boundaries, where the KPool tail is empty.
+        config.state_cache_is_indexed = kwargs.get('device_type', 'cuda') in ('cuda', 'auto')
+        ring_shape = ((num_spec_tokens + 1,) if num_spec_tokens else ()) if not config.state_cache_is_indexed else ()
         config.state_cache_specs = [
             StateCacheSpec(
                 GLM5_KDA_CONV_STATE,
-                (num_linear_layers, conv_dim, conv_kernel_size + num_spec_tokens),
+                (num_linear_layers, conv_dim,
+                 conv_kernel_size - 1 if config.state_cache_is_indexed else conv_kernel_size + num_spec_tokens),
                 torch.bfloat16,
             ),
             StateCacheSpec(
@@ -375,6 +391,7 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             if hasattr(hf_config, 'auto_map'):
                 del hf_config.auto_map
             config.num_layers = 1
+            config.state_cache_is_indexed = False
             config.state_cache_specs = []
             config.states_shapes = []
             config.is_gated_delta = False

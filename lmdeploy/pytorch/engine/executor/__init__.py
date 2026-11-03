@@ -6,7 +6,15 @@ import torch
 
 from lmdeploy.messages import QuantPolicy
 from lmdeploy.pytorch import envs
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MiscConfig,
+    ModelConfig,
+    SpecDecodeConfig,
+    SSMStateCapacity,
+)
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.utils import get_logger
 
@@ -158,6 +166,13 @@ def build_executor(
     _finalize_sparse_mla_cache_policy(shared_cache_models, cache_config)
     if specdecode_config is not None and specdecode_config.cache_config is not None:
         _finalize_sparse_mla_cache_policy([specdecode_config.model_config], specdecode_config.cache_config)
+
+    if (model_config.state_cache_is_indexed and model_config.states_shapes
+            and cache_config.compact_state_capacity is None):
+        width = 1 if specdecode_config is None else 1 + specdecode_config.num_speculative_tokens
+        cache_config.compact_state_capacity = SSMStateCapacity.from_cache_config(
+            cache_config, width, runtime_is_auxiliary=model_config.enable_replayssm)
+        logger.info('Enable unified compact state: %s', cache_config.compact_state_capacity)
 
     if distributed_executor_backend is None:
         distributed_executor_backend = get_distributed_executor_backend(world_size, dp, device_type, logger)

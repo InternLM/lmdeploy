@@ -17,6 +17,8 @@ from lmdeploy.pytorch.consts import (
     GDN_REPLAY_K_CACHE_NAME,
     GDN_REPLAY_RAW_K_CACHE_NAME,
     GDN_REPLAY_RAW_V_CACHE_NAME,
+    GDN_REPLAY_SHARED_CONV_CACHE_NAME,
+    GDN_REPLAY_SHARED_STATE_CACHE_NAME,
 )
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 
@@ -56,6 +58,8 @@ class GatedDeltaReplayState:
     raw_k_ring: torch.Tensor | None = None
     beta_ring: torch.Tensor | None = None
     force_flush: torch.Tensor | None = None
+    shared_checkpoint: torch.Tensor | None = None
+    shared_conv_state: torch.Tensor | None = None
 
 
 def _named_layer(caches: Mapping[str, torch.Tensor], name: str, layer_id: int):
@@ -81,6 +85,9 @@ def build_gated_delta_replay_state(caches: Mapping[str, torch.Tensor],
             raw_k_ring=_named_layer(caches, GDN_REPLAY_RAW_K_CACHE_NAME, layer_id),
             beta_ring=_named_layer(caches, GDN_REPLAY_BETA_CACHE_NAME, layer_id),
         )
+    if GDN_REPLAY_SHARED_STATE_CACHE_NAME in caches:
+        kwargs.update(shared_checkpoint=_named_layer(caches, GDN_REPLAY_SHARED_STATE_CACHE_NAME, layer_id),
+                      shared_conv_state=_named_layer(caches, GDN_REPLAY_SHARED_CONV_CACHE_NAME, layer_id))
     return GatedDeltaReplayState(
         conv_state=_named_layer(caches, GDN_CONV_STATE_CACHE_NAME, layer_id),
         checkpoint=_named_layer(caches, GDN_REPLAY_CHECKPOINT_CACHE_NAME, layer_id),
@@ -162,6 +169,7 @@ class GatedDeltaMetaImpl(ABC):
 @dataclass(frozen=True)
 class GatedDeltaMetaBuildSpec(BuildSpec[GatedDeltaMetaImpl]):
     """Request construction of a gated-delta metadata operator."""
+    indexed_state: bool = False
 
 
 class GatedDeltaRuleImpl(ABC):
@@ -368,3 +376,4 @@ class GatedDeltaRuleImpl(ABC):
 @dataclass(frozen=True)
 class GatedDeltaRuleBuildSpec(BuildSpec[GatedDeltaRuleImpl]):
     """Request construction of a gated-delta-rule operator."""
+    indexed_state: bool = False

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 
 from .base import BuildSpec
-from .gated_delta_rule import GatedDeltaMeta
+from .gated_delta_rule import GatedDeltaMeta, GatedDeltaReplayState
 
 
 class CausalConv1dImpl(ABC):
@@ -17,7 +17,7 @@ class CausalConv1dImpl(ABC):
         x: torch.Tensor,
         weight: torch.Tensor,
         bias: torch.Tensor | None,
-        conv_state: torch.Tensor,
+        conv_state: torch.Tensor | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
         activation: str,
     ) -> torch.Tensor:
@@ -54,3 +54,4 @@ class CausalConv1dImpl(ABC):
 @dataclass(frozen=True)
 class CausalConv1dBuildSpec(BuildSpec[CausalConv1dImpl]):
     """Request construction of a causal-convolution operator."""
+    indexed_state: bool = False

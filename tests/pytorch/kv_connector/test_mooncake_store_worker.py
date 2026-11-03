@@ -932,6 +932,7 @@ def test_hybrid_sender_reads_frozen_snapshot_across_all_pool_rows(put_result):
     recurrent[:, 1] = torch.arange(10).reshape(2, 5) + 10
     expected = bytes(conv[1].tolist()) + bytes(recurrent[:, 1].flatten().tolist())
     engine = object.__new__(StateCacheEngine)
+    engine.compact_plan = None
     engine.cache_config = SimpleNamespace(num_state_caches=4)
     engine._cache_tensors = [conv, recurrent]
     engine._slot_tensors = ((conv, 0), (recurrent, 1))
@@ -1268,7 +1269,7 @@ def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path
         tensor.zero_()
     raw_tokens.fill_(float('nan'))
     for i, tensor in enumerate(state_slots):
-        tensor[2].fill_(-1 if i in state_indices else float('nan'))
+        tensor[2].fill_(-1 if i in state_indices or not tensor.is_floating_point() else float('nan'))
     load = MooncakeStoreLoadRequest(2, (2, 0), hashes, 2, state_slot=2)
     worker.start_load_kv(MooncakeStoreConnectorMetadata(load_requests=(load,)))
     worker.kv_recv_thread.request_queue.join()
@@ -1279,8 +1280,8 @@ def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path
     for i, expected in zip(state_indices, expected_state):
         torch.testing.assert_close(state_slots[i][2], expected)
     assert torch.isnan(raw_tokens).all()
-    assert all(torch.isnan(tensor[2]).all() for i, tensor in enumerate(state_slots)
-               if i not in state_indices)
+    assert all((torch.isnan(tensor[2]).all() if tensor.is_floating_point() else (tensor[2] == -1).all())
+               for i, tensor in enumerate(state_slots) if i not in state_indices)
     worker.shutdown()
 
 

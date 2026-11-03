@@ -148,14 +148,15 @@ class Qwen3NextGatedDeltaNet(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        past_key_value: tuple[torch.Tensor, torch.Tensor],
+        past_key_value: tuple[torch.Tensor, torch.Tensor] | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
     ):
         """forward."""
 
         # load states
         if isinstance(past_key_value, GatedDeltaReplayState):
-            conv_state, recurrent_state = past_key_value.conv_state, past_key_value
+            conv_state = past_key_value if past_key_value.shared_conv_state is not None else past_key_value.conv_state
+            recurrent_state = past_key_value
         else:
             conv_state, recurrent_state = past_key_value[:2]
 

@@ -11,8 +11,16 @@ ReplaySSM 是实验性功能，**默认关闭**。当前支持：
 - Qwen3-Next/Qwen3.5 Gated DeltaNet 和 GLM-5.3 Flash KDA 的标准解码。
 - Qwen3.5 的 `qwen3_5_mtp`，以及 GLM-5.3 Flash 的 `deepseek_mtp`。
 
-不支持 TurboMind、非 CUDA 设备、P/D 解耦、外部 KV-cache connector，以及其他
+不支持 TurboMind、非 CUDA 设备、P/D 解耦、Mooncake Store 以外的外部 KV-cache connector，以及其他
 模型或投机算法组合。不支持的 ReplaySSM 配置会在启动时报错。
+
+无论是否开启 ReplaySSM，CUDA Qwen3.5 和 GLM-5.3 都使用同一 indexed compact
+state owner 与 checkpoint 生命周期。Replay 的 base checkpoint、输入 rings、cursor
+和运行时卷积历史保留在请求私有的 auxiliary slot 中；该 request-slot ID 不是共享
+checkpoint unit ID。Prefix caching 和 Mooncake Store 只保存精确边界的 recurrent
+state 和按时间顺序排列的 `W-1` 卷积历史（`W` 为卷积核宽度），不保存私有 rings 或
+cursor。恢复时从共享边界初始化私有运行时状态。Store 仍使用布局指纹隔离不兼容
+格式；其他外部 KV connector 仍不支持。
 
 ## 使用方式
 

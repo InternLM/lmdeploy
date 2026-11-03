@@ -12,9 +12,19 @@ ReplaySSM is experimental and **disabled by default**. It supports:
 - Standard decoding for Qwen3-Next/Qwen3.5 Gated DeltaNet and GLM-5.3 Flash KDA.
 - Qwen3.5 MTP with `qwen3_5_mtp`, or GLM-5.3 Flash MTP with `deepseek_mtp`.
 
-TurboMind, non-CUDA devices, P/D disaggregation, external KV-cache connectors,
+TurboMind, non-CUDA devices, P/D disaggregation, external KV-cache connectors other than Mooncake Store,
 and other model/speculative-method combinations are not supported. Unsupported
 ReplaySSM configurations are rejected at startup.
+
+CUDA Qwen3.5 and GLM-5.3 use the same indexed compact state owner and checkpoint
+lifecycle with ReplaySSM enabled or disabled. Replay's base checkpoint, input
+rings, cursor and runtime convolution history remain private to an auxiliary
+request slot; its ID is not a shared checkpoint unit ID. Prefix caching and
+Mooncake Store save only the exact-boundary recurrent state and chronological
+convolution history of length `W-1` (`W` is the convolution kernel width), not
+the private Replay rings or cursor. Restore initializes the private runtime
+from that shared boundary. Store layout fingerprints still separate incompatible
+formats; other external KV connectors remain unsupported.
 
 ## Usage
 

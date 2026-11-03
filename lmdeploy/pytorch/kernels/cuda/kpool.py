@@ -197,9 +197,12 @@ def _prefill_offsets_kernel(Q, KV, Counts, Starts, QEnds,
     tl.store(QEnds + request, tl.cumsum(q), request < BATCH)
 
 
+# Request-dependent row/page counts and page-table row strides stay runtime
+# throughout these kernels. Only tile geometry and fixed model dimensions
+# need constexpr specialization; otherwise each new context can trigger JIT.
 @triton.jit
 def _prefill_query_metadata_kernel(KV, QEnds, Starts, Seq, Lengths, QueryStarts, QueryEnds,
-                                   ROWS: tl.constexpr, BATCH: tl.constexpr, POOL: tl.constexpr,
+                                   ROWS, BATCH: tl.constexpr, POOL: tl.constexpr,
                                    BLOCK: tl.constexpr):
     row = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     low = tl.full((BLOCK,), 0, tl.int32)
@@ -335,7 +338,7 @@ def _normalized_hadamard(value, WIDTH: tl.constexpr, LEVELS: tl.constexpr):
 
 
 @triton.jit
-def _rotate_kpool_query_kernel(Query, Out, ROWS: tl.constexpr, WIDTH: tl.constexpr,
+def _rotate_kpool_query_kernel(Query, Out, ROWS, WIDTH: tl.constexpr,
                               LEVELS: tl.constexpr, BLOCK_M: tl.constexpr):
     rows = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
     offsets = rows[:, None] * WIDTH + tl.arange(0, WIDTH)[None, :]
@@ -504,10 +507,15 @@ def write_raw_ring(keys, scores, new_keys, new_scores, state_ids, history, lengt
 @triton.jit
 def _score_pages(Q, W, Cache, Lengths, Table, Out,
                  QS0: tl.constexpr, QS1: tl.constexpr,
-                 WS0: tl.constexpr, TS0: tl.constexpr,
+                 WS0: tl.constexpr, TS0,
                  PAGE_STRIDE: tl.constexpr, PAGE: tl.constexpr,
-                 HEADS: tl.constexpr, DIM: tl.constexpr, WIDTH: tl.constexpr,
-                 H: tl.constexpr, D: tl.constexpr, TILE: tl.constexpr):
+                 HEADS: tl.constexpr, DIM: tl.constexpr, WIDTH,
+                 H: tl.constexpr, D: tl.constexpr, TILE: tl.constexpr,
+                 WIDTH_BOUND: tl.constexpr):
+    # Keep the exact width dynamic while preserving bounded loop-index analysis.
+    # The launcher derives this bound from the actual (possibly padded) page table.
+    tl.assume(WIDTH > 0)
+    tl.assume(WIDTH <= WIDTH_BOUND)
     row = tl.program_id(0)
     heads = tl.arange(0, H)
     ds = tl.arange(0, D)
@@ -541,13 +549,15 @@ def score_paged(query, weight, cache, lengths, table):
     result = torch.empty((rows, width), dtype=torch.float32, device=query.device)
     if not rows or not width:
         return result
+    width_bound = triton.next_power_of_2(width)
     workers = min(triton.cdiv(width, 64),
                   triton.cdiv(torch.cuda.get_device_properties(query.device).multi_processor_count * 2, rows))
     _score_pages[(rows, workers)](
         query, weight, cache, lengths, table, result,
         query.stride(0), query.stride(1), weight.stride(0), table.stride(0),
         cache.stride(0), cache.size(1), heads, dim, width,
-        max(16, triton.next_power_of_2(heads)), triton.next_power_of_2(dim), 64)
+        max(16, triton.next_power_of_2(heads)), triton.next_power_of_2(dim), 64,
+        WIDTH_BOUND=width_bound)
     return result
 
 
@@ -555,8 +565,8 @@ def score_paged(query, weight, cache, lengths, table):
 def _gather_token_tail_kernel(Cache, Blocks, Q, KV, Keys, Scores, StateIds,
                               stride_cb: tl.constexpr, stride_ct: tl.constexpr,
                               stride_cs: tl.constexpr, stride_cd: tl.constexpr,
-                              stride_bb: tl.constexpr, stride_bp: tl.constexpr,
-                              PAGES: tl.constexpr, PAGE_SIZE: tl.constexpr,
+                              stride_bb, stride_bp: tl.constexpr,
+                              PAGES, PAGE_SIZE: tl.constexpr,
                               POOL: tl.constexpr, WIDTH: tl.constexpr,
                               BLOCK_D: tl.constexpr):
     request = tl.program_id(0)
@@ -596,10 +606,10 @@ def gather_kpool_token_tail(cache, block_offsets, q_seqlens, kv_seqlens, pool_si
 def _write_token_cache_kernel(Cache, Blocks, Q, KV, Starts, Keys, Scores,
                                stride_cb: tl.constexpr, stride_ct: tl.constexpr,
                                stride_cs: tl.constexpr, stride_cd: tl.constexpr,
-                               stride_bb: tl.constexpr, stride_bp: tl.constexpr,
+                               stride_bb, stride_bp: tl.constexpr,
                                stride_kt: tl.constexpr, stride_kd: tl.constexpr,
                                stride_st: tl.constexpr, stride_sd: tl.constexpr,
-                               BATCH: tl.constexpr, PAGES: tl.constexpr,
+                               BATCH: tl.constexpr, PAGES,
                                PAGE_SIZE: tl.constexpr, WIDTH: tl.constexpr,
                                BLOCK_B: tl.constexpr, BLOCK_D: tl.constexpr):
     row = tl.program_id(0)
@@ -633,8 +643,8 @@ def write_kpool_token_cache(cache, keys, scores, block_offsets, q_seqlens,
 
 @triton.jit
 def _decode_metadata_kernel(Q, KV, Blocks, Seq, Groups, Context, ScheduleLengths, Table,
-                            STEPS: tl.constexpr, POOL: tl.constexpr, PAGES: tl.constexpr, PAGE_STEP: tl.constexpr,
-                            stride_bb: tl.constexpr, stride_bp: tl.constexpr,
+                            STEPS: tl.constexpr, POOL: tl.constexpr, PAGES, PAGE_STEP: tl.constexpr,
+                            stride_bb, stride_bp: tl.constexpr,
                             BLOCK: tl.constexpr):
     row = tl.program_id(0)
     tile = tl.program_id(1)

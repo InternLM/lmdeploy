@@ -14,6 +14,7 @@ from lmdeploy.pytorch.kv_connector.base import RequestId
 from lmdeploy.utils import get_logger
 
 from .data import (
+    MooncakeStoreCompactStateSave,
     MooncakeStoreKeyMetadata,
     MooncakeStoreLoadRequest,
     MooncakeStoreRegistration,
@@ -209,10 +210,26 @@ class KVCacheStoreSendingThread(threading.Thread):
         if request.state is not None:
             # State uses every attention TP rank. It must not inherit FA's
             # replicated-KV-head ownership rule.
+            state = request.state
+            compact = isinstance(state, MooncakeStoreCompactStateSave)
+            if compact != (self.key_metadata.state_schema is not None):
+                raise ValueError('Store save state source does not match registered schema mode.')
+            if compact:
+                block_size = self.key_metadata.block_size
+                if (state.boundary_tokens % block_size
+                        or (request.start_block + len(request.block_ids)) * block_size > state.forward_end):
+                    raise ValueError('Compact save needs an aligned checkpoint and completed KV blocks.')
+                boundary_index = state.boundary_tokens // block_size - 1 - request.start_block
+                if (0 <= boundary_index < len(request.block_hashes)
+                        and state.boundary_hash != request.block_hashes[boundary_index]):
+                    raise ValueError('Compact state identity differs from its checkpoint prefix.')
+                block_hash, source = state.boundary_hash, state.unit_id
+            else:
+                block_hash, source = request.block_hashes[-1], state.snapshot_slot
             entries.append(_SaveEntry(
-                key=build_store_key(self.key_metadata, self.tp_rank, request.block_hashes[-1], group_id=1),
+                key=build_store_key(self.key_metadata, self.tp_rank, block_hash, group_id=1),
                 cache_kind='linear_attention',
-                source_index=request.state.snapshot_slot,
+                source_index=source,
             ))
         return entries
 
@@ -489,8 +506,9 @@ class KVCacheStoreRecvingThread(threading.Thread):
             self.tp_size,
             request.request_id,
             len(request.block_ids),
-            request.state_slot,
-            request.remote_block_count * self.key_metadata.block_size if request.state_slot is not None else None,
+            request.state_destination,
+            (request.remote_block_count * self.key_metadata.block_size
+             if request.state_destination is not None else None),
         )
 
     def _scatter_block(self, block_id: int) -> tuple[list[int], list[int]]:
@@ -513,11 +531,13 @@ class KVCacheStoreRecvingThread(threading.Thread):
             addresses.append(block_addresses)
             sizes.append(block_sizes)
 
-        if request.state_slot is not None:
-            if request.state_slot <= 0:
+        if request.state_destination is not None:
+            if (request.state_unit_id is not None) != (self.key_metadata.state_schema is not None):
+                raise ValueError('Store load state destination does not match registered schema mode.')
+            if request.state_destination <= 0:
                 raise ValueError('Mooncake load cannot write the reserved state slot')
             state_addresses, state_sizes = _scatter_state(
-                self.state_rows, self.num_state_slots, request.state_slot)
+                self.state_rows, self.num_state_slots, request.state_destination)
             keys.append(build_store_key(self.key_metadata, self.tp_rank, request.block_hashes[-1], group_id=1))
             addresses.append(state_addresses)
             sizes.append(state_sizes)
@@ -534,7 +554,7 @@ class KVCacheStoreRecvingThread(threading.Thread):
             len(keys),
             sum(len(parts) for parts in addresses),
             total_bytes,
-            request.state_slot,
+            request.state_destination,
         )
         # Key/address preparation only touches CPU metadata. Wait after it,
         # before Store can overwrite bytes still in use by earlier GPU work.
@@ -570,8 +590,13 @@ class KVCacheStoreRecvingThread(threading.Thread):
             )
             return False
 
-        num_failed = sum(result < 0 for result in results)
-        state_failed = request.state_slot is not None and results[-1] < 0
+        failed = [result < 0 for result in results]
+        if self.key_metadata.state_schema is not None:
+            # Mooncake returns bytes read, not merely a success status. A short
+            # object can otherwise leave the direct destination partly stale.
+            failed = [result != sum(parts) for result, parts in zip(results, sizes, strict=True)]
+        num_failed = sum(failed)
+        state_failed = request.state_destination is not None and failed[-1]
         log = logger.info if not num_failed else logger.error
         log(
             'Mooncake Store interaction after: operation=load_batch_get_into_multi_buffers '

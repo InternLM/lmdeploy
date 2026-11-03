@@ -5,7 +5,7 @@ from functools import lru_cache, partial
 import torch
 
 from ..causal_conv1d import CausalConv1dImpl
-from ..gated_delta_rule import GatedDeltaMeta
+from ..gated_delta_rule import GatedDeltaMeta, GatedDeltaReplayState
 from .step_metadata import register_piecewise_graph_impl
 from .utils import has_tilelang
 
@@ -13,7 +13,8 @@ from .utils import has_tilelang
 class CausalConv1dTilelangImpl(CausalConv1dImpl):
     """CausalConv1d update implementation."""
 
-    def __init__(self):
+    def __init__(self, indexed_state: bool = False):
+        self.indexed_state = indexed_state
         from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_fn, causal_conv1d_update
         self.causal_conv1d_fn = causal_conv1d_fn
         self.causal_conv1d_update = causal_conv1d_update
@@ -94,7 +95,7 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
             x: torch.Tensor,
             weight: torch.Tensor,
             bias: torch.Tensor | None,
-            conv_state: torch.Tensor,
+            conv_state: torch.Tensor | GatedDeltaReplayState,
             gated_delta_meta: GatedDeltaMeta,
             activation: str,
         ) -> torch.Tensor:
@@ -113,7 +114,7 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
             x: torch.Tensor,
             weight: torch.Tensor,
             bias: torch.Tensor | None,
-            conv_state: torch.Tensor,
+            conv_state: torch.Tensor | GatedDeltaReplayState,
             gated_delta_meta: GatedDeltaMeta,
             activation: str,
         ) -> torch.Tensor:
@@ -162,14 +163,61 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
         x: torch.Tensor,
         weight: torch.Tensor,
         bias: torch.Tensor | None,
-        conv_state: torch.Tensor,
+        conv_state: torch.Tensor | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
         activation: str,
     ) -> torch.Tensor:
-        """Dispatch causal convolution by inference phase."""
+        """Dispatch causal convolution by state layout and inference phase."""
+        if isinstance(conv_state, GatedDeltaReplayState):
+            return self.forward_replay(x, weight, bias, conv_state, gated_delta_meta, activation)
+        if self.indexed_state:
+            return self.forward_indexed(x, weight, bias, conv_state, gated_delta_meta, activation)
         if gated_delta_meta.is_decoding:
             return self.decode(x, weight, bias, conv_state, gated_delta_meta, activation)
         return self._prefill(x, weight, bias, conv_state, gated_delta_meta, activation)
+
+    def forward_replay(self, x, weight, bias, state, metadata, activation):
+        from lmdeploy.pytorch.kernels.cuda.replayssm_indexed import replay_conv_boundaries
+        if not metadata.is_decoding:
+            replay_conv_boundaries(x, state, metadata, weight.shape[-1])
+            return self._prefill(x, weight, bias, state.conv_state, metadata, activation)
+        output = self.decode(x, weight, bias, state.conv_state, metadata, activation)
+        if state.cursor.Tmax == 1:
+            replay_conv_boundaries(x, state, metadata, weight.shape[-1])
+        return output
+
+    @staticmethod
+    def forward_indexed(
+        x: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor | None,
+        conv_state: torch.Tensor,
+        metadata: GatedDeltaMeta,
+        activation: str,
+    ) -> torch.Tensor:
+        """Shared indexed Qwen/KDA convolution; inputs/outputs are unit
+        views."""
+        from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_update, indexed_causal_conv1d_fwd
+        if weight.ndim == 3:
+            if weight.size(1) != 1:
+                raise ValueError('Depthwise convolution weight must have shape [C,1,K].')
+            weight = weight[:, 0]
+        ssm_state_meta = metadata.ssm_state_meta
+        if metadata.is_decoding:
+            batch, width = ssm_state_meta.output_state_ids.shape
+            values = x[0].unflatten(0, (batch, width)).transpose(1, 2)
+            output = causal_conv1d_update(values, conv_state, weight, bias=bias, activation=activation,
+                                         conv_state_indices=ssm_state_meta.input_state_ids,
+                                         output_state_indices=ssm_state_meta.output_state_ids)
+            return output.transpose(1, 2).flatten(0, 1).unsqueeze(0)
+        ssm_prefill_meta = metadata.ssm_prefill_meta
+        output = indexed_causal_conv1d_fwd(
+            x.transpose(1, 2), weight, conv_state,
+            ssm_state_meta.input_state_ids, ssm_state_meta.output_state_ids[:, 0],
+            seq_idx=ssm_prefill_meta.seq_idx, cu_seqlens=ssm_prefill_meta.cu_seqlens,
+            bias=bias, activation=activation,
+            checkpoint_ids=ssm_prefill_meta.checkpoint_ids, checkpoint_offsets=ssm_prefill_meta.checkpoint_offsets)
+        return output.transpose(1, 2)
 
     def supports_piecewise_cuda_graph(self) -> bool:
         """Return whether this selected CUDA implementation supports PCG."""
@@ -216,6 +264,7 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
 class CausalConv1dDaoImpl(CausalConv1dTilelangImpl):
 
     def __init__(self):
+        self.indexed_state = False
         self._piecewise_forward = None
         try:
             import causal_conv1d
@@ -255,11 +304,11 @@ def has_dao():
         return False
 
 
-def _build_causal_conv1d() -> CausalConv1dImpl:
+def _build_causal_conv1d(indexed_state: bool = False) -> CausalConv1dImpl:
     """Build the best available CUDA causal-convolution implementation."""
     if has_tilelang():
-        return CausalConv1dTilelangImpl()
-    if has_dao():
+        return CausalConv1dTilelangImpl(indexed_state=indexed_state)
+    if not indexed_state and has_dao():
         return CausalConv1dDaoImpl()
     raise RuntimeError('No available implementation for CausalConv1d, '
                        'please install https://tilelang.com/ or https://github.com/Dao-AILab/causal-conv1d')

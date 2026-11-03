@@ -678,9 +678,9 @@ def test_replayssm_log_does_not_attribute_auxiliary_state_to_ring(monkeypatch):
              StateCacheSpec('auxiliary_kpool_tail', (2, 4), torch.float32, layer_ids=[1])]
     shapes = [(spec.shape, spec.dtype) for spec in specs]
     executor = object.__new__(ExecutorBase)
-    executor.cache_config = SimpleNamespace(states_shapes=shapes, num_state_caches=3)
+    executor.cache_config = SimpleNamespace(states_shapes=shapes, num_state_caches=3, compact_state_capacity=None)
     executor.model_config = SimpleNamespace(state_cache_specs=specs, enable_replayssm=True,
-                                            replayssm_baseline_state_shapes=shapes, model_paradigm='ar',
+                                            model_paradigm='ar',
                                             replayssm_buffer_len=16)
     total = executor._get_state_cache_mem()
     slot = StateCacheEngine.get_state_slot_nbytes(shapes, state_specs=specs)

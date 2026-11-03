@@ -50,6 +50,7 @@ class KVLoadAdmission(enum.Enum):
     PENDING = enum.auto()
     FULL_PREFILL_UNAVAILABLE = enum.auto()
     SOFT_BUDGET_UNAVAILABLE = enum.auto()
+    LOAD_STATE_UNAVAILABLE = enum.auto()
     STARTED = enum.auto()
 
 
@@ -341,6 +342,12 @@ class KVLoadCoordinator:
         if not self.can_admit_load(seq, plan.target_blocks):
             seq.kv_token_limit = plan.original_kv_token_limit
             return KVLoadAdmission.SOFT_BUDGET_UNAVAILABLE
+        if (self.state_manager is not None
+                and not self.block_trie.state_checkpoints.make_load_state_available(seq)):
+            seq.kv_token_limit = plan.original_kv_token_limit
+            return KVLoadAdmission.LOAD_STATE_UNAVAILABLE
+        # No yield or checkpoint producer intervenes before allocation and the
+        # connector's submit_load lease; their existing rollback stays atomic.
         return None
 
     def _allocate_and_start_load(

@@ -188,7 +188,7 @@ class StateCheckpointLifecycle:
             return -1
 
         try:
-            slot = self._reserve_checkpoint(node, step)
+            slot = self._reserve_checkpoint(node, step, seq=seq)
         except MemoryError:
             return -1
         except RuntimeError as e:
@@ -396,6 +396,10 @@ class StateCheckpointLifecycle:
         self.evict(1)
         return state_manager.get_num_free_runtime() > 0
 
+    def make_load_state_available(self, seq: SchedulerSequence) -> bool:
+        """Admit a Store destination; legacy loads write the runtime slot."""
+        return self._state_manager.is_allocated(seq) or self.make_runtime_state_available()
+
     def evict(self, max_num_checkpoints: int):
         """Evict published checkpoints without removing trie nodes."""
         return self._evict_checkpoints(self._index.unique_nodes(), max_num_checkpoints)
@@ -491,7 +495,7 @@ class StateCheckpointLifecycle:
             evicted += 1
         return evicted
 
-    def _reserve_checkpoint(self, node: Node, step: int):
+    def _reserve_checkpoint(self, node: Node, step: int, *, seq: SchedulerSequence | None = None):
         """Reserve or replace the checkpoint owned by one trie anchor.
 
         Replacing a published checkpoint at the same anchor is allowed only while no async copy pins it. If the shared
@@ -504,12 +508,12 @@ class StateCheckpointLifecycle:
 
         checkpoint = node.state_checkpoint
         if checkpoint is None:
-            return self._create_checkpoint(node, step)
-        if not checkpoint.published or checkpoint.pin_count > 0 or checkpoint.step == step:
+            return self._create_checkpoint(node, step, seq=seq)
+        if not checkpoint.published or self.is_pinned(node) or checkpoint.step == step:
             return -1
-        return self._replace_checkpoint(node, checkpoint, step)
+        return self._replace_checkpoint(node, checkpoint, step, seq=seq)
 
-    def _create_checkpoint(self, node: Node, step: int):
+    def _create_checkpoint(self, node: Node, step: int, *, seq: SchedulerSequence | None = None):
         """Allocate a new checkpoint, rolling back state on KV failure."""
         if self._state_manager.get_num_free_checkpoint() == 0 and self.evict(1) == 0:
             return -1
@@ -528,7 +532,8 @@ class StateCheckpointLifecycle:
                                                     frozen_block_id=frozen_block_id)
         return slot
 
-    def _replace_checkpoint(self, node: Node, checkpoint: NodeStateCheckpoint, step: int):
+    def _replace_checkpoint(self, node: Node, checkpoint: NodeStateCheckpoint, step: int,
+                            *, seq: SchedulerSequence | None = None):
         """Reuse an unpinned checkpoint while changing its exact step."""
         is_partial = checkpoint_anchor_step(step, self._block_size) != step
         frozen_block_id = checkpoint.frozen_block_id
@@ -648,10 +653,10 @@ class StateCheckpointLifecycle:
         checkpoint = node.state_checkpoint
         return checkpoint is not None and checkpoint.slot == slot and checkpoint.published
 
-    @staticmethod
-    def _is_evictable_checkpoint(node: Node):
+    @classmethod
+    def _is_evictable_checkpoint(cls, node: Node):
         checkpoint = node.state_checkpoint
-        return checkpoint is not None and checkpoint.slot >= 0 and checkpoint.published and checkpoint.pin_count == 0
+        return checkpoint is not None and checkpoint.slot >= 0 and checkpoint.published and not cls.is_pinned(node)
 
     def _unindex_checkpoint(self, node: Node):
         """Remove a checkpoint from every sparse-index bucket."""

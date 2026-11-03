@@ -182,6 +182,8 @@ class CacheConfig:
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
+    # Internal geometry derived from the model/backend state layout at startup.
+    compact_state_capacity: 'SSMStateCapacity | None' = None
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
     prefill_save_alignment: int = 1024
@@ -461,6 +463,87 @@ class MemDecodeConfig:
             raise ValueError('router_path is required when adaptive_router is enabled.')
 
 
+@dataclass(frozen=True)
+class SSMStateCapacity:
+    """Separate request capacity from private state-unit capacity.
+
+    This is an internal geometry contract, not a reinterpretation of
+    ``CacheConfig.num_state_caches``. ``request_slots`` includes reserved slot
+    zero; checkpoint and Store budgets count shared units, not extra banks.
+    """
+
+    request_slots: int
+    max_update_tokens: int
+    checkpoint_budget: int = 0
+    store_budget: int = 0
+    runtime_is_auxiliary: bool = False
+    # Store consumers need shared load destinations even when runtime has no unit bank.
+    load_budget: int = 0
+
+    def __post_init__(self):
+        values = (self.request_slots, self.max_update_tokens,
+                  self.checkpoint_budget, self.store_budget, self.load_budget)
+        if self.load_budget and not self.runtime_is_auxiliary:
+            raise ValueError('Separate Store load capacity is only needed for auxiliary runtime.')
+        if type(self.runtime_is_auxiliary) is not bool:
+            raise ValueError('runtime_is_auxiliary must be a bool.')
+        if self.request_slots == 0 and self.runtime_is_auxiliary:
+            raise ValueError('Stateless models cannot have auxiliary runtime.')
+        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
+            raise ValueError('Compact state capacities must be non-negative integers.')
+        if self.request_slots == 0:
+            if any(values[1:]):
+                raise ValueError('Stateless models must have zero compact state capacities.')
+        elif self.max_update_tokens == 0:
+            raise ValueError('Stateful models need at least one update token.')
+
+    @classmethod
+    def from_cache_config(cls, cache: CacheConfig, max_update_tokens: int, *,
+                          runtime_is_auxiliary: bool = False) -> 'SSMStateCapacity':
+        """Normalize default state slots and derive capacity for a stateful
+        target."""
+        # CacheConfig.states_shapes is populated later than executor selection.
+        store_budget = (cache.mooncake_state_save_slots
+                        if cache.use_mooncake_store and cache.kv_transfer_config.is_kv_producer else 0)
+        if cache.num_state_caches is None:
+            cache.num_state_caches = cache.max_batches + 2 + cache.prefix_cache_state_budget + store_budget
+        load_budget = (cache.num_state_caches - cache.prefix_cache_state_budget - store_budget - 1
+                       if runtime_is_auxiliary and cache.use_mooncake_store
+                       and cache.kv_transfer_config.is_kv_consumer else 0)
+        return cls.from_state_slots(cache.num_state_caches, cache.prefix_cache_state_budget,
+                                    store_budget, max_update_tokens, runtime_is_auxiliary=runtime_is_auxiliary,
+                                    load_budget=load_budget)
+
+    @classmethod
+    def from_state_slots(cls, num_state_caches: int | None, checkpoint_budget: int,
+                    store_budget: int, max_update_tokens: int, *,
+                         runtime_is_auxiliary: bool = False, load_budget: int = 0) -> 'SSMStateCapacity':
+        """Preserve A=M-B-S, R=A-1; absence of state allocates nothing."""
+        if num_state_caches is None:
+            return cls(0, 0)
+        request_slots = num_state_caches - checkpoint_budget - store_budget
+        if request_slots < 1:
+            raise ValueError('State capacity must include reserved request slot zero.')
+        return cls(request_slots, max_update_tokens, checkpoint_budget, store_budget, runtime_is_auxiliary, load_budget)
+
+    @property
+    def request_capacity(self) -> int:
+        return max(0, self.request_slots - 1)
+
+    @property
+    def bank_width(self) -> int:
+        """Native uses one destination per token; auxiliary Replay uses
+        none."""
+        return self.max_update_tokens if self.request_slots and not self.runtime_is_auxiliary else 0
+
+    @property
+    def num_units(self) -> int:
+        if not self.request_slots:
+            return 0
+        return (1 + self.request_capacity * self.bank_width
+                + self.checkpoint_budget + self.store_budget + self.load_budget)
+
+
 @dataclass
 class StateCacheSpec:
     """Spec for a named sequence-scoped state cache (e.g. compressor
@@ -521,10 +604,11 @@ class ModelConfig:
     # Effective flag: a supported target builder has installed the Replay schema.
     enable_replayssm: bool = False
     replayssm_buffer_len: int = 16
-    replayssm_baseline_state_shapes: list[tuple[tuple[int, ...], torch.dtype]] = field(default_factory=list)
 
     # Named state-cache specs for models that need layered sequence state.
     state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
+    # Model/backend storage contract, not a runtime feature toggle.
+    state_cache_is_indexed: bool = False
     use_standard_kv_cache: bool = True
 
     # A model can reject generic prefix-cache reuse when its auxiliary state

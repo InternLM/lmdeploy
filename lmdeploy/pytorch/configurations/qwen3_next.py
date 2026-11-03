@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from dataclasses import replace
+
 import torch
 
 from lmdeploy.pytorch.config import StateCacheSpec, validate_replayssm_config
@@ -44,7 +46,6 @@ def configure_gdn_replayssm(cfg,
     if not enable_replayssm:
         return
     validate_replayssm_config(replayssm_buffer_len, num_spec_tokens)
-    cfg.replayssm_baseline_state_shapes = list(cfg.states_shapes)
 
     layer_ids = [idx for idx, layer_type in enumerate(hf_config.layer_types)
                  if layer_type == 'linear_attention']
@@ -97,7 +98,22 @@ def configure_gdn_replayssm(cfg,
     cfg.state_cache_specs = specs
     # Compatibility bridge for scheduler/executor SSM feature gates. Named
     # specs remain the allocation authority.
-    cfg.states_shapes = [(tuple(spec.shape), spec.dtype) for spec in specs]
+    from lmdeploy.pytorch.consts import GDN_REPLAY_SHARED_CONV_CACHE_NAME, GDN_REPLAY_SHARED_STATE_CACHE_NAME
+
+    runtime_specs = [replace(spec, prefix_checkpoint=False, store_cacheable=False) for spec in specs]
+    conv_spec = next(spec for spec in runtime_specs if spec.name == GDN_CONV_STATE_CACHE_NAME)
+    recurrent_spec = next(spec for spec in runtime_specs if spec.name == GDN_REPLAY_CHECKPOINT_CACHE_NAME)
+    cfg.state_cache_specs = [
+        *runtime_specs,
+        replace(conv_spec, name=GDN_REPLAY_SHARED_CONV_CACHE_NAME,
+                shape=(conv_spec.shape[0], hf_config.linear_conv_kernel_dim - 1),
+                prefix_checkpoint=True, store_cacheable=True),
+        replace(recurrent_spec, name=GDN_REPLAY_SHARED_STATE_CACHE_NAME,
+                prefix_checkpoint=True, store_cacheable=True),
+    ]
+    cfg.states_shapes = [(tuple(spec.shape), spec.dtype) for spec in cfg.state_cache_specs]
+    # Shared exact checkpoints use unit IDs; Replay runtime uses auxiliary IDs.
+    cfg.state_cache_is_indexed = True
     cfg.enable_replayssm = True
 
 

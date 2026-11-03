@@ -83,6 +83,7 @@ def test_layer_scoped_state_cache_specs_reject_invalid_layer_ids():
 
 def _make_state_cache_engine(num_caches: int = 4):
     cache_engine = object.__new__(StateCacheEngine)
+    cache_engine.compact_plan = None
     cache_engine.cache_config = CacheConfig(max_batches=1,
                                             block_size=64,
                                             num_cpu_blocks=0,
@@ -98,6 +99,7 @@ def _make_state_cache_engine(num_caches: int = 4):
 
 def _make_multi_pool_state_cache_engine(num_caches: int = 4):
     cache_engine = object.__new__(StateCacheEngine)
+    cache_engine.compact_plan = None
     cache_engine.cache_config = CacheConfig(max_batches=1,
                                             block_size=64,
                                             num_cpu_blocks=0,

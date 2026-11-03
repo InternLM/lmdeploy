@@ -8,9 +8,15 @@ ROWS = [1, 2, 32, 33, 64, 65]
 
 
 @pytest.fixture(autouse=True)
-def seed_and_disable_tf32(monkeypatch):
+def seed_and_disable_tf32():
     torch.manual_seed(5027)
-    monkeypatch.setattr(torch.backends.cuda.matmul, 'allow_tf32', False)
+    # This backend flag is a dynamic property, not a deletable Python attribute.
+    original = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        yield
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = original
 
 
 def _unfused_pre(x, mixes, scale, base, weight, sinkhorn_iters, norm_eps):

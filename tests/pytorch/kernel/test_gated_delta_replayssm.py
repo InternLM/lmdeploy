@@ -153,7 +153,10 @@ def test_standard_replayssm_force_flush_publishes_checkpoint_boundary():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is required')
-def test_standard_replayssm_graph_save_restore_continues_before_natural_flush():
+def test_standard_replayssm_graph_save_restore_continues_before_natural_flush(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr('lmdeploy.pytorch.models.utils.cudagraph.get_step_ctx_manager',
+                        lambda: SimpleNamespace(current_context=lambda: SimpleNamespace(ssm_state_meta=None)))
     """A graph-captured false flag must remain a mutable flush input."""
     from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
         advance_gdn_replayssm_standard_cursor,

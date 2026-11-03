@@ -50,3 +50,7 @@ def dsa_packed_indexer_k_cache_shape(entries_per_block: int, head_dim: int) -> t
     Raw block layout: ``[all FP8 K][one FP32 scale per entry]``.
     """
     return (entries_per_block, 1, head_dim + DSA_INDEX_SCALE_BYTES)
+
+# Shared exact-boundary payloads; Replay runtime uses auxiliary request IDs.
+GDN_REPLAY_SHARED_STATE_CACHE_NAME = 'gdn_replay_shared_state'
+GDN_REPLAY_SHARED_CONV_CACHE_NAME = 'gdn_replay_shared_conv'

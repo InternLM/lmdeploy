@@ -169,6 +169,10 @@ class EngineWorkerBase:
         """Get engine config."""
         return self.engine.get_engine_config()
 
+    def get_vocab_size(self) -> int:
+        """Get the loaded model's output vocabulary size."""
+        return self.engine.vocab_size
+
     def get_schedule_metrics(self):
         """Get schedule metrics."""
         return self.engine.get_schedule_metrics()

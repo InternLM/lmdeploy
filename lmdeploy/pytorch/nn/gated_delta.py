@@ -12,6 +12,7 @@ from lmdeploy.pytorch.backends.causal_conv1d import CausalConv1dBuildSpec
 from lmdeploy.pytorch.backends.gated_delta_rule import (
     GatedDeltaMeta,
     GatedDeltaMetaBuildSpec,
+    GatedDeltaReplayState,
     GatedDeltaRuleBuildSpec,
 )
 from lmdeploy.pytorch.distributed import get_tp_world_rank
@@ -41,7 +42,7 @@ class GatedDeltaMetaBuilder:
 
     def __init__(self) -> None:
         self.impl = get_backend().build_op(
-            GatedDeltaMetaBuildSpec(),
+            GatedDeltaMetaBuildSpec(indexed_state=get_build_model_context().state_cache_is_indexed),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
@@ -59,7 +60,7 @@ class CausalConv1dFunc:
 
     def __init__(self, activation: str = 'silu'):
         self.impl = get_backend().build_op(
-            CausalConv1dBuildSpec(),
+            CausalConv1dBuildSpec(indexed_state=get_build_model_context().state_cache_is_indexed),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
         self.activation = activation
@@ -70,7 +71,7 @@ class CausalConv1dFunc:
         x: torch.Tensor,
         weight: torch.Tensor,
         bias: torch.Tensor,
-        conv_state: torch.Tensor,
+        conv_state: torch.Tensor | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
     ):
         return self.impl.forward(x, weight, bias, conv_state, gated_delta_meta, activation=self.activation)
@@ -80,7 +81,7 @@ class GatedDelta:
 
     def __init__(self, use_qk_l2norm_in_kernel: bool = True):
         self.impl = get_backend().build_op(
-            GatedDeltaRuleBuildSpec(),
+            GatedDeltaRuleBuildSpec(indexed_state=get_build_model_context().state_cache_is_indexed),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
         self.use_qk_l2norm_in_kernel = use_qk_l2norm_in_kernel
@@ -190,6 +191,7 @@ class CausalConv1d(nn.Module):
         loaded_weight = torch.cat([q, k, v], dim=0)
         default_weight_loader(param, loaded_weight)
 
-    def forward(self, x: torch.Tensor, conv_state: torch.Tensor, gated_delta_meta: GatedDeltaMeta):
+    def forward(self, x: torch.Tensor, conv_state: torch.Tensor | GatedDeltaReplayState,
+                gated_delta_meta: GatedDeltaMeta):
         """forward."""
         return self.causal_conv1d_func(x, self.weight, self.bias, conv_state, gated_delta_meta)

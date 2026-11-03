@@ -16,6 +16,8 @@ from lmdeploy.pytorch.consts import (
     GDN_REPLAY_K_CACHE_NAME,
     GDN_REPLAY_RAW_K_CACHE_NAME,
     GDN_REPLAY_RAW_V_CACHE_NAME,
+    GDN_REPLAY_SHARED_CONV_CACHE_NAME,
+    GDN_REPLAY_SHARED_STATE_CACHE_NAME,
 )
 from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
 from lmdeploy.pytorch.engine.executor import (
@@ -175,7 +177,7 @@ def test_standard_replayssm_named_schema():
                             replayssm_buffer_len=16)
 
     specs = {spec.name: spec for spec in cfg.state_cache_specs}
-    assert len(cfg.states_shapes) == 6
+    assert len(cfg.states_shapes) == 8
     assert cfg.enable_replayssm
     assert list(specs) == [
         GDN_CONV_STATE_CACHE_NAME,
@@ -184,6 +186,8 @@ def test_standard_replayssm_named_schema():
         GDN_REPLAY_K_CACHE_NAME,
         GDN_REPLAY_G_CACHE_NAME,
         GDN_REPLAY_CURSOR_CACHE_NAME,
+        GDN_REPLAY_SHARED_CONV_CACHE_NAME,
+        GDN_REPLAY_SHARED_STATE_CACHE_NAME,
     ]
     assert specs[GDN_CONV_STATE_CACHE_NAME].shape == (768, 4)
     assert specs[GDN_REPLAY_CHECKPOINT_CACHE_NAME].shape == (4, 128, 64)
@@ -269,6 +273,8 @@ def test_glm_replayssm_preserves_kpool_and_replaces_only_kda_banks(monkeypatch, 
     assert specs[GDN_REPLAY_D_CACHE_NAME].dtype == torch.float32
     assert specs[GDN_REPLAY_K_CACHE_NAME].dtype == torch.float32
     assert config.enable_replayssm
+    assert config.state_cache_is_indexed
+    assert baseline.state_cache_is_indexed
     assert (GDN_REPLAY_RAW_K_CACHE_NAME in specs) == bool(num_spec_tokens)
     assert not baseline.enable_replayssm
     draft = Glm5NextModelConfigBuilder.build(hf, enable_replayssm=True, is_draft_model=True, **kwargs)
@@ -308,7 +314,8 @@ def test_qwen_replayssm_target_draft_protocol(monkeypatch, enabled, num_spec_tok
         num_spec_tokens=num_spec_tokens, spec_method='qwen3_5_mtp' if num_spec_tokens else None,
         is_draft_model=draft)
     assert cfg.enable_replayssm == (enabled and not draft)
-    assert bool(cfg.state_cache_specs) == (enabled and not draft)
+    assert bool(cfg.state_cache_specs) == (not draft)
+    assert cfg.state_cache_is_indexed == (not draft)
     assert not hasattr(cfg, 'replayssm_mode')
     if draft:
         assert cfg.states_shapes == []
@@ -358,6 +365,7 @@ def test_qwen_next_replayssm_is_target_only(enabled, draft):
     cfg = Qwen3NextModelConfigBuilder.build(hf, enable_replayssm=enabled, is_draft_model=draft)
     assert cfg.enable_replayssm == (enabled and not draft)
     assert bool(cfg.state_cache_specs) == (enabled and not draft)
+    assert cfg.state_cache_is_indexed == (enabled and not draft)
     if not enabled or draft:
         # Unlike the Qwen3.5 predictor, this builder retains its legacy SSM shapes.
         assert cfg.states_shapes == baseline.states_shapes
@@ -376,3 +384,34 @@ def test_replayssm_accepts_mooncake_full_state_protocol(role, method, prefix):
     spec_config = None if method is None else SpecDecodeConfig(
         model='', method=method, num_speculative_tokens=3)
     _validate_replayssm_preallocation(cache_config, spec_config)
+
+
+@pytest.mark.parametrize('spec', [0, 5])
+def test_indexed_replay_separates_unit_payloads_from_private_runtime(spec):
+    from lmdeploy.pytorch.config import SSMStateCapacity
+    cfg = _cfg()
+    configure_gdn_replayssm(cfg, _hf_config(), tp=2, activation_dtype=torch.bfloat16,
+                            ssm_dtype=torch.float32, num_spec_tokens=spec, enable_replayssm=True,
+                            replayssm_buffer_len=16)
+    units = {s.name: s for s in cfg.state_cache_specs if s.prefix_checkpoint}
+    auxiliary = {s.name: s for s in cfg.state_cache_specs if not s.prefix_checkpoint}
+    assert set(units) == {GDN_REPLAY_SHARED_STATE_CACHE_NAME, GDN_REPLAY_SHARED_CONV_CACHE_NAME}
+    assert units[GDN_REPLAY_SHARED_STATE_CACHE_NAME].shape == (4, 128, 64)
+    assert units[GDN_REPLAY_SHARED_STATE_CACHE_NAME].dtype == torch.float32
+    assert units[GDN_REPLAY_SHARED_CONV_CACHE_NAME].shape == (768, 3)
+    assert auxiliary[GDN_REPLAY_CHECKPOINT_CACHE_NAME].shape == (4, 128, 64)
+    assert all(s.store_cacheable == s.prefix_checkpoint for s in cfg.state_cache_specs)
+    cap = SSMStateCapacity(66, spec+1, 8, runtime_is_auxiliary=True)
+    assert cap.num_units == 9 and cap.bank_width == 0 and cap.max_update_tokens == spec+1
+
+
+@pytest.mark.parametrize('role', ['kv_producer', 'kv_consumer', 'kv_both'])
+def test_auxiliary_store_capacity_keeps_load_destinations_outside_runtime(role):
+    from lmdeploy.pytorch.config import SSMStateCapacity
+    cache = ConfigBuilder.build_cache_config(PytorchEngineConfig(
+        max_batch_size=4, enable_replayssm=True, prefix_cache_state_budget=8,
+        kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role=role)))
+    cap = SSMStateCapacity.from_cache_config(cache, 6, runtime_is_auxiliary=True)
+    assert cap.load_budget == (cap.request_capacity if role != 'kv_producer' else 0)
+    assert cap.bank_width == 0
+    assert cap.num_units == 1+cap.checkpoint_budget+cap.store_budget+cap.load_budget

@@ -6,7 +6,15 @@ import math
 from typing import Any, NamedTuple
 
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.pytorch.config import BackendConfig, CacheConfig, DistConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import (
+    BackendConfig,
+    CacheConfig,
+    DistConfig,
+    MiscConfig,
+    ModelConfig,
+    SpecDecodeConfig,
+    SSMStateCapacity,
+)
 from lmdeploy.pytorch.consts import (
     GDN_REPLAY_BETA_CACHE_NAME,
     GDN_REPLAY_G_CACHE_NAME,
@@ -27,6 +35,9 @@ class _WorkerCachePlanSizes(NamedTuple):
     target: int
     spec: int = 0
     memory: int = 0
+    # Exact retained worker compact-pool bytes plus current-ID ledger. None
+    # keeps the legacy sizing path; this is not a per-KV-block component.
+    compact_state: int | None = None
 
     @property
     def total(self) -> int:
@@ -63,6 +74,7 @@ class ExecutorBase:
         cache_config.prefix_cache_token_lookahead = int(
             specdecode_config is not None
             and specdecode_config.method in ('deepseek_mtp', 'qwen3_5_mtp', 'hy3_mtp'))
+        self._validate_compact_state_config()
         if cache_config.use_mooncake_store and model_config.states_shapes and specdecode_config is not None:
             supported_mtp = (specdecode_config.method == 'qwen3_5_mtp'
                              or (specdecode_config.method == 'deepseek_mtp'
@@ -79,6 +91,40 @@ class ExecutorBase:
                 raise RuntimeError('Hybrid Mooncake Store requires TileLang causal convolution on CUDA: '
                                    'the Dao backend does not restore prefill initial states')
         self._maybe_disable_unsupported_prefix_caching(check_window=not self._has_cache_update_hook())
+
+    def _validate_compact_state_config(self):
+        """Validate compact state before building workers/pools."""
+        cache, model = self.cache_config, self.model_config
+        capacity = cache.compact_state_capacity
+        if capacity is None:
+            return
+        if not model.states_shapes:
+            if capacity != SSMStateCapacity(0, 0):
+                raise ValueError('Stateless compact selection must have zero capacity.')
+            cache.compact_state_capacity = None
+            return
+        if (self.device_type != 'cuda' or model.model_paradigm not in ('ar', 'ar_spec')
+                or not model.state_cache_is_indexed):
+            raise NotImplementedError('Compact state requires an adapted CUDA Qwen3.5/GLM5.3 AR/MTP target.')
+        if cache.role != EngineRole.Hybrid or self.misc_config.memdecode_config is not None:
+            raise NotImplementedError('Compact state does not support PD/MemDecode.')
+        if cache.kv_transfer_config is not None and not cache.use_mooncake_store:
+            raise NotImplementedError('Compact state supports only the Mooncake Store connector.')
+        if cache.num_cpu_blocks > 0:
+            raise ValueError('Compact state does not support CPU KV paging.')
+        if cache.num_gpu_blocks < 0:
+            raise ValueError('Compact state requires non-negative num_gpu_blocks (0 selects automatic sizing).')
+        spec = self.specdecode_config
+        if spec is not None:
+            expected_method = 'deepseek_mtp' if model.hf_config.model_type == 'glm5_next' else 'qwen3_5_mtp'
+            if (spec.method != expected_method or spec.model_config.states_shapes
+                    or spec.model_config.num_layers != 1
+                    or (spec.cache_config is not None and spec.cache_config.compact_state_capacity is not None)):
+                raise NotImplementedError('Compact state requires the matching stateless single-layer MTP draft.')
+        width = 1 if spec is None else 1 + spec.num_speculative_tokens
+        expected = SSMStateCapacity.from_cache_config(cache, width, runtime_is_auxiliary=model.enable_replayssm)
+        if capacity != expected:
+            raise ValueError('Compact state capacity must preserve configured M/B/S and the target update width.')
 
     def _has_cache_update_hook(self):
         """Return whether the model may normalize cache config later."""
@@ -182,6 +228,11 @@ class ExecutorBase:
     def stop(self):
         """Stop engine loop."""
         raise NotImplementedError('Not Implemented.')
+
+
+    async def drain_for_shutdown(self):
+        """Prove all model producers and connector I/O have stopped."""
+        raise NotImplementedError('Shutdown drain is not supported by this executor.')
 
     def release(self):
         """Release resources."""
@@ -336,6 +387,8 @@ class ExecutorBase:
     def _get_state_cache_mem(self, states_shapes=None, cache_config=None, model_config=None):
         """Get state cache mem usage."""
         cache_config = cache_config or self.cache_config
+        if cache_config.compact_state_capacity is not None:
+            raise ValueError('Compact state bytes must come from retained worker plans, not legacy slot estimates.')
         states_shapes = states_shapes if states_shapes is not None else cache_config.states_shapes
         if len(states_shapes) == 0:
             return 0
@@ -367,25 +420,18 @@ class ExecutorBase:
             base_slot = StateCacheEngine.get_state_slot_nbytes(
                 [(spec.shape, spec.dtype) for spec in base_specs], state_specs=base_specs)
             extra_slot = mems - base_slot
-            baseline_shapes = model_config.replayssm_baseline_state_shapes
-            baseline_slot = StateCacheEngine.get_state_slot_nbytes(baseline_shapes)
-            baseline_budget_capacity = (num_state_caches * baseline_slot // mems) if mems else num_state_caches
             logger.info(
                 'ReplaySSM state cache: mode=%s L=%d aligned_bytes_per_slot=%d '
-                'baseline_bytes_per_slot=%d delta_bytes_per_slot=%d '
                 'base_conv_checkpoint_bytes_per_slot=%d non_base_state_bytes_per_slot=%d '
-                'num_state_caches=%d total_bytes=%d baseline-budget slot estimate=%d '
+                'num_state_caches=%d total_bytes=%d '
                 '(attention TP shards GDN state; EP does not).',
                 'mtp' if model_config.model_paradigm == 'ar_spec' else 'standard',
                 model_config.replayssm_buffer_len,
                 mems,
-                baseline_slot,
-                mems - baseline_slot,
                 base_slot,
                 extra_slot,
                 num_state_caches,
                 mems * num_state_caches,
-                baseline_budget_capacity,
             )
             self._replayssm_memory_logged = True
         mems *= num_state_caches
@@ -441,8 +487,17 @@ class ExecutorBase:
         logger.debug(f'minimal free gpu memory: {min(free_mems) >> 20} mb')
         return free_mems
 
-    def _reserve_state_cache_mem(self, free_mems: list[int]) -> list[int]:
+    def _reserve_state_cache_mem(self, free_mems: list[int],
+                                 cache_plan_sizes: list[_WorkerCachePlanSizes] | None = None) -> list[int]:
         """Reserve non-pageable state cache memory from free memory."""
+        if self.cache_config.compact_state_capacity is not None:
+            if (cache_plan_sizes is None or len(cache_plan_sizes) != len(free_mems)
+                    or any(plan.compact_state is None or plan.compact_state <= 0 for plan in cache_plan_sizes)):
+                raise ValueError('Compact memory sizing requires every retained worker state plan.')
+            free_mems = [free_mem - plan.compact_state for free_mem, plan in zip(free_mems, cache_plan_sizes)]
+            if min(free_mems) <= 0:
+                raise RuntimeError('Compact state does not fit at the unchanged request capacity.')
+            return free_mems
         state_cache_mem = self._get_state_cache_mem() + self._get_mem_state_cache_mem()
         # State cache is allocated as a separate pool and is not governed by
         # cache_max_entry_count, so subtract it from every rank first.
@@ -498,6 +553,8 @@ class ExecutorBase:
         runtime_mem, max_prefill_token_num = self._get_runtime_size(free_mems, cache_block_sizes,
                                                                     self.model_config.vocab_size)
         if self.cache_config.max_prefill_token_num != max_prefill_token_num:
+            if self.cache_config.compact_state_capacity is not None:
+                raise RuntimeError('Compact state cannot preserve the configured prefill budget.')
             if max_prefill_token_num <= 0:
                 raise RuntimeError('No enough gpu memory for runtime.')
             self.cache_config.max_prefill_token_num = max_prefill_token_num
@@ -516,6 +573,10 @@ class ExecutorBase:
         if self.cache_config.num_gpu_blocks != 0:
             # User supplied an explicit block count. Do not resize it from the
             # current free-memory snapshot.
+            if self.cache_config.compact_state_capacity is not None:
+                sizes = self._get_rank_cache_block_sizes(cache_block_sizes)
+                if any(free < size * self.cache_config.num_gpu_blocks for free, size in zip(free_mems, sizes)):
+                    raise RuntimeError('Compact state cannot preserve the explicit baseline KV capacity.')
             if spec_cache_config is not None:
                 spec_cache_config.num_gpu_blocks = self.cache_config.num_gpu_blocks
             return
@@ -535,6 +596,7 @@ class ExecutorBase:
         self._sync_spec_cache_block_size()
         self._validate_memdecode_configs()
         self.cache_config.states_shapes = self.model_config.states_shapes
+        self._validate_compact_state_config()
         if (self.cache_config.states_shapes and self.cache_config.needs_prefix_cache_identity
                 and self.cache_config.prefill_save_alignment % self.cache_config.block_size != 0):
             raise ValueError('prefill_save_alignment must be a multiple of block_size')
@@ -543,7 +605,7 @@ class ExecutorBase:
         cache_block_sizes = self._prepare_worker_cache_plans(self.cache_config, spec_cache_config)
 
         free_mems = self._get_free_gpu_mems()
-        free_mems = self._reserve_state_cache_mem(free_mems)
+        free_mems = self._reserve_state_cache_mem(free_mems, cache_block_sizes)
         free_mems = self._reserve_runtime_mem(free_mems, cache_block_sizes, spec_cache_config)
         self._update_num_gpu_blocks(free_mems, cache_block_sizes, spec_cache_config)
 
