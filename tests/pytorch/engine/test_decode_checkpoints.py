@@ -770,13 +770,14 @@ def test_engine_always_prefetches_before_checkpoint_confirmation(copied):
         finish_forward_dispatch=lambda *args, **kwargs: None,
         unpin_saves=lambda *args: events.append('unpin'))
     loop.executor = SimpleNamespace(get_output_async=get_output)
-    loop.scheduler = SimpleNamespace(decode_checkpoints=SimpleNamespace(finish=confirm))
+    loop.scheduler = SimpleNamespace(decode_checkpoints=SimpleNamespace(finish=confirm),
+                                     prefetch_kv_lookups=lambda: events.append('lookup'))
     loop.resp_queue = SimpleNamespace(put_nowait=lambda output: events.append('response'))
     loop._finish_forward_output = finish
     cache_inputs = None if copied is None else CacheCheckpointInputs(decode_save_id=7)
     delta = SimpleNamespace(ssm_checkpoint_state_ids=None)
     asyncio.run(loop._main_loop_get_outputs([object()], dict(inputs=None, delta=delta, cache_inputs=cache_inputs)))
-    assert events == (['prefetch', 'output', 'unpin', 'acceptance']
+    assert events == (['prefetch', 'lookup', 'output', 'unpin', 'acceptance']
                       + ([] if copied is None else ['confirm']) + ['response'])
 
 

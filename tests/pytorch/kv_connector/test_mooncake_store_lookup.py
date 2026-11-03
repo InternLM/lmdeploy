@@ -147,6 +147,44 @@ def test_async_lookup_is_pending_and_submitted_only_once(lookup_pair_factory):
         gate.set()
 
 
+@pytest.mark.parametrize('result', [0, 23, RuntimeError('lookup failed')])
+def test_prefetched_result_is_retained_until_admission_without_duplicate_rpc(lookup_pair_factory, result):
+    store_worker = _FakeStoreWorker([result])
+    client, _, _ = lookup_pair_factory(store_worker)
+    hashes = [b'a' * 16]
+
+    client.submit(2, 64, hashes)
+    query = client.queries[2]
+    expected = 0 if isinstance(result, BaseException) else result
+    assert query.future.result(timeout=2) == expected
+    client.submit(2, 64, hashes)
+    assert client.queries[2] is query
+    assert not query.admission_started
+    assert client.lookup(2, 64, hashes) == expected
+    assert store_worker.lookup_calls == [(64, hashes, 0)]
+    assert client.queries == {}
+
+
+def test_prefetch_only_blocks_admission_after_remote_extension_is_needed(lookup_pair_factory):
+    gate = threading.Event()
+    worker = _FakeStoreWorker([23])
+    worker.lookup_gate = gate
+    client, _, _ = lookup_pair_factory(worker)
+    hashes = [b'a' * 16]
+    try:
+        client.submit(2, 64, hashes)
+        assert worker.lookup_started.wait(timeout=2)
+        assert not client.is_pending(2)
+        assert client.lookup(2, 64, hashes) is None
+        assert client.is_pending(2)
+        assert client.lookup(2, 64, hashes) is None
+        assert len(worker.lookup_calls) == 1
+        gate.set()
+        assert _poll_lookup(client, 2, 64, hashes) == 23
+    finally:
+        gate.set()
+
+
 def test_discard_drops_an_inflight_result_before_reusing_request_id(lookup_pair_factory):
     first_gate = threading.Event()
     second_gate = threading.Event()
@@ -271,7 +309,7 @@ def test_close_is_idempotent_stops_server_and_removes_ipc_file(lookup_pair_facto
     assert not server.thread.is_alive()
     assert not os.path.exists(ipc_path)
     assert not os.path.exists(f'{ipc_path}.lock')
-    assert client.futures == {}
+    assert client.queries == {}
     with pytest.raises(RuntimeError, match='closed'):
         client.lookup(9, 64, [])
 
@@ -291,7 +329,7 @@ def test_close_drains_an_inflight_lookup_without_leaking_state(lookup_pair_facto
     close_thread.join(timeout=2)
 
     assert not close_thread.is_alive()
-    assert client.futures == {}
+    assert client.queries == {}
     assert client.context is None
     assert client.socket is None
 

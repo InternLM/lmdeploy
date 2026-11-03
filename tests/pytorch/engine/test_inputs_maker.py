@@ -401,7 +401,9 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
     state_checkpoints = _StateCheckpoints()
     loop = EngineLoop.__new__(EngineLoop)
     loop.config = EngineLoopConfig(role=EngineRole.Hybrid)
-    loop.scheduler = SimpleNamespace(resume_completed_migrations=lambda: None)
+    loop.scheduler = SimpleNamespace(
+        resume_completed_migrations=lambda: None,
+        prefetch_kv_lookups=lambda: events.append(('lookup', state_checkpoints.pinned)))
     loop.state_checkpoints = state_checkpoints
     loop.inputs_maker = _InputsMaker(state_checkpoints)
     loop.executor = _Executor(state_checkpoints)
@@ -418,10 +420,27 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
         'update_running',
         ('finish_dispatch', True),
         ('prefetch', True),
+        ('lookup', True),
         ('get_output', True),
         ('unpin_saves', True),
     ]
     assert not state_checkpoints.pinned
+
+
+def test_new_inputs_start_lookup_before_waking_model_scheduling():
+    events = []
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.stop_event = asyncio.Event()
+
+    async def receive():
+        events.append('receive')
+        loop.stop_event.set()
+
+    loop.req_manager = SimpleNamespace(step=receive)
+    loop.scheduler = SimpleNamespace(prefetch_kv_lookups=lambda: events.append('lookup'))
+    loop.has_runable_event = SimpleNamespace(set=lambda: events.append('wake'))
+    asyncio.run(loop.preprocess_loop())
+    assert events == ['receive', 'lookup', 'wake']
 
 
 def test_engine_loop_routes_connector_only_output_without_model_postprocess():

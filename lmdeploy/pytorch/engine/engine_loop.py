@@ -166,6 +166,7 @@ class EngineLoop:
         """Preprocess request."""
         while not self.stop_event.is_set():
             await self.req_manager.step()
+            self.scheduler.prefetch_kv_lookups()
             self.has_runable_event.set()
 
     async def drain_for_sleep(self):
@@ -449,7 +450,10 @@ class EngineLoop:
         """Prefetch the next batch unless sleep has started."""
         if self._sleep_requested:
             return None, None
-        return await self.inputs_maker.prefetch_next_inputs()
+        result = await self.inputs_maker.prefetch_next_inputs()
+        # Refill after selection, while the already queued forward executes.
+        self.scheduler.prefetch_kv_lookups()
+        return result
 
     async def _wait_for_schedulable_prefill(self):
         """Yield briefly for lookup I/O or back off for cache pressure."""

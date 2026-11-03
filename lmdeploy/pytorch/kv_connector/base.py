@@ -293,6 +293,14 @@ class KVConnectorBase(ABC):
 
     # Scheduler-side methods.
 
+    def prefetch_lookups(self, requests: Sequence['SchedulerSequence']) -> None:
+        """Start bounded metadata-only queries for waiting prefill candidates.
+
+        Results remain connector-owned until ordinary admission consumes them. This must not allocate or pin paging
+        resources, or change sequence state. Connectors without an asynchronous lookup path may ignore this hint.
+        """
+        return None
+
     @abstractmethod
     def get_num_new_matched_tokens(
         self,
@@ -356,7 +364,11 @@ class KVConnectorBase(ABC):
         return None
 
     def is_lookup_pending(self, request_id: RequestId) -> bool:
-        """Return whether an asynchronous prefix lookup is still running."""
+        """Whether admission already requires an unfinished lookup.
+
+        Speculative queries must allow a first local match before blocking admission, since a full local hit can
+        supersede the query.
+        """
         return False
 
     def cancel_lookup(self, request_id: RequestId) -> None:

@@ -137,6 +137,55 @@ class MooncakeStoreScheduler:
             raise ValueError('Compact Store owner must be bound exactly once before admission.')
         self._compact_owner = owner
 
+    def prefetch_lookups(self, requests: Sequence[SchedulerSequence]) -> None:
+        """Query a bounded waiting window without touching paging ownership.
+
+        Completed futures count toward the bound until admission consumes them. num_history_ids is only the already
+        owned prefix; matching the local trie stays in admission, which can discard a now-unnecessary query.
+        """
+        client = self.client
+        if client is None:
+            return
+        for request in requests:
+            if len(client.queries) >= self._cache_config.max_batches:
+                break
+            req_id = int(request.seq_id)
+            if (req_id in client.queries or req_id in self._lookup_plans
+                    or req_id in self._pending_loads or req_id in self._inflight_loads):
+                continue
+            token_len, recompute_blocks = self._lookup_range(request, request.num_history_ids)
+            if token_len == 0:
+                continue
+            hashes = self._get_request_block_hashes(request, req_id, token_len, self._cache_config.block_size)
+            client.submit(req_id, token_len, hashes, recompute_blocks=recompute_blocks)
+
+    def _lookup_range(self, request: SchedulerSequence, num_computed_tokens: int) -> tuple[int, int]:
+        """Return the safe query boundary and recompute margin, or zeros."""
+        if not self._kv_transfer_config.is_kv_consumer:
+            return 0, 0
+        if self._compact_capacity is not None and self._compact_owner is None:
+            raise RuntimeError('Compact Store lookup requires the paging state owner.')
+        if len(request.history_embeddings) > 0:
+            return 0, 0
+
+        block_size = self._cache_config.block_size
+        token_len = request.clamp_prefix_cache_match_step(
+            request.get_prefix_cache_max_candidate_step())
+        recompute_blocks = max(0, request.prefix_cache.recompute_overlap.recompute_blocks)
+        recompute_tokens = recompute_blocks * block_size
+        lookup_alignment = self._cache_config.state_lookup_alignment if self._is_hybrid else block_size
+        max_hit_tokens = max(0, token_len - recompute_tokens) // lookup_alignment * lookup_alignment
+        if max_hit_tokens == 0 or num_computed_tokens >= max_hit_tokens:
+            return 0, 0
+        # Check the rewind margin beyond the latest possible state boundary.
+        # A matching FA block there can make that state reusable with MTP.
+        token_len = max_hit_tokens + recompute_tokens
+
+        if int(request.seq_id) in self._failed_load_requests:
+            return 0, 0
+
+        return token_len, recompute_blocks
+
     def get_num_new_matched_tokens(
         self,
         request: SchedulerSequence,
@@ -149,29 +198,14 @@ class MooncakeStoreScheduler:
         paging aligns the actual load range before calling
         ``update_state_after_alloc``.
         """
-        if not self._kv_transfer_config.is_kv_consumer:
-            return 0, False
-        if self._compact_capacity is not None and self._compact_owner is None:
-            raise RuntimeError('Compact Store lookup requires the paging state owner.')
-        if len(request.history_embeddings) > 0:
-            return 0, False
-
-        block_size = self._cache_config.block_size
-        token_len = request.clamp_prefix_cache_match_step(
-            request.get_prefix_cache_max_candidate_step())
-        recompute_blocks = max(0, request.prefix_cache.recompute_overlap.recompute_blocks)
-        recompute_tokens = recompute_blocks * block_size
-        lookup_alignment = self._cache_config.state_lookup_alignment if self._is_hybrid else block_size
-        max_hit_tokens = max(0, token_len - recompute_tokens) // lookup_alignment * lookup_alignment
-        if max_hit_tokens == 0 or num_computed_tokens >= max_hit_tokens:
-            return 0, False
-        # Check the rewind margin beyond the latest possible state boundary.
-        # A matching FA block there can make that state reusable with MTP.
-        token_len = max_hit_tokens + recompute_tokens
-
+        token_len, recompute_blocks = self._lookup_range(request, num_computed_tokens)
         req_id = int(request.seq_id)
-        if req_id in self._failed_load_requests:
+        if token_len == 0:
+            # A local match may supersede a speculative query before it finishes.
+            self.cancel_lookup(req_id)
             return 0, False
+        block_size = self._cache_config.block_size
+        lookup_alignment = self._cache_config.state_lookup_alignment if self._is_hybrid else block_size
 
         plan = self._lookup_plans.get(req_id)
         if plan is not None:
@@ -617,7 +651,7 @@ class MooncakeStoreScheduler:
         return None
 
     def is_lookup_pending(self, request_id: int) -> bool:
-        """Return whether the request's lookup Future is still running."""
+        """Whether this request's admission is waiting for its lookup."""
         client = self.client
         return client is not None and client.is_pending(int(request_id))
 

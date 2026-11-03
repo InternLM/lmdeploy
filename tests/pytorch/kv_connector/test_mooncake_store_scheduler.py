@@ -103,6 +103,24 @@ def _hybrid_cache_config(role='kv_producer'):
                    num_state_caches=5, mooncake_state_save_slots=2, prefill_save_alignment=8)
 
 
+@pytest.mark.parametrize('role', ['kv_producer', 'kv_consumer', 'kv_both'])
+def test_prefetch_skips_ineligible_requests_before_hashing(role):
+    scheduler = MooncakeStoreScheduler(_cache_config(role))
+    scheduler._get_request_block_hashes = Mock(side_effect=AssertionError('must not hash'))
+    short = _request(range(4), seq_id=1)
+    embedded = _request(range(17), seq_id=2, embeddings=True)
+    computed = _request(range(17), seq_id=3)
+    computed.num_history_ids = 16
+    failed = _request(range(17), seq_id=4)
+    scheduler._failed_load_requests.add(failed.seq_id)
+    try:
+        scheduler.prefetch_lookups([short, embedded, computed, failed])
+        assert scheduler.client is None or scheduler.client.queries == {}
+        scheduler._get_request_block_hashes.assert_not_called()
+    finally:
+        scheduler.shutdown()
+
+
 def test_hybrid_save_slots_survive_request_finish_until_job_completion():
     scheduler = MooncakeStoreScheduler(_hybrid_cache_config())
     request = _request(range(33))

@@ -79,6 +79,9 @@ class MooncakeStoreConnector(KVConnectorBase):
 
     # Scheduler-side methods.
 
+    def prefetch_lookups(self, requests: Sequence[SchedulerSequence]) -> None:
+        self._require_scheduler().prefetch_lookups(requests)
+
     def bind_compact_state_manager(self, owner: SSMStateManager) -> None:
         self._require_scheduler().bind_compact_state_manager(owner)
 

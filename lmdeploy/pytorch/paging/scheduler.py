@@ -6,7 +6,7 @@ from collections import OrderedDict
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, islice
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -345,6 +345,20 @@ class Scheduler:
             migration_ready.append(seq)
 
         return migration_ready
+
+    def prefetch_kv_lookups(self) -> None:
+        """Offer one waiting batch to metadata lookup without admitting it.
+
+        Use arrival/registration order and a fixed lookahead bound. Local trie matching and all resource ownership
+        remain in prefill admission.
+        """
+        if not self.kv_load_coordinator.lookup_enabled:
+            return
+        waiting = self.seq_manager.get_sequences(MessageStatus.WAITING).values()
+        candidates = list(islice(waiting, self.scheduler_config.max_batches))
+        self.kv_connector.prefetch_lookups([
+            seq for seq in candidates if not self.kv_load_coordinator.is_remote_ready(seq)
+        ])
 
     def schedule(self,
                  is_prefill: bool,
