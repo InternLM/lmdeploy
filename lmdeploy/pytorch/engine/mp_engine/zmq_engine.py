@@ -163,9 +163,11 @@ class ZMQMPEngine(MPEngine):
         shutting_down = False
 
         async def shutdown(loop, signame):
+            nonlocal shutting_down
             logger.info(f'MP process received signal {signame}, stopping server.')
             # Signals must not interrupt drain, including after RPC return/failure.
-            if not shutting_down and current_task is not None and not current_task.cancelling():
+            if not shutting_down and current_task is not None:
+                shutting_down = True
                 current_task.cancel()
 
         for signame in {'SIGINT', 'SIGTERM'}:

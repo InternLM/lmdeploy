@@ -37,3 +37,21 @@ class CudaCacheBackend(DefaultCacheBackend):
                          pages_per_block: int):
         """Build the Triton allocation-aware copy primitive."""
         return CudaBlockCacheCopy(allocation, num_logical_blocks, pages_per_block)
+
+    @staticmethod
+    def get_decode_save_mask(plan: torch.Tensor, history: torch.Tensor, query_lengths: torch.Tensor,
+                             tokens: torch.Tensor, stop_pos: torch.Tensor, *, is_decoding: bool,
+                             lookahead: int) -> torch.Tensor:
+        """Validate candidates without reading acceptance back to the host."""
+        from ...kernels.cuda.copy_cache import decode_save_mask
+        return decode_save_mask(plan, history, query_lengths, tokens, stop_pos,
+                                is_decoding=is_decoding, lookahead=lookahead)
+
+    @staticmethod
+    def copy_decode_slots(slot_tensors: tuple[tuple[torch.Tensor, int], ...],
+                          plan: torch.Tensor, copy_mask: torch.Tensor) -> None:
+        """Freeze selected checkpoint pools without allocating slot-sized
+        temporaries."""
+        from ...kernels.cuda.copy_cache import copy_cache_blocks
+        for tensor, slot_axis in slot_tensors:
+            copy_cache_blocks(tensor, slot_axis, plan[2], plan[3], 1, copy_mask)

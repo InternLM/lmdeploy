@@ -59,6 +59,17 @@ class _LookupPlan:
     block_hashes: tuple[bytes, ...]
 
 
+@dataclass
+class _SaveOperation:
+    """A dispatched suffix and the input turn its success may advance."""
+
+    save: MooncakeStoreSaveRequest
+    decode_request: SchedulerSequence | None
+    input_end_pos: int
+    failed: bool = False
+    lease: StateAccess | None = None
+
+
 class MooncakeStoreScheduler:
     """Scheduler-side component of the Mooncake Store connector."""
 
@@ -106,10 +117,11 @@ class MooncakeStoreScheduler:
         # Saves do not block request progress. Chunked prefill may therefore
         # create several in-flight saves for one request, each with its own ID.
         self._next_save_id = 0
-        # The next block eligible for save in each request. Scheduling advances
-        # it optimistically; save failures are retried only by a later request.
+        # Prefill advances this frontier on dispatch to avoid resending each
+        # chunk. Failure rewinds it; decode also covers unfinished earlier saves.
         self._next_save_block: dict[RequestId, int] = {}
-        self._inflight_saves: dict[int, int | StateAccess | None] = {}
+        self._inflight_saves: dict[int, _SaveOperation] = {}
+        self._ready_decode_saves: list[MooncakeStoreSaveRequest] = []
 
     def bind_compact_state_manager(self, owner: SSMStateManager) -> None:
         """Inject paging's single unit owner before any compact Store
@@ -125,6 +137,55 @@ class MooncakeStoreScheduler:
             raise ValueError('Compact Store owner must be bound exactly once before admission.')
         self._compact_owner = owner
 
+    def prefetch_lookups(self, requests: Sequence[SchedulerSequence]) -> None:
+        """Query a bounded waiting window without touching paging ownership.
+
+        Completed futures count toward the bound until admission consumes them. num_history_ids is only the already
+        owned prefix; matching the local trie stays in admission, which can discard a now-unnecessary query.
+        """
+        client = self.client
+        if client is None:
+            return
+        for request in requests:
+            if len(client.queries) >= self._cache_config.max_batches:
+                break
+            req_id = int(request.seq_id)
+            if (req_id in client.queries or req_id in self._lookup_plans
+                    or req_id in self._pending_loads or req_id in self._inflight_loads):
+                continue
+            token_len, recompute_blocks = self._lookup_range(request, request.num_history_ids)
+            if token_len == 0:
+                continue
+            hashes = self._get_request_block_hashes(request, req_id, token_len, self._cache_config.block_size)
+            client.submit(req_id, token_len, hashes, recompute_blocks=recompute_blocks)
+
+    def _lookup_range(self, request: SchedulerSequence, num_computed_tokens: int) -> tuple[int, int]:
+        """Return the safe query boundary and recompute margin, or zeros."""
+        if not self._kv_transfer_config.is_kv_consumer:
+            return 0, 0
+        if self._compact_capacity is not None and self._compact_owner is None:
+            raise RuntimeError('Compact Store lookup requires the paging state owner.')
+        if len(request.history_embeddings) > 0:
+            return 0, 0
+
+        block_size = self._cache_config.block_size
+        token_len = request.clamp_prefix_cache_match_step(
+            request.get_prefix_cache_max_candidate_step())
+        recompute_blocks = max(0, request.prefix_cache.recompute_overlap.recompute_blocks)
+        recompute_tokens = recompute_blocks * block_size
+        lookup_alignment = self._cache_config.state_lookup_alignment if self._is_hybrid else block_size
+        max_hit_tokens = max(0, token_len - recompute_tokens) // lookup_alignment * lookup_alignment
+        if max_hit_tokens == 0 or num_computed_tokens >= max_hit_tokens:
+            return 0, 0
+        # Check the rewind margin beyond the latest possible state boundary.
+        # A matching FA block there can make that state reusable with MTP.
+        token_len = max_hit_tokens + recompute_tokens
+
+        if int(request.seq_id) in self._failed_load_requests:
+            return 0, 0
+
+        return token_len, recompute_blocks
+
     def get_num_new_matched_tokens(
         self,
         request: SchedulerSequence,
@@ -137,29 +198,14 @@ class MooncakeStoreScheduler:
         paging aligns the actual load range before calling
         ``update_state_after_alloc``.
         """
-        if not self._kv_transfer_config.is_kv_consumer:
-            return 0, False
-        if self._compact_capacity is not None and self._compact_owner is None:
-            raise RuntimeError('Compact Store lookup requires the paging state owner.')
-        if len(request.history_embeddings) > 0:
-            return 0, False
-
-        block_size = self._cache_config.block_size
-        token_len = request.clamp_prefix_cache_match_step(
-            request.get_prefix_cache_max_candidate_step())
-        recompute_blocks = max(0, request.prefix_cache.recompute_overlap.recompute_blocks)
-        recompute_tokens = recompute_blocks * block_size
-        lookup_alignment = self._cache_config.prefill_save_alignment if self._is_hybrid else block_size
-        max_hit_tokens = max(0, token_len - recompute_tokens) // lookup_alignment * lookup_alignment
-        if max_hit_tokens == 0 or num_computed_tokens >= max_hit_tokens:
-            return 0, False
-        # Check the rewind margin beyond the latest possible state boundary.
-        # A matching FA block there can make that state reusable with MTP.
-        token_len = max_hit_tokens + recompute_tokens
-
+        token_len, recompute_blocks = self._lookup_range(request, num_computed_tokens)
         req_id = int(request.seq_id)
-        if req_id in self._failed_load_requests:
+        if token_len == 0:
+            # A local match may supersede a speculative query before it finishes.
+            self.cancel_lookup(req_id)
             return 0, False
+        block_size = self._cache_config.block_size
+        lookup_alignment = self._cache_config.state_lookup_alignment if self._is_hybrid else block_size
 
         plan = self._lookup_plans.get(req_id)
         if plan is not None:
@@ -237,14 +283,19 @@ class MooncakeStoreScheduler:
             return tracker.block_hashes[:num_blocks]
 
         block_extras = {}
-        if not request.history_multimodals.empty():
-            # Store keys omit MTP lookahead, including media beyond this block.
+        lookahead = self._cache_config.prefix_cache_token_lookahead if self._is_hybrid else 0
+        if not request.history_multimodals.empty() or lookahead:
             for block_index in range(len(tracker.block_hashes), num_blocks):
                 start = block_index * block_size
-                spans = request.get_prefix_cache_multimodal_identity(start, start + block_size)
-                if spans:
-                    identity = [(span.modality, span.content_hash, span.start - start, span.end - start)
-                                for span in spans]
+                end = start + block_size
+                spans = request.get_prefix_cache_multimodal_identity(start, end + lookahead)
+                identity = [(span.modality, span.content_hash, span.start - start, span.end - start)
+                            for span in spans]
+                if lookahead:
+                    # A shifted MTP row also depends on the next accepted token.
+                    # Include it for both prompt and generated Store prefixes.
+                    identity.append(('mtp_lookahead', tuple(int(x) for x in request.all_ids[end:end + lookahead])))
+                if identity:
                     block_extras[block_index] = json.dumps(identity, separators=(',', ':')).encode('utf-8')
 
         tracker.block_hashes = build_prefix_block_hashes(
@@ -318,7 +369,7 @@ class MooncakeStoreScheduler:
         self,
         step_input: KVConnectorStepInput,
     ) -> tuple[MooncakeStoreSaveRequest, ...]:
-        """Build newly completed full-block suffixes for prefill work."""
+        """Build immutable suffixes and track unconfirmed decode snapshots."""
         token_lens = step_input.connector_token_lens
         if not self._kv_transfer_config.is_kv_producer or not token_lens:
             return ()
@@ -335,6 +386,12 @@ class MooncakeStoreScheduler:
             raise ValueError('hybrid saves require one runtime state slot per running request')
 
         block_size = self._cache_config.block_size
+        pending_starts = {}
+        if self._is_hybrid:
+            for operation in self._inflight_saves.values():
+                save = operation.save
+                pending_starts[save.request_id] = min(
+                    pending_starts.get(save.request_id, save.start_block), save.start_block)
         save_requests = []
         for index, (request, token_len, request_blocks, request_logical_blocks) in enumerate(zip(
                 running, token_lens, block_ids, logical_block_ids, strict=True)):
@@ -344,17 +401,33 @@ class MooncakeStoreScheduler:
             request_id = int(request.seq_id)
             full_blocks = int(token_len) // block_size
             first_block = self._next_save_block.get(request_id, 0)
+            is_decode_save = step_input.is_decode_checkpoint or (
+                self._is_hybrid and self._cache_config.prefix_cache_decode_save_first
+                and token_len == request.input_end_pos)
+            if is_decode_save:
+                if request.prefix_cache.decode_store_save_pending:
+                    continue
+                # A later state is reusable only with a complete FA prefix.
+                # Cover pending earlier waves so their failure cannot leave
+                # a hole behind a successfully saved decode checkpoint.
+                first_block = min(first_block, pending_starts.get(request_id, first_block))
             if full_blocks <= first_block:
                 continue
             if self._is_hybrid:
-                if self._cache_config.prefill_save_last_only and token_len != get_last_prefill_save_step(request):
-                    continue
-                if (token_len % self._cache_config.prefill_save_alignment != 0
+                if not step_input.is_decode_checkpoint:
+                    if self._cache_config.prefill_save_last_only and token_len != get_last_prefill_save_step(request):
+                        continue
+                alignment = (self._cache_config.state_lookup_alignment if step_input.is_decode_checkpoint
+                             else self._cache_config.prefill_save_alignment)
+                if (token_len % alignment != 0
                         or not request.is_prefix_cache_boundary_safe(token_len)):
+                    continue
+                lookahead = self._cache_config.prefix_cache_token_lookahead
+                if lookahead and token_len + lookahead > request.num_valid_ids:
                     continue
                 if step_input.connector_state_ids[index] <= 0:
                     raise ValueError('hybrid saves require an allocated runtime state slot')
-                if self._state_slots.get_num_free() == 0:
+                if not step_input.connector_snapshot_ids and self._state_slots.get_num_free() == 0:
                     self._num_skipped_state_saves += 1
                     logger.info('Mooncake state save skipped: request_id=%s boundary=%d slots=%d skipped=%d',
                                  request_id, token_len, self._state_slots.num_states, self._num_skipped_state_saves)
@@ -374,23 +447,47 @@ class MooncakeStoreScheduler:
             self._next_save_id += 1
             state = None
             if self._is_hybrid:
+                snapshot_slot = (step_input.connector_snapshot_ids[index] if step_input.connector_snapshot_ids
+                                 else int(self._state_slots.allocate()))
                 state = MooncakeStoreStateSave(source_slot=step_input.connector_state_ids[index],
-                                              snapshot_slot=int(self._state_slots.allocate()),
+                                              snapshot_slot=snapshot_slot,
                                               boundary_tokens=int(token_len))
-            save_requests.append(
-                MooncakeStoreSaveRequest(
-                    save_id=save_id,
-                    request_id=request_id,
-                    start_block=first_block,
-                    block_ids=tuple(request_blocks[first_block:full_blocks]),
-                    logical_block_ids=tuple(request_logical_blocks[first_block:full_blocks]),
-                    block_hashes=block_hashes[first_block:full_blocks],
-                    state=state,
-                ))
+            save = MooncakeStoreSaveRequest(
+                save_id=save_id,
+                request_id=request_id,
+                start_block=first_block,
+                block_ids=tuple(request_blocks[first_block:full_blocks]),
+                logical_block_ids=tuple(request_logical_blocks[first_block:full_blocks]),
+                block_hashes=block_hashes[first_block:full_blocks],
+                state=state,
+            )
+            save_requests.append(save)
             self._next_save_block[request_id] = full_blocks
-            self._inflight_saves[save_id] = state.snapshot_slot if state is not None else None
+            self._inflight_saves[save_id] = _SaveOperation(
+                save, request if is_decode_save else None, request.input_end_pos if is_decode_save else 0)
+            if is_decode_save:
+                request.prefix_cache.decode_store_save_pending = True
         return tuple(save_requests)
 
+    def reserve_decode_snapshot(self, request: SchedulerSequence) -> int:
+        """Reserve a private Store slot before the worker verifies a
+        candidate."""
+        if (not self._kv_transfer_config.is_kv_producer or not self._is_hybrid
+                or request.prefix_cache.decode_store_save_pending or self._state_slots.get_num_free() == 0):
+            return -1
+        return int(self._state_slots.allocate())
+
+    def release_decode_snapshot(self, slot: int) -> None:
+        self._state_slots.free(slot)
+
+    def queue_decode_save(self, step_input: KVConnectorStepInput) -> MooncakeStoreConnectorMetadata | None:
+        """Adopt already frozen states; token hashes are now based on accepted
+        output."""
+        saves = self._build_save_requests(step_input)
+        if not saves:
+            return None
+        self._ready_decode_saves.extend(saves)
+        return MooncakeStoreConnectorMetadata(save_requests=saves)
     def plan_compact_save_steps(self, running, token_lens, checkpoint_steps, *, skipped=None):
         """Select Store intent from the SAME c/e plan before reserving
         producers.
@@ -446,17 +543,31 @@ class MooncakeStoreScheduler:
         if len({int(seq.seq_id) for seq in running}) != len(running):
             raise ValueError('Compact Store saves require distinct request rows.')
         block_size = self._cache_config.block_size
-        requests, sources = [], []
+        requests, sources, producers = [], [], []
         for seq, end, reference, ids, logical_ids in zip(running, ends, references, blocks, logical):
             if reference is None:
                 continue
             boundary = reference.boundary
+            alignment = (self._cache_config.state_lookup_alignment if step_input.is_decode_checkpoint
+                         else self._cache_config.prefill_save_alignment)
             if (not reference.active or reference.phase not in ('submitted', 'ready')
-                    or not 0 < boundary <= end or boundary % self._cache_config.prefill_save_alignment
+                    or not 0 < boundary <= end or boundary % alignment
                     or seq.history_embeddings or not seq.is_prefix_cache_boundary_safe(boundary)):
                 raise ValueError('Compact Store save requires an exact, safe, ordered-readable producer.')
-            request_id, full_blocks = int(seq.seq_id), int(end) // block_size
+            lookahead = self._cache_config.prefix_cache_token_lookahead
+            full_blocks = min(int(end), seq.num_valid_ids - lookahead) // block_size
+            if boundary // block_size > full_blocks:
+                continue
+            request_id = int(seq.seq_id)
             first_block = self._next_save_block.get(request_id, 0)
+            is_decode_save = step_input.is_decode_checkpoint or (
+                self._cache_config.prefix_cache_decode_save_first and boundary == seq.input_end_pos)
+            if is_decode_save:
+                if seq.prefix_cache.decode_store_save_pending or owner.get_num_free_store_saves() <= len(sources):
+                    continue
+                first_block = min((operation.save.start_block for operation in self._inflight_saves.values()
+                                   if operation.save.request_id == request_id), default=first_block)
+                first_block = min(first_block, self._next_save_block.get(request_id, 0))
             if full_blocks <= first_block:
                 continue
             if full_blocks > len(ids) or full_blocks > len(logical_ids):
@@ -469,6 +580,7 @@ class MooncakeStoreScheduler:
                 tuple(ids[first_block:full_blocks]), tuple(logical_ids[first_block:full_blocks]),
                 hashes[first_block:full_blocks], state))
             sources.append(reference)
+            producers.append(seq if is_decode_save else None)
         leases = []
         try:
             for reference in sources:
@@ -486,9 +598,12 @@ class MooncakeStoreScheduler:
             for lease in leases:
                 owner.cancel_unsubmitted_save(lease)
             raise
-        for request, lease in zip(requests, leases):
-            self._inflight_saves[request.save_id] = lease
+        for request, lease, seq in zip(requests, leases, producers):
+            self._inflight_saves[request.save_id] = _SaveOperation(
+                request, seq, seq.input_end_pos if seq is not None else 0, lease=lease)
             self._next_save_block[request.request_id] = request.start_block + len(request.block_ids)
+            if seq is not None:
+                seq.prefix_cache.decode_store_save_pending = True
         self._next_save_id += len(requests)
         return tuple(requests)
 
@@ -498,8 +613,10 @@ class MooncakeStoreScheduler:
         if self._compact_owner is None:
             raise RuntimeError('Compact rollback requires the paging state owner.')
         for request in reversed(metadata.save_requests):
-            lease = self._inflight_saves.pop(request.save_id)
-            self._compact_owner.cancel_unsubmitted_save(lease)
+            operation = self._inflight_saves.pop(request.save_id)
+            self._compact_owner.cancel_unsubmitted_save(operation.lease)
+            if operation.decode_request is not None:
+                operation.decode_request.prefix_cache.decode_store_save_pending = False
             self._next_save_block[request.request_id] = request.start_block
         for request in metadata.load_requests:
             self._pending_loads[request.request_id] = self._inflight_loads.pop(request.request_id)
@@ -509,7 +626,8 @@ class MooncakeStoreScheduler:
         step_input: KVConnectorStepInput,
     ) -> MooncakeStoreConnectorMetadata | None:
         """Dispatch new work and keep emitting polling steps while I/O runs."""
-        save_requests = self._build_save_requests(step_input)
+        save_requests = tuple(self._ready_decode_saves) + self._build_save_requests(step_input)
+        self._ready_decode_saves.clear()
         if (not save_requests and not self._pending_loads
                 and not self._inflight_loads and not self._inflight_saves):
             return None
@@ -532,7 +650,7 @@ class MooncakeStoreScheduler:
         return None
 
     def is_lookup_pending(self, request_id: int) -> bool:
-        """Return whether the request's lookup Future is still running."""
+        """Whether this request's admission is waiting for its lookup."""
         client = self.client
         return client is not None and client.is_pending(int(request_id))
 
@@ -546,12 +664,16 @@ class MooncakeStoreScheduler:
         connector_output: KVConnectorOutput,
     ) -> KVConnectorResult:
         """Convert all-TP worker completion into backend-neutral updates."""
+        for save_id in connector_output.failed_save_ids:
+            operation = self._inflight_saves.get(save_id)
+            if operation is not None:
+                operation.failed = True
         completed_save_ids = frozenset(
             save_id
             for save_id in connector_output.completed_save_ids or ()
             if save_id in self._inflight_saves
         )
-        self._release_save_slots(completed_save_ids)
+        self._finish_saves(completed_save_ids, confirmed=True)
 
         self._failed_load_requests.update(
             request_id for request_id in connector_output.failed_receiving
@@ -616,21 +738,36 @@ class MooncakeStoreScheduler:
         self._compact_loads.clear()
         self._pending_loads.clear()
         self._inflight_loads.clear()
-        self._release_save_slots(tuple(self._inflight_saves))
+        self._ready_decode_saves.clear()
+        self._finish_saves(tuple(self._inflight_saves), confirmed=False)
 
-    def _release_save_slots(self, save_ids: Iterable[int]) -> None:
-        """Release legacy snapshots or direct leases after all-rank
-        completion/drain."""
+    def _finish_saves(self, save_ids: Iterable[int], *, confirmed: bool) -> None:
+        """Release terminal saves; only confirmed success advances a turn."""
         for save_id in save_ids:
-            lease = self._inflight_saves[save_id]
-            if self._compact_owner is not None and lease is not None:
-                # A failure notification or an early rank result cannot arrive
-                # here as terminal proof. Preserve the record if validation fails.
-                self._compact_owner.complete(lease)
-                self._compact_owner.release_reference(lease._store_reference)
-            elif lease is not None:
-                self._state_slots.free(lease)
+            operation = self._inflight_saves[save_id]
+            save = operation.save
+            if operation.lease is not None:
+                # Keep the operation if completion validation fails: early rank results cannot release its reader.
+                self._compact_owner.complete(operation.lease, success=confirmed and not operation.failed)
+                self._compact_owner.release_reference(operation.lease._store_reference)
+            elif save.state is not None:
+                self._state_slots.free(save.state.snapshot_slot)
             del self._inflight_saves[save_id]
+            request = operation.decode_request
+            current_turn = request is not None and request.input_end_pos == operation.input_end_pos
+            if current_turn:
+                request.prefix_cache.decode_store_save_pending = False
+            # Ended requests still own I/O slots, but cannot recreate planning
+            # state or advance a later request when their completions arrive.
+            if save.request_id not in self._next_save_block:
+                continue
+            success = confirmed and not operation.failed
+            if not success:
+                self._next_save_block[save.request_id] = min(
+                    self._next_save_block[save.request_id], save.start_block)
+            elif current_turn:
+                request.prefix_cache.last_decode_save_step = max(
+                    request.prefix_cache.last_decode_save_step, save.state.boundary_tokens)
 
     def shutdown(self) -> None:
         """Cancel pending lookups and release the scheduler client."""
@@ -644,4 +781,5 @@ class MooncakeStoreScheduler:
         self._inflight_loads.clear()
         self._failed_load_requests.clear()
         self._next_save_block.clear()
-        self._release_save_slots(tuple(self._inflight_saves))
+        self._ready_decode_saves.clear()
+        self._finish_saves(tuple(self._inflight_saves), confirmed=False)

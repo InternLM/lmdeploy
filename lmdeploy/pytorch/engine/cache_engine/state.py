@@ -290,3 +290,8 @@ class StateCacheEngine:
                 src_tensor = tensor.narrow(slot_axis, src, length)
                 dst_tensor = tensor.narrow(slot_axis, dst, length)
                 dst_tensor.copy_(src_tensor, non_blocking=True)
+
+    def copy_decode_slots(self, plan: torch.Tensor, copy_mask: torch.Tensor) -> None:
+        """Freeze accepted state rings before the next forward can overwrite
+        them."""
+        get_backend().get_cache_backend().copy_decode_slots(self._checkpoint_slot_tensors, plan, copy_mask)

@@ -6,7 +6,7 @@ from collections import OrderedDict
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, islice
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -21,6 +21,7 @@ from ..messages import MessageStatus, SchedulerSequence, SchedulerSession, Seque
 from .block_manager import build_block_manager
 from .block_trie import BlockTrie
 from .compact_state import SSMStateManager
+from .decode_checkpoint import DecodeCheckpointCoordinator
 from .eviction_helper import build_eviction_helper
 from .kv_load_coordinator import KVLoadCoordinator
 from .kv_save_coordinator import KVSaveCoordinator
@@ -98,11 +99,14 @@ class Scheduler:
             cache_config.prefill_save_alignment
             if self.is_ssm and (cache_config.enable_prefix_caching or cache_config.num_store_state_caches) else 0)
         seq_meta.prefill_save_last_only = bool(seq_meta.prefill_save_alignment) and cache_config.prefill_save_last_only
+        seq_meta.prefix_cache_decode_save_first = cache_config.prefix_cache_decode_save_first
+        seq_meta.prefix_cache_decode_state_interval = cache_config.prefix_cache_decode_state_interval
         seq_meta.prefix_cache_checkpoint_block_size = (
             cache_config.block_size
             if cache_config.enable_prefix_caching and cache_config.prefix_cache_block_aligned else 0)
-        seq_meta.prefix_cache_token_lookahead = (cache_config.prefix_cache_token_lookahead
-                                               if cache_config.enable_prefix_caching else 0)
+        seq_meta.prefix_cache_token_lookahead = (
+            cache_config.prefix_cache_token_lookahead
+            if cache_config.enable_prefix_caching or (self.is_ssm and cache_config.use_mooncake_store) else 0)
         # Selected compact GDN/KDA backends export recurrent state at relative
         # 64-token chunk boundaries; conv supports these same boundaries.
         seq_meta.compact_prefill_checkpoint_stride = (
@@ -173,6 +177,9 @@ class Scheduler:
         )
         # Keep save call sites uniform even when the producer role is disabled.
         self.kv_save_coordinator = KVSaveCoordinator(self.block_manager)
+        self.decode_checkpoints = DecodeCheckpointCoordinator(
+            block_manager=self.block_manager, block_trie=self.block_trie, state_manager=self.state_manager,
+            connector=kv_connector, save_coordinator=self.kv_save_coordinator)
 
         self.scheduler_tick = 0
 
@@ -195,6 +202,7 @@ class Scheduler:
         self.kv_connector = None
         self.sequence_lifecycle.disable_connector()
         self.kv_load_coordinator.shutdown()
+        self.decode_checkpoints.clear()
         self.kv_save_coordinator.clear()
         if not compact and connector is not None:
             connector.shutdown()
@@ -337,6 +345,20 @@ class Scheduler:
 
         return migration_ready
 
+    def prefetch_kv_lookups(self) -> None:
+        """Offer one waiting batch to metadata lookup without admitting it.
+
+        Use arrival/registration order and a fixed lookahead bound. Local trie matching and all resource ownership
+        remain in prefill admission.
+        """
+        if not self.kv_load_coordinator.lookup_enabled:
+            return
+        waiting = self.seq_manager.get_sequences(MessageStatus.WAITING).values()
+        candidates = list(islice(waiting, self.scheduler_config.max_batches))
+        self.kv_connector.prefetch_lookups([
+            seq for seq in candidates if not self.kv_load_coordinator.is_remote_ready(seq)
+        ])
+
     def schedule(self,
                  is_prefill: bool,
                  prealloc_size: int = 0,
@@ -468,6 +490,7 @@ class Scheduler:
         running: SeqList,
         connector_token_lens: tuple[int, ...] = (),
         connector_state_ids: tuple[int, ...] = (),
+        is_decode_checkpoint: bool = False,
         compact_state_references=(),
     ):
         """Build and lease one connector payload after work selection.
@@ -500,6 +523,7 @@ class Scheduler:
             connector_block_ids=block_ids,
             connector_logical_block_ids=logical_block_ids,
             connector_state_ids=connector_state_ids,
+            is_decode_checkpoint=is_decode_checkpoint,
             compact_state_references=compact_state_references,
         )
         metadata = connector.build_connector_meta(step_input)
@@ -554,6 +578,7 @@ class Scheduler:
         # sequence removal closes banks, but their physical I/O holds survive
         # until connector retirement; only then may compact host reset run.
         self.kv_load_coordinator.finish_deferred_loads_after_worker_drain()
+        self.decode_checkpoints.clear()
         if isinstance(self.state_manager, SSMStateManager):
             if self.sessions:
                 raise RuntimeError('Compact cache drain requires all scheduler sessions to be ended.')

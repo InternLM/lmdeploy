@@ -11,7 +11,7 @@ import lmdeploy.pytorch.engine.engine_loop as engine_loop_module
 import lmdeploy.pytorch.engine.inputs_maker as inputs_maker_module
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
-from lmdeploy.pytorch.engine.engine_loop import EngineLoop, RunableEventAsync
+from lmdeploy.pytorch.engine.engine_loop import EngineLoop, EngineLoopConfig, RunableEventAsync
 from lmdeploy.pytorch.engine.inputs_maker import (
     InputsMakerAsync,
     InputsMakerConfig,
@@ -400,7 +400,10 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
 
     state_checkpoints = _StateCheckpoints()
     loop = EngineLoop.__new__(EngineLoop)
-    loop.scheduler = SimpleNamespace(resume_completed_migrations=lambda: None)
+    loop.config = EngineLoopConfig(role=EngineRole.Hybrid)
+    loop.scheduler = SimpleNamespace(
+        resume_completed_migrations=lambda: None,
+        prefetch_kv_lookups=lambda: events.append(('lookup', state_checkpoints.pinned)))
     loop.state_checkpoints = state_checkpoints
     loop.inputs_maker = _InputsMaker(state_checkpoints)
     loop.executor = _Executor(state_checkpoints)
@@ -417,10 +420,27 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
         'update_running',
         ('finish_dispatch', True),
         ('prefetch', True),
+        ('lookup', True),
         ('get_output', True),
         ('unpin_saves', True),
     ]
     assert not state_checkpoints.pinned
+
+
+def test_new_inputs_start_lookup_before_waking_model_scheduling():
+    events = []
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.stop_event = asyncio.Event()
+
+    async def receive():
+        events.append('receive')
+        loop.stop_event.set()
+
+    loop.req_manager = SimpleNamespace(step=receive)
+    loop.scheduler = SimpleNamespace(prefetch_kv_lookups=lambda: events.append('lookup'))
+    loop.has_runable_event = SimpleNamespace(set=lambda: events.append('wake'))
+    asyncio.run(loop.preprocess_loop())
+    assert events == ['receive', 'lookup', 'wake']
 
 
 def test_engine_loop_routes_connector_only_output_without_model_postprocess():
@@ -487,6 +507,7 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save()
     loop.inputs_maker = _InputsMaker()
     loop.executor = _Executor()
     loop._sleep_requested = True
+    loop.config = EngineLoopConfig(role=EngineRole.Hybrid)
     model_inputs = SimpleNamespace(ssm_prefill_meta=None)
     cache_inputs = CacheCheckpointInputs(state_save_plan=((0, ), (1, )))
     forward_inputs = dict(inputs=model_inputs, delta=None, cache_inputs=cache_inputs)
@@ -565,6 +586,7 @@ def test_inputs_maker_resumes_completed_migrations_before_selecting_work(method_
         return dict(running=['seq'], inputs=None, delta=None)
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(enable_decode_checkpoints=False)
     maker.compact_state_manager = None
     maker.scheduler = _Scheduler()
     maker.executor = _Executor()
@@ -581,6 +603,35 @@ def test_inputs_maker_resumes_completed_migrations_before_selecting_work(method_
         'forward_async',
         'tick',
     ]
+
+
+def test_inputs_maker_attaches_decode_snapshot_to_normal_forward():
+    seq = object()
+    plan = torch.tensor([[0], [64], [1], [2]])
+    cache_inputs = CacheCheckpointInputs(state_save_plan=((3,), (4,)))
+    delta = SimpleNamespace(max_q_seqlen=4)
+    sent = []
+
+    def prepare(running, inputs, actual_delta, *, access_id):
+        assert running == [seq] and inputs is None and actual_delta is delta
+        assert access_id is None
+        return 7, plan
+
+    async def forward(payload):
+        sent.append(payload)
+
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(enable_decode_checkpoints=True)
+    maker.scheduler = SimpleNamespace(resume_completed_migrations=lambda: None, tick=lambda: None,
+                                      decode_checkpoints=SimpleNamespace(prepare=prepare))
+    maker.executor = SimpleNamespace(forward_async=forward)
+    maker.do_prefill = lambda: False
+    maker._make_forward_inputs = lambda *args: dict(running=[seq], inputs=None, delta=delta, cache_inputs=cache_inputs)
+    payload, running = asyncio.run(maker.prefetch_next_inputs())
+    assert len(sent) == 1 and sent[0] is payload and running == [seq]
+    assert payload['cache_inputs'].decode_save_plan is plan
+    assert payload['cache_inputs'].decode_save_id == 7
+    assert payload['cache_inputs'].state_save_plan is cache_inputs.state_save_plan
 
 
 def test_migration_loop_schedules_and_processes_ready_batch():
@@ -1134,11 +1185,9 @@ def test_long_context_chunk_defers_to_decode_after_chunk_forward():
     long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
     decode_seq = _DummySeq(history_ids=0, token_ids=1, all_multimodals={}, input_multimodals={})
     delta = SimpleNamespace(is_decoding=True)
-    cache_inputs = CacheCheckpointInputs(state_save_plan=((1, ), (2, )))
     maker = _make_policy_maker(long_seq, decode_seq)
     maker._last_forward_kind = 'long_context_chunk'
     maker.create_model_inputs_delta = lambda: (delta, [decode_seq], [])
-    maker._make_decode_cache_inputs = lambda running, delta: cache_inputs
     maker.create_model_inputs_long_context = lambda *args, **kwargs: (_ for _ in ()).throw(
         AssertionError('long chunk should wait behind decode'))
 
@@ -1146,7 +1195,7 @@ def test_long_context_chunk_defers_to_decode_after_chunk_forward():
 
     assert forward_inputs['inputs'] is None
     assert forward_inputs['delta'] is delta
-    assert forward_inputs['cache_inputs'] is cache_inputs
+    assert forward_inputs['cache_inputs'] is None
     assert maker.to_evict_seqs == []
 
 
@@ -1833,14 +1882,13 @@ def test_prepare_prefill_cache_inputs_rejects_mismatched_save_steps():
 
 @pytest.mark.parametrize('replay', [False, True])
 @pytest.mark.parametrize('spec', [False, True])
-def test_from_engine_decode_cache_inputs_compacts_valid_replayssm_saves(replay, spec):
+def test_legacy_decode_saves_use_accepted_output_coordinator(replay, spec):
     valid_seqs = [_state_seq(4), _state_seq(5)]
 
     class _StateCheckpoints:
 
         def reserve_decode_save_batch(self, seqs, interval):
-            assert interval == 16
-            return CheckpointCopyPlan(state_pairs=((4, 31), ))
+            raise AssertionError('Legacy save reservation must use the accepted-output coordinator')
 
     cache_config = SimpleNamespace(
         max_batches=8,
@@ -1852,6 +1900,7 @@ def test_from_engine_decode_cache_inputs_compacts_valid_replayssm_saves(replay, 
         states_shapes=[((1, ), torch.float32)],
         enable_prefix_caching=True,
         prefix_cache_decode_state_interval=16,
+        enable_decode_checkpoints=True,
     )
     engine = SimpleNamespace(
         cache_config=cache_config,
@@ -1872,17 +1921,9 @@ def test_from_engine_decode_cache_inputs_compacts_valid_replayssm_saves(replay, 
     maker.spec_decoding = spec
     delta = SimpleNamespace(max_q_seqlen=1)
 
-    cache_inputs = maker._make_decode_cache_inputs(valid_seqs, delta)
-    if spec:
-        assert cache_inputs is None
-        return
-
-    assert cache_inputs.state_restore_plan is None
-    assert cache_inputs.state_save_plan == ((4, ), (31, ))
-    if replay:
-        assert cache_inputs.replayssm_force_flush.tolist() == [True, False]
-    else:
-        assert cache_inputs.replayssm_force_flush is None
+    # Legacy row copies now belong to the accepted-output coordinator, not this direct compact path.
+    assert config.enable_decode_checkpoints
+    assert maker._make_decode_cache_inputs(valid_seqs, delta) is None
 
 
 @pytest.mark.parametrize(

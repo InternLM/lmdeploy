@@ -90,13 +90,16 @@ class GenerationConfig:
             nucleus sampling, where the model considers the results of the
             tokens with top_p probability mass
         top_k: An alternative to sampling with temperature, where
-            the model considers the top_k tokens with the highest probability
+            the model considers the top_k tokens with the highest probability.
+            Defaults to 0, which disables top-k filtering.
+            Set to 0 or -1 to disable top-k filtering; -1 is normalized to 0.
         min_p: Minimum token probability, which will be scaled by the
             probability of the most likely token. It must be a value between
             0 and 1. Typical values are in the 0.01-0.2 range, comparably
             selective as setting `top_p` in the 0.99-0.8 range (use the
             opposite of normal `top_p` values)
-        temperature: Sampling temperature
+        temperature: Sampling temperature. Defaults to 1.0, which leaves
+            the logits unscaled. Set to 0.8 to retain the previous default.
         repetition_penalty: Penalty to prevent the model from
             generating repeated words or phrases. A value larger than
             1 discourages repetition
@@ -180,9 +183,9 @@ class GenerationConfig:
     max_new_tokens: int = 512
     do_sample: bool = False
     top_p: float = 1.0
-    top_k: int = 50
+    top_k: int = 0
     min_p: float = 0.0
-    temperature: float = 0.8
+    temperature: float = 1.0
     repetition_penalty: float = 1.0
     ignore_eos: bool = False
     random_seed: int = None
@@ -260,7 +263,9 @@ class GenerationConfig:
         """Check input validation."""
         assert type(self.n) is int and self.n > 0, 'n is not a positive integer'
         assert self.top_p >= 0 and self.top_p <= 1  # [0, 1]
-        assert self.top_k >= 0, 'top_k can not be a negative integer'
+        assert self.top_k >= -1, 'top_k must be -1, 0, or a positive integer'
+        if self.top_k == -1:
+            self.top_k = 0
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
@@ -494,15 +499,18 @@ class PytorchEngineConfig:
             prefix-cache checkpoints. 0 adds no extra slots, but SSM
             checkpoints may still borrow idle runtime state slots.
         prefix_cache_decode_state_interval: Token interval for SSM decode
-            state checkpoints. 0 disables decode-state checkpoint saves; prefill
-            and chunk checkpoints may still be saved. Keep 0 unless the workload
-            has long SSM decoding and repeated continuations that can reuse
-            decode checkpoints. Smaller positive values create more hit points
-            but use more checkpoint memory and copy work; larger values reduce
-            overhead but make decode-prefix hits less likely. Positive values
-            must be multiples of the cache block size.
+            checkpoints. With prefix_cache_decode_save_first, count from the
+            last successfully saved decode checkpoint; otherwise use absolute token positions.
+            0 disables periodic saves. Positive values must be multiples of the
+            actual cache block size, but need not be multiples of prefill_save_alignment.
+            Applies to local prefix caching and Mooncake Store.
+        prefix_cache_decode_save_first: Save at the first safe
+            prefill_save_alignment boundary at or after each prompt, once the
+            accepted decode history satisfies its dependencies. Defaults to
+            False. With interval 0, save only this first decode checkpoint.
         prefill_save_alignment: Token alignment for prefill state checkpoints,
-            shared by local prefix caching and Mooncake Store. Defaults to
+            also used for the first decode checkpoint with prefix_cache_decode_save_first.
+            Shared by local prefix caching and Mooncake Store. Defaults to
             1024 and must be a positive multiple of block_size. Only applies
             to models with linear-attention state caches; full-attention-only
             models ignore it. Intermediate aligned positions may be skipped.
@@ -584,6 +592,7 @@ class PytorchEngineConfig:
     enable_prefix_caching: bool = False
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
+    prefix_cache_decode_save_first: bool = False
     prefill_save_alignment: int = 1024
     prefill_save_last_only: bool = False
     mooncake_state_save_slots: int = 8

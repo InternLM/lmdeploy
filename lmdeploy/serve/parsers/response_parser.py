@@ -375,6 +375,12 @@ class BaseResponseParser(ResponseParser):
             # Internal structural tags override client response_format because
             # an engine can apply only one guided-decoding constraint.
             self.request = self.request.model_copy(update={'response_format': required_response_format})
+        elif (request.tool_choice == 'auto' and request.tools and self.tool_parser is not None
+              and self.request.response_format is None):
+            auto_response_format = self.tool_parser.build_auto_response_format(
+                request.tools, tokenizer=type(self).tokenizer)
+            if auto_response_format is not None:
+                self.request = self.request.model_copy(update={'response_format': auto_response_format})
 
         self._received_any_text = False
         self._stream_final_received = False

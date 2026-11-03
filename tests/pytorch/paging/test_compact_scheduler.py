@@ -184,6 +184,7 @@ def test_shutdown_order_is_compact_only(compact, failure):
         kv_connector=connector,
         sequence_lifecycle=SimpleNamespace(disable_connector=lambda: events.append('disable')),
         kv_load_coordinator=SimpleNamespace(shutdown=lambda: events.append('load')),
+        decode_checkpoints=SimpleNamespace(clear=lambda: events.append('decode')),
         kv_save_coordinator=SimpleNamespace(clear=lambda: events.append('save')))
     if failure:
         with pytest.raises(RuntimeError, match='still owns I/O'):
@@ -191,8 +192,8 @@ def test_shutdown_order_is_compact_only(compact, failure):
     else:
         Scheduler.shutdown(scheduler)
     assert events == (['connector'] if compact and failure else
-                      ['connector', 'disable', 'load', 'save'] if compact else
-                      ['disable', 'load', 'save', 'connector'])
+                      ['connector', 'disable', 'load', 'decode', 'save'] if compact else
+                      ['disable', 'load', 'decode', 'save', 'connector'])
     assert (scheduler.kv_connector is connector) == (compact and failure)
 
 

@@ -1010,17 +1010,14 @@ def test_model_forward_cudagraph_checkpoint_publish_restore_and_continue():
         GDN_REPLAY_G_CACHE_NAME,
         GDN_REPLAY_K_CACHE_NAME,
     )
-    from lmdeploy.pytorch.disagg.config import EngineRole
     from lmdeploy.pytorch.engine.cache_engine.state import StateCacheEngine
     from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
-    from lmdeploy.pytorch.engine.inputs_maker import InputsMakerAsync, InputsMakerConfig
     from lmdeploy.pytorch.engine.model_agent.agent import model_forward
     from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
         fused_recurrent_gdn_replayssm_decode,
     )
     from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
     from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMixin
-    from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import CheckpointCopyPlan
 
     batch, slots, h, hv, kdim, vdim, length = 1, 4, 1, 2, 32, 48, 8
     device = torch.device('cuda')
@@ -1077,6 +1074,7 @@ def test_model_forward_cudagraph_checkpoint_publish_restore_and_continue():
                 local_adapter_ids=None,
                 enable_microbatch=False,
                 ssm_state_meta=None,
+                dp_meta=None,
             )
             context.attn_metadata = SimpleNamespace(
                 block_offsets=context.block_offsets,
@@ -1207,49 +1205,13 @@ def test_model_forward_cudagraph_checkpoint_publish_restore_and_continue():
     reference = torch.zeros(batch, hv, vdim, kdim,
                             dtype=torch.bfloat16, device=device)
 
-    input_maker_cache_config = SimpleNamespace(
-        max_batches=batch,
-        max_prefill_token_num=512,
-        role=EngineRole.Hybrid,
-        block_size=16,
-        kernel_block_size=16,
-        window_size=-1,
-        states_shapes=model_config.states_shapes,
-        enable_prefix_caching=True,
-        prefix_cache_decode_state_interval=16,
-    )
-    input_maker_engine = SimpleNamespace(
-        cache_config=input_maker_cache_config,
-        model_config=model_config,
-        engine_config=SimpleNamespace(prefill_interval=None),
-        specdecode_config=None,
-        dist_config=SimpleNamespace(dp=1),
-        misc_config=SimpleNamespace(enable_chunked_prefill=False),
-    )
-    inputs_maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    inputs_maker.config = InputsMakerConfig.from_engine(input_maker_engine)
-    inputs_maker.cache_config = input_maker_cache_config
-    inputs_maker.spec_decoding = False
-    inputs_maker.compact_state_manager = None
-
     def make_save_inputs(source: int, destination: int):
-
-        class _StateCheckpoints:
-
-            def reserve_decode_save_batch(self, seqs, interval):
-                assert len(seqs) == 1
-                assert seqs[0].logical_state == source
-                assert interval == 16
-                return CheckpointCopyPlan(
-                    state_pairs=((source, destination), ))
-
-        inputs_maker.state_checkpoints = _StateCheckpoints()
-        cache_inputs = inputs_maker._make_decode_cache_inputs(
-            [SimpleNamespace(logical_state=source)],
-            SimpleNamespace(max_q_seqlen=1))
-        assert cache_inputs.state_save_plan == ((source, ), (destination, ))
-        assert cache_inputs.replayssm_force_flush.tolist() == [True]
-        return cache_inputs.to_device(device)
+        # Exercise the low-level graph/carrier contract. Production indexed AR
+        # publication is covered by test_compact_inputs_maker and test_replayssm_indexed.
+        return CacheCheckpointInputs(
+            state_save_plan=((source,), (destination,)),
+            replayssm_force_flush=torch.tensor([True], dtype=torch.bool),
+        ).to_device(device)
 
     def make_inputs(state_id: int, *, dummy: bool = False):
         return ModelInputs(
@@ -1821,12 +1783,14 @@ class TestDPForwardInputsMaker:
     def test_get_attaches_dummy_inputs_to_connector_only_step(self):
         async def _run():
             metadata = object()
+            cache_inputs = None
             connector_inputs = {
                 'inputs': None,
                 'delta': None,
                 'extra_inputs': None,
                 'return_logits': False,
                 'kv_connector_metadata': metadata,
+                'cache_inputs': cache_inputs,
             }
             dummy_inputs = {
                 'inputs': 'connector_dummy',
@@ -1843,6 +1807,7 @@ class TestDPForwardInputsMaker:
             assert result['extra_inputs'] == 'dummy_extra'
             assert result['return_logits'] is True
             assert result['kv_connector_metadata'] is metadata
+            assert result['cache_inputs'] is cache_inputs
 
         asyncio.run(_run())
 

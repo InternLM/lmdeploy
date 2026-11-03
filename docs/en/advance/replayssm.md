@@ -26,6 +26,14 @@ the private Replay rings or cursor. Restore initializes the private runtime
 from that shared boundary. Store layout fingerprints still separate incompatible
 formats; other external KV connectors remain unsupported.
 
+ReplaySSM decode checkpoint saving currently supports only standard AR interval
+saving without Mooncake Store. The accepted-output snapshot path introduced by
+`prefix_cache_decode_save_first`, MTP decode intervals, and Store decode intervals
+requires per-token full states and is rejected for ReplaySSM at startup. Keep
+`prefix_cache_decode_save_first=False` and, for MTP or Store,
+`prefix_cache_decode_state_interval=0`. Prefill checkpoint saving, prefix restore
+and Store loading remain supported; Replay OFF retains the upstream decode policies.
+
 ## Usage
 
 ### Command line

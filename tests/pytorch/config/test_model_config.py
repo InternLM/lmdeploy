@@ -293,8 +293,9 @@ def test_glm5_next_tail_checkpoint_policy_requires_closed_pool_boundary(monkeypa
     assert cache.block_size % hf_config.text_config.index_kpool == 0
     if num_spec_tokens:
         cache.prefix_cache_decode_state_interval = 64
-        with pytest.raises(ValueError, match='only publishes prefill'):
-            model.update_cache_config_func(cache)
+        cache.prefix_cache_decode_save_first = True
+        model.update_cache_config_func(cache)
+        assert cache.prefix_cache_decode_state_interval == 64
     draft = Glm5NextModelConfigBuilder.build(Glm5NextConfig(), is_draft_model=True,
                                             num_spec_tokens=num_spec_tokens)
     assert not draft.state_cache_specs

@@ -259,6 +259,42 @@ class SSMStateCheckpointLifecycle(StateCheckpointLifecycle):
             raise
         return tuple(reservations)
 
+    def reserve_decode_snapshot(self, seq, step, *, access_id):
+        """Reserve a snapshot, reclaiming old checkpoints under unit
+        pressure."""
+        owner = self._state_manager
+        bank = owner.bank_for(seq)
+        self.collect_completed()
+        old_node = seq.prefix_cache.decode_checkpoint_node
+        while owner.get_num_free_optional() == 0:
+            # Do not evict this request's last accepted checkpoint to make room
+            # for an unconfirmed replacement.
+            # Readers/Store may retain an evicted unit, so recheck physical capacity.
+            candidates = (node for node in self._index.unique_nodes() if node is not old_node)
+            if self._evict_checkpoints(candidates, 1) == 0:
+                return None
+        return owner.reserve_decode_snapshot(access_id, bank, step)
+
+    def publish_decode_snapshot(self, seq, step, reference):
+        """Publish an accepted exact-boundary unit after its forward
+        completes."""
+        if not reference.active or reference.phase != 'ready' or reference.boundary != step:
+            return False
+        node = self._attach_decode_checkpoint(seq, step)
+        if node is None or self._node_has_slot(node):
+            return False
+        if not self._release_replaceable_decode_checkpoint(seq, step):
+            return False
+        node.state_checkpoint = NodeStateCheckpoint(slot=reference.unit_id, step=step, state_reference=reference)
+        try:
+            self._publish_checkpoint(node, seq)
+        except Exception:
+            node.state_checkpoint = None
+            raise
+        seq.prefix_cache.decode_checkpoint_node = node
+        seq.prefix_cache.last_decode_save_step = max(seq.prefix_cache.last_decode_save_step, step)
+        return True
+
     def discard_decode(self, reservations):
         """Drop tentative publication, never its submitted GPU/reader holds."""
         for reservation in reservations:

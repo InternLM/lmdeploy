@@ -496,12 +496,12 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                      act_func: Callable = None,
                      **kwargs):
         """forward."""
-        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
-                                                                                    topk_ids)
-
-        topk_weights = self.do_renormalize(topk_weights)
         step_ctx = get_step_ctx_manager().current_context()
         low_latency_mode = step_ctx.global_is_decoding() and self.use_deep_gemm
+        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(
+            hidden_states, topk_weights, topk_ids, mask_padding=low_latency_mode)
+
+        topk_weights = self.do_renormalize(topk_weights)
         moe = self.fusedmoe_build(low_latency_mode)
         out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
                                  down_scale, expert_list, act_func=act_func)

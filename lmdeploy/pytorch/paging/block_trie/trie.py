@@ -612,20 +612,12 @@ class BlockTrie:
             if child is not None and not self._node_matches_block(child, token_ids, extra_identity):
                 break
 
-            if preserve_blocks and child is not None:
-                # Decode publication follows dispatch: queued block-offset
-                # tables must remain valid. Traverse canonical identity without
-                # replacing/freeing the sequence's already submitted KV pages.
-                trie_block_map[block_idx] = child.block_id
-                node = child
-                continue
-
-            if (seq._seq_meta.prefix_cache_checkpoint_block_size and child is not None
-                    and end > seq.num_history_ids):
-                # An aligned-state model may miss its recurrent checkpoint
-                # even though token blocks exist, or restore an earlier state.
-                # Keep the recomputed suffix writable and private; canonical
-                # KV/KPool pages must not be substituted before this forward.
+            if (child is not None and (preserve_blocks
+                    or (seq._seq_meta.prefix_cache_checkpoint_block_size and end > seq.num_history_ids))):
+                # Prefill may still write this private suffix. Decode
+                # publication runs after the next forward was prefetched, so
+                # that forward may already read the old physical block table.
+                # Keep runtime blocks stable and index the canonical trie path.
                 trie_block_map[block_idx] = child.block_id
                 node = child
                 continue
@@ -677,7 +669,7 @@ class BlockTrie:
             self._extend_trie_path(seq, node, step // self.block_size, preserve_blocks=True)
         return self._state_checkpoints._find_checkpoint_node(seq, step)
 
-    def allocate(self, seq: SchedulerSequence):
+    def allocate(self, seq: SchedulerSequence, token_limit: int | None = None):
         """Attach newly allocated full blocks to the prefix-cache trie.
 
         Allocation starts from ``seq.prefix_cache.trie_cursor`` when that
@@ -699,9 +691,12 @@ class BlockTrie:
             if seq.logprob_start_pos >= 0:
                 # Scoring forwards skip the draft model entirely.
                 return
-            # Only prompt-conditioned draft payload is canonical. Proposal KV
-            # and the final prompt row depending on a sampled token stay private.
-            num_valid_ids = min(num_valid_ids, seq.input_end_pos - seq._seq_meta.prefix_cache_token_lookahead)
+            # Decode publication supplies a verified boundary after acceptance;
+            # ordinary allocation must not attach speculative proposal KV.
+            identity_end = seq.input_end_pos if token_limit is None else seq.num_valid_ids
+            num_valid_ids = min(num_valid_ids, identity_end - seq._seq_meta.prefix_cache_token_lookahead)
+        if token_limit is not None:
+            num_valid_ids = min(num_valid_ids, token_limit)
         if seq.kv_token_limit is not None:
             num_valid_ids = min(num_valid_ids, seq.kv_token_limit)
 
@@ -711,7 +706,7 @@ class BlockTrie:
             recompute_overlap.clear_fresh_block_range()
             return
 
-        self._extend_trie_path(seq, node, num_complete_blocks)
+        self._extend_trie_path(seq, node, num_complete_blocks, preserve_blocks=token_limit is not None)
         recompute_overlap.clear_fresh_block_range()
 
     def clear(self) -> None:

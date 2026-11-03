@@ -56,6 +56,7 @@ class CLI:
         ArgumentHelper.dllm_block_length(pt_group)
         ArgumentHelper.prefix_cache_state_budget(pt_group)
         ArgumentHelper.prefix_cache_decode_state_interval(pt_group)
+        ArgumentHelper.prefix_cache_decode_save_first(pt_group)
         ArgumentHelper.prefill_save_alignment(pt_group)
         ArgumentHelper.prefill_save_last_only(pt_group)
         ArgumentHelper.mooncake_state_save_slots(pt_group)

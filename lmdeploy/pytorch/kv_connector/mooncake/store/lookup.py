@@ -9,6 +9,7 @@ import socket
 import threading
 from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
@@ -231,6 +232,14 @@ class LookupKeyServer:
         self.thread.join()
 
 
+@dataclass
+class _LookupQuery:
+    """One RPC retained until admission consumes or cancels its result."""
+
+    future: Future[int]
+    admission_started: bool = False
+
+
 class LookupKeyClient:
     """Scheduler-side ZMQ client with non-blocking Future polling."""
 
@@ -240,7 +249,7 @@ class LookupKeyClient:
         self.context: zmq.Context | None = None
         self.socket: zmq.Socket | None = None
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='MooncakeLookupClient')
-        self.futures: dict[RequestId, Future[int]] = {}
+        self.queries: dict[RequestId, _LookupQuery] = {}
         self._closed = False
 
     def _make_socket(self) -> zmq.Socket:
@@ -318,6 +327,22 @@ class LookupKeyClient:
             raise RuntimeError(f'lookup response {result} exceeds token_len {token_len}')
         return result
 
+    def submit(
+        self,
+        req_id: RequestId,
+        token_len: int,
+        block_hashes: Sequence[bytes],
+        *,
+        recompute_blocks: int = 0,
+    ) -> None:
+        """Start a query once, retaining even a completed result for
+        admission."""
+        if self._closed:
+            raise RuntimeError('LookupKeyClient is closed')
+        if req_id not in self.queries:
+            self.queries[req_id] = _LookupQuery(self.executor.submit(
+                self._lookup, token_len, tuple(block_hashes), recompute_blocks))
+
     def lookup(
         self,
         req_id: RequestId,
@@ -328,12 +353,10 @@ class LookupKeyClient:
         recompute_blocks: int = 0,
     ) -> int | None:
         """Submit once per request and poll without blocking by default."""
-        if self._closed:
-            raise RuntimeError('LookupKeyClient is closed')
-        future = self.futures.get(req_id)
-        if future is None:
-            future = self.executor.submit(self._lookup, token_len, tuple(block_hashes), recompute_blocks)
-            self.futures[req_id] = future
+        self.submit(req_id, token_len, block_hashes, recompute_blocks=recompute_blocks)
+        query = self.queries[req_id]
+        query.admission_started = True
+        future = query.future
         if non_block and not future.done():
             return None
         try:
@@ -342,28 +365,32 @@ class LookupKeyClient:
             logger.error('Asynchronous Mooncake lookup failed for %s: %s', req_id, e, exc_info=True)
             return 0
         finally:
-            self.futures.pop(req_id, None)
+            self.queries.pop(req_id, None)
 
     def discard(self, req_id: RequestId) -> None:
         """Drop an in-flight or completed lookup for an aborted request."""
-        future = self.futures.pop(req_id, None)
-        if future is not None:
-            future.cancel()
+        query = self.queries.pop(req_id, None)
+        if query is not None:
+            query.future.cancel()
 
     def is_pending(self, req_id: RequestId) -> bool:
-        """Return whether a request's lookup Future is still running."""
-        future = self.futures.get(req_id)
-        return future is not None and not future.done()
+        """Whether admission already needs an unfinished query.
+
+        Speculation alone must not skip local prefix matching: a full local
+        hit can cancel the query without ever waiting for its result.
+        """
+        query = self.queries.get(req_id)
+        return query is not None and query.admission_started and not query.future.done()
 
     def close(self) -> None:
         """Cancel queued lookups and release the client socket exactly once."""
         if self._closed:
             return
         self._closed = True
-        futures = list(self.futures.values())
-        self.futures.clear()
-        for future in futures:
-            future.cancel()
+        queries = list(self.queries.values())
+        self.queries.clear()
+        for query in queries:
+            query.future.cancel()
         close_future = self.executor.submit(self._close_transport)
         close_future.result()
         self.executor.shutdown(wait=True, cancel_futures=True)

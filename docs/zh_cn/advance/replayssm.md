@@ -22,6 +22,13 @@ state 和按时间顺序排列的 `W-1` 卷积历史（`W` 为卷积核宽度）
 cursor。恢复时从共享边界初始化私有运行时状态。Store 仍使用布局指纹隔离不兼容
 格式；其他外部 KV connector 仍不支持。
 
+ReplaySSM 的 decode checkpoint 目前仅支持不启用 Mooncake Store 的标准 AR interval
+保存。`prefix_cache_decode_save_first`、MTP decode interval 和 Store decode interval
+采用的 accepted-output snapshot 路径需要逐 token 完整状态，ReplaySSM 会在启动时明确
+拒绝这些组合。请保持 `prefix_cache_decode_save_first=False`，并在 MTP 或 Store 下保持
+`prefix_cache_decode_state_interval=0`。Prefill checkpoint、prefix 恢复和 Store 加载仍受
+支持；Replay OFF 保留 main 新增的 decode 保存策略。
+
 ## 使用方式
 
 ### 命令行

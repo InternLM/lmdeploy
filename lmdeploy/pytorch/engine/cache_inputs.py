@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Per-forward prefix-cache checkpoint operations."""
+"""Prefix-cache checkpoint operations owned by one forward."""
 from dataclasses import dataclass
 
 import torch
@@ -13,8 +13,8 @@ class CacheCheckpointInputs:
 
     KV plans contain physical GPU block-offset pairs at scheduler-block
     granularity with shape ``[2, N]``. They move to the cache device with the
-    other forward payloads. State plans remain compact host integer sequences
-    because ``StateCacheEngine`` schedules those copies from the host.
+    other forward payloads. Unconditional state plans remain host integer
+    sequences. Decode plans move to the device for acceptance and copying.
 
     Copy plans execute only once; model-consumed compact layouts and bindings
     travel with ModelInputs/ModelInputsDelta instead.
@@ -28,6 +28,10 @@ class CacheCheckpointInputs:
     # creates it on the host and the normal H2D payload path moves it once;
     # ModelAgent must not allocate it on the decode stream.
     replayssm_force_flush: torch.BoolTensor | None = None
+    # Columns are (batch row, boundary, source slot, destination slot).
+    # Decode copies are conditional on this forward's accepted prefix.
+    decode_save_plan: torch.Tensor | None = None
+    decode_save_id: int | None = None
     # Host-only checkpoint boundaries consumed by InputsMaker before submission.
     # None leaves checkpoint planning disabled; zero skips a row.
     ssm_checkpoint_steps: tuple[int, ...] | None = None
@@ -62,6 +66,9 @@ class CacheCheckpointInputs:
         if replayssm_force_flush is not None:
             replayssm_force_flush = replayssm_force_flush.to(
                 device, non_blocking=non_blocking)
+        decode_save_plan = self.decode_save_plan
+        if decode_save_plan is not None:
+            decode_save_plan = decode_save_plan.to(device, non_blocking=non_blocking)
 
         return CacheCheckpointInputs(
             kv_restore_plan=kv_restore_plan,
@@ -69,12 +76,13 @@ class CacheCheckpointInputs:
             state_restore_plan=self.state_restore_plan,
             state_save_plan=self.state_save_plan,
             replayssm_force_flush=replayssm_force_flush,
+            decode_save_plan=decode_save_plan,
+            decode_save_id=self.decode_save_id,
             ssm_state_access_id=self.ssm_state_access_id,
         )
 
     def record_stream(self, stream: torch.cuda.Stream) -> None:
         """Record forward-stream use of device-consumed plans."""
-        for plan in (self.kv_restore_plan, self.kv_save_plan,
-                     self.replayssm_force_flush):
+        for plan in (self.kv_restore_plan, self.kv_save_plan, self.replayssm_force_flush, self.decode_save_plan):
             if plan is not None and plan.is_cuda:
                 plan.record_stream(stream)

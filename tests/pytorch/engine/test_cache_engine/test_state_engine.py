@@ -122,22 +122,28 @@ def test_connector_state_cache_pools_expose_owning_pools_and_axes():
                for pool, allocation_pool in zip(pools, cache_engine.allocation.pools))
 
 
-def test_glm_store_projection_preserves_local_state_copies(monkeypatch):
+@pytest.fixture(params=['cpu'])
+def glm_state_cache_engine(monkeypatch, request):
     from lmdeploy.hf_configs.configuration_glm5_next import Glm5NextConfig
     from lmdeploy.pytorch.configurations.glm5_next import Glm5NextModelConfigBuilder
 
     monkeypatch.setattr('lmdeploy.pytorch.configurations.deepseek_v2.flash_mla_available', lambda: True)
     monkeypatch.setattr(state_module, '_allocate_state_caches',
                         lambda specs, num_caches, device: PackedStateCacheLayout(tuple(specs)).allocate(
-                            num_caches, device='cpu'))
+                            num_caches, device=request.param))
     hf_config = Glm5NextConfig(text_config=dict(
         num_hidden_layers=2, layer_types=['linear_attention', 'full_attention'],
         linear_num_heads=2, linear_head_dim=8, index_head_dim=8))
-    model_config = Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=3)
+    # This fixture exercises the legacy ring ABI, including on a CUDA test device.
+    model_config = Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=3, device_type='cpu')
     cache_config = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0,
                                num_gpu_blocks=0, num_state_caches=4, states_shapes=model_config.states_shapes)
     engine = StateCacheEngine(cache_config, model_config)
+    return engine, model_config
 
+
+def test_glm_store_projection_preserves_local_state_copies(glm_state_cache_engine):
+    engine, model_config = glm_state_cache_engine
     assert [spec.store_cacheable for spec in model_config.state_cache_specs] == [True, True, False, False]
     checkpoint_pool, runtime_pool = engine.connector_state_cache_pools
     assert checkpoint_pool.transfer_ranges is None
@@ -149,6 +155,96 @@ def test_glm_store_projection_preserves_local_state_copies(monkeypatch):
     engine.copy_slots(1, 3)
     for value, cache in enumerate(engine.state_caches, start=1):
         assert (cache[3] == value).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+@pytest.mark.parametrize('glm_state_cache_engine', ['cuda'], indirect=True)
+@pytest.mark.parametrize('boundary_offset', [1, 2, 4])
+def test_glm_checkpoint_restores_the_selected_verification_position(
+        monkeypatch, glm_state_cache_engine, boundary_offset):
+    from lmdeploy.pytorch.backends import gated_delta_rule as meta_module
+
+    engine, _ = glm_state_cache_engine
+    conv, recurrent, tail_keys, tail_scores = engine.state_caches
+    for cache in engine.state_caches:
+        cache.fill_(-10)
+    # Mark every entry by its absolute position, including the unaccepted tail.
+    boundary, num_spec_tokens = 256, 3
+    history = boundary - boundary_offset
+    ring_size = num_spec_tokens + 1
+    conv_length = conv.shape[-1]
+    conv_width = conv_length - num_spec_tokens
+    for position in range(history + 1, history + ring_size + 1):
+        recurrent[1, 0, position % ring_size].fill_(position)
+    for position in range(history + ring_size - conv_length, history + ring_size):
+        conv[1, 0, :, position % conv_length].fill_(position)
+    plan = torch.tensor([[0, 0], [boundary, boundary], [1, 1], [2, 3]], device='cuda')
+    engine.copy_decode_slots(plan, torch.tensor([True, False], device='cuda'))
+    assert (recurrent[3] == -10).all()
+    for cache in engine.state_caches:
+        cache[1].fill_(999)  # Later forwards reuse the runtime state.
+    engine.copy_slots(2, 3, checkpoint_only=True)
+
+    # Use the actual prefill restore metadata to select the saved boundary.
+    monkeypatch.setattr(meta_module, 'get_step_ctx_manager',
+                        lambda: SimpleNamespace(build_ctx=SimpleNamespace(num_spec_tokens=num_spec_tokens)))
+    meta = meta_module.GatedDeltaMeta(1, conv_width, torch.tensor([3]), SimpleNamespace(
+        is_decoding=False, cu_seqlens_q=torch.tensor([0, 1]),
+        q_seqlens=torch.tensor([1]), kv_seqlens=torch.tensor([boundary + 1])))
+    restored_state = recurrent[3, 0, meta.spec_state_offsets[0][0]]
+    torch.testing.assert_close(restored_state, torch.full_like(restored_state, boundary))
+    restored_conv = conv[3, 0, :, meta.spec_conv_offsets[0][0]]
+    expected_conv = torch.arange(boundary - conv_width + 1, boundary, dtype=conv.dtype, device=conv.device)
+    torch.testing.assert_close(restored_conv, expected_conv.expand_as(restored_conv))
+    assert (tail_keys[3] == -10).all() and (tail_scores[3] == -10).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+@pytest.mark.parametrize('boundary_offset', [1, 2, 4])
+def test_glm_compact_checkpoint_copies_exact_accepted_state_unit(monkeypatch, boundary_offset):
+    from lmdeploy.hf_configs.configuration_glm5_next import Glm5NextConfig
+    from lmdeploy.pytorch.config import SSMStateCapacity
+    from lmdeploy.pytorch.configurations.glm5_next import Glm5NextModelConfigBuilder
+    from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    monkeypatch.setattr('lmdeploy.pytorch.configurations.deepseek_v2.flash_mla_available', lambda: True)
+    model = Glm5NextModelConfigBuilder.build(Glm5NextConfig(text_config=dict(
+        num_hidden_layers=2, layer_types=['linear_attention', 'full_attention'],
+        linear_num_heads=2, linear_head_dim=8, index_head_dim=8)), num_spec_tokens=3)
+    cache = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=0,
+                        num_state_caches=4, states_shapes=model.states_shapes, prefix_cache_token_lookahead=1)
+    plan = state_module.SSMStatePlan.from_model_config(model, SSMStateCapacity(2, 4, 2))
+    engine = StateCacheEngine(cache, model, compact_plan=plan)
+    conv, recurrent, tail_keys, tail_scores = engine.state_caches
+    for tensor in engine.state_caches:
+        tensor.fill_(-10)
+    boundary = 256
+    history = boundary - boundary_offset
+    outputs = torch.tensor([[3, 1, 4, 2]], device='cuda')
+    for offset, unit in enumerate(outputs[0].tolist(), start=1):
+        recurrent[unit].fill_(history + offset)
+        conv[unit].copy_(torch.arange(history + offset - conv.shape[-1], history + offset,
+                                     device='cuda', dtype=conv.dtype).expand_as(conv[unit]))
+    agent = agent_module.BaseModelAgent.__new__(agent_module.BaseModelAgent)
+    agent.need_output, agent.cache_config, agent.state_cache_engine = True, cache, engine
+    monkeypatch.setattr(agent_module, 'get_dist_manager', lambda: SimpleNamespace(
+        current_context=lambda: SimpleNamespace(dist_config=SimpleNamespace(attn_tp=1))))
+    inputs = SimpleNamespace(history_lengths=torch.tensor([history], device='cuda'),
+                             seq_length=torch.tensor([4], device='cuda'), is_decoding=True,
+                             ssm_state_meta=SimpleNamespace(output_state_ids=outputs))
+    output = agent_module.BatchedOutputs(
+        next_token_ids=torch.tensor([[7] * boundary_offset + [-1] * (4 - boundary_offset)], device='cuda'),
+        stopped=torch.tensor([False], device='cuda'), stop_pos=torch.tensor([-1], device='cuda'))
+    copies = torch.tensor([[0, 0], [boundary, boundary + 4], [-1, -1], [5, 6]], device='cuda')
+    agent._save_decode_checkpoints(CacheCheckpointInputs(decode_save_plan=copies), inputs, output)
+    assert output.decode_checkpoint_mask.tolist() == [True, False]
+    conv[1:5].fill_(999)
+    recurrent[1:5].fill_(999)
+    assert (recurrent[5] == boundary).all() and (recurrent[6] == -10).all()
+    expected = torch.arange(boundary - conv.shape[-1], boundary, device='cuda', dtype=conv.dtype)
+    torch.testing.assert_close(conv[5], expected.expand_as(conv[5]))
+    assert (conv[6] == -10).all() and (tail_keys == -10).all() and (tail_scores == -10).all()
 
 
 def test_state_cache_engine_zero_slots_uses_each_pool_entry_axis():

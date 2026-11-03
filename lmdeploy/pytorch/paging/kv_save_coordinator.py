@@ -54,7 +54,9 @@ class KVSaveCoordinator:
         block_manager = self.block_manager
         for lease in metadata.get_save_block_leases():
             if lease.operation_id in self._leases:
-                raise RuntimeError(f'save operation {lease.operation_id} already owns a block lease')
+                # A decode snapshot acquires ownership when accepted, before
+                # its metadata is dispatched on the next normal forward.
+                continue
             logical_block_ids = np.asarray(lease.logical_block_ids, dtype=np.int64)
             block_manager.pin_logical_blocks(logical_block_ids)
             self._leases[lease.operation_id] = logical_block_ids

@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -61,6 +62,102 @@ def _publish_local_checkpoint(scheduler, step):
     checkpoint = seq.prefix_cache.trie_cursor.state_checkpoint
     scheduler.end_session(0)
     return checkpoint
+
+
+def test_lookup_prefetch_bounds_waiting_window_without_acquiring_paging_resources(make_scheduler):
+    scheduler, connector = make_scheduler(max_batches=2, remote_hit=0)
+    del connector.client.lookup  # Use the real submit/consume lifecycle.
+    connector.client._lookup = Mock(return_value=0)
+    seqs = [scheduler.add_session(i).add_sequence(torch.arange(21)) for i in range(5)]
+    free_blocks = scheduler.block_manager.get_num_free_gpu_blocks()
+    free_states = scheduler.state_manager.get_num_free()
+
+    scheduler.prefetch_kv_lookups()
+    for query in connector.client.queries.values():
+        query.future.result(timeout=2)
+    scheduler.prefetch_kv_lookups()
+
+    assert set(connector.client.queries) == {s.seq_id for s in seqs[:2]}
+    assert connector.client._lookup.call_count == 2
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == free_blocks
+    assert scheduler.state_manager.get_num_free() == free_states
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+    assert all(s.status == MessageStatus.WAITING and s.num_blocks == 0
+               and s.num_history_ids == 0 and not s.prefix_cache.restore.is_selected for s in seqs)
+    # Consuming the first result admits work without another query; refill
+    # advances the window even though the current token budget held its sibling.
+    assert scheduler.schedule(is_prefill=True).running == [seqs[0]]
+    scheduler.prefetch_kv_lookups()
+    assert set(connector.client.queries) == {s.seq_id for s in seqs[1:3]}
+
+
+def test_local_full_hit_cancels_prefetch_without_waiting_or_double_counting(make_scheduler):
+    scheduler, connector = make_scheduler()
+    checkpoint = _publish_local_checkpoint(scheduler, 16)
+    del connector.client.lookup
+    started, release = Event(), Event()
+
+    def lookup(*args):
+        started.set()
+        assert release.wait(timeout=2)
+        return 16
+
+    connector.client._lookup = lookup
+    seq = scheduler.add_session(1).add_sequence(torch.arange(17))
+    try:
+        scheduler.prefetch_kv_lookups()
+        assert started.wait(timeout=2)
+        assert not connector.client.queries[seq.seq_id].future.done()
+        assert not connector.is_lookup_pending(seq.seq_id)
+        assert scheduler.schedule(is_prefill=True).running == [seq]
+        assert seq.num_history_ids == seq.cached_tokens == 16
+        assert seq.prefix_cache.restore.slot == checkpoint.slot
+        assert connector.client.queries == {}
+        assert not connector._pending_loads
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize('local_step', [0, 8, 16])
+def test_prefetched_hit_rebases_against_local_checkpoint_at_admission(make_scheduler, local_step):
+    scheduler, connector = make_scheduler()
+    del connector.client.lookup
+    connector.client._lookup = Mock(return_value=16)
+    seq = scheduler.add_session(1).add_sequence(torch.arange(21))
+    scheduler.prefetch_kv_lookups()
+    assert connector.client.queries[seq.seq_id].future.result(timeout=2) == 16
+    if local_step:
+        _publish_local_checkpoint(scheduler, local_step)
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert connector.client._lookup.call_count == 1
+    assert connector.client.queries == {}
+    if local_step == 16:
+        assert output.running == [seq]
+        assert seq.cached_tokens == 16
+        assert not connector._pending_loads
+    else:
+        assert output.running == []
+        assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+        load = connector.build_connector_meta(output).load_requests[0]
+        assert len(load.block_ids) == (16 - local_step) // 4
+        scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+        assert scheduler.schedule(is_prefill=True).running == [seq]
+        assert seq.num_history_ids == seq.cached_tokens == 16
+
+
+@pytest.mark.parametrize('terminal', ['stop_session', 'end_session'])
+def test_lookup_prefetch_is_cancelled_when_waiting_request_leaves(make_scheduler, terminal):
+    scheduler, connector = make_scheduler()
+    connector.client._lookup = Mock(return_value=16)
+    seq = scheduler.add_session(1).add_sequence(torch.arange(21))
+    scheduler.prefetch_kv_lookups()
+    assert seq.seq_id in connector.client.queries
+    getattr(scheduler, terminal)(1)
+    scheduler.prefetch_kv_lookups()
+    assert connector.client.queries == {}
+    assert not connector._pending_loads
 
 
 def test_mooncake_producer_reports_zero_external_hit_rate_without_lookup(make_scheduler):

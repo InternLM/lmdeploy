@@ -1,9 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Shared planning helpers for long-context prefill chunks."""
+"""Shared planning helpers for prefill chunks and state checkpoints."""
 
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import chain
+from math import gcd
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -121,6 +122,43 @@ def get_last_prefill_save_step(seq: 'SchedulerSequence') -> int | None:
         if start < step < end:
             step = start // alignment * alignment
     return step or None
+
+
+def get_decode_save_step(seq: 'SchedulerSequence', min_step: int, max_step: int) -> int | None:
+    """Choose a checkpoint within the state history retained by one forward.
+
+    The inclusive bounds describe retained states, not accepted tokens. The caller must verify acceptance and lookahead
+    before saving. Planning never advances the last successful save position.
+
+    A missed first save retries on prefill alignment. Later retries use the same gcd alignment as Store lookups so every
+    saved boundary remains discoverable. An overwritten state cannot be saved retroactively.
+    """
+    meta = seq._seq_meta
+    if not meta.prefill_save_alignment or seq.logprob_start_pos >= 0:
+        return None
+    if not meta.enable_prefix_caching and seq.prefix_cache.decode_store_save_pending:
+        return None
+    interval = meta.prefix_cache_decode_state_interval
+    last_step = seq.prefix_cache.last_decode_save_step
+    if meta.prefix_cache_decode_save_first:
+        if last_step < 0:
+            alignment = meta.prefill_save_alignment
+            step = (seq.input_end_pos + alignment - 1) // alignment * alignment
+        elif interval:
+            alignment = gcd(meta.prefill_save_alignment, interval)
+            step = last_step + interval
+        else:
+            return None
+    elif interval:
+        alignment = interval
+        step = (seq.input_end_pos // interval + 1) * interval
+    else:
+        return None
+    if step < min_step:
+        step = (min_step + alignment - 1) // alignment * alignment
+    if 0 < step <= max_step and seq.is_prefix_cache_boundary_safe(step):
+        return step
+    return None
 
 
 def limit_long_context_checkpoint(seq: 'SchedulerSequence', limit: int) -> int:
