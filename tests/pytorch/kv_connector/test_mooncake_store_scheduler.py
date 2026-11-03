@@ -29,7 +29,7 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
 from lmdeploy.pytorch.kv_connector.mooncake.store.scheduler import MooncakeStoreScheduler
 from lmdeploy.pytorch.kv_connector.mooncake.store.worker import MooncakeStoreWorker
 from lmdeploy.pytorch.long_context import get_last_prefill_save_step, plan_long_context_chunk
-from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta
+from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.model_inputs import ModelInputs
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging.scheduler import Scheduler
@@ -395,14 +395,15 @@ def test_hybrid_lookup_rejects_invalid_state_boundary_without_clamping(remote_hi
 
 @pytest.mark.parametrize('modality', [Modality.IMAGE, Modality.VIDEO])
 @pytest.mark.parametrize('lookahead', [0, 1])
-def test_fa_multimodal_save_hashes_ignore_mtp_lookahead(modality, lookahead):
-    cache_config = replace(_cache_config('kv_producer'), enable_prefix_caching=bool(lookahead),
+@pytest.mark.parametrize('local_prefix_cache', [False, True])
+def test_fa_multimodal_save_hashes_include_mtp_lookahead(modality, lookahead, local_prefix_cache):
+    cache_config = replace(_cache_config('kv_producer'), enable_prefix_caching=local_prefix_cache,
                            prefix_cache_block_aligned=True, prefix_cache_token_lookahead=lookahead)
     paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache_config,
                        seq_meta=SequenceMeta(4, strategy=ARSpecSequenceStrategy()))
     store = MooncakeStoreScheduler(cache_config)
     assert cache_config.needs_prefix_cache_identity
-    assert paging.block_trie.enabled == bool(lookahead)
+    assert paging.block_trie.enabled == local_prefix_cache
     assert cache_config.num_store_state_caches == 0
     hashes = []
     local_identities = []
@@ -423,14 +424,134 @@ def test_fa_multimodal_save_hashes_ignore_mtp_lookahead(modality, lookahead):
         assert save.state is None
         assert metadata.get_state_save_copies() == ()
         assert save.block_hashes[:2] == prefix
-        assert save.block_hashes[0] == build_prefix_block_hashes(range(4), 4)[0]
+        assert (save.block_hashes[0] == build_prefix_block_hashes(range(4), 4)[0]) == (not lookahead)
         hashes.append(save.block_hashes)
-    assert hashes[0] == hashes[2]
-    assert hashes[0][0] == hashes[1][0]
+    assert hashes[0][:-1] == hashes[2][:-1]
+    assert (hashes[0][-1] != hashes[2][-1]) == bool(lookahead)
+    assert (hashes[0][0] != hashes[1][0]) == bool(lookahead)
     assert all(a != b for a, b in zip(hashes[0][1:], hashes[1][1:]))
     assert (local_identities[0] != local_identities[2]) == bool(lookahead)
     store.shutdown()
     paging.shutdown()
+
+
+@pytest.mark.parametrize('local_prefix_cache', [False, True])
+@pytest.mark.parametrize(('changed_token', 'prompt_len', 'expected_hit'), [
+    (None, 13, 12), (None, 12, 8), (None, 17, 12),
+    (4, 13, 0), (8, 13, 4), (12, 13, 8),
+])
+def test_mtp_store_save_lookup_and_load_matches_successor(local_prefix_cache, changed_token, prompt_len, expected_hit):
+    cache = replace(_cache_config('kv_producer'), prefix_cache_token_lookahead=1)
+    source_paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache,
+                              seq_meta=SequenceMeta(4, strategy=ARSpecSequenceStrategy()))
+    producer = MooncakeStoreScheduler(cache)
+    source = source_paging.add_session(0).add_sequence(range(13))
+    saved = producer.build_connector_meta(_connector_step(
+        (source,), (13,), ((0, 1, 2, 3),), ((10, 11, 12, 13),))).save_requests[0]
+    # Neither legacy MTP keys nor target-only entries may satisfy this lookup.
+    assert set(saved.block_hashes).isdisjoint(build_prefix_block_hashes(source.all_ids, 4))
+    metadata = MooncakeStoreKeyMetadata('model', '', 1, 4)
+    stored_keys = {build_store_key(metadata, 0, h) for h in saved.block_hashes}
+
+    cache = replace(cache, enable_prefix_caching=local_prefix_cache,
+                    kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_consumer'))
+    consumer = MooncakeStoreScheduler(cache)
+    worker = MooncakeStoreWorker.__new__(MooncakeStoreWorker)
+    worker._cache_config = cache
+    worker.key_metadata = metadata
+    worker.global_rank = worker.tp_rank = 0
+    worker.tp_size = 1
+    worker.store = SimpleNamespace(batch_is_exist=lambda keys: [int(key in stored_keys) for key in keys])
+    consumer.client.lookup = Mock(side_effect=lambda req_id, token_len, hashes, non_block, recompute_blocks:
+                                 worker.lookup(token_len, hashes, recompute_blocks=recompute_blocks))
+    paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache,
+                       seq_meta=SequenceMeta(4, strategy=ARSpecSequenceStrategy()), kv_connector=consumer)
+    tokens = list(range(prompt_len))
+    if changed_token is not None:
+        tokens[changed_token] = 99
+    request = paging.add_session(1).add_sequence(tokens)
+    assert request._seq_meta.prefix_cache_token_lookahead == 1
+    assert request.prefix_cache.recompute_overlap.recompute_blocks == 0
+
+    output = paging.schedule(is_prefill=True)
+    assert consumer.client.lookup.call_args.kwargs['recompute_blocks'] == 0
+    if expected_hit:
+        assert output.running == []
+        load = consumer.build_connector_meta(output).load_requests[0]
+        assert load.remote_block_count * 4 == expected_hit
+        assert load.block_hashes == saved.block_hashes[:expected_hit // 4]
+        paging.update_connector_output(KVConnectorOutput(finished_receiving={request.seq_id}))
+        assert paging.schedule(is_prefill=True).running == [request]
+    else:
+        assert output.running == [request]
+        assert consumer.build_connector_meta(output) is None
+    assert request.num_history_ids == request.cached_tokens == expected_hit
+    paging.shutdown()
+    source_paging.shutdown()
+    producer.shutdown()
+
+
+@pytest.mark.parametrize('successor', [12, 99])
+def test_mtp_store_load_publication_deduplicates_only_matching_successor(successor):
+    cache = replace(_cache_config('kv_consumer'), enable_prefix_caching=True,
+                    prefix_cache_token_lookahead=1, num_gpu_blocks=16)
+    consumer = MooncakeStoreScheduler(cache)
+    consumer.client.lookup = Mock(return_value=12)
+    paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache,
+                       seq_meta=SequenceMeta(4, strategy=ARSpecSequenceStrategy()), kv_connector=consumer)
+    request = paging.add_session(0).add_sequence(range(13))
+    output = paging.schedule(is_prefill=True)
+    assert output.running == []
+    consumer.build_connector_meta(output)
+    loaded_block = request.logical_blocks[2]
+    # Publish another request while the remote load is in flight, reproducing
+    # the race from #4948. Its final draft row depends on its own successor.
+    racing = paging.add_session(1).add_sequence([*range(12), successor])
+    paging.block_manager.allocate(racing)
+    paging.block_trie.allocate(racing)
+    racing_block = racing.logical_blocks[2]
+    assert loaded_block != racing_block
+
+    paging.update_connector_output(KVConnectorOutput(finished_receiving={request.seq_id}))
+    assert request.num_history_ids == 12
+    assert tuple(request.logical_blocks[:2]) == tuple(racing.logical_blocks[:2])
+    assert request.logical_blocks[2] == (racing_block if successor == 12 else loaded_block)
+    # A later local hit must select the same draft boundary as the remote hit.
+    probe = paging.add_session(2).add_sequence(range(13))
+    paging.block_trie.match(probe)
+    assert probe.num_history_ids == 12
+    assert probe.logical_blocks[2] == request.logical_blocks[2]
+    paging.shutdown()
+
+
+@pytest.mark.parametrize('local_prefix_cache', [False, True])
+def test_mtp_store_save_waits_for_accepted_lookahead_and_extends_hashes(local_prefix_cache):
+    cache = replace(_cache_config('kv_producer'), enable_prefix_caching=local_prefix_cache,
+                    prefix_cache_token_lookahead=1)
+    paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache,
+                       seq_meta=SequenceMeta(4, strategy=ARSpecSequenceStrategy()))
+    store = MooncakeStoreScheduler(cache)
+    request = paging.add_session(0).add_sequence(range(8))
+    step = _connector_step((request,), (8,), ((0, 1),), ((10, 11),))
+    first = store.build_connector_meta(step).save_requests[0]
+    assert first.block_ids == (0,)
+    assert store._request_hash_trackers[request.seq_id].block_hashes == first.block_hashes
+    assert store.build_connector_meta(step).save_requests == ()
+
+    request.update_token_ids([42], draft_token_ids=[90, 91, 92, 93], mode=UpdateTokenMode.PREFILL)
+    assert request.num_valid_ids == 9 < request.num_all_ids
+    # Even if a forward covered the proposed suffix, only accepted successors
+    # may extend the memoized hash chain.
+    second = store.build_connector_meta(_connector_step(
+        (request,), (12,), ((0, 1, 2),), ((10, 11, 12),))).save_requests[0]
+    assert second.start_block == 1
+    assert second.block_ids == (1,)
+    fresh = paging.add_session(1).add_sequence([*range(8), 42])
+    hashes = store._get_request_block_hashes(fresh, fresh.seq_id, 8, 4)
+    assert hashes == first.block_hashes + second.block_hashes
+    assert store._request_hash_trackers[request.seq_id].block_hashes == hashes
+    paging.shutdown()
+    store.shutdown()
 
 
 @pytest.mark.parametrize(('spans', 'remote_hit', 'expected_end'), [
@@ -503,6 +624,36 @@ def test_prefix_block_hashes_are_stable_chained_and_incremental():
     metadata = MooncakeStoreKeyMetadata('model', 'prefix', 1, 4)
     assert tuple(build_store_key(metadata, 0, block_hash) for block_hash in full) == tuple(
         f'prefix@model@tp_rank:0@group:0@{block_hash}' for block_hash in expected)
+
+
+@pytest.mark.parametrize('lookahead', [1, 2])
+@pytest.mark.parametrize('as_numpy', [False, True])
+def test_prefix_block_hashes_require_complete_lookahead(lookahead, as_numpy):
+    tokens = list(range(12 + lookahead))
+    if as_numpy:
+        tokens = np.asarray(tokens, dtype=np.int64)
+    hashes = build_prefix_block_hashes(tokens, 4, token_lookahead=lookahead)
+    assert len(hashes) == 3
+    assert build_prefix_block_hashes(tokens[:4 + lookahead - 1], 4, token_lookahead=lookahead) == ()
+    prefix = build_prefix_block_hashes(tokens[:8 + lookahead - 1], 4, token_lookahead=lookahead)
+    assert prefix == hashes[:1]
+    assert build_prefix_block_hashes(tokens, 4, token_lookahead=lookahead, previous_hashes=prefix) == hashes
+    assert build_prefix_block_hashes(np.asarray(tokens), 4, token_lookahead=lookahead) == hashes
+    assert build_prefix_block_hashes(tokens[:12 + lookahead - 1], 4, token_lookahead=lookahead) == hashes[:2]
+
+    # Changing any successor invalidates this block and all chained children,
+    # while ordinary in-block identities and legacy block sizes stay distinct.
+    for position in range(8, 8 + lookahead):
+        changed = tokens.copy()
+        changed[position] = 99
+        other = build_prefix_block_hashes(changed, 4, token_lookahead=lookahead)
+        assert other[0] == hashes[0]
+        assert all(a != b for a, b in zip(other[1:], hashes[1:]))
+    assert hashes[0] != build_prefix_block_hashes(tokens, 4 + lookahead)[0]
+    assert hashes[0] != build_prefix_block_hashes(tokens, 4)[0]
+    assert hashes[0] != build_prefix_block_hashes(tokens, 4, token_lookahead=3 - lookahead)[0]
+    with pytest.raises(ValueError, match='token_lookahead must be non-negative'):
+        build_prefix_block_hashes(tokens, 4, token_lookahead=-1)
 
 
 def test_scheduler_extends_hashes_and_reports_pending_miss_and_hit(monkeypatch):

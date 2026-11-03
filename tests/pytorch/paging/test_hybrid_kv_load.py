@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from lmdeploy.messages import KVTransferConfig
-from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.engine.inputs_maker import InputsMakerAsync
 from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVConnectorStepInput
 from lmdeploy.pytorch.kv_connector.base import KVConnectorOutputAggregator
@@ -17,7 +17,7 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging.kv_load_coordinator import KVLoadAdmission
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
-from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
+from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
 
 
 @pytest.fixture
@@ -40,8 +40,7 @@ def make_scheduler():
             connector.client.lookup = Mock(return_value=remote_hit)
         strategy = ARSequenceStrategy()
         if mtp:
-            strategy = ARSpecStrategyFactory(SimpleNamespace(bos_token_id=0), SpecDecodeConfig(
-                model='draft', method='qwen3_5_mtp', disable_prefix_cache_block_drop=no_drop)).build_sequence_strategy()
+            strategy = ARSpecSequenceStrategy(recompute_blocks=0 if no_drop else 1)
         scheduler = Scheduler(
             SchedulerConfig(max_batches=max_batches, max_session_len=64, max_request_output_len=16), config,
             SequenceMeta(4, strategy=strategy), kv_connector=connector)
