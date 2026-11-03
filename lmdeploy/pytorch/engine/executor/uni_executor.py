@@ -95,6 +95,10 @@ class UniExecutor(ExecutorBase):
         """Receive weights through checkpoint-engine CUDA IPC."""
         return self.model_agent.update_weights_from_ipc(request, reject_reason)
 
+    def update_params(self, request):
+        """Load a same-node named-tensor bucket into the single GPU worker."""
+        return self.model_agent.update_params(request)
+
     def warmup(self):
         self.model_agent.warmup()
 

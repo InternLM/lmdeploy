@@ -545,7 +545,9 @@ class PytorchEngineConfig:
             It can be used to override the default config of the model,
         language_model_only: Whether to run as text-only LLM without loading
             vision/multimodal encoder modules. Default to False.
-        logprobs_mode: The mode of logprob, options: ['raw_logits', 'raw_logprobs']
+        logprobs_mode: 'raw_logits', 'raw_logprobs', or 'temperature_logprobs'.
+            The last mode scores raw model logits at the request temperature,
+            before repetition, grammar, top-k/top-p and other processors.
         dllm_block_length: Block size of block diffusion model.
         dllm_unmasking_strategy: Dllm unmasking strategy, options:
             ['low_confidence_dynamic', 'low_confidence_static', 'sequential'].

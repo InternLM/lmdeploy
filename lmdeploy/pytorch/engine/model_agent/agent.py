@@ -1777,7 +1777,13 @@ class BaseModelAgent:
             model = self.patched_model.get_model()
             spec_model = self.spec_agent.get_model()
 
-            weights = _deserialize_weights(serialized_data)
+            if request.load_format == 'safetensors_file':
+                # The trainer and server may use different Torch versions.
+                # Load tensor data without unpickling trainer-side CUDA storage.
+                from safetensors.torch import load_file
+                weights = list(load_file(serialized_data, device='cpu').items())
+            else:
+                weights = _deserialize_weights(serialized_data)
             main_weights, draft_weights = self._split_updated_weights(weights)
 
             for m, w, tag in [(model, main_weights, 'main'), (spec_model, draft_weights, 'draft')]:
@@ -1799,6 +1805,9 @@ class BaseModelAgent:
                     self._update_params_ipc_event = None
                     self._update_params_ipc_tensor = None
 
+            if request.load_format == 'safetensors_file':
+                # The sender removes this bucket after the RPC acknowledges it.
+                torch.cuda.synchronize()
             torch.cuda.empty_cache()
 
     def init_weights_update_group(self, request: InitWeightsUpdateGroupRequest):
