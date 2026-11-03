@@ -58,7 +58,8 @@ class DecisionContext:
     temperature: float
 
 
-def create_decision_context(engine, model_path: str) -> DecisionContext:
+def create_decision_context(engine, model_path: str, *, temperature: float | None = None,
+                            original_model_path: str | None = None) -> DecisionContext:
     """Check task capabilities once without loading another tokenizer or processor."""
     if engine.backend != 'pytorch' or not isinstance(engine.backend_config, PytorchEngineConfig):
         raise ValueError(f'{TASK_NAME} requires the PyTorch backend')
@@ -109,7 +110,7 @@ def create_decision_context(engine, model_path: str) -> DecisionContext:
         marker_id=marker_id,
         symbol_ids=MappingProxyType(symbol_ids),
         image_token_id=tokenizer.convert_tokens_to_ids(image_token) if image_token else None,
-        temperature=resolve_temperature(model_path),
+        temperature=resolve_temperature(model_path, temperature=temperature, original_model_path=original_model_path),
     )
 
 

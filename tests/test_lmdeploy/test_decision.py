@@ -13,7 +13,6 @@ import torch
 from PIL import Image
 
 from lmdeploy.intern_decision_encoding import (
-    DEFAULT_TEMPERATURE,
     DecisionOutputError,
     compile_row,
     decode_answers,
@@ -147,7 +146,7 @@ def test_temperature_flattens_but_keeps_argmax():
 def test_output_rejects_bad_logits(logits):
     questions = {'q': {'type': 'noul'}}
     with pytest.raises(DecisionOutputError):
-        decode_answers(questions, ('q', ), logits)
+        decode_answers(questions, ('q', ), logits, temperature=1.0)
 
 
 MARKER, IMAGE_PAD = 900, 800
@@ -156,7 +155,7 @@ SYMBOLS = {'A': 32, 'B': 33, 'C': 34}
 
 def config(**kwargs):
     values = dict(marker_id=MARKER, symbol_ids=SYMBOLS, image_token_id=IMAGE_PAD,
-                  temperature=DEFAULT_TEMPERATURE)
+                  temperature=2.0)
     return DecisionContext(**{**values, **kwargs})
 
 
@@ -250,7 +249,8 @@ def test_scoring_uses_final_marker_positions(images):
     prepared, = engine.requests
     assert prepared.inputs['input_ids'][prepared.gen_config.logprob_start_len + 1] == MARKER
     assert prepared.gen_config.logprob_extra_token_ids == [32, 33, 34]
-    expected = decode_answers(QUESTIONS, tuple(QUESTIONS), [[32., 33.], [-32., -33., -34.], [32., 33.]])
+    expected = decode_answers(QUESTIONS, tuple(QUESTIONS), [[32., 33.], [-32., -33., -34.], [32., 33.]],
+                              temperature=config().temperature)
     for answer in expected.values():
         answer.pop('source')
         answer.pop('decision')

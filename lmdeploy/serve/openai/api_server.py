@@ -284,6 +284,7 @@ def serve(model_path: str,
           allowed_media_domains: list[str] | None = None,
           generation_config: str = 'auto',
           task: str | None = None,
+          decision_temperature: float | None = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -338,8 +339,10 @@ def serve(model_path: str,
         allowed_media_domains (list[str] | None): Optional exact hostname
             allowlist for HTTP(S) media URLs.
         task (str | None): Set to ``'intern-decision'`` to enable decision scoring
-            on the PyTorch backend. Temperature is read from the resolved
-            checkpoint metadata; missing or invalid calibration is rejected.
+            on the PyTorch backend.
+        decision_temperature (float | None): Explicit decision calibration,
+            overriding checkpoint metadata and known model-path temperatures.
+            Must be finite and positive. Unknown models without calibration fail startup.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
@@ -347,6 +350,12 @@ def serve(model_path: str,
 
     if task not in (None, 'intern-decision'):
         raise ValueError(f'Unknown task: {task!r}. Use task="intern-decision".')
+    if decision_temperature is not None:
+        if task != 'intern-decision':
+            raise ValueError('decision_temperature requires task="intern-decision".')
+        from lmdeploy.intern_decision_encoding import resolve_temperature
+        decision_temperature = resolve_temperature(model_path, temperature=decision_temperature)
+    original_model_path = model_path
 
     server_context = ServerContext()
     server_context.allow_terminate_by_client = allow_terminate_by_client
@@ -403,7 +412,9 @@ def serve(model_path: str,
     if task is not None:
         from lmdeploy.serve.parsers.decision_parser import create_decision_context
         try:
-            server_context.decision_context = create_decision_context(server_context.async_engine, model_path)
+            server_context.decision_context = create_decision_context(
+                server_context.async_engine, model_path, temperature=decision_temperature,
+                original_model_path=original_model_path)
         except BaseException:
             server_context.async_engine.close()
             raise

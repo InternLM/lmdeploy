@@ -10,7 +10,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from lmdeploy.intern_decision_encoding import DEFAULT_TEMPERATURE
 from lmdeploy.serve.core.async_engine import GenOut
 from lmdeploy.serve.parsers.decision_parser import DecisionContext, DecisionParser
 
@@ -21,7 +20,7 @@ SYMBOLS = {'A': 32, 'B': 33, 'C': 34}
 
 def config(**kwargs):
     values = dict(marker_id=MARKER, symbol_ids=SYMBOLS, image_token_id=IMAGE_PAD,
-                  temperature=DEFAULT_TEMPERATURE)
+                  temperature=2.0)
     return DecisionContext(**{**values, **kwargs})
 
 

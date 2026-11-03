@@ -22,8 +22,6 @@ logger = logging.getLogger('lmdeploy')
 
 DECISION_TOKEN = '<decision>'
 ANSWER_SYMBOLS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-# Official 4B calibration, also used by standalone scoring helpers.
-DEFAULT_TEMPERATURE = 1.99241824
 SYSTEM_PROMPT = ('You are a careful decision assistant. Use the state and decision schema in '
                  'the user message to make the requested decisions. For every field, choose '
                  'exactly one answer symbol (e.g. A, B, C, ...) from its listed options and '
@@ -154,16 +152,25 @@ def validate_temperature(temperature) -> float:
     return temperature
 
 
-def resolve_temperature(model_path: str | Path) -> float:
+def resolve_temperature(model_path: str | Path, *, temperature: float | None = None,
+                        original_model_path: str | Path | None = None) -> float:
     """Read calibration for local Intern-Decision family checkpoints.
 
     This reader follows the Intern-Decision-specific convention of a top-level
     numeric DEFAULT_TEMPERATURE in the checkpoint's inference.py. It is not a
     general checkpoint metadata format. Parse the constant without importing or
-    executing the module or downloading files. The caller must resolve remote
-    model IDs first. Missing or invalid metadata is an error: calibration from a
-    different checkpoint must not be substituted.
+    executing the module or downloading files. Priority: explicit override,
+    checkpoint constant, then an exact known model directory/repository name.
+    The caller resolves remote IDs first and preserves their original path for
+    name matching. Unknown models have no default calibration.
     """
+    if temperature is not None:
+        if isinstance(temperature, bool):
+            raise ValueError('Decision temperature must be a finite positive number')
+        temperature = validate_temperature(temperature)
+        logger.info(f'Explicit decision temperature: {temperature}.')
+        return temperature
+
     source = Path(model_path) / 'inference.py'
     try:
         tree = ast.parse(source.read_text(encoding='utf-8'), filename=str(source))
@@ -184,8 +191,20 @@ def resolve_temperature(model_path: str | Path) -> float:
             raise ValueError('DEFAULT_TEMPERATURE must be a numeric constant')
         temperature = validate_temperature(value)
     except (OSError, UnicodeError, SyntaxError, ValueError, TypeError, OverflowError) as exc:
-        raise ValueError(f'Cannot read decision temperature from {source}: {exc}. '
-                         'Provide a checkpoint with a finite positive DEFAULT_TEMPERATURE in inference.py.') from exc
+        name = Path(original_model_path if original_model_path is not None else model_path).name.lower()
+        known_temperatures = {
+            'intern-decision-0.8b': 2.747760550703,
+            'intern-decision-2b': 2.100509348278,
+            'intern-decision-4b': 1.99241824,
+        }
+        if name not in known_temperatures:
+            raise ValueError(f'Cannot read decision temperature from {source}: {exc}. '
+                             f'Unrecognized model path name {name!r}; set --decision-temperature or provide '
+                             'a finite positive DEFAULT_TEMPERATURE in inference.py.') from exc
+        temperature = known_temperatures[name]
+        logger.warning(f'Cannot read decision temperature from {source}: {exc}; '
+                       f'using {temperature} for model path name {name!r}.')
+        return temperature
     logger.info(f'Decision temperature from {source}: {temperature}.')
     return temperature
 
@@ -212,8 +231,8 @@ def decode_answers(questions: dict,
                    fields: tuple[str, ...],
                    candidate_logits: list[list[float]],
                    *,
-                   temperature: float = DEFAULT_TEMPERATURE) -> dict:
-    """Decode candidate logits in field/option order into calibrated answers."""
+                   temperature: float) -> dict:
+    """Decode candidate logits using the explicitly supplied calibration temperature."""
     import torch
 
     temperature = validate_temperature(temperature)

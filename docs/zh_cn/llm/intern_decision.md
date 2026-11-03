@@ -40,8 +40,17 @@ lmdeploy serve api_server /path/to/Intern-Decision-0.8B --task intern-decision -
 传入的模型 ID。例如，可以将上面的本地路径替换为 `internlm/Intern-Decision-2B`，并设置
 `--model-name Intern-Decision-2B`。
 
-启动时用 AST 读取该 checkpoint 的 `inference.py` 中有限且为正的 `DEFAULT_TEMPERATURE` 常量，不执行该文件。
-文件或常量缺失、读取/解析失败、数值非法时拒绝启动，不再套用其他模型的温度；自定义 checkpoint 需提供自己的校准常量。
+启动时按以下顺序确定决策校准温度：
+
+1. 显式 `--decision-temperature`，对应 Python `serve(..., decision_temperature=...)`。
+2. 已解析 checkpoint 的 `inference.py` 中有限且为正的 `DEFAULT_TEMPERATURE` 常量；用 AST 读取，不执行文件。
+3. 根据原始 `model_path` 的最后一级目录或仓库名匹配上表的温度，不区分大小写；仅精确匹配
+   `Intern-Decision-0.8B`、`Intern-Decision-2B` 和 `Intern-Decision-4B`，不使用 `--model-name` 服务别名判断。
+
+显式值非法时立即拒绝启动。checkpoint 常量缺失、读取/解析失败或数值非法时，尝试按路径匹配，采用该值时记录警告。
+所有来源都无法提供温度时拒绝启动，不使用统一默认值。自定义或改名 checkpoint 应显式指定温度或提供 `inference.py`；
+名称匹配本身不验证权重。例如，在启动命令中增加 `--decision-temperature 2.1` 即可覆盖两种自动策略。
+该参数要求同时启用 `--task intern-decision`，不影响普通生成的采样温度。
 
 只读共享对象 `DecisionContext` 仅保存标记 ID、答案符号 ID、图片 token ID 和温度，复用已有引擎资源初始化一次；
 对象存在即表示决策端点已启用。
@@ -161,7 +170,7 @@ choice/score 的选项 description 仍是字符串。例如：
 
 `model` 必填，接受 `/v1/models` 返回的服务模型名、`InternLM/<服务模型名>` 或
 `internlm/<转为小写的服务模型名>`，不用于切换权重。
-模型身份由 HTTP 端点处理，两种协议共用同一个 `DecisionContext` 和从 checkpoint 读取的温度。
+模型身份由 HTTP 端点处理，两种协议共用同一个 `DecisionContext` 和按上述优先级确定的温度。
 可选的 `safety_identifier` 接受最长 64 字符的字符串或 `null`，表示调用方提供的终端用户标识。
 本服务仅兼容接收并校验；它不是鉴权凭据，不进入提示，也不影响评分。
 其他消息角色、音频/视频/文件内容块、工具记录、缓存控制和未知字段均返回 422。

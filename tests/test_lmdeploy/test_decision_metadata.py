@@ -45,3 +45,49 @@ def test_remote_id_does_not_download_temperature(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match='Cannot read decision temperature'):
         resolve_temperature('organization/decision-model')
     download.assert_not_called()
+
+
+def test_explicit_temperature_overrides_metadata_and_model_name(tmp_path):
+    checkpoint = tmp_path / 'Intern-Decision-4B'
+    checkpoint.mkdir()
+    (checkpoint / 'inference.py').write_text('DEFAULT_TEMPERATURE = 2.1')
+    assert resolve_temperature(checkpoint, temperature=0.75) == 0.75
+    assert resolve_temperature(checkpoint) == 2.1
+    (checkpoint / 'inference.py').unlink()
+    assert resolve_temperature(checkpoint, temperature=0.75) == 0.75
+    assert resolve_temperature(checkpoint) == 1.99241824
+
+
+@pytest.mark.parametrize('temperature', [0, -1, float('nan'), float('inf'), True])
+def test_invalid_override_does_not_fall_through(tmp_path, temperature):
+    checkpoint = tmp_path / 'Intern-Decision-2B'
+    checkpoint.mkdir()
+    (checkpoint / 'inference.py').write_text('DEFAULT_TEMPERATURE = 2.1')
+    with pytest.raises(ValueError, match='temperature|Temperature'):
+        resolve_temperature(checkpoint, temperature=temperature)
+
+
+@pytest.mark.parametrize('name, expected', [
+    ('Intern-Decision-0.8B', 2.747760550703),
+    ('intern-decision-2b', 2.100509348278),
+    ('INTERN-DECISION-4B', 1.99241824),
+])
+@pytest.mark.parametrize('source', [None, 'DEFAULT_TEMPERATURE = -1'])
+def test_known_model_path_fallback(tmp_path, name, expected, source, monkeypatch):
+    from lmdeploy import intern_decision_encoding as encoding
+
+    checkpoint = tmp_path / name
+    checkpoint.mkdir()
+    if source is not None:
+        (checkpoint / 'inference.py').write_text(source)
+    warning = Mock()
+    monkeypatch.setattr(encoding.logger, 'warning', warning)
+    assert resolve_temperature(str(checkpoint) + '/') == expected
+    warning.assert_called_once()
+
+
+@pytest.mark.parametrize('name', ['Qwen3.5-4B', 'Intern-Decision-4B-custom', 'Intern-Decision-8B',
+                                'custom-Intern-Decision-2B', 'Intern-Decision-4B/checkpoint-100'])
+def test_unrecognized_model_paths_have_no_default(tmp_path, name):
+    with pytest.raises(ValueError, match='Unrecognized model path'):
+        resolve_temperature(tmp_path / name)

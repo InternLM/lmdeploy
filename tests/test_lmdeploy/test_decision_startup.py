@@ -104,15 +104,17 @@ def test_invalid_checkpoint_closes_engine(server_startup, tmp_path):
     ('0.8B', 2.747760550703), ('2B', 2.100509348278), ('4B', 1.99241824),
 ])
 @pytest.mark.parametrize('model_name', [None, 'custom-name'])
+@pytest.mark.parametrize('has_metadata', [False, True])
 def test_remote_checkpoint_uses_resolved_calibration(
-        server_startup, monkeypatch, tmp_path, size, temperature, model_name):
+        server_startup, monkeypatch, tmp_path, size, temperature, model_name, has_metadata):
     api_server, build, run = server_startup
     context = api_server.ServerContext()
     monkeypatch.setattr(api_server, 'ServerContext', lambda: context)
     monkeypatch.chdir(tmp_path)
     checkpoint = tmp_path / 'cached-snapshot'
     checkpoint.mkdir()
-    (checkpoint / 'inference.py').write_text(f'DEFAULT_TEMPERATURE = {temperature}')
+    if has_metadata:
+        (checkpoint / 'inference.py').write_text('DEFAULT_TEMPERATURE = 0.75')
     download = Mock(return_value=str(checkpoint))
     monkeypatch.setattr(api_server, 'get_model', download)
     model_id = f'internlm/Intern-Decision-{size}'
@@ -124,7 +126,7 @@ def test_remote_checkpoint_uses_resolved_calibration(
     download.assert_called_once_with(model_id, backend_config.download_dir, 'pinned-revision')
     assert build.call_args.kwargs['model_path'] == str(checkpoint)
     assert build.call_args.kwargs['model_name'] == (model_name or model_id)
-    assert context.decision_context.temperature == temperature
+    assert context.decision_context.temperature == (0.75 if has_metadata else temperature)
     run.assert_called_once()
 
 
@@ -133,7 +135,56 @@ def test_missing_calibration_closes_engine_without_starting_server(server_startu
     download = Mock(side_effect=AssertionError('Local checkpoints must not be downloaded'))
     monkeypatch.setattr(api_server, 'get_model', download)
     with pytest.raises(ValueError, match='Cannot read decision temperature'):
-        api_server.serve(str(tmp_path), task='intern-decision', generation_config='lmdeploy')
+        api_server.serve(str(tmp_path), model_name='Intern-Decision-4B',
+                         task='intern-decision', generation_config='lmdeploy')
     download.assert_not_called()
     build.return_value.close.assert_called_once()
     run.assert_not_called()
+
+
+def test_startup_explicit_calibration_without_metadata(server_startup, monkeypatch, tmp_path):
+    api_server, build, run = server_startup
+    context = api_server.ServerContext()
+    monkeypatch.setattr(api_server, 'ServerContext', lambda: context)
+    api_server.serve(str(tmp_path), task='intern-decision', decision_temperature=0.75,
+                     generation_config='lmdeploy')
+    assert context.decision_context.temperature == 0.75
+    assert 'decision_temperature' not in build.call_args.kwargs
+    run.assert_called_once()
+
+
+@pytest.mark.parametrize('temperature', [0, -1, float('nan'), float('inf'), True])
+def test_invalid_explicit_calibration_fails_before_engine(server_startup, temperature):
+    api_server, build, run = server_startup
+    with pytest.raises(ValueError, match='temperature|Temperature'):
+        api_server.serve('/unused', task='intern-decision', decision_temperature=temperature)
+    build.assert_not_called()
+    run.assert_not_called()
+
+
+def test_calibration_override_requires_decision_task(server_startup):
+    api_server, build, run = server_startup
+    with pytest.raises(ValueError, match='requires task'):
+        api_server.serve('/unused', decision_temperature=1.0)
+    build.assert_not_called()
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize('dp', [1, 2])
+def test_cli_forwards_decision_temperature(monkeypatch, dp):
+    import importlib
+
+    from lmdeploy.cli.serve import SubCliServe
+
+    parser = argparse.ArgumentParser()
+    monkeypatch.setattr(SubCliServe, 'subparsers', parser.add_subparsers())
+    SubCliServe.add_parser_api_server()
+    args = parser.parse_args(['api_server', '/models/checkpoint', '--task', 'intern-decision',
+                              '--decision-temperature', '0.75', '--dp', str(dp), '--max-batch-size', '2'])
+    target = 'api_server' if dp == 1 else 'launch_server'
+    module = importlib.import_module(f'lmdeploy.serve.openai.{target}')
+    launch = Mock()
+    monkeypatch.setattr(module, 'serve' if dp == 1 else 'launch_server', launch)
+    SubCliServe.api_server(args)
+    assert launch.call_args.kwargs['decision_temperature'] == 0.75
+    assert launch.call_args.kwargs['task'] == 'intern-decision'

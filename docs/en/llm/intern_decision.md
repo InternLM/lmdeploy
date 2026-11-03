@@ -46,9 +46,21 @@ and calibration metadata. An explicit `--model-name` is preserved; otherwise the
 service name. For example, use `internlm/Intern-Decision-2B` instead of the local path above, with
 `--model-name Intern-Decision-2B`.
 
-Startup reads a finite positive `DEFAULT_TEMPERATURE` constant from that checkpoint's `inference.py` using AST
-parsing, without executing the file. Missing, unreadable or invalid metadata prevents startup; no other model's
-temperature is substituted. Custom checkpoints must provide this constant for their own calibration.
+Startup resolves decision calibration in this order:
+
+1. Explicit `--decision-temperature` (Python `serve(..., decision_temperature=...)`).
+2. A finite positive `DEFAULT_TEMPERATURE` constant in the resolved checkpoint's `inference.py`, read using AST
+   parsing without executing the file.
+3. The known temperature in the table above, matched against the final directory/repository name of the original
+   `model_path`, case-insensitively. Only exact `Intern-Decision-0.8B`, `Intern-Decision-2B` and `Intern-Decision-4B`
+   names match; the served `--model-name` alias is not used.
+
+An invalid explicit value fails startup immediately. Missing, unreadable or invalid checkpoint metadata falls
+through to model-path matching with a warning when a match is used. If no source provides a temperature, startup
+fails instead of using a global default. Custom or renamed checkpoints should supply their calibration explicitly
+or in `inference.py`; matching a name does not verify the weights. For example, add `--decision-temperature 2.1`
+to the startup command to override both automatic sources. This parameter requires `--task intern-decision` and
+does not change ordinary generation sampling temperature.
 
 A read-only `DecisionContext` holds only the marker ID, answer-symbol IDs, image-token ID and temperature.
 It is initialized once from existing engine resources; its presence enables the decision endpoints.

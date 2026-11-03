@@ -84,7 +84,13 @@ class SubCliServe:
                             choices=['intern-decision'],
                             default=None,
                             help='Enable Intern-Decision scoring on the PyTorch backend. '
-                            'Read temperature from local checkpoint metadata, falling back to the 4B default.')
+                            'Resolve calibration from an explicit override, checkpoint metadata, '
+                            'or a known model path; otherwise fail startup.')
+        parser.add_argument('--decision-temperature',
+                            type=float,
+                            default=None,
+                            help='Finite positive decision calibration temperature. Requires --task intern-decision '
+                            'and overrides checkpoint metadata and known model-path calibration.')
         # common args
         ArgumentHelper.backend(parser)
         ArgumentHelper.log_level(parser)
@@ -368,6 +374,7 @@ class SubCliServe:
                 allowed_media_domains=args.allowed_media_domains,
                 generation_config=args.generation_config,
                 task=args.task,
+                decision_temperature=args.decision_temperature,
             )
         else:
             from lmdeploy.serve.openai.launch_server import launch_server
@@ -403,6 +410,7 @@ class SubCliServe:
                 allowed_media_domains=args.allowed_media_domains,
                 generation_config=args.generation_config,
                 task=args.task,
+                decision_temperature=args.decision_temperature,
             )
 
     @staticmethod
