@@ -123,8 +123,15 @@ def check_request(
     for field_name in ('ignore_eos', 'skip_special_tokens', 'include_stop_str_in_output'):
         if field_name in request.model_fields_set:
             chat_request_kwargs[field_name] = getattr(request, field_name)
-    effort = None if request.reasoning is None else request.reasoning.effort
-    if effort is not None:
+    # The Responses API runs without reasoning unless the request explicitly
+    # asks for it. Hybrid-thinking chat templates default to thinking
+    # enabled, so force enable_thinking=False when `reasoning` is absent
+    # (Sage-A1.5 F9: tight max_output_tokens budgets were exhausted inside
+    # the reasoning block, ending the response as incomplete).
+    if request.reasoning is None:
+        chat_request_kwargs['chat_template_kwargs'] = {'enable_thinking': False}
+    else:
+        effort = request.reasoning.effort
         if effort not in ('none', 'low', 'medium', 'high', 'max'):
             return None, error_response(
                 HTTPStatus.BAD_REQUEST,
