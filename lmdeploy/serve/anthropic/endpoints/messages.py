@@ -74,8 +74,14 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             return_token_ids=bool(request.return_token_ids),
             return_routed_experts=bool(request.return_routed_experts),
             include_stop_str_in_output=bool(request.include_stop_str_in_output),
-            chat_template_kwargs=(
-                {'enable_thinking': request.thinking.type != 'disabled'} if request.thinking is not None else None),
+            # The Anthropic Messages API keeps thinking disabled unless the
+            # request carries a thinking block, so map an absent thinking
+            # to enable_thinking=False instead of leaving the chat template
+            # default (enabled on hybrid-thinking models).
+            chat_template_kwargs={
+                'enable_thinking':
+                    request.thinking is not None and request.thinking.type != 'disabled'
+            },
         )
         try:
             chat_runner = await ChatRunner.prepare(
