@@ -11,6 +11,19 @@
 
 namespace turbomind::verification_attention {
 
+template<class T>
+struct MmaOperation;
+
+template<>
+struct MmaOperation<cutlass::half_t> {
+    using Type = cute::SM80_16x8x16_F32F16F16F32_TN;
+};
+
+template<>
+struct MmaOperation<cutlass::bfloat16_t> {
+    using Type = cute::SM80_16x8x16_F32BF16BF16F32_TN;
+};
+
 template<int HeadDim_, int MTile_>
 struct Sm90PolicyBase {
     using MmaTraits = cute::MMA_Traits<cute::SM80_16x8x16_F32F16F16F32_TN>;
@@ -41,6 +54,20 @@ struct Sm90Policy: Sm90PolicyBase<HeadDim_, MTile_> {
     static constexpr int PvNtile     = Base::PvNtile;
     static constexpr int KeyTile     = HeadDim == 128 ? 64 : 32;
     static constexpr int PvTileCount = HeadDim / PvNtile;
+
+    // Async KV pipeline (cp.async) + SM90 stmatrix probability store. These are
+    // the only arch-specific bits; the SM75 policy swaps them for sync copies
+    // while every other part of the generic kernel is shared verbatim.
+    static constexpr bool AsyncKV = true;
+
+    template<class T>
+    using KvCopyAtom = cute::Copy_Atom<cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<cute::uint128_t>, T>;
+
+    template<class T>
+    using StoreAtom = cute::Copy_Atom<cute::SM90_U32x4_STSM_N, T>;
+
+    template<class T>
+    using MmaOp = typename MmaOperation<T>::Type;
 
     using KvShape    = cute::Shape<cute::Int<KeyTile>, cute::Int<HeadDim>>;
     using ScoreShape = cute::Shape<cute::Int<MTile>, cute::Int<KeyTile>>;
@@ -76,33 +103,17 @@ using QTileCopy = VectorTileCopy<cute::Copy_Atom<cute::UniversalCopy<cute::uint1
                                  Policy>;
 
 template<class T, class Policy>
-using KvTileCopy = VectorTileCopy<
-    cute::Copy_Atom<cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<cute::uint128_t>, T>,
-    Policy::KeyTile,
-    Policy::HeadDim,
-    Policy>;
+using KvTileCopy =
+    VectorTileCopy<typename Policy::template KvCopyAtom<T>, Policy::KeyTile, Policy::HeadDim, Policy>;
 
 template<class T, class Policy>
 using OutputTileCopy = QTileCopy<T, Policy>;
-
-template<class T>
-struct MmaOperation;
-
-template<>
-struct MmaOperation<cutlass::half_t> {
-    using Type = cute::SM80_16x8x16_F32F16F16F32_TN;
-};
-
-template<>
-struct MmaOperation<cutlass::bfloat16_t> {
-    using Type = cute::SM80_16x8x16_F32BF16BF16F32_TN;
-};
 
 template<class T, class Policy>
 struct Sm90Mma {
     using AtomLayout = cute::Layout<
         cute::Shape<cute::Int<Policy::MmaAtomM>, cute::Int<Policy::MmaAtomN>, cute::_1>>;
-    using MmaOp      = typename MmaOperation<T>::Type;
+    using MmaOp      = typename Policy::template MmaOp<T>;
 
     using QK = decltype(cute::make_tiled_mma(
         MmaOp{},
@@ -121,8 +132,6 @@ struct Sm90Mma {
         cute::Copy_Atom<cute::SM75_U32x4_LDSM_N, T>{}, PV{}));
     using CopyPvBAtom = cute::Copy_Atom<cute::SM75_U16x8_LDSM_T, T>;
     using CopyPvB = decltype(cute::make_tiled_copy_B(CopyPvBAtom{}, PV{}));
-    using StoreProbability = decltype(cute::make_tiled_copy_C(
-        cute::Copy_Atom<cute::SM90_U32x4_STSM_N, T>{}, QK{}));
 };
 
 using SmemAtom = decltype(cute::composition(

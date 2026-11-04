@@ -36,7 +36,7 @@ CUTE_DEVICE float ReduceRowSum(float value)
     return value;
 }
 
-template<class T, class Policy, bool StorePartial>
+template<class T, class Policy, bool StorePartial, class Tkv = T>
 struct VerificationAttentionMainloop {
     Arguments                 arguments;
     SharedStorage<T, Policy>& storage;
@@ -58,8 +58,8 @@ struct VerificationAttentionMainloop {
         using QueryCopy    = QTileCopy<T, Policy>;
         using KeyValueCopy = KvTileCopy<T, Policy>;
 
-        static_assert(KeyValueCopy::AccessCount == (Policy::Threads == 256 ? 4 : 8));
-        static_assert(Policy::Stages == 3);
+        static_assert(KeyValueCopy::AccessCount >= 1);
+        static_assert(Policy::Stages >= 1);
 
         using QLayout  = SmemLayout2D<Policy::MTile, Policy::HeadDim>;
         using KVLayout = SmemLayout3D<Policy::KeyTile, Policy::HeadDim, Policy::Stages>;
@@ -241,66 +241,34 @@ struct VerificationAttentionMainloop {
         // Q and K share storage; finish every Q read before staging K.
         __syncthreads();
 
-        PagedKv<T, Policy::HeadDim> cache(arguments.block_ptrs,
-                                          arguments.block_ptr_offsets,
-                                          request,
-                                          kv_head,
-                                          arguments.kv_head_count,
-                                          arguments.block_len,
-                                          arguments.block_len_divmod,
-                                          arguments.cache_block_offset);
+        PagedKv<T, Policy::HeadDim, Tkv> cache(arguments.block_ptrs,
+                                               arguments.block_ptr_offsets,
+                                               request,
+                                               kv_head,
+                                               arguments.kv_head_count,
+                                               arguments.block_len,
+                                               arguments.block_len_divmod,
+                                               arguments.cache_block_offset);
 
-        const int split_tile_count = last_tile - first_tile;
-        int issued_tiles       = 0;
-        int consumed_tiles     = 0;
-        int outstanding_groups = 0;
-        int read_stage         = 0;
-        int write_stage        = 0;
-
-        CUTE_UNROLL
-        for (int prologue = 0; prologue < Policy::Stages - 1; ++prologue) {
-            if (prologue < split_tile_count) {
-                const int load_tile      = first_tile + issued_tiles;
-                const int load_key_begin = load_tile * Policy::KeyTile;
-                auto shared_k_write = shared_k(cute::_, cute::_, write_stage);
-                auto shared_v_write = shared_v(cute::_, cute::_, write_stage);
-                copy_paged_tile<false, T, Policy>(cache, load_key_begin, key_length, shared_k_write);
-                copy_paged_tile<true, T, Policy>(cache, load_key_begin, key_length, shared_v_write);
-                cute::cp_async_fence();
-                ++issued_tiles;
-                ++outstanding_groups;
-                write_stage = (write_stage + 1) % Policy::Stages;
-            }
-        }
-
-        for (; consumed_tiles < split_tile_count; ++consumed_tiles) {
-            if (outstanding_groups == 1) {
-                cute::cp_async_wait<0>();
+        // Load one KV tile into smem stage: fp16 direct, or int4 with dequant.
+        auto issue_load = [&](int key_begin, int stage) {
+            if constexpr (std::is_same_v<Tkv, T>) {
+                auto kw = shared_k(cute::_, cute::_, stage);
+                auto vw = shared_v(cute::_, cute::_, stage);
+                copy_paged_tile<false, T, Policy>(cache, key_begin, key_length, kw);
+                copy_paged_tile<true, T, Policy>(cache, key_begin, key_length, vw);
             }
             else {
-                cute::cp_async_wait<1>();
+                copy_paged_tile_u4<false, T, Policy>(cache, key_begin, key_length, shared_k, stage);
+                copy_paged_tile_u4<true, T, Policy>(cache, key_begin, key_length, shared_v, stage);
             }
-            __syncthreads();
-            --outstanding_groups;
+        };
 
-            const int current_tile      = first_tile + consumed_tiles;
+        const int split_tile_count = last_tile - first_tile;
+        auto process_tile = [&](int current_tile, int read_stage) {
             const int current_key_begin = current_tile * Policy::KeyTile;
             auto shared_k_read = shared_k(cute::_, cute::_, read_stage);
             auto shared_v_read = shared_v(cute::_, cute::_, read_stage);
-
-            if (issued_tiles < split_tile_count) {
-                const int load_tile      = first_tile + issued_tiles;
-                const int load_key_begin = load_tile * Policy::KeyTile;
-                auto shared_k_write = shared_k(cute::_, cute::_, write_stage);
-                auto shared_v_write = shared_v(cute::_, cute::_, write_stage);
-                copy_paged_tile<false, T, Policy>(cache, load_key_begin, key_length, shared_k_write);
-                copy_paged_tile<true, T, Policy>(cache, load_key_begin, key_length, shared_v_write);
-                cute::cp_async_fence();
-                ++issued_tiles;
-                ++outstanding_groups;
-                write_stage = (write_stage + 1) % Policy::Stages;
-            }
-
             auto score_identity = cute::make_identity_tensor(typename Policy::ScoreShape{});
             auto score_coordinates = thread_mma_qk.partition_C(score_identity);
             auto score_fragment = thread_mma_qk.make_fragment_C(score_coordinates);
@@ -384,11 +352,24 @@ struct VerificationAttentionMainloop {
                 running_max[row] = new_max[row];
             }
 
-            auto store_p        = typename Mma::StoreProbability{};
-            auto thread_store_p = store_p.get_thread_slice(threadIdx.x);
-            cute::copy(store_p,
-                       thread_store_p.retile_S(probability_store_fragment),
-                       thread_store_p.partition_D(shared_probability));
+            if constexpr (Policy::AsyncKV) {
+                // SM90: stmatrix store of the probability fragment.
+                auto store_p = cute::make_tiled_copy_C(typename Policy::template StoreAtom<T>{}, typename Mma::QK{});
+                auto thread_store_p = store_p.get_thread_slice(threadIdx.x);
+                cute::copy(store_p,
+                           thread_store_p.retile_S(probability_store_fragment),
+                           thread_store_p.partition_D(shared_probability));
+            }
+            else {
+                // SM75: no stmatrix -> elementwise store through the P smem layout.
+                constexpr PLayout p_layout{};
+                CUTE_UNROLL
+                for (int i = 0; i < cute::size(score_fragment); ++i) {
+                    const auto mk = score_coordinates(i);
+                    storage.body.probability[p_layout(cute::get<0>(mk), cute::get<1>(mk))] =
+                        probability_store_fragment(i);
+                }
+            }
             __syncthreads();
 
             auto probability_fragment = thread_mma_pv.partition_fragment_A(shared_probability);
@@ -423,8 +404,69 @@ struct VerificationAttentionMainloop {
                 cute::gemm(thread_mma_pv, probability_fragment, value_fragment, output_tile);
             }
 
+        };
+
+        if constexpr (Policy::AsyncKV) {
+        int issued_tiles       = 0;
+        int consumed_tiles     = 0;
+        int outstanding_groups = 0;
+        int read_stage         = 0;
+        int write_stage        = 0;
+
+        CUTE_UNROLL
+        for (int prologue = 0; prologue < Policy::Stages - 1; ++prologue) {
+            if (prologue < split_tile_count) {
+                const int load_tile      = first_tile + issued_tiles;
+                const int load_key_begin = load_tile * Policy::KeyTile;
+                issue_load(load_key_begin, write_stage);
+                if constexpr (Policy::AsyncKV) {
+                    cute::cp_async_fence();
+                }
+                ++issued_tiles;
+                ++outstanding_groups;
+                write_stage = (write_stage + 1) % Policy::Stages;
+            }
+        }
+
+        for (; consumed_tiles < split_tile_count; ++consumed_tiles) {
+            if constexpr (Policy::AsyncKV) {
+                if (outstanding_groups == 1) {
+                    cute::cp_async_wait<0>();
+                }
+                else {
+                    cute::cp_async_wait<1>();
+                }
+            }
+            __syncthreads();
+            --outstanding_groups;
+
+
+            if (issued_tiles < split_tile_count) {
+                const int load_tile      = first_tile + issued_tiles;
+                const int load_key_begin = load_tile * Policy::KeyTile;
+                issue_load(load_key_begin, write_stage);
+                if constexpr (Policy::AsyncKV) {
+                    cute::cp_async_fence();
+                }
+                ++issued_tiles;
+                ++outstanding_groups;
+                write_stage = (write_stage + 1) % Policy::Stages;
+            }
+
+            process_tile(first_tile + consumed_tiles, read_stage);
             __syncthreads();
             read_stage = (read_stage + 1) % Policy::Stages;
+        }
+        }
+        else {
+            for (int consumed_tiles = 0; consumed_tiles < split_tile_count; ++consumed_tiles) {
+                const int current_tile      = first_tile + consumed_tiles;
+                const int load_key_begin    = current_tile * Policy::KeyTile;
+                issue_load(load_key_begin, 0);
+                __syncthreads();
+                process_tile(current_tile, 0);
+                __syncthreads();
+            }
         }
         }
 
@@ -485,15 +527,13 @@ struct VerificationAttentionMainloop {
     }
 };
 
-template<class T, class Policy, bool StorePartial>
+template<class T, class Policy, bool StorePartial, class Tkv = T>
 __global__ __maxnreg__(Policy::HeadDim == 128 ? 209 : 255)
 void VerificationAttentionKernel(Arguments arguments)
 {
     extern __shared__ char dynamic_shared[];
     auto& storage = *reinterpret_cast<SharedStorage<T, Policy>*>(dynamic_shared);
-    VerificationAttentionMainloop<T, Policy, StorePartial>{arguments, storage}.run();
+    VerificationAttentionMainloop<T, Policy, StorePartial, Tkv>{arguments, storage}.run();
 }
-
-void Reduce(const Arguments& arguments);
 
 }  // namespace turbomind::verification_attention

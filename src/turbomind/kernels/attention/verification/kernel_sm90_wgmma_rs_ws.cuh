@@ -26,6 +26,10 @@ struct Sm90WgmmaRsWsCopyPolicy {
     static constexpr int KeyTile = 64;
 
     using KvShape = cute::Shape<cute::_64, cute::_256>;
+
+    static constexpr bool AsyncKV = true;
+    template<class T>
+    using KvCopyAtom = cute::Copy_Atom<cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<cute::uint128_t>, T>;
 };
 
 template<class T>

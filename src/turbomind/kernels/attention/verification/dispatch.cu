@@ -4,10 +4,15 @@
 #include "src/turbomind/kernels/attention/verification/kernel_sm90_wgmma.cuh"
 #include "src/turbomind/kernels/attention/verification/kernel_sm90_wgmma_rs.cuh"
 #include "src/turbomind/kernels/attention/verification/kernel_sm90_wgmma_rs_ws.cuh"
+#include "src/turbomind/kernels/attention/verification/reduce.cuh"
 
 #include <algorithm>
 
 namespace turbomind::verification_attention {
+
+// SM90-specific entry points. Unchanged; the host dispatcher in dispatch_arch.cc
+// selects these for arch>=90.
+namespace sm90 {
 
 bool supports(const Capability& c)
 {
@@ -106,5 +111,7 @@ void run(const Arguments& arguments)
         Reduce(arguments);
     }
 }
+
+}  // namespace sm90
 
 }  // namespace turbomind::verification_attention

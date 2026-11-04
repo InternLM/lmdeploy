@@ -21,6 +21,8 @@
 
 #include "src/turbomind/engine/block.h"
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <math.h>
 #include <numeric>
@@ -753,6 +755,8 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
         a.rope                = writer.rope_param;
         a.partial_o           = partial_O_.data();
         a.partial_ml          = partial_ML_.data();
+        a.arch                = arch_;
+        a.quant_policy        = quant_policy_;
         a.data_type           = dtype;
         a.stream              = stream;
 

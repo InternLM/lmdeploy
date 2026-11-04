@@ -1,4 +1,9 @@
 // Copyright (c) OpenMMLab. All rights reserved.
+//
+// Split-KV reduction for the verification-attention path. Arch-neutral
+// (cub BlockReduce only) so it is shared by the SM90 and SM75 verification
+// libraries via this `inline` header (no duplicate symbols).
+#pragma once
 
 #include "src/turbomind/kernels/attention/verification/kernel_sm80.cuh"
 
@@ -98,7 +103,7 @@ __global__ void ReduceSplits(T*           out_ptr,
 }
 
 template<class T>
-void DispatchReduce(const Arguments& arguments)
+inline void DispatchReduce(const Arguments& arguments)
 {
     dim3 grid(arguments.query_count, arguments.query_head_count);
     if (arguments.head_dim == 128) {
@@ -123,7 +128,7 @@ void DispatchReduce(const Arguments& arguments)
     }
 }
 
-void Reduce(const Arguments& arguments)
+inline void Reduce(const Arguments& arguments)
 {
     if (arguments.data_type == DataType::kHalf) {
         DispatchReduce<cutlass::half_t>(arguments);

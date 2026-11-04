@@ -3,16 +3,19 @@
 #pragma once
 
 #include <cute/tensor.hpp>
+#include <cuda_fp16.h>
 
 #include "src/turbomind/kernels/attention/block.h"
+#include "src/turbomind/kernels/attention/quantization.h"
 #include "src/turbomind/kernels/attention/verification/policy_sm90.cuh"
+#include "src/turbomind/kernels/core/array_ops.h"
 
 namespace turbomind::verification_attention {
 
-template<class T, int HeadDim>
+template<class T, int HeadDim, class Tkv = T>
 class PagedKv {
 public:
-    using Config = block::Config<T, T, HeadDim, false>;
+    using Config = block::Config<T, Tkv, HeadDim, false>;
     using Layout = block::Layout<Config>;
 
     CUTE_DEVICE PagedKv(char* const* block_ptrs,
@@ -58,6 +61,32 @@ public:
                 cute::make_stride(cute::Int<HeadDim>{}, cute::_1{})));
     }
 
+    // --- int4 (uint4) KV accessors: packed 4-bit data + per-token {scale,zero} ---
+
+    template<bool Value>
+    CUTE_DEVICE uint4_t* data(int token) const
+    {
+        int page_index;
+        int page_token;
+        block_len_divmod_(page_index, page_token, token);
+        char*      page        = pages_[page_index];
+        const auto byte_offset = Value ? layout_.v_data(kv_head_, page_token) :
+                                         layout_.k_data(kv_head_, page_token);
+        return reinterpret_cast<uint4_t*>(page + cache_block_offset_ + byte_offset);
+    }
+
+    template<bool Value>
+    CUTE_DEVICE T* param(int token) const
+    {
+        int page_index;
+        int page_token;
+        block_len_divmod_(page_index, page_token, token);
+        char*      page        = pages_[page_index];
+        const auto byte_offset = Value ? layout_.v_param(kv_head_, page_token) :
+                                         layout_.k_param(kv_head_, page_token);
+        return reinterpret_cast<T*>(page + cache_block_offset_ + byte_offset);
+    }
+
 private:
     char* const* pages_;
     Layout       layout_;
@@ -65,6 +94,44 @@ private:
     cutlass::FastDivmod block_len_divmod_;
     int          cache_block_offset_;
 };
+
+// Dequantising int4 KV tile copy: read packed 4-bit codes + per-token {scale,zero},
+// dequantise with the shared ConvertKvCache<uint4_t,half> 8-wide path, and store
+// the resulting half values into the swizzled smem tile [KeyTile, HeadDim, Stages].
+template<bool Value, class T, class Policy, class SmemTensor>
+CUTE_DEVICE void copy_paged_tile_u4(const PagedKv<T, Policy::HeadDim, uint4_t>& cache,
+                                    int                                        key_begin,
+                                    int                                        key_limit,
+                                    SmemTensor                                 destination,
+                                    int                                        stage)
+{
+    constexpr int HeadDim = Policy::HeadDim;
+    constexpr int KeyTile = Policy::KeyTile;
+    constexpr int kChunks = HeadDim / 8;  // 8 codes per uint32
+
+    const int tid  = threadIdx.x;
+    const int nthr = Policy::Threads;
+
+    for (int idx = tid; idx < KeyTile * kChunks; idx += nthr) {
+        const int key_in_tile = idx / kChunks;
+        const int c           = idx % kChunks;
+        const int key         = key_begin + key_in_tile;
+        const int rkey        = key < key_limit ? key : key_begin;
+
+        const T* param = cache.template param<Value>(rkey);
+        const half* scale_zero = reinterpret_cast<const half*>(param);
+        ConvertKvCache<uint4_t, half> conv{scale_zero[0], scale_zero[1]};
+
+        const uint4_t* row = cache.template data<Value>(rkey);
+        const uint32_t word = *reinterpret_cast<const uint32_t*>(reinterpret_cast<const char*>(row) + c * 4);
+        Array<uint4_t, 8> vi = reinterpret_cast<const Array<uint4_t, 8>&>(word);
+        auto              vo = conv(vi);  // Array<half, 8>
+        PRAGMA_UNROLL
+        for (int j = 0; j < 8; ++j) {
+            destination(key_in_tile, c * 8 + j, stage) = T(vo[j]);
+        }
+    }
+}
 
 template<bool Value, class T, class Policy, class SmemTensor>
 CUTE_DEVICE void copy_paged_tile(const PagedKv<T, Policy::HeadDim>& cache,
@@ -94,7 +161,15 @@ CUTE_DEVICE void copy_paged_tile(const PagedKv<T, Policy::HeadDim>& cache,
         auto source = cute::make_tensor(
             cute::make_gmem_ptr(&source_row(d_begin)),
             cute::make_layout(cute::Int<Copy::ValuesPerAccess>{}));
-        cute::copy(copy_atom.with(valid), source, destinations(cute::_, access));
+        // Async (cp.async) atoms support per-access predication (zero-fill); the
+        // synchronous SM75 path reads the clamped source row instead — invalid
+        // entries are masked in the softmax (K) / weighted by 0 (V).
+        if constexpr (Policy::AsyncKV) {
+            cute::copy(copy_atom.with(valid), source, destinations(cute::_, access));
+        }
+        else {
+            cute::copy(copy_atom, source, destinations(cute::_, access));
+        }
     }
 }
 

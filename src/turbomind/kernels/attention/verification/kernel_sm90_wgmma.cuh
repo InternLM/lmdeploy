@@ -47,6 +47,10 @@ struct Sm90WgmmaPolicy256 {
 
     using QShape  = cute::Shape<cute::Int<MTile>, cute::Int<HeadDim>>;
     using KvShape = cute::Shape<cute::Int<KeyTile>, cute::Int<HeadDim>>;
+
+    static constexpr bool AsyncKV = true;
+    template<class T>
+    using KvCopyAtom = cute::Copy_Atom<cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<cute::uint128_t>, T>;
 };
 
 template<class T, int MTile>

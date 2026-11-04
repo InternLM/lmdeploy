@@ -48,9 +48,16 @@ struct Arguments {
     float* partial_o{};
     float* partial_ml{};
 
+    int          arch{};          // SM version (75, 80, 90, ...); drives kernel selection
+    int          quant_policy{};  // 0 = fp16 KV, 4 = int4 KV
     DataType     data_type{};
     cudaStream_t stream{};
 };
+
+inline bool IsSm75(const Arguments& arguments)
+{
+    return arguments.arch > 0 && arguments.arch < 80;
+}
 
 struct Capability {
     int      arch{};
@@ -112,11 +119,20 @@ inline bool UsesRuntimeWgmmaM(const Arguments& arguments)
 inline int CtaM(const Arguments& arguments)
 {
     const int m = arguments.max_query_length * arguments.query_group_size;
+    if (IsSm75(arguments)) {
+        // The generic mainloop assumes exactly two M-rows per thread, which
+        // holds for MTile>=64 (the SM90-validated tiling). Always use 64; larger
+        // m is handled by M-slices (m_begin), not a wider tile.
+        return 64;
+    }
     return m <= 64 ? 64 : 128;
 }
 
 inline int KeyTile(const Arguments& arguments)
 {
+    if (IsSm75(arguments)) {
+        return arguments.head_dim == 128 ? 32 : 16;
+    }
     return arguments.head_dim == 128 || UsesRuntimeWgmmaM(arguments) ? 64 : 32;
 }
 
