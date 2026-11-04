@@ -456,10 +456,13 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
                 gated_delta_meta, kv_ratio, use_qk_l2norm_in_kernel)
         meta = gated_delta_meta
         ids = meta.ssm_state_meta
+        # Indexed requests without history read the immutable zero-state unit.
+        # Keep their real gate: a -1e6 reset loses the smaller decays when FLA
+        # forms FP32 cumulative sums in the first chunk.
         query, key, g, beta, normalized = self.prepare_inputs(
             query, key, b, a, dt_bias, a_log_exp, kv_ratio,
             use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, is_decoding=meta.is_decoding,
-            init_token_mask=meta.is_init_token)
+            init_token_mask=None)
         if meta.is_decoding:
             batch, width = ids.output_state_ids.shape
             q, k, v, g, beta = [x[0].unflatten(0, (batch, width)).contiguous()
