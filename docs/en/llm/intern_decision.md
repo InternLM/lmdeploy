@@ -41,7 +41,7 @@ subsequent PR revisions. PyTorch 2.10.0+cu128, Transformers 5.6.2, FLA 0.5.2, Tr
 and TileLang 0.1.11; checkpoint temperatures are listed above.
 
 Seven-suite **unweighted mean** accuracy, compared with the
-[fixed official results](https://github.com/InternLM/Intern-Decision/blob/c7c2535c29830cb69495c8e66a598303ac2cdcf7/README.md#benchmark-accuracy):
+[fixed official results](https://github.com/InternLM/Intern-Decision/blob/565350244af860e1c276768cd80bdd9b8be93913/README.md#benchmark-accuracy):
 
 | Model | Official | LMDeploy | Difference (percentage points) |
 | --- | ---: | ---: | ---: |
@@ -66,7 +66,7 @@ Calibration metrics below cover **Jevbench-Hard only (111 fields)**, not the sep
 | 2B | 0.437256 | 0.437578 | 0.100208 | 0.071510 |
 | 4B | 0.346762 | 0.347182 | 0.065267 | 0.081564 |
 
-The [versioned evidence bundle](https://github.com/zzwwrr/lmdeploy-working/tree/e427ea9bc58517308125f7ce767bab4298d63edd/pr5075-a100) provides all raw responses, per-suite metrics,
+The [versioned evidence bundle](https://github.com/zzwwrr/lmdeploy-working/tree/5dbb32bd58ae03b6bb51e01e94ec66b068c5b374/pr5075-a100) provides all raw responses, per-suite metrics,
 original metadata and source patch, artifact hashes, the historical inference harness,
 and CPU-only audit/rescoring commands. All three models' seven-suite accuracies and Hard
 Brier/ECE were reproduced from the saved responses using the pinned official scorer before publication.

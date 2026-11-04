@@ -35,7 +35,7 @@ session/prefill 上限 8192，启用 piecewise CUDA graphs。每个模型完成 
 依赖为 PyTorch 2.10.0+cu128、Transformers 5.6.2、FLA 0.5.2、Triton 3.6.0、TileLang 0.1.11；
 使用上表列出的各 checkpoint 校准温度。
 
-七套准确率的**不加权平均**，与[固定版本的官方结果](https://github.com/InternLM/Intern-Decision/blob/c7c2535c29830cb69495c8e66a598303ac2cdcf7/README.md#benchmark-accuracy)对照：
+七套准确率的**不加权平均**，与[固定版本的官方结果](https://github.com/InternLM/Intern-Decision/blob/565350244af860e1c276768cd80bdd9b8be93913/README.md#benchmark-accuracy)对照：
 
 | 模型 | 官方 | LMDeploy | 差值（百分点） |
 | --- | ---: | ---: | ---: |
@@ -60,7 +60,7 @@ Brier/ECE 越低越好，ECE 使用官方评分器的十个分桶。
 | 2B | 0.437256 | 0.437578 | 0.100208 | 0.071510 |
 | 4B | 0.346762 | 0.347182 | 0.065267 | 0.081564 |
 
-[固定版本的复现材料](https://github.com/zzwwrr/lmdeploy-working/tree/e427ea9bc58517308125f7ce767bab4298d63edd/pr5075-a100)包含全部原始响应、各套评分结果、原始运行元数据和源码补丁、
+[固定版本的复现材料](https://github.com/zzwwrr/lmdeploy-working/tree/5dbb32bd58ae03b6bb51e01e94ec66b068c5b374/pr5075-a100)包含全部原始响应、各套评分结果、原始运行元数据和源码补丁、
 文件哈希、历史推理脚本，以及无需 GPU 的审计和重新评分命令。发布前已使用固定版本的官方评分器，
 从保存的响应复算三档模型全部七套准确率及 Hard Brier/ECE，结果一致。
 材料分支同时保留实测的 753 个生产 Python 文件，并校验其哈希。
