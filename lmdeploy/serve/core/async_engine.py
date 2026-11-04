@@ -605,7 +605,13 @@ class AsyncEngine:
             metrics_processor.increase_total_requests()
             metrics_processor.increase_failed_requests('error')
             remove_session()
-            raise RequestError(ErrorCode.PREPROCESS_FAILED) from e
+            detail = repr(e)
+            filename = getattr(e, 'filename', None)
+            if filename:
+                detail = f'{detail}: {filename}'
+            raise RequestError(
+                ErrorCode.PREPROCESS_FAILED,
+                f'Request preprocessing failed: {detail}') from e
 
     @staticmethod
     def _request_error_from_status(status: ResponseType) -> RequestError:
