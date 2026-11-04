@@ -144,13 +144,17 @@ def test_http_domain_policy_preserved(http_service):
     assert not context.async_engine.requests
 
 
-@pytest.mark.parametrize('data', [image_bytes(fmt='BMP'), b'x' * (10 * 1024**2 + 1)])
-def test_downloaded_images_use_same_limits(http_service, monkeypatch, data):
+@pytest.mark.parametrize('data, encoding', [
+    (image_bytes(fmt='BMP'), 'identity'), (b'x' * (10 * 1024**2 + 1), 'identity'),
+    (image_bytes(), 'gzip'),
+])
+def test_downloaded_images_use_same_limits(http_service, monkeypatch, data, encoding):
     from lmdeploy.vl.media import connection
 
     monkeypatch.setattr(connection, '_is_safe_url', lambda url: (True, 'test transport'))
     monkeypatch.setattr(connection.requests.Session, 'get', lambda *args, **kwargs: SimpleNamespace(
-        is_redirect=False, content=data, raise_for_status=lambda: None))
+        is_redirect=False, headers={'Content-Encoding': encoding}, close=lambda: None, raise_for_status=lambda: None,
+        iter_content=lambda chunk_size: (data[i:i + chunk_size] for i in range(0, len(data), chunk_size))))
     client, context = http_service
     body = request()
     body['input'] = [dict(role='user', content=[
@@ -158,6 +162,8 @@ def test_downloaded_images_use_same_limits(http_service, monkeypatch, data):
     response = client.post('/v1/decisions', json=body)
     assert response.status_code == 422
     assert response.json()['error']['details'][0]['field'] == 'input.0.content.0.image_url'
+    if encoding == 'gzip':
+        assert 'Content-Encoding' in response.json()['error']['details'][0]['message']
     assert not context.async_engine.requests
 
 

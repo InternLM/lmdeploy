@@ -89,7 +89,8 @@ def prepare_decision_images(image_inputs, *, allowed_media_domains=None):
                     header, _, data = url.partition(',')
                     images[url] = loader.load_base64(header[5:].split(';')[0], data)
                 else:
-                    images[url] = load_from_url(url, loader, allowed_media_domains=allowed_media_domains)
+                    images[url] = load_from_url(url, loader, allowed_media_domains=allowed_media_domains,
+                                                max_download_bytes=loader.max_bytes)
             except (ValueError, RequestException) as exc:
                 if isinstance(exc, RequestException):
                     exc = ValueError('Could not download image.')
