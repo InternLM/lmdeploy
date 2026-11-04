@@ -1225,7 +1225,10 @@ def test_messages_forwards_thinking_to_template_and_parser(stream, thinking_type
     else:
         status = _post_messages(client, **options).status_code
     assert status == 200
-    expected = None if thinking_type is None else {'enable_thinking': thinking_type != 'disabled'}
+    # The Messages API treats thinking as opt-in: an absent thinking block
+    # maps to enable_thinking=False instead of the template default.
+    expected = ({'enable_thinking': False} if thinking_type is None else
+                {'enable_thinking': thinking_type != 'disabled'})
     assert context.async_engine.preprocess_calls[0][1]['chat_template_kwargs'] == expected
 
 
