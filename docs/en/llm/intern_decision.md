@@ -26,9 +26,125 @@ and `images`; it does not accept the former native request format or emit its re
 All three checkpoints share the parser and scoring implementation. Local checkpoint metadata, tokenizer and
 processor checks cover all three sizes; these CPU checks do not load model weights or establish GPU accuracy
 or latency parity. Full-weight text evaluation on A100 covers all three sizes (seven suites, 10,751 requests /
-12,351 decision fields per model). These checks do not
-establish numerical parity with the published reference or full-image GPU accuracy. The tested GPU precision
+12,351 decision fields per model). These checks do not establish numerical parity with the published reference.
+Additional full-weight text and image results for 4B are reported in the H200 section below. The tested GPU precision
 is BF16; quantized decision scoring has not been validated. TurboMind decision scoring and a Python Pipeline decision entry point are not supported.
+
+## A100 text quality evaluation
+
+Historical run on 2026-11-03: one A100-SXM4-80GB, BF16/TP1, cache OFF, concurrency 8,
+max batch 8, session/prefill limits 8192 and piecewise CUDA graphs. Each model completed
+10,751 requests / 12,351 decision fields with no failed requests. The harness calls the
+production Systemone scoring handler directly; it does not exercise HTTP transport or middleware.
+The evaluated source is `cda4c3b5` (recorded as `3df76b5b` plus the saved patch), not a rerun of
+subsequent PR revisions. PyTorch 2.10.0+cu128, Transformers 5.6.2, FLA 0.5.2, Triton 3.6.0,
+and TileLang 0.1.11; checkpoint temperatures are listed above.
+
+Seven-suite **unweighted mean** accuracy, compared with the
+[fixed official results](https://github.com/InternLM/Intern-Decision/blob/c7c2535c29830cb69495c8e66a598303ac2cdcf7/README.md#benchmark-accuracy):
+
+| Model | Official | LMDeploy | Difference (percentage points) |
+| --- | ---: | ---: | ---: |
+| 0.8B | 79.38% | 79.1617% | -0.2183 |
+| 2B | 84.68% | 84.9129% | +0.2329 |
+| 4B | 90.02% | 89.8408% | -0.1792 |
+
+Per-suite LMDeploy accuracy (%):
+
+| Model | Jevbench Easy | Original | Hard | Typed Decision | ToolACE | AG News | WildJailbreak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.8B | 97.9167 | 79.1667 | 53.1532 | 77.4500 | 94.5161 | 88.6711 | 63.2579 |
+| 2B | 100.0000 | 84.7222 | 65.7658 | 79.3000 | 96.4516 | 89.9605 | 78.1900 |
+| 4B | 100.0000 | 98.6111 | 72.9730 | 80.3000 | 96.4516 | 90.7763 | 89.7738 |
+
+Calibration metrics below cover **Jevbench-Hard only (111 fields)**, not the separate
+96-case distribution pilot. Lower Brier/ECE is better; ECE uses the official scorer's ten bins.
+
+| Model | Official Brier | LMDeploy Brier | Official ECE | LMDeploy ECE |
+| --- | ---: | ---: | ---: | ---: |
+| 0.8B | 0.529519 | 0.529083 | 0.065710 | 0.091346 |
+| 2B | 0.437256 | 0.437578 | 0.100208 | 0.071510 |
+| 4B | 0.346762 | 0.347182 | 0.065267 | 0.081564 |
+
+The [versioned evidence bundle](https://github.com/zzwwrr/lmdeploy-working/tree/e427ea9bc58517308125f7ce767bab4298d63edd/pr5075-a100) provides all raw responses, per-suite metrics,
+original metadata and source patch, artifact hashes, the historical inference harness,
+and CPU-only audit/rescoring commands. All three models' seven-suite accuracies and Hard
+Brier/ECE were reproduced from the saved responses using the pinned official scorer before publication.
+The evidence branch also preserves all 753 evaluated production Python files and verifies their hashes.
+
+These are measured differences from published reference results, not proof of numerical equivalence.
+The test does not validate images on GPU, mixed generation/scoring batches, quantization, HTTP
+cancellation or current-head full-weight accuracy. Performance comparisons are reported separately.
+
+## H200 4B quality evaluation
+
+The following results summarize the archived 2026-10-30 to 2026-11-03 runs of Intern-Decision-4B
+on a single H200, using BF16 and calibration temperature `1.99241824`. The model revision is
+`38c9dafbbef52dd04bae943c0c6ac918419adfd5`. H200 full-weight results for 0.8B and 2B are not available.
+The A100 results above and H200 results below are separate runs with their own software and settings.
+
+### Evaluated configurations
+
+| Evaluation | Configuration |
+| --- | --- |
+| Seven suites / SuperGLUE | TP1, prefix cache OFF, concurrency 8, max batch 64, session/prefill 16384, piecewise CUDA graphs up to 8192 tokens |
+| RACE/MultiRC multi-field reference | TP1, prefix cache ON/OFF, accuracy concurrency 1, max batch 128, session 16384, prefill 8192 |
+| Two-protocol 2,000-request set / images | TP1, prefix cache ON, accuracy concurrency 1, max batch 128, session 16384, prefill/graph limit 8192 |
+
+The LMDeploy environment snapshot records PyTorch 2.10.0, Transformers 5.14.1, FLA 0.5.2,
+TileLang 0.1.11, Triton 3.6.0 and CUDA runtime 12.8. Later runs do not each have a complete package freeze.
+The comparison uses the vLLM deployment adapter at `a8fe089c73472acc728102ac3f271f96f2398352`
+with vLLM 0.28.0. The HF multi-field reference uses `Intern-Decision@3572c8a68b5df5dafe02d0e093989ba8ec0183bc`,
+BF16, batch 1, SDPA and `use_cache=False`. Test launchers also apply configuration overrides,
+tokenizer alignment and tracing; these wrappers are part of the evaluated setup.
+
+### Seven suites and calibration
+
+Each backend completed 10,751 requests / 12,351 decision fields with zero HTTP failures, timeouts
+or automatic retries. The scorer is `jevbench@7ce310c7262ed49cc85853339a8a42459298e3f3`.
+Accuracy includes failed fields as incorrect; there were none in this run. The official column uses the
+[published 4B results](https://github.com/InternLM/Intern-Decision/blob/565350244af860e1c276768cd80bdd9b8be93913/README.md)
+at their published precision.
+
+| Suite | Fields | Official (%) | LMDeploy PyTorch (%) | vLLM adapter (%) |
+| --- | ---: | ---: | ---: | ---: |
+| Jevbench Easy | 48 | 100 | 100.0000 | 100.0000 |
+| Jevbench Original | 72 | 98.61 | 98.6111 | 98.6111 |
+| Jevbench Hard | 111 | 73.87 | 73.8739 | 73.8739 |
+| Typed Decision | 2000 | 80.55 | 80.1500 | 80.4500 |
+| ToolACE | 310 | 96.45 | 96.4516 | 96.4516 |
+| AG News | 7600 | 90.82 | 90.8026 | 90.8684 |
+| WildJailbreak | 2210 | 89.86 | 89.6380 | 89.9095 |
+| Unweighted suite mean | — | 90.02 | 89.9325 | 90.0235 |
+| Mean difference from official (percentage points) | — | — | -0.0875 | +0.0035 |
+
+Calibration covers the 111 Jevbench-Hard fields. Brier sums squared probability errors over classes,
+then averages over fields; ECE uses max-probability confidence and ten equal-width bins.
+
+| Metric | Official | LMDeploy PyTorch | vLLM adapter | PyTorch minus official |
+| --- | ---: | ---: | ---: | ---: |
+| Hard Brier | 0.346762 | 0.344308 | 0.345656 | -0.002454 |
+| Hard ECE | 0.065267 | 0.072684 | 0.071217 | +0.007417 |
+
+### Image comparisons
+
+Each backend/protocol combination completed 12,088 predictions: 3,000 examples for each of the three POPE
+settings and 3,088 AI2D examples, with zero failed predictions. Accuracy is shown below; parentheses give correct counts.
+
+| Backend / protocol | POPE random (%) | POPE popular (%) | POPE adversarial (%) | AI2D (%) |
+| --- | ---: | ---: | ---: | ---: |
+| LMDeploy PyTorch / Systemone | 91.43 (2743) | 89.07 (2672) | 87.73 (2632) | 79.02 (2440) |
+| LMDeploy PyTorch / OpenAI Decisions | 91.47 (2744) | 88.77 (2663) | 87.57 (2627) | 78.40 (2421) |
+| vLLM adapter / Systemone | 91.47 (2744) | 89.03 (2671) | 87.80 (2634) | 79.11 (2443) |
+| vLLM adapter / OpenAI Decisions | 91.30 (2739) | 88.60 (2658) | 87.33 (2620) | 78.34 (2419) |
+
+POPE predicts yes when P(yes) > 0.5, with ties assigned to no; AI2D uses argmax. Preparation corrected 57 POPE
+question texts against the authors' version and resized 183 of 1,314 unique source images without changing aspect ratio.
+Both protocols receive identical image bytes, but image placement and prompt structure differ. Therefore, compare
+backend results within the same protocol; the table does not establish cross-protocol image-prompt equivalence.
+Scoring-prefix hashes match between PyTorch and vLLM for all evaluated image requests within each protocol.
+The vLLM image runs use eager execution after visual compilation failed. The HF image run is incomplete, so no
+full-set HF accuracy is reported.
 
 ## HTTP
 
@@ -39,6 +155,17 @@ lmdeploy serve api_server /path/to/Intern-Decision-0.8B --task intern-decision -
 `--task intern-decision` enables decision scoring on the PyTorch backend. The old checkpoint-name task values are
 no longer accepted. All PyTorch engine options (batch size, TP, prefix caching, ...) remain available. Decision
 requests use input scoring and generate no tokens.
+
+This task dedicates the server to decision inference. Other inference POST routes (`/v1/chat/completions`,
+`/v1/completions`, `/v1/messages`, `/v1/responses`, `/generate`, `/pooling`, and `/get_ppl`) return 400 before
+entering the inference engine. Run generation on a separate server; the engine does not
+support mixing generation and decision scoring in the same batch. Model listing, tokenization and management
+endpoints remain available.
+
+Concurrency admission retains the upstream `--max-concurrent-requests` behavior. This version does not
+monitor client disconnects concurrently with decision processing: preprocessing and scoring may continue
+until an output is available, and disconnected requests may remain in the admission queue. Prompt cancellation
+and disconnect-aware admission are tracked separately. The Systemone route retains its 32 MiB body limit.
 
 Local checkpoint directories and remote model IDs are accepted. For the decision task, startup first resolves
 a remote ID with the configured download directory and revision, then uses that same local path for the engine
@@ -149,9 +276,14 @@ URL restrictions and configured domain allowlist. Server file paths are not acce
 `null`, or `"auto"`; other profiles are rejected. Each request accepts at most eight image occurrences across `input` and all question `instructions`, including repeats.
 Inline and downloaded images must be static PNG, JPEG, WEBP or GIF, at most 10 MiB of decoded file bytes,
 20 million pixels, 20000 pixels on either side, and a 200:1 aspect ratio. Invalid image content returns 422 with
-the source field location. HTTP downloads retain the shared loader's transport behavior; the byte limit is checked
-after download. Images are converted to RGB and resized on a 32-pixel grid with a 1024-token per-image budget and
-a 4096-token total budget, divided by the number of image occurrences, following a8fe089.
+the source field location. HTTP downloads enforce the 10 MiB limit while streaming, reject an oversized declared
+`Content-Length` before reading the body, and close the response on overflow. Redirect bodies are discarded and
+each target is checked against the URL restrictions. Downloads request `Accept-Encoding: identity`; responses
+with another `Content-Encoding` are rejected with 422 to avoid unbounded HTTP decompression. This limits the
+downloaded file payload, not total process memory or decoded pixel storage. Shared-loader callers that do not
+set a download budget retain their existing compression support. Images are converted to RGB and resized on a
+32-pixel grid with a 1024-token per-image budget and a 4096-token total budget, divided by the number of image
+occurrences, following a8fe089.
 
 The parser collects images in encounter order across all messages and writes one-based `image_index` references
 into the internal state. Repeated references occupy separate positions. The compiler places these input images before
