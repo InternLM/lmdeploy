@@ -38,6 +38,7 @@ from lmdeploy.serve.openai.responses import create_responses_router
 from lmdeploy.serve.openai.utils import get_model_list
 from lmdeploy.serve.utils.server_utils import (
     AuthenticationMiddleware,
+    DecisionOnlyMiddleware,
     EngineSleepingMiddleware,
     protocol_error_response,
 )
@@ -448,6 +449,9 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+
+    if server_context.decision_context is not None:
+        app.add_middleware(DecisionOnlyMiddleware)
 
     if api_keys is not None and (tokens := [key for key in api_keys if key]):
         app.add_middleware(AuthenticationMiddleware, tokens=tokens)
