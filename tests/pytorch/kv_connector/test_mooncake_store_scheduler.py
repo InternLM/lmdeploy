@@ -925,6 +925,7 @@ def test_scheduler_builds_incremental_save_operations_and_poll_metadata():
     scheduler.shutdown()
 
 
+@pytest.mark.parametrize('lookahead', [0, 1])
 @pytest.mark.parametrize(
     ('history', 'token_len', 'final_chunk', 'hybrid'),
     [
@@ -938,14 +939,18 @@ def test_scheduler_builds_incremental_save_operations_and_poll_metadata():
         pytest.param(8, 16, True, True, id='hybrid-chunks'),
     ],
 )
-def test_mtp_prefill_save_boundary_follows_written_rows(history, token_len, final_chunk, hybrid):
+def test_mtp_prefill_save_boundary_follows_written_rows(history, token_len, final_chunk, hybrid, lookahead):
     """Check real target sampling, MTP input preparation and save planning.
 
     CPU rows record the token paired with each KV row, without model weights or GPU kernels. The final MTP row must use
     the accepted target token; unverified draft rows and incomplete blocks must stay out of saves.
     """
-    scheduler = MooncakeStoreScheduler(_hybrid_cache_config() if hybrid else _cache_config('kv_producer'))
-    request = _request(range(token_len))
+    cache = replace(_hybrid_cache_config() if hybrid else _cache_config('kv_producer'),
+                    prefix_cache_token_lookahead=lookahead)
+    scheduler = MooncakeStoreScheduler(cache)
+    paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache,
+                       seq_meta=SequenceMeta(4, strategy=ARSpecSequenceStrategy()))
+    request = paging.add_session(0).add_sequence(range(token_len))
     request.is_prefix_cache_boundary_safe = lambda step: True
     task = _ForwardInputsTask(SimpleNamespace(scheduler=scheduler, spec_decoding=True), prefill=True)
     agent = object.__new__(SpecModelAgent)
@@ -955,6 +960,20 @@ def test_mtp_prefill_save_boundary_follows_written_rows(history, token_len, fina
     block_ids = tuple(range((token_len + 3) // 4 + 1))
     target_rows = torch.full((len(block_ids) * 4, ), -1, dtype=torch.long)
     mtp_rows = torch.full_like(target_rows, -1)
+
+    def check_save(save, first_block, full_blocks):
+        assert save.start_block == first_block
+        assert save.block_ids == tuple(range(first_block, full_blocks))
+        start, end = first_block * 4, full_blocks * 4
+        assert torch.all(mtp_rows[start:end] >= 0)
+        # Build the expected identity from the rows actually prepared for the
+        # target and draft models, including the draft's boundary successor.
+        written_tokens = target_rows[:end].tolist()
+        if lookahead:
+            written_tokens.append(mtp_rows[end - 1].item())
+            torch.testing.assert_close(mtp_rows[start:end], torch.tensor(written_tokens[start + 1:end + 1]))
+        assert save.block_hashes == build_prefix_block_hashes(
+            written_tokens, 4, token_lookahead=lookahead)[first_block:full_blocks]
 
     def prefill(start, end, **chunk_flags):
         inputs = ModelInputs(
@@ -993,6 +1012,8 @@ def test_mtp_prefill_save_boundary_follows_written_rows(history, token_len, fina
             mtp_rows[draft_end:] = -2
         token_lens = task._get_connector_token_lens(inputs)
         assert token_lens == (min(end, draft_end), )
+        # Save planning still sees the pre-forward host history, even though
+        # the simulated worker has already sampled the last row's successor.
         metadata = scheduler.build_connector_meta(_scheduler_output(
             running=(request, ),
             token_lens=token_lens,
@@ -1000,17 +1021,17 @@ def test_mtp_prefill_save_boundary_follows_written_rows(history, token_len, fina
             logical_block_ids=(block_ids, ),
             state_ids=(1, ),
         ))
-        save = metadata.save_requests[0]
-        if hybrid:
+        save = metadata.save_requests[0] if metadata is not None and metadata.save_requests else None
+        if hybrid and save is not None:
             assert save.state.boundary_tokens == end
             assert metadata.get_state_save_copies() == ((1, save.state.snapshot_slot), )
-        return draft, token_lens, save
+        return draft, token_lens, save, sampled
 
     if final_chunk:
-        first_draft, first_boundary, first_save = prefill(0, history, is_chunk=True, is_first_chunk=True)
+        first_draft, first_boundary, first_save, _ = prefill(0, history, is_chunk=True, is_first_chunk=True)
         assert first_boundary == (8, )
         assert first_draft.seq_length.tolist() == [8]
-        assert first_save.block_ids == (0, 1)
+        check_save(first_save, 0, 2)
         assert mtp_rows[7].item() == 8
         first_saved_mtp_rows = mtp_rows[:8].clone()
     else:
@@ -1018,20 +1039,38 @@ def test_mtp_prefill_save_boundary_follows_written_rows(history, token_len, fina
         target_rows[:history] = torch.arange(history)
         mtp_rows[:history] = torch.arange(1, history + 1)
 
-    draft, boundary, save = prefill(history, token_len, is_chunk=final_chunk, is_last_chunk=final_chunk)
+    draft, boundary, save, sampled = prefill(history, token_len, is_chunk=final_chunk, is_last_chunk=final_chunk)
     assert boundary == (token_len, )
     torch.testing.assert_close(target_rows[:token_len], torch.arange(token_len))
     torch.testing.assert_close(mtp_rows[:token_len], torch.tensor([*range(1, token_len), 99]))
     first_block = 2 if final_chunk else 0
-    full_blocks = token_len // 4
-    assert save.start_block == first_block
-    assert save.block_ids == tuple(range(first_block, full_blocks))
-    assert save.block_hashes == build_prefix_block_hashes(request.all_ids, 4)[first_block:full_blocks]
-    assert torch.all(mtp_rows[first_block * 4:full_blocks * 4] >= 0)
+    full_blocks = (token_len - lookahead) // 4
+    assert request.num_valid_ids == token_len
+    if full_blocks == first_block or (hybrid and lookahead):
+        # Defer an incomplete last block, or the whole hybrid state boundary,
+        # until the host knows the target token used by the last draft row.
+        assert save is None
+    else:
+        check_save(save, first_block, full_blocks)
     if final_chunk:
         assert draft.history_lengths.tolist() == [8]
         assert mtp_rows[7].item() == 8
         torch.testing.assert_close(mtp_rows[:8], first_saved_mtp_rows)
+    if lookahead:
+        request.update_token_ids(sampled.output_token_ids.flatten(), draft_token_ids=torch.tensor([90, 91, 92, 93]),
+                                 mode=UpdateTokenMode.PREFILL)
+        assert request.num_valid_ids == token_len + 1 < request.num_all_ids
+        # Revisit the completed rows once the sampled successor is accepted on
+        # the host. The new hash must include that token, not a proposed token.
+        accepted = scheduler.build_connector_meta(_scheduler_output(
+            (request,), boundary, (block_ids,), (block_ids,), (1,)))
+        if token_len % 4 == 0:
+            check_save(accepted.save_requests[0], first_block if hybrid else full_blocks, token_len // 4)
+            if hybrid:
+                assert accepted.save_requests[0].state.boundary_tokens == token_len
+        else:
+            assert accepted.save_requests == ()
+    paging.shutdown()
     scheduler.shutdown()
 
 
