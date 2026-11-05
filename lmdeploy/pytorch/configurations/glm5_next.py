@@ -3,6 +3,7 @@
 
 import torch
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.config import StateCacheSpec
 from lmdeploy.pytorch.consts import (
     GLM5_KDA_CONV_STATE,
@@ -228,6 +229,13 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         if text_config.index_kpool != 4:
             raise ValueError('GLM-5.3 currently requires index_kpool=4 for its 64-token cache owner.')
         quant_config = getattr(hf_config, 'quantization_config', None)
+        if (_envs.fp8_moe_only and quant_config is not None
+                and quant_config.get('quant_method') == 'fp8'
+                and quant_config.get('lmdeploy_patched', False)):
+            quant_config['fp8_quant_scope'] = 'moe_only'
+            get_logger('lmdeploy').info(
+                'Enable fp8_quant_scope=moe_only for glm5_next because LMDEPLOY_FP8_MOE_ONLY=1 '
+                'and the FP8 quantization config is LMDeploy-synthesized.')
         if quant_config is not None:
             text_config.quantization_config = quant_config
 

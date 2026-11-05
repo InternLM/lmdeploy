@@ -216,6 +216,42 @@ def test_quantization_config_fp8_moe_only_module_kinds():
         QuantizationConfig(quant_method='awq', fp8_quant_scope='moe_only')
 
 
+@pytest.mark.parametrize('enabled,prequantized,model_format,expected_scope', [
+    (True, False, 'fp8', 'moe_only'),
+    (False, False, 'fp8', None),
+    (True, True, 'fp8', None),
+    (True, False, None, None),
+])
+def test_fp8_moe_only_scope_for_glm5_next(monkeypatch, enabled, prequantized, model_format, expected_scope):
+    from lmdeploy.hf_configs.configuration_glm5_next import Glm5NextConfig
+    from lmdeploy.pytorch import envs
+
+    def config_factory():
+        hf_config = Glm5NextConfig()
+        if prequantized:
+            hf_config.quantization_config = dict(quant_method='fp8', fmt='e4m3', weight_block_size=[128, 128])
+        return hf_config
+
+    monkeypatch.setattr(envs, 'fp8_moe_only', enabled)
+    monkeypatch.setattr('lmdeploy.pytorch.configurations.deepseek_v2.flash_mla_available', lambda: True)
+    _patch_config_builder(monkeypatch, config_factory)
+
+    model_config = ModelConfig.from_pretrained('fake-model', model_format=model_format)
+    quant_config = model_config.quant_config
+
+    assert quant_config.fp8_quant_scope == expected_scope
+    if quant_config.quant_method == 'fp8':
+        assert model_config.hf_config.text_config.quantization_config is model_config.hf_config.quantization_config
+        assert quant_config.hf_quant_config.get('fp8_quant_scope') == expected_scope
+        assert quant_config.get_quant_method('model.layers.3.mlp.experts', module_kind='moe') == 'fp8'
+        expected_linear = None if expected_scope == 'moe_only' else 'fp8'
+        assert quant_config.get_quant_method('model.layers.3.self_attn.q_a_proj') == expected_linear
+        if prequantized:
+            assert 'lmdeploy_patched' not in quant_config.hf_quant_config
+    else:
+        assert quant_config.quant_method is None
+
+
 def test_fp8_moe_only_scope_survives_mtp_draft_config(monkeypatch):
     from lmdeploy.pytorch import envs
 
