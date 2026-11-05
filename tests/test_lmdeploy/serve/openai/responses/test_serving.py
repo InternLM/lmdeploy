@@ -403,7 +403,9 @@ def test_responses_forwards_reasoning_effort(responses_endpoint, fake_raw_reques
     asyncio.run(run())
     kwargs = context.async_engine.preprocess_kwargs
     assert kwargs['reasoning_effort'] == (None if effort == 'none' else effort)
-    assert kwargs['chat_template_kwargs'] == (None if effort is None else {'enable_thinking': effort != 'none'})
+    expected_template_kwargs = ({'enable_thinking': False} if effort is None
+                                 else {'enable_thinking': effort != 'none'})
+    assert kwargs['chat_template_kwargs'] == expected_template_kwargs
 
 
 @pytest.mark.parametrize('stream', [False, True])

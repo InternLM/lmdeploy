@@ -19,7 +19,7 @@ from lmdeploy.vl.model.base import VisionModel
 
 @pytest.mark.parametrize('stream', [False, True])
 @pytest.mark.parametrize('with_image', [False, True])
-@pytest.mark.parametrize('effort', [None, 'none'])
+@pytest.mark.parametrize('effort', [None, 'none', 'low'])
 def test_low_budget_responses(responses_endpoint, hf_media_template, sse_payloads, stream, with_image, effort):
     _, context = responses_endpoint
     template = hf_media_template('glm5_3_flash')
@@ -85,8 +85,9 @@ def test_low_budget_responses(responses_endpoint, hf_media_template, sse_payload
     with TestClient(app) as client:
         response = client.post('/v1/responses', json=payload)
     assert response.status_code == 200
-    expected_status = 'completed' if effort == 'none' else 'incomplete'
-    expected_text = answer if effort == 'none' else ''
+    thinking_off = effort is None or effort == 'none'
+    expected_status = 'completed' if thinking_off else 'incomplete'
+    expected_text = answer if thinking_off else ''
     if stream:
         events = sse_payloads([response.text])
         assert events[-1]['type'] == f'response.{expected_status}'
@@ -98,7 +99,7 @@ def test_low_budget_responses(responses_endpoint, hf_media_template, sse_payload
     assert result['status'] == expected_status
     assert result['output_text'] == expected_text
     assert result['output'][0]['status'] == expected_status
-    assert result['usage']['output_tokens'] == (1 if effort == 'none' else budget)
-    assert result['usage']['output_tokens_details']['reasoning_tokens'] == (0 if effort == 'none' else budget)
-    assert result.get('incomplete_details') == (None if effort == 'none' else {'reason': 'max_output_tokens'})
+    assert result['usage']['output_tokens'] == (1 if thinking_off else budget)
+    assert result['usage']['output_tokens_details']['reasoning_tokens'] == (0 if thinking_off else budget)
+    assert result.get('incomplete_details') == (None if thinking_off else {'reason': 'max_output_tokens'})
     assert len(context.session_manager.removed) == 1
