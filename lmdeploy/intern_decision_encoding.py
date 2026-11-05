@@ -4,7 +4,8 @@
 # src/inference/encoding.py and inference.py (DecisionEngine.predict, scale_result).
 # Modified for LMDeploy: inference-only prompts, engine-expanded image placeholders,
 # candidate-logit decoding with finite checks and temperature calibration.
-"""The trained Intern-Decision prompt, token encoding and candidate-score decoding."""
+"""The trained Intern-Decision prompt, token encoding and candidate-score
+decoding."""
 
 from __future__ import annotations
 
@@ -110,10 +111,10 @@ def compile_row(row: Mapping[str, Any]) -> CompiledExample:
             schema_lines.append(f"    {symbol} = {value}: {description}")
 
     state = _json(row.get('state'))
-    user_text = ("Return one answer for every field using the supplied answer symbols.\n\n"
-                 "## State\n"
+    user_text = ('Return one answer for every field using the supplied answer symbols.\n\n'
+                 '## State\n'
                  f"{state}\n"
-                 "## Decision schema\n" + "\n".join(schema_lines))
+                 '## Decision schema\n' + '\n'.join(schema_lines))
     if DECISION_TOKEN in user_text or any(DECISION_TOKEN in field for field in fields):
         raise ValueError('Reserved decision marker appears in input evidence')
     skeleton = json.dumps(dict.fromkeys(fields, DECISION_TOKEN), ensure_ascii=False, indent=4)
@@ -156,13 +157,11 @@ def resolve_temperature(model_path: str | Path, *, temperature: float | None = N
                         original_model_path: str | Path | None = None) -> float:
     """Read calibration for local Intern-Decision family checkpoints.
 
-    This reader follows the Intern-Decision-specific convention of a top-level
-    numeric DEFAULT_TEMPERATURE in the checkpoint's inference.py. It is not a
-    general checkpoint metadata format. Parse the constant without importing or
-    executing the module or downloading files. Priority: explicit override,
-    checkpoint constant, then an exact known model directory/repository name.
-    The caller resolves remote IDs first and preserves their original path for
-    name matching. Unknown models have no default calibration.
+    This reader follows the Intern-Decision-specific convention of a top-level numeric DEFAULT_TEMPERATURE in the
+    checkpoint's inference.py. It is not a general checkpoint metadata format. Parse the constant without importing or
+    executing the module or downloading files. Priority: explicit override, checkpoint constant, then an exact known
+    model directory/repository name. The caller resolves remote IDs first and preserves their original path for name
+    matching. Unknown models have no default calibration.
     """
     if temperature is not None:
         if isinstance(temperature, bool):
@@ -214,7 +213,8 @@ def argmax(probs: dict[str, float]) -> str:
 
 
 def scale_probabilities(probs: dict[str, float], temperature: float) -> dict[str, float]:
-    """Temperature-scale a candidate distribution exactly as the checkpoint's reference does."""
+    """Temperature-scale a candidate distribution exactly as the checkpoint's
+    reference does."""
     if temperature == 1.0:
         return dict(probs)
     logs = {label: math.log(p) if p else -math.inf for label, p in probs.items()}
@@ -232,7 +232,8 @@ def decode_answers(questions: dict,
                    candidate_logits: list[list[float]],
                    *,
                    temperature: float) -> dict:
-    """Decode candidate logits using the explicitly supplied calibration temperature."""
+    """Decode candidate logits using the explicitly supplied calibration
+    temperature."""
     import torch
 
     temperature = validate_temperature(temperature)

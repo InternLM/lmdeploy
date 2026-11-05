@@ -165,9 +165,8 @@ def load_from_url(url: str, media_io: MediaIO[_M], allowed_media_domains: list[s
                   max_download_bytes: int | None = None) -> _M:
     """Load media from a HTTP, data or file url.
 
-    An optional HTTP byte budget stops oversized downloads before decoding and
-    requires identity Content-Encoding. Other callers retain unlimited downloads.
-    Data and file URLs remain subject to the media IO's own limits.
+    An optional HTTP byte budget stops oversized downloads before decoding and requires identity Content-Encoding. Other
+    callers retain unlimited downloads. Data and file URLs remain subject to the media IO's own limits.
     """
     url_spec = urlparse(url)
 

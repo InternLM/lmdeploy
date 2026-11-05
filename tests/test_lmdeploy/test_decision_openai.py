@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Exercise the production wire models, parser and HTTP routes with fixed engine scores."""
+"""Exercise the production wire models, parser and HTTP routes with fixed
+engine scores."""
 import asyncio
 import base64
 import copy
@@ -40,7 +41,8 @@ def request(questions=None, **kwargs):
 
 
 def prepared_output(parser, probabilities):
-    """Substitute only tokenizer/engine work; production compilation and row selection run."""
+    """Substitute only tokenizer/engine work; production compilation and row
+    selection run."""
     inputs = parser.prepare_input(tokenizer=FakeEngine().tokenizer)
     prepared = SimpleNamespace(inputs={'input_ids': [1] + [MARKER, 3] * len(probabilities)},
                                gen_config=inputs.gen_config)

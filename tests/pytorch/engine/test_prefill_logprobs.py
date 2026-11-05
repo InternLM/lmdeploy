@@ -109,7 +109,8 @@ def test_engine_loop_rejects_malformed_compact_scoring_segments():
 
 
 def test_engine_loop_keeps_only_own_requested_token_columns():
-    """Rows carry the batch union of logprob_extra_token_ids; each request gets its own."""
+    """Rows carry the batch union of logprob_extra_token_ids; each request gets
+    its own."""
 
     def message(ids):
         return SimpleNamespace(logprob_start_pos=0,

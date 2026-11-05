@@ -93,7 +93,8 @@ class SystemoneNoulQuestion(_SystemoneQuestion):
 
 
 class SystemoneRequest(BaseModel):
-    """Systemone assets protocol; model identity is checked against the loaded engine."""
+    """Systemone assets protocol; model identity is checked against the loaded
+    engine."""
 
     model_config = ConfigDict(strict=True, extra='forbid', allow_inf_nan=False)
     state: _SystemoneContent
@@ -138,7 +139,8 @@ class DecisionInputImage(_OpenAIDecisionSchema):
 
 
 class DecisionInputJSON(_OpenAIDecisionSchema):
-    """Structured evidence rendered as compact JSON text, never as image references."""
+    """Structured evidence rendered as compact JSON text, never as image
+    references."""
 
     type: Literal['input_json']
     data: dict[str, JsonValue] | list[dict[str, JsonValue]]
@@ -225,7 +227,8 @@ class DecisionInputMessage(_OpenAIDecisionSchema):
 
 
 class OpenAIDecisionRequest(_OpenAIDecisionSchema):
-    """OpenAI Decisions text/image input, subject to the local checkpoint's limits."""
+    """OpenAI Decisions text/image input, subject to the local checkpoint's
+    limits."""
 
     model: str
     input: Annotated[str, Field(min_length=1)] | Annotated[list[DecisionInputMessage], Field(min_length=1)]
@@ -237,7 +240,8 @@ class OpenAIDecisionRequest(_OpenAIDecisionSchema):
     safety_identifier: str | None = Field(default=None, max_length=64)
 
     def image_inputs(self):
-        """Yield every image occurrence and its wire location in input/question order."""
+        """Yield every image occurrence and its wire location in input/question
+        order."""
         contents = []
         if not isinstance(self.input, str):
             contents.extend((message.content, ('input', i, 'content')) for i, message in enumerate(self.input))

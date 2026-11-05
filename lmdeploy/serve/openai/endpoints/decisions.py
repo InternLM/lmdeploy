@@ -69,7 +69,8 @@ def _validation_error_response(exc: RequestValidationError, *, systemone: bool) 
 
 
 class _DecisionRoute(APIRoute):
-    """Keep field-level validation responses local to the decision endpoints."""
+    """Keep field-level validation responses local to the decision
+    endpoints."""
 
     systemone = False
 
@@ -89,10 +90,11 @@ class _DecisionRoute(APIRoute):
 
 
 class _SystemoneRoute(_DecisionRoute):
-    """Normalize bounded multipart input before FastAPI's typed JSON validation.
+    """Normalize bounded multipart input before FastAPI's typed JSON
+    validation.
 
-    Body limits and error details follow intern-decision-inference a8fe089.
-    The normal request model remains visible in OpenAPI.
+    Body limits and error details follow intern-decision-inference a8fe089. The normal request model remains visible in
+    OpenAPI.
     """
 
     systemone = True
@@ -198,7 +200,8 @@ async def _score_request(server_context, parser: DecisionParser, raw_request=Non
 def register(router: APIRouter, server_context) -> None:
 
     async def handle_request(request: OpenAIDecisionRequest | SystemoneRequest, raw_request: Request):
-        """Share task checks, scoring and error handling across decision protocols."""
+        """Share task checks, scoring and error handling across decision
+        protocols."""
         context = server_context.decision_context
         if context is None:
             return create_error_response(
@@ -227,7 +230,8 @@ def register(router: APIRouter, server_context) -> None:
             return create_error_response(HTTPStatus.INTERNAL_SERVER_ERROR, 'Decision scoring failed.')
 
     async def decide(request: OpenAIDecisionRequest, raw_request: Request):
-        """Score OpenAI Decisions text/image input and return OpenAI Decisions output."""
+        """Score OpenAI Decisions text/image input and return OpenAI Decisions
+        output."""
         return await handle_request(request, raw_request)
 
     async def systemone(request: SystemoneRequest, raw_request: Request):
