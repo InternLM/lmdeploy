@@ -38,7 +38,8 @@ MAX_PIXELS_PER_IMAGE = 1024 * FACTOR**2
 MAX_PIXELS_PER_REQUEST = 4096 * FACTOR**2
 
 class DecisionImageIO(ImageMediaIO):
-    """Decisions image policy from a8fe089, also applied to downloaded bytes."""
+    """Decisions image policy from a8fe089, also applied to downloaded
+    bytes."""
 
     max_bytes = 10 * 1024**2
 
@@ -77,7 +78,8 @@ class DecisionImageIO(ImageMediaIO):
 
 
 def prepare_decision_images(image_inputs, *, allowed_media_domains=None):
-    """Decode once per URL, preserving source field locations and occurrence budgets."""
+    """Decode once per URL, preserving source field locations and occurrence
+    budgets."""
     images = {}
     loader = DecisionImageIO()
     try:
@@ -184,10 +186,11 @@ def map_evidence(row, transform):
 
 
 def prepare_assets(row) -> dict[str, Image.Image]:
-    """Validate before resizing and return request-owned, fully loaded RGB images.
+    """Validate before resizing and return request-owned, fully loaded RGB
+    images.
 
-    References may share an image for read-only preprocessing. No open file handles
-    are retained; successful results live as long as the parser and its messages.
+    References may share an image for read-only preprocessing. No open file handles are retained; successful results
+    live as long as the parser and its messages.
     """
     assets = row.get('assets') or {}
     if not assets:
@@ -243,7 +246,8 @@ def prepare_assets(row) -> dict[str, Image.Image]:
 
 
 def image_sentinels(refs, original):
-    """Assign collision-free placeholders before compiling text; return ref -> token."""
+    """Assign collision-free placeholders before compiling text; return ref ->
+    token."""
     while True:
         prefix = 'ASSET_' + uuid4().hex + '_'
         if prefix not in original:
@@ -251,7 +255,8 @@ def image_sentinels(refs, original):
 
 
 def prepare_evidence(row):
-    """Replace only evidence values before serialization, never keys or prompt scaffolding."""
+    """Replace only evidence values before serialization, never keys or prompt
+    scaffolding."""
     assets = row.get('assets') or {}
     if not assets:
         return row, {}
@@ -264,7 +269,8 @@ def prepare_evidence(row):
 
 
 def image_content(text, sentinels, images_by_ref):
-    """Materialize compiled image URLs and inline sentinels from the same request cache."""
+    """Materialize compiled image URLs and inline sentinels from the same
+    request cache."""
     if isinstance(text, str):
         if not sentinels:
             return text
@@ -288,10 +294,10 @@ def image_content(text, sentinels, images_by_ref):
 def unpack_multipart(raw, content_type):
     """Parse an already size-bounded MIME body in the validation executor.
 
-    No temporary files, URLs, or client-supplied paths are opened. MIME transfer
-    encodings and nested multiparts are deliberately rejected.
+    No temporary files, URLs, or client-supplied paths are opened. MIME transfer encodings and nested multiparts are
+    deliberately rejected.
     """
-    if '\r' in content_type or '\n' in content_type:
+    if not content_type.isascii() or '\r' in content_type or '\n' in content_type:
         raise AssetError('Invalid multipart Content-Type.')
     msg = BytesParser(policy=policy.default).parsebytes(
         ('Content-Type: ' + content_type + '\r\nMIME-Version: 1.0\r\n\r\n').encode('ascii') + raw)

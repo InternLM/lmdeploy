@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # Asset cases adapted from intern-decision-inference a8fe089/tests/test_assets.py.
-"""Systemone wire, image positioning and response contracts on the shared engine."""
+"""Systemone wire, image positioning and response contracts on the shared
+engine."""
 import base64
 import copy
 import json
@@ -282,12 +283,13 @@ def test_reference_name_limits(service, ref, status):
 def test_multipart_matches_json_and_part_overrides_base64(service):
     client, _ = service
     row = body()
+    row['state']['description'] = '红色照片'
     expected = client.post('/v1/systemone', json=row).json()
     raw = base64.b64decode(row['assets']['photo-ref']['data_base64'])
     row['assets']['photo-ref'] = {'part': 'upload', 'data_base64': 'ignored'}
 
     def parts(request=row):
-        return [('request', (None, json.dumps(request), 'application/json')),
+        return [('request', (None, json.dumps(request, ensure_ascii=False).encode('utf-8'), 'application/json')),
                 ('upload', ('photo.png', raw, 'image/png'))]
 
     response = client.post('/v1/systemone', files=parts())
@@ -306,6 +308,20 @@ def test_multipart_matches_json_and_part_overrides_base64(service):
     assert client.post('/v1/systemone', json=row).status_code == 400
     assert client.post('/v1/systemone', content=b'--x\r\n',
                        headers={'Content-Type': 'multipart/form-data; boundary=x'}).status_code == 400
+
+
+@pytest.mark.parametrize('content_type', [
+    b'multipart/form-data; boundary=\xff',
+    b'multipart/form-data; boundary=x; note="\xe9"',
+])
+def test_multipart_non_ascii_content_type_is_400_before_engine_work(service, content_type):
+    client, engine = service
+    response = client.post('/v1/systemone', content=b'--x--\r\n',
+                           headers=[(b'content-type', content_type)])
+    assert response.status_code == 400
+    assert response.json() == {'error': 'Invalid multipart Content-Type.'}
+    assert not engine.requests and not engine.image_inputs
+    assert engine.session_mgr.count == 0
 
 
 def test_schema_errors_are_422_and_protocols_use_separate_routes(service):
