@@ -69,12 +69,15 @@ def test_python_rejects_unknown_task_before_building_engine(server_startup, task
 
 
 @pytest.mark.parametrize('enabled', [False, True])
-def test_startup_publishes_context_only_when_enabled(server_startup, monkeypatch, tmp_path, enabled):
+@pytest.mark.parametrize('logprobs_mode', [None, 'raw_logits'])
+def test_startup_publishes_context_only_when_enabled(
+        server_startup, monkeypatch, tmp_path, enabled, logprobs_mode):
     api_server, build, run = server_startup
     context = api_server.ServerContext()
     monkeypatch.setattr(api_server, 'ServerContext', lambda: context)
     (tmp_path / 'inference.py').write_text('DEFAULT_TEMPERATURE = 2.1')
     api_server.serve(str(tmp_path), backend='pytorch', task='intern-decision' if enabled else None,
+                     backend_config=PytorchEngineConfig(logprobs_mode=logprobs_mode),
                      generation_config='lmdeploy')
     with TestClient(run.call_args.kwargs['app']) as client:
         response = client.post('/v1/systemone', json={
@@ -146,12 +149,14 @@ def test_missing_calibration_fails_before_building_engine(server_startup, monkey
     run.assert_not_called()
 
 
-@pytest.fixture(params=['turbomind', 'speculative', 'prefill', 'decode'])
+@pytest.fixture(params=['turbomind', 'speculative', 'prefill', 'decode', 'raw_logprobs'])
 def unsupported_decision_config(request):
     if request.param == 'turbomind':
         return TurbomindEngineConfig(), None, 'requires the PyTorch backend'
     if request.param == 'speculative':
         return PytorchEngineConfig(), SimpleNamespace(), 'does not support speculative decoding'
+    if request.param == 'raw_logprobs':
+        return PytorchEngineConfig(logprobs_mode='raw_logprobs'), None, 'requires logprobs_mode'
     role = EngineRole.Prefill if request.param == 'prefill' else EngineRole.Decode
     return PytorchEngineConfig(role=role), None, 'requires the hybrid engine role'
 
@@ -188,6 +193,24 @@ def test_dp_unsupported_config_fails_before_starting_workers(monkeypatch, unsupp
     process.assert_not_called()
     start_method.assert_not_called()
     host_ip.assert_not_called()
+
+
+def test_raw_logprobs_is_rejected_by_direct_context_creation():
+    from lmdeploy.serve.parsers.decision_parser import create_decision_context
+
+    engine = SimpleNamespace(backend='pytorch', backend_config=PytorchEngineConfig(logprobs_mode='raw_logprobs'),
+                             speculative_config=None)
+    with pytest.raises(ValueError, match='requires logprobs_mode'):
+        create_decision_context(engine, '/unused', temperature=1.0)
+
+
+def test_ordinary_server_keeps_raw_logprobs(server_startup, tmp_path):
+    api_server, build, run = server_startup
+    config = PytorchEngineConfig(logprobs_mode='raw_logprobs')
+    api_server.serve(str(tmp_path), backend='pytorch', backend_config=config, generation_config='lmdeploy')
+    assert build.call_args.kwargs['backend_config'] is config
+    assert build.call_args.kwargs['backend_config'].logprobs_mode == 'raw_logprobs'
+    run.assert_called_once()
 
 
 @pytest.mark.parametrize('temperature', [0, -1, float('nan'), float('inf'), True])

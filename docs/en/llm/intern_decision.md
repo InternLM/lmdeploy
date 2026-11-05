@@ -17,11 +17,11 @@ and `images`; it does not accept the former native request format or emit its re
 
 ## Supported checkpoints
 
-| Checkpoint weights | Calibration temperature | Backend | HTTP protocols |
-| --- | ---: | --- | --- |
-| [Intern-Decision-0.8B](https://huggingface.co/internlm/Intern-Decision-0.8B) | 2.747760550703 | PyTorch | OpenAI Decisions subset / Systemone |
-| [Intern-Decision-2B](https://huggingface.co/internlm/Intern-Decision-2B) | 2.100509348278 | PyTorch | OpenAI Decisions subset / Systemone |
-| [Intern-Decision-4B](https://huggingface.co/internlm/Intern-Decision-4B) | 1.99241824 | PyTorch | OpenAI Decisions subset / Systemone |
+| Checkpoint weights                                                           | Calibration temperature | Backend | HTTP protocols                      |
+| ---------------------------------------------------------------------------- | ----------------------: | ------- | ----------------------------------- |
+| [Intern-Decision-0.8B](https://huggingface.co/internlm/Intern-Decision-0.8B) |          2.747760550703 | PyTorch | OpenAI Decisions subset / Systemone |
+| [Intern-Decision-2B](https://huggingface.co/internlm/Intern-Decision-2B)     |          2.100509348278 | PyTorch | OpenAI Decisions subset / Systemone |
+| [Intern-Decision-4B](https://huggingface.co/internlm/Intern-Decision-4B)     |              1.99241824 | PyTorch | OpenAI Decisions subset / Systemone |
 
 All three checkpoints share the parser and scoring implementation. Local checkpoint metadata, tokenizer and
 processor checks cover all three sizes; these CPU checks do not load model weights or establish GPU accuracy
@@ -44,27 +44,27 @@ Seven-suite **unweighted mean** accuracy, compared with the
 [fixed official results](https://github.com/InternLM/Intern-Decision/blob/565350244af860e1c276768cd80bdd9b8be93913/README.md#benchmark-accuracy):
 
 | Model | Official | LMDeploy | Difference (percentage points) |
-| --- | ---: | ---: | ---: |
-| 0.8B | 79.38% | 79.1617% | -0.2183 |
-| 2B | 84.68% | 84.9129% | +0.2329 |
-| 4B | 90.02% | 89.8408% | -0.1792 |
+| ----- | -------: | -------: | -----------------------------: |
+| 0.8B  |   79.38% | 79.1617% |                        -0.2183 |
+| 2B    |   84.68% | 84.9129% |                        +0.2329 |
+| 4B    |   90.02% | 89.8408% |                        -0.1792 |
 
 Per-suite LMDeploy accuracy (%):
 
-| Model | Jevbench Easy | Original | Hard | Typed Decision | ToolACE | AG News | WildJailbreak |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0.8B | 97.9167 | 79.1667 | 53.1532 | 77.4500 | 94.5161 | 88.6711 | 63.2579 |
-| 2B | 100.0000 | 84.7222 | 65.7658 | 79.3000 | 96.4516 | 89.9605 | 78.1900 |
-| 4B | 100.0000 | 98.6111 | 72.9730 | 80.3000 | 96.4516 | 90.7763 | 89.7738 |
+| Model | Jevbench Easy | Original |    Hard | Typed Decision | ToolACE | AG News | WildJailbreak |
+| ----- | ------------: | -------: | ------: | -------------: | ------: | ------: | ------------: |
+| 0.8B  |       97.9167 |  79.1667 | 53.1532 |        77.4500 | 94.5161 | 88.6711 |       63.2579 |
+| 2B    |      100.0000 |  84.7222 | 65.7658 |        79.3000 | 96.4516 | 89.9605 |       78.1900 |
+| 4B    |      100.0000 |  98.6111 | 72.9730 |        80.3000 | 96.4516 | 90.7763 |       89.7738 |
 
 Calibration metrics below cover **Jevbench-Hard only (111 fields)**, not the separate
 96-case distribution pilot. Lower Brier/ECE is better; ECE uses the official scorer's ten bins.
 
 | Model | Official Brier | LMDeploy Brier | Official ECE | LMDeploy ECE |
-| --- | ---: | ---: | ---: | ---: |
-| 0.8B | 0.529519 | 0.529083 | 0.065710 | 0.091346 |
-| 2B | 0.437256 | 0.437578 | 0.100208 | 0.071510 |
-| 4B | 0.346762 | 0.347182 | 0.065267 | 0.081564 |
+| ----- | -------------: | -------------: | -----------: | -----------: |
+| 0.8B  |       0.529519 |       0.529083 |     0.065710 |     0.091346 |
+| 2B    |       0.437256 |       0.437578 |     0.100208 |     0.071510 |
+| 4B    |       0.346762 |       0.347182 |     0.065267 |     0.081564 |
 
 The [versioned evidence bundle](https://github.com/zzwwrr/lmdeploy-working/tree/5dbb32bd58ae03b6bb51e01e94ec66b068c5b374/pr5075-a100) provides all raw responses, per-suite metrics,
 original metadata and source patch, artifact hashes, the historical inference harness,
@@ -85,11 +85,11 @@ The A100 results above and H200 results below are separate runs with their own s
 
 ### Evaluated configurations
 
-| Evaluation | Configuration |
-| --- | --- |
-| Seven suites / SuperGLUE | TP1, prefix cache OFF, concurrency 8, max batch 64, session/prefill 16384, piecewise CUDA graphs up to 8192 tokens |
-| RACE/MultiRC multi-field reference | TP1, prefix cache ON/OFF, accuracy concurrency 1, max batch 128, session 16384, prefill 8192 |
-| Two-protocol 2,000-request set / images | TP1, prefix cache ON, accuracy concurrency 1, max batch 128, session 16384, prefill/graph limit 8192 |
+| Evaluation                              | Configuration                                                                                                      |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Seven suites / SuperGLUE                | TP1, prefix cache OFF, concurrency 8, max batch 64, session/prefill 16384, piecewise CUDA graphs up to 8192 tokens |
+| RACE/MultiRC multi-field reference      | TP1, prefix cache ON/OFF, accuracy concurrency 1, max batch 128, session 16384, prefill 8192                       |
+| Two-protocol 2,000-request set / images | TP1, prefix cache ON, accuracy concurrency 1, max batch 128, session 16384, prefill/graph limit 8192               |
 
 The LMDeploy environment snapshot records PyTorch 2.10.0, Transformers 5.14.1, FLA 0.5.2,
 TileLang 0.1.11, Triton 3.6.0 and CUDA runtime 12.8. Later runs do not each have a complete package freeze.
@@ -106,37 +106,37 @@ Accuracy includes failed fields as incorrect; there were none in this run. The o
 [published 4B results](https://github.com/InternLM/Intern-Decision/blob/565350244af860e1c276768cd80bdd9b8be93913/README.md)
 at their published precision.
 
-| Suite | Fields | Official (%) | LMDeploy PyTorch (%) | vLLM adapter (%) |
-| --- | ---: | ---: | ---: | ---: |
-| Jevbench Easy | 48 | 100 | 100.0000 | 100.0000 |
-| Jevbench Original | 72 | 98.61 | 98.6111 | 98.6111 |
-| Jevbench Hard | 111 | 73.87 | 73.8739 | 73.8739 |
-| Typed Decision | 2000 | 80.55 | 80.1500 | 80.4500 |
-| ToolACE | 310 | 96.45 | 96.4516 | 96.4516 |
-| AG News | 7600 | 90.82 | 90.8026 | 90.8684 |
-| WildJailbreak | 2210 | 89.86 | 89.6380 | 89.9095 |
-| Unweighted suite mean | — | 90.02 | 89.9325 | 90.0235 |
-| Mean difference from official (percentage points) | — | — | -0.0875 | +0.0035 |
+| Suite                                             | Fields | Official (%) | LMDeploy PyTorch (%) | vLLM adapter (%) |
+| ------------------------------------------------- | -----: | -----------: | -------------------: | ---------------: |
+| Jevbench Easy                                     |     48 |          100 |             100.0000 |         100.0000 |
+| Jevbench Original                                 |     72 |        98.61 |              98.6111 |          98.6111 |
+| Jevbench Hard                                     |    111 |        73.87 |              73.8739 |          73.8739 |
+| Typed Decision                                    |   2000 |        80.55 |              80.1500 |          80.4500 |
+| ToolACE                                           |    310 |        96.45 |              96.4516 |          96.4516 |
+| AG News                                           |   7600 |        90.82 |              90.8026 |          90.8684 |
+| WildJailbreak                                     |   2210 |        89.86 |              89.6380 |          89.9095 |
+| Unweighted suite mean                             |      — |        90.02 |              89.9325 |          90.0235 |
+| Mean difference from official (percentage points) |      — |            — |              -0.0875 |          +0.0035 |
 
 Calibration covers the 111 Jevbench-Hard fields. Brier sums squared probability errors over classes,
 then averages over fields; ECE uses max-probability confidence and ten equal-width bins.
 
-| Metric | Official | LMDeploy PyTorch | vLLM adapter | PyTorch minus official |
-| --- | ---: | ---: | ---: | ---: |
-| Hard Brier | 0.346762 | 0.344308 | 0.345656 | -0.002454 |
-| Hard ECE | 0.065267 | 0.072684 | 0.071217 | +0.007417 |
+| Metric     | Official | LMDeploy PyTorch | vLLM adapter | PyTorch minus official |
+| ---------- | -------: | ---------------: | -----------: | ---------------------: |
+| Hard Brier | 0.346762 |         0.344308 |     0.345656 |              -0.002454 |
+| Hard ECE   | 0.065267 |         0.072684 |     0.071217 |              +0.007417 |
 
 ### Image comparisons
 
 Each backend/protocol combination completed 12,088 predictions: 3,000 examples for each of the three POPE
 settings and 3,088 AI2D examples, with zero failed predictions. Accuracy is shown below; parentheses give correct counts.
 
-| Backend / protocol | POPE random (%) | POPE popular (%) | POPE adversarial (%) | AI2D (%) |
-| --- | ---: | ---: | ---: | ---: |
-| LMDeploy PyTorch / Systemone | 91.43 (2743) | 89.07 (2672) | 87.73 (2632) | 79.02 (2440) |
-| LMDeploy PyTorch / OpenAI Decisions | 91.47 (2744) | 88.77 (2663) | 87.57 (2627) | 78.40 (2421) |
-| vLLM adapter / Systemone | 91.47 (2744) | 89.03 (2671) | 87.80 (2634) | 79.11 (2443) |
-| vLLM adapter / OpenAI Decisions | 91.30 (2739) | 88.60 (2658) | 87.33 (2620) | 78.34 (2419) |
+| Backend / protocol                  | POPE random (%) | POPE popular (%) | POPE adversarial (%) |     AI2D (%) |
+| ----------------------------------- | --------------: | ---------------: | -------------------: | -----------: |
+| LMDeploy PyTorch / Systemone        |    91.43 (2743) |     89.07 (2672) |         87.73 (2632) | 79.02 (2440) |
+| LMDeploy PyTorch / OpenAI Decisions |    91.47 (2744) |     88.77 (2663) |         87.57 (2627) | 78.40 (2421) |
+| vLLM adapter / Systemone            |    91.47 (2744) |     89.03 (2671) |         87.80 (2634) | 79.11 (2443) |
+| vLLM adapter / OpenAI Decisions     |    91.30 (2739) |     88.60 (2658) |         87.33 (2620) | 78.34 (2419) |
 
 POPE predicts yes when P(yes) > 0.5, with ties assigned to no; AI2D uses argmax. Preparation corrected 57 POPE
 question texts against the authors' version and resized 183 of 1,314 unique source images without changing aspect ratio.
@@ -421,6 +421,9 @@ preprocessing consumes PIL-backed blocks and expands visual tokens without downl
 ## Limitations
 
 - PyTorch backend only; speculative decoding and non-hybrid (disaggregated) roles are rejected.
+- Decision scoring requires `logprobs_mode=None` (the default) or `raw_logits`.
+  `raw_logprobs` is rejected at startup because low-precision full-vocabulary normalization can erase
+  candidate score differences. This restriction does not apply to ordinary generation servers.
 - After image expansion, input must be shorter than the engine's session length,
   which is the model's own context window unless overridden by `--session-len`.
   Longer inputs are rejected, never truncated.

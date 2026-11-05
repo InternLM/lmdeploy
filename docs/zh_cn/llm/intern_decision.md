@@ -14,11 +14,11 @@ Parser 将 OpenAI 请求转换成私有 `_DecisionRow`，只保存 `state`、`qu
 
 ## 支持的模型
 
-| 模型权重 | 校准温度 | 后端 | HTTP 协议 |
-| --- | ---: | --- | --- |
+| 模型权重                                                                     |       校准温度 | 后端    | HTTP 协议                         |
+| ---------------------------------------------------------------------------- | -------------: | ------- | --------------------------------- |
 | [Intern-Decision-0.8B](https://huggingface.co/internlm/Intern-Decision-0.8B) | 2.747760550703 | PyTorch | OpenAI Decisions 子集 / Systemone |
-| [Intern-Decision-2B](https://huggingface.co/internlm/Intern-Decision-2B) | 2.100509348278 | PyTorch | OpenAI Decisions 子集 / Systemone |
-| [Intern-Decision-4B](https://huggingface.co/internlm/Intern-Decision-4B) | 1.99241824 | PyTorch | OpenAI Decisions 子集 / Systemone |
+| [Intern-Decision-2B](https://huggingface.co/internlm/Intern-Decision-2B)     | 2.100509348278 | PyTorch | OpenAI Decisions 子集 / Systemone |
+| [Intern-Decision-4B](https://huggingface.co/internlm/Intern-Decision-4B)     |     1.99241824 | PyTorch | OpenAI Decisions 子集 / Systemone |
 
 三种模型共用解析器和评分实现。本地 checkpoint 元数据、tokenizer 和 processor 检查覆盖三种规模；
 这些 CPU 检查不加载模型权重。三种模型均已在 A100 上完成完整权重的文本评测（七套件，每模型 10,751 条请求、
@@ -37,28 +37,28 @@ session/prefill 上限 8192，启用 piecewise CUDA graphs。每个模型完成 
 
 七套准确率的**不加权平均**，与[固定版本的官方结果](https://github.com/InternLM/Intern-Decision/blob/565350244af860e1c276768cd80bdd9b8be93913/README.md#benchmark-accuracy)对照：
 
-| 模型 | 官方 | LMDeploy | 差值（百分点） |
-| --- | ---: | ---: | ---: |
-| 0.8B | 79.38% | 79.1617% | -0.2183 |
-| 2B | 84.68% | 84.9129% | +0.2329 |
-| 4B | 90.02% | 89.8408% | -0.1792 |
+| 模型 |   官方 | LMDeploy | 差值（百分点） |
+| ---- | -----: | -------: | -------------: |
+| 0.8B | 79.38% | 79.1617% |        -0.2183 |
+| 2B   | 84.68% | 84.9129% |        +0.2329 |
+| 4B   | 90.02% | 89.8408% |        -0.1792 |
 
 LMDeploy 分项准确率（%）：
 
-| 模型 | Jevbench Easy | Original | Hard | Typed Decision | ToolACE | AG News | WildJailbreak |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0.8B | 97.9167 | 79.1667 | 53.1532 | 77.4500 | 94.5161 | 88.6711 | 63.2579 |
-| 2B | 100.0000 | 84.7222 | 65.7658 | 79.3000 | 96.4516 | 89.9605 | 78.1900 |
-| 4B | 100.0000 | 98.6111 | 72.9730 | 80.3000 | 96.4516 | 90.7763 | 89.7738 |
+| 模型 | Jevbench Easy | Original |    Hard | Typed Decision | ToolACE | AG News | WildJailbreak |
+| ---- | ------------: | -------: | ------: | -------------: | ------: | ------: | ------------: |
+| 0.8B |       97.9167 |  79.1667 | 53.1532 |        77.4500 | 94.5161 | 88.6711 |       63.2579 |
+| 2B   |      100.0000 |  84.7222 | 65.7658 |        79.3000 | 96.4516 | 89.9605 |       78.1900 |
+| 4B   |      100.0000 |  98.6111 | 72.9730 |        80.3000 | 96.4516 | 90.7763 |       89.7738 |
 
 以下校准指标**仅针对 Jevbench-Hard 的 111 个字段**，不与独立的 96 条分布 pilot 混用。
 Brier/ECE 越低越好，ECE 使用官方评分器的十个分桶。
 
 | 模型 | 官方 Brier | LMDeploy Brier | 官方 ECE | LMDeploy ECE |
-| --- | ---: | ---: | ---: | ---: |
-| 0.8B | 0.529519 | 0.529083 | 0.065710 | 0.091346 |
-| 2B | 0.437256 | 0.437578 | 0.100208 | 0.071510 |
-| 4B | 0.346762 | 0.347182 | 0.065267 | 0.081564 |
+| ---- | ---------: | -------------: | -------: | -----------: |
+| 0.8B |   0.529519 |       0.529083 | 0.065710 |     0.091346 |
+| 2B   |   0.437256 |       0.437578 | 0.100208 |     0.071510 |
+| 4B   |   0.346762 |       0.347182 | 0.065267 |     0.081564 |
 
 [固定版本的复现材料](https://github.com/zzwwrr/lmdeploy-working/tree/5dbb32bd58ae03b6bb51e01e94ec66b068c5b374/pr5075-a100)包含全部原始响应、各套评分结果、原始运行元数据和源码补丁、
 文件哈希、历史推理脚本，以及无需 GPU 的审计和重新评分命令。发布前已使用固定版本的官方评分器，
@@ -76,11 +76,11 @@ HTTP 断连取消或当前 HEAD 完整权重准确率。性能对比另行整理
 
 ### 实测配置
 
-| 评测 | 配置 |
-| --- | --- |
-| 七套 / SuperGLUE | TP1，prefix cache OFF，并发 8，max batch 64，session/prefill 16384，piecewise CUDA graphs 上限 8192 token |
-| RACE/MultiRC 多字段参考 | TP1，prefix cache ON/OFF，准确率并发 1，max batch 128，session 16384，prefill 8192 |
-| 两协议 2,000 条 / 图片 | TP1，prefix cache ON，准确率并发 1，max batch 128，session 16384，prefill/graph 上限 8192 |
+| 评测                    | 配置                                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- |
+| 七套 / SuperGLUE        | TP1，prefix cache OFF，并发 8，max batch 64，session/prefill 16384，piecewise CUDA graphs 上限 8192 token |
+| RACE/MultiRC 多字段参考 | TP1，prefix cache ON/OFF，准确率并发 1，max batch 128，session 16384，prefill 8192                        |
+| 两协议 2,000 条 / 图片  | TP1，prefix cache ON，准确率并发 1，max batch 128，session 16384，prefill/graph 上限 8192                 |
 
 LMDeploy 环境快照记录 PyTorch 2.10.0、Transformers 5.14.1、FLA 0.5.2、TileLang 0.1.11、
 Triton 3.6.0、CUDA runtime 12.8；后续各轮没有逐次完整保存依赖 freeze。
@@ -94,37 +94,37 @@ SDPA、`use_cache=False`。测试 launcher 的配置覆盖、tokenizer 对齐和
 评分器为 `jevbench@7ce310c7262ed49cc85853339a8a42459298e3f3`；失败字段保留在准确率分母中并计错，本轮没有失败字段。
 官方列采用[固定版本发布的 4B 结果](https://github.com/InternLM/Intern-Decision/blob/565350244af860e1c276768cd80bdd9b8be93913/README.md)，保留其发布精度。
 
-| 套件 | 字段数 | 官方（%） | LMDeploy PyTorch（%） | vLLM 适配（%） |
-| --- | ---: | ---: | ---: | ---: |
-| Jevbench Easy | 48 | 100 | 100.0000 | 100.0000 |
-| Jevbench Original | 72 | 98.61 | 98.6111 | 98.6111 |
-| Jevbench Hard | 111 | 73.87 | 73.8739 | 73.8739 |
-| Typed Decision | 2000 | 80.55 | 80.1500 | 80.4500 |
-| ToolACE | 310 | 96.45 | 96.4516 | 96.4516 |
-| AG News | 7600 | 90.82 | 90.8026 | 90.8684 |
-| WildJailbreak | 2210 | 89.86 | 89.6380 | 89.9095 |
-| 七套不加权均值 | — | 90.02 | 89.9325 | 90.0235 |
-| 均值相对官方差值（百分点） | — | — | -0.0875 | +0.0035 |
+| 套件                       | 字段数 | 官方（%） | LMDeploy PyTorch（%） | vLLM 适配（%） |
+| -------------------------- | -----: | --------: | --------------------: | -------------: |
+| Jevbench Easy              |     48 |       100 |              100.0000 |       100.0000 |
+| Jevbench Original          |     72 |     98.61 |               98.6111 |        98.6111 |
+| Jevbench Hard              |    111 |     73.87 |               73.8739 |        73.8739 |
+| Typed Decision             |   2000 |     80.55 |               80.1500 |        80.4500 |
+| ToolACE                    |    310 |     96.45 |               96.4516 |        96.4516 |
+| AG News                    |   7600 |     90.82 |               90.8026 |        90.8684 |
+| WildJailbreak              |   2210 |     89.86 |               89.6380 |        89.9095 |
+| 七套不加权均值             |      — |     90.02 |               89.9325 |        90.0235 |
+| 均值相对官方差值（百分点） |      — |         — |               -0.0875 |        +0.0035 |
 
 校准指标覆盖 Jevbench-Hard 的 111 个字段。Brier 对每题各候选的概率平方误差求和，再对字段取平均；
 ECE 使用最大候选概率作为置信度，按十个等宽桶计算。
 
-| 指标 | 官方 | LMDeploy PyTorch | vLLM 适配 | PyTorch 相对官方差值 |
-| --- | ---: | ---: | ---: | ---: |
-| Hard Brier | 0.346762 | 0.344308 | 0.345656 | -0.002454 |
-| Hard ECE | 0.065267 | 0.072684 | 0.071217 | +0.007417 |
+| 指标       |     官方 | LMDeploy PyTorch | vLLM 适配 | PyTorch 相对官方差值 |
+| ---------- | -------: | ---------------: | --------: | -------------------: |
+| Hard Brier | 0.346762 |         0.344308 |  0.345656 |            -0.002454 |
+| Hard ECE   | 0.065267 |         0.072684 |  0.071217 |            +0.007417 |
 
 ### 图片效果对比
 
 每个后端 / 协议组合完成 12,088 条预测：POPE 三种设置各 3,000 条，AI2D 3,088 条，正式预测失败数为 0。
 下表为准确率，括号内为正确数。
 
-| 后端 / 协议 | POPE random（%） | POPE popular（%） | POPE adversarial（%） | AI2D（%） |
-| --- | ---: | ---: | ---: | ---: |
-| LMDeploy PyTorch / Systemone | 91.43（2743） | 89.07（2672） | 87.73（2632） | 79.02（2440） |
-| LMDeploy PyTorch / OpenAI Decisions | 91.47（2744） | 88.77（2663） | 87.57（2627） | 78.40（2421） |
-| vLLM 适配 / Systemone | 91.47（2744） | 89.03（2671） | 87.80（2634） | 79.11（2443） |
-| vLLM 适配 / OpenAI Decisions | 91.30（2739） | 88.60（2658） | 87.33（2620） | 78.34（2419） |
+| 后端 / 协议                         | POPE random（%） | POPE popular（%） | POPE adversarial（%） |     AI2D（%） |
+| ----------------------------------- | ---------------: | ----------------: | --------------------: | ------------: |
+| LMDeploy PyTorch / Systemone        |    91.43（2743） |     89.07（2672） |         87.73（2632） | 79.02（2440） |
+| LMDeploy PyTorch / OpenAI Decisions |    91.47（2744） |     88.77（2663） |         87.57（2627） | 78.40（2421） |
+| vLLM 适配 / Systemone               |    91.47（2744） |     89.03（2671） |         87.80（2634） | 79.11（2443） |
+| vLLM 适配 / OpenAI Decisions        |    91.30（2739） |     88.60（2658） |         87.33（2620） | 78.34（2419） |
 
 POPE 采用 P(yes)>0.5，平局判 no；AI2D 使用 argmax。数据准备按原作者版本修正 57 条 POPE 题干，
 对 1,314 张唯一源图片中的 183 张等比例缩放。两协议使用相同图片字节，但图片插入位置及提示结构不同，
@@ -343,6 +343,9 @@ OpenAI 格式与 Systemone 格式均将 assistant 答案骨架分词后的 token
 ## 限制
 
 - 仅支持 PyTorch 后端；不支持投机解码与 PD 分离角色。
+- 决策评分要求 `logprobs_mode=None`（默认值）或 `raw_logits`。
+  `raw_logprobs` 会在启动时被拒绝，因为低精度的全词表归一化可能抹平候选分数差异。
+  此限制不影响普通生成服务。
 - 图片展开后必须小于引擎会话长度（即模型自身的上下文长度，除非用 `--session-len` 覆盖）；
   超限输入会被拒绝，不会截断。
 - Systemone 请求包含 1–16 个问题，每个 `choice` 或 `score` 问题有 1–62 个选项，按请求顺序分配答案符号，

@@ -68,6 +68,9 @@ def validate_decision_config(backend_config, speculative_config=None) -> None:
         raise ValueError(f'{TASK_NAME} does not support speculative decoding')
     if backend_config.role != EngineRole.Hybrid:
         raise ValueError(f'{TASK_NAME} requires the hybrid engine role')
+    if backend_config.logprobs_mode not in (None, 'raw_logits'):
+        raise ValueError(f'{TASK_NAME} requires logprobs_mode=None or "raw_logits"; '
+                         'raw_logprobs can round away candidate score differences')
 
 
 def create_decision_context(engine, model_path: str, *, temperature: float | None = None,
