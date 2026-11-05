@@ -423,7 +423,6 @@ class StepContext:
 
         Args:
             inputs (ModelInputs): packaged model inputs.
-            device (str): The device of the tensors.
         """
         q_seqlens = inputs.seq_length
         history_seqlens = inputs.history_lengths
