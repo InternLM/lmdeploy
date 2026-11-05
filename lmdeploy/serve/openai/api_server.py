@@ -358,6 +358,21 @@ def serve(model_path: str,
         decision_temperature = resolve_temperature(model_path, temperature=decision_temperature)
     original_model_path = model_path
 
+    if task is not None:
+        from lmdeploy.intern_decision_encoding import resolve_temperature
+        from lmdeploy.serve.parsers.decision_parser import validate_decision_config
+        if backend_config is None:
+            backend_config = PytorchEngineConfig()
+        validate_decision_config(backend_config, speculative_config)
+        # Input scoring is PyTorch-only; like the CLI, the task selects that backend.
+        backend = 'pytorch'
+        if not os.path.exists(model_path):
+            # Load weights and calibration metadata from the same resolved checkpoint.
+            model_name = model_name if model_name is not None else model_path
+            model_path = get_model(model_path, backend_config.download_dir, backend_config.revision)
+        decision_temperature = resolve_temperature(
+            model_path, temperature=decision_temperature, original_model_path=original_model_path)
+
     server_context = ServerContext()
     server_context.allow_terminate_by_client = allow_terminate_by_client
     server_context.enable_abort_handling = enable_abort_handling
@@ -376,17 +391,6 @@ def serve(model_path: str,
         ssl_keyfile = os.environ['SSL_KEYFILE']
         ssl_certfile = os.environ['SSL_CERTFILE']
         http_or_https = 'https'
-
-    if task is not None:
-        if backend_config is not None and not isinstance(backend_config, PytorchEngineConfig):
-            raise ValueError(f'{task} requires the PyTorch backend')
-        # input logprobs are PyTorch-only; like the CLI, the task selects that backend
-        backend = 'pytorch'
-        backend_config = backend_config or PytorchEngineConfig()
-        if not os.path.exists(model_path):
-            # Load weights and calibration metadata from the same resolved checkpoint.
-            model_name = model_name if model_name is not None else model_path
-            model_path = get_model(model_path, backend_config.download_dir, backend_config.revision)
 
     handle_torchrun()
     _, pipeline_class = get_task(backend,

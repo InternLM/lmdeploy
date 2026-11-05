@@ -8,7 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lmdeploy.intern_decision_encoding import ANSWER_SYMBOLS
-from lmdeploy.messages import PytorchEngineConfig
+from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig
+from lmdeploy.pytorch.disagg.config import EngineRole
 
 
 @pytest.mark.parametrize('task', ['intern-decision', 'Intern-Decision-4B', 'unknown'])
@@ -94,6 +95,7 @@ def test_invalid_checkpoint_closes_engine(server_startup, tmp_path):
     api_server, build, run = server_startup
     engine = build.return_value
     engine.hf_cfg.vocab_size = 10
+    (tmp_path / 'inference.py').write_text('DEFAULT_TEMPERATURE = 2.1')
     with pytest.raises(ValueError, match='exceed the model vocabulary'):
         api_server.serve(str(tmp_path), task='intern-decision', generation_config='lmdeploy')
     engine.close.assert_called_once()
@@ -130,7 +132,7 @@ def test_remote_checkpoint_uses_resolved_calibration(
     run.assert_called_once()
 
 
-def test_missing_calibration_closes_engine_without_starting_server(server_startup, monkeypatch, tmp_path):
+def test_missing_calibration_fails_before_building_engine(server_startup, monkeypatch, tmp_path):
     api_server, build, run = server_startup
     download = Mock(side_effect=AssertionError('Local checkpoints must not be downloaded'))
     monkeypatch.setattr(api_server, 'get_model', download)
@@ -138,8 +140,86 @@ def test_missing_calibration_closes_engine_without_starting_server(server_startu
         api_server.serve(str(tmp_path), model_name='Intern-Decision-4B',
                          task='intern-decision', generation_config='lmdeploy')
     download.assert_not_called()
-    build.return_value.close.assert_called_once()
+    build.assert_not_called()
+    api_server.get_task.assert_not_called()
+    build.return_value.close.assert_not_called()
     run.assert_not_called()
+
+
+@pytest.fixture(params=['turbomind', 'speculative', 'prefill', 'decode'])
+def unsupported_decision_config(request):
+    if request.param == 'turbomind':
+        return TurbomindEngineConfig(), None, 'requires the PyTorch backend'
+    if request.param == 'speculative':
+        return PytorchEngineConfig(), SimpleNamespace(), 'does not support speculative decoding'
+    role = EngineRole.Prefill if request.param == 'prefill' else EngineRole.Decode
+    return PytorchEngineConfig(role=role), None, 'requires the hybrid engine role'
+
+
+def test_unsupported_config_fails_before_loading_resources(
+        server_startup, monkeypatch, unsupported_decision_config):
+    api_server, build, run = server_startup
+    config, speculative, message = unsupported_decision_config
+    download, generation_config = Mock(), Mock()
+    monkeypatch.setattr(api_server, 'get_model', download)
+    monkeypatch.setattr(api_server, 'resolve_default_gen_config', generation_config)
+    with pytest.raises(ValueError, match=message):
+        api_server.serve('remote/checkpoint', backend_config=config, task='intern-decision',
+                         speculative_config=speculative)
+    download.assert_not_called()
+    generation_config.assert_not_called()
+    api_server.get_task.assert_not_called()
+    build.assert_not_called()
+    run.assert_not_called()
+
+
+def test_dp_unsupported_config_fails_before_starting_workers(monkeypatch, unsupported_decision_config):
+    import importlib
+
+    launcher = importlib.import_module('lmdeploy.serve.openai.launch_server')
+    config, speculative, message = unsupported_decision_config
+    process, start_method, host_ip = Mock(), Mock(), Mock()
+    monkeypatch.setattr(launcher.mp, 'Process', process)
+    monkeypatch.setattr(launcher.mp, 'set_start_method', start_method)
+    monkeypatch.setattr(launcher, 'get_host_ip', host_ip)
+    with pytest.raises(ValueError, match=message):
+        launcher.launch_server(1, 0, 'remote/checkpoint', config,
+                               task='intern-decision', speculative_config=speculative)
+    process.assert_not_called()
+    start_method.assert_not_called()
+    host_ip.assert_not_called()
+
+
+@pytest.mark.parametrize('temperature', [0, -1, float('nan'), float('inf'), True])
+def test_dp_invalid_temperature_fails_before_starting_workers(monkeypatch, temperature):
+    import importlib
+
+    launcher = importlib.import_module('lmdeploy.serve.openai.launch_server')
+    process = Mock()
+    monkeypatch.setattr(launcher.mp, 'Process', process)
+    monkeypatch.setattr(launcher.mp, 'set_start_method', Mock())
+    with pytest.raises(ValueError, match='temperature|Temperature'):
+        launcher.launch_server(1, 0, 'remote/checkpoint', PytorchEngineConfig(),
+                               task='intern-decision', decision_temperature=temperature)
+    process.assert_not_called()
+
+
+def test_calibration_is_resolved_before_engine_initialization(server_startup, monkeypatch, tmp_path):
+    api_server, build, run = server_startup
+    context = api_server.ServerContext()
+    monkeypatch.setattr(api_server, 'ServerContext', lambda: context)
+    metadata = tmp_path / 'inference.py'
+    metadata.write_text('DEFAULT_TEMPERATURE = 0.75')
+    engine = build.return_value
+
+    def build_engine(**kwargs):
+        metadata.write_text('DEFAULT_TEMPERATURE = 99')
+        return engine
+
+    build.side_effect = build_engine
+    api_server.serve(str(tmp_path), task='intern-decision', generation_config='lmdeploy')
+    assert context.decision_context.temperature == 0.75
+    run.assert_called_once()
 
 
 def test_startup_explicit_calibration_without_metadata(server_startup, monkeypatch, tmp_path):

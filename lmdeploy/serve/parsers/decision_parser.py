@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Intern-Decision request adaptation using the engine's existing model resources."""
+"""Intern-Decision request adaptation using the engine's existing model
+resources."""
 from __future__ import annotations
 
 import json
@@ -50,7 +51,8 @@ class DecisionInput:
 
 @dataclass(frozen=True)
 class DecisionContext:
-    """Small immutable model metadata; tokenizer/processor ownership stays with the engine."""
+    """Small immutable model metadata; tokenizer/processor ownership stays with
+    the engine."""
 
     marker_id: int
     symbol_ids: Mapping[str, int]
@@ -58,15 +60,23 @@ class DecisionContext:
     temperature: float
 
 
+def validate_decision_config(backend_config, speculative_config=None) -> None:
+    """Reject unsupported task settings before loading model resources."""
+    if not isinstance(backend_config, PytorchEngineConfig):
+        raise ValueError(f'{TASK_NAME} requires the PyTorch backend')
+    if speculative_config is not None:
+        raise ValueError(f'{TASK_NAME} does not support speculative decoding')
+    if backend_config.role != EngineRole.Hybrid:
+        raise ValueError(f'{TASK_NAME} requires the hybrid engine role')
+
+
 def create_decision_context(engine, model_path: str, *, temperature: float | None = None,
                             original_model_path: str | None = None) -> DecisionContext:
-    """Check task capabilities once without loading another tokenizer or processor."""
-    if engine.backend != 'pytorch' or not isinstance(engine.backend_config, PytorchEngineConfig):
+    """Check task capabilities once without loading another tokenizer or
+    processor."""
+    if engine.backend != 'pytorch':
         raise ValueError(f'{TASK_NAME} requires the PyTorch backend')
-    if engine.speculative_config is not None:
-        raise ValueError(f'{TASK_NAME} does not support speculative decoding')
-    if engine.backend_config.role != EngineRole.Hybrid:
-        raise ValueError(f'{TASK_NAME} requires the hybrid engine role')
+    validate_decision_config(engine.backend_config, engine.speculative_config)
 
     tokenizer = engine.tokenizer.model.model
     if DECISION_TOKEN not in tokenizer.get_added_vocab():
@@ -116,7 +126,8 @@ def create_decision_context(engine, model_path: str, *, temperature: float | Non
 
 @dataclass(frozen=True)
 class _QuestionMapping:
-    """Request-owned wire values, separate from the checkpoint's string keys."""
+    """Request-owned wire values, separate from the checkpoint's string
+    keys."""
 
     field: str
     kind: str
@@ -128,7 +139,8 @@ class _QuestionMapping:
 
 @dataclass
 class _DecisionRow:
-    """Compiler input adapted from validated OpenAI requests, not a wire schema."""
+    """Compiler input adapted from validated OpenAI requests, not a wire
+    schema."""
 
     state: Any
     questions: dict[str, dict[str, Any]]
@@ -136,7 +148,8 @@ class _DecisionRow:
 
 
 class DecisionParser:
-    """Per-request task input/output conversion without owning engine resources."""
+    """Per-request task input/output conversion without owning engine
+    resources."""
 
     def __init__(self, request, context: DecisionContext):
         self._question_mappings = None
@@ -160,7 +173,8 @@ class DecisionParser:
 
     @staticmethod
     def _extract_state_and_images(value: str | list[DecisionInputMessage]) -> tuple[Any, list[str]]:
-        """Extract images in encounter order and retain one-based references in state."""
+        """Extract images in encounter order and retain one-based references in
+        state."""
         if isinstance(value, str):
             return value, []
         if len(value) == 1 and isinstance(value[0].content, str):
@@ -186,8 +200,8 @@ class DecisionParser:
     def _adapt_openai_request(self, request: OpenAIDecisionRequest) -> _DecisionRow:
         """Normalize wire questions once and retain their inverse mapping.
 
-        Input normalization and typed choice encoding follow intern-decision-inference's decisions_api
-        (Apache-2.0, a8fe089); model identity is checked by the HTTP endpoint.
+        Input normalization and typed choice encoding follow intern-decision-inference's decisions_api (Apache-2.0,
+        a8fe089); model identity is checked by the HTTP endpoint.
         """
         reserved = {question.name for question in request.questions if question.name is not None}
         questions = {}
@@ -229,7 +243,8 @@ class DecisionParser:
 
     @staticmethod
     def _prepare_instructions(row):
-        """Lower typed content into compiler text, preserving image positions and literal JSON."""
+        """Lower typed content into compiler text, preserving image positions
+        and literal JSON."""
         refs = [part['image_url'] for question in row['questions'].values()
                 if isinstance(question['instructions'], list) for part in question['instructions']
                 if part['type'] == 'input_image']
@@ -255,7 +270,8 @@ class DecisionParser:
         return {**row, 'questions': questions}, {token: ref for ref, token in tokens.items()}
 
     def prepare_input(self, *, tokenizer, allowed_media_domains=None) -> DecisionInput:
-        """Prepare request-owned data; wire protocols require a tokenizer for usage."""
+        """Prepare request-owned data; wire protocols require a tokenizer for
+        usage."""
         if tokenizer is None:
             raise ValueError('Decision wire protocols require a tokenizer to prepare input and usage')
         row = (self.request.model_dump(exclude={'model'}, exclude_unset=True) if self.systemone
