@@ -60,7 +60,7 @@ def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
         tools = [item.function.model_dump() for item in request.tools if item.function.name in allowed_names]
         return request.model_copy(update={'tools': tools})
 
-    if not request.tools:
+    if request.tool_choice == 'none' or not request.tools:
         return request.model_copy(update={'tools': None})
 
     if not isinstance(request.tool_choice, str):
