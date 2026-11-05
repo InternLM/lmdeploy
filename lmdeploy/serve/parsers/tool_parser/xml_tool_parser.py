@@ -465,6 +465,24 @@ class XmlToolParser(ToolParser):
             for item in schema_type:
                 if isinstance(item, str):
                     return item
+            return None
+        if 'anyOf' in param_schema or 'oneOf' in param_schema:
+            # Resolve a union only when every non-null branch agrees on one
+            # JSON type; mixed unions coerce the raw value as JSON instead.
+            branches = param_schema.get('anyOf') or param_schema.get('oneOf') or []
+            branch_types = [
+                XmlToolParser._resolve_schema_type(branch)
+                for branch in branches
+                if isinstance(branch, dict)
+            ]
+            distinct = {t for t in branch_types if t not in (None, 'null')}
+            if len(distinct) == 1:
+                return distinct.pop()
+            return None
+        if isinstance(param_schema.get('properties'), dict):
+            return 'object'
+        if param_schema.get('items') is not None:
+            return 'array'
         return None
 
     @staticmethod
@@ -533,8 +551,38 @@ class XmlToolParser(ToolParser):
 
         return original
 
+    @staticmethod
+    def _coerce_json_value(raw_value: str) -> Any:
+        """Coerce a value whose schema declares no single JSON type.
+
+        Union (``anyOf``/``oneOf``), ``$ref`` and typeless schemas keep the
+        raw property dict, so no scalar JSON type applies. The model still
+        emits the value in bare JSON form inside the parameter tags, so
+        parse it as a JSON value; quoted values decode as strings and
+        anything that is not valid JSON keeps its original string form.
+        """
+        original = raw_value
+        raw_value = raw_value.strip()
+        if not raw_value:
+            return original
+        if raw_value.startswith('"'):
+            try:
+                parsed_val = json.loads(raw_value)
+                return parsed_val if isinstance(parsed_val, str) else original
+            except json.JSONDecodeError:
+                return original
+        try:
+            return json.loads(raw_value)
+        except json.JSONDecodeError:
+            return original
+
     def _coerce_arg_value(self, raw_value: Any, schema: dict[str, Any] | None) -> Any:
         """Apply schema-aware coercion to one argument value."""
         if not isinstance(raw_value, str):
             return raw_value
-        return self._coerce_value(raw_value, self._get_schema_type(schema)) if schema is not None else raw_value
+        if schema is None:
+            return raw_value
+        schema_type = self._get_schema_type(schema)
+        if schema_type is None:
+            return self._coerce_json_value(raw_value)
+        return self._coerce_value(raw_value, schema_type)
