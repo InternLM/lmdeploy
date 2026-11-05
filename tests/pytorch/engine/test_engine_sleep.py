@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -187,6 +188,7 @@ def test_engine_wakeup_all_delegates_warmup_to_executor_wakeup(event_loop):
 @pytest.mark.parametrize('state_step', [None, 8, 32, 35])
 @pytest.mark.parametrize('prefix_caching', [False, True])
 def test_sleep_invalidates_completed_prefix_cache(event_loop, level, staged, state_step, prefix_caching):
+    """Clear exact checkpoints independently of the save policy."""
     cache = CacheConfig(max_batches=4,
                         block_size=16,
                         num_cpu_blocks=4,
@@ -206,7 +208,8 @@ def test_sleep_invalidates_completed_prefix_cache(event_loop, level, staged, sta
         scheduler.block_manager.allocate(seq)
         scheduler.block_trie.allocate(seq)
         if state_step is not None and prefix_caching:
-            assert scheduler.state_checkpoints.reserve_save(seq) >= 0
+            with patch.object(scheduler.seq_meta, 'prefill_save_alignment', 0):
+                assert scheduler.state_checkpoints.reserve_save(seq) >= 0
             assert scheduler.state_checkpoints.publish_save(seq)
         scheduler.end_session(0)
         repeat = scheduler.add_session(1).add_sequence(tokens + [2])
