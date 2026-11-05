@@ -49,11 +49,9 @@ def test_scheduler_publishes_cached_tokens_for_accepted_prefix_hit():
 
 @pytest.mark.parametrize('no_drop', [False, True])
 def test_scheduler_ar_spec_prefix_hit_obeys_block_drop_policy(no_drop):
-    from lmdeploy.pytorch.config import SpecDecodeConfig
-    from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
+    from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
     block_size = 16
-    strategy = ARSpecStrategyFactory(SimpleNamespace(bos_token_id=0), SpecDecodeConfig(
-        model='draft', method='qwen3_5_mtp', disable_prefix_cache_block_drop=no_drop)).build_sequence_strategy()
+    strategy = ARSpecSequenceStrategy(recompute_blocks=0 if no_drop else 1)
     seq_meta = SequenceMeta(block_size, strategy=strategy)
     cache_config = CacheConfig(max_batches=1,
                                block_size=block_size,
@@ -450,15 +448,13 @@ def test_scheduler_preserves_usage_without_recounting_recompute_hits(monkeypatch
 @pytest.mark.parametrize('mtp', [False, True])
 @pytest.mark.parametrize('ssm', [False, True])
 def test_scheduler_preserves_usage_after_decode_preemption_and_admission_rollback(initial_hit, mtp, ssm):
-    from lmdeploy.pytorch.config import SpecDecodeConfig
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
-    from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
+    from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
 
     block_size = 4
     strategy = ARSequenceStrategy()
     if mtp:
-        strategy = ARSpecStrategyFactory(SimpleNamespace(bos_token_id=0), SpecDecodeConfig(
-            model='draft', method='qwen3_5_mtp', disable_prefix_cache_block_drop=True)).build_sequence_strategy()
+        strategy = ARSpecSequenceStrategy(recompute_blocks=0)
     cache_config = CacheConfig(max_batches=2,
                                block_size=block_size,
                                num_cpu_blocks=0,

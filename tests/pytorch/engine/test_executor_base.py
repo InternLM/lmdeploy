@@ -19,49 +19,39 @@ from lmdeploy.pytorch.engine.executor.uni_executor import UniExecutor
 from lmdeploy.pytorch.paging.state_manager import build_state_manager
 
 
-@pytest.mark.parametrize('no_drop', [False, True])
+@pytest.mark.parametrize(('local_cache', 'store'), [(True, False), (False, True), (True, True)])
 @pytest.mark.parametrize('method', ['deepseek_mtp', 'hy3_mtp', 'qwen3_5_mtp', 'eagle', 'eagle3'])
-def test_spec_block_drop_config_reaches_sequence_strategy(monkeypatch, no_drop, method):
+def test_spec_config_selects_exact_mtp_cache_identity(monkeypatch, local_cache, store, method):
     from argparse import ArgumentParser
 
     from lmdeploy.cli.utils import ArgumentHelper, get_speculative_config
-    from lmdeploy.pytorch.config import ModelConfig
+    from lmdeploy.pytorch.config import ModelConfig, SchedulerConfig
+    from lmdeploy.pytorch.messages import SequenceMeta
+    from lmdeploy.pytorch.paging.scheduler import Scheduler
     from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
 
     parser = ArgumentParser()
     ArgumentHelper.add_spec_group(parser)
-    flag = ['--speculative-disable-prefix-cache-block-drop']
-    args = ['--speculative-algorithm', method] + (flag if no_drop else [])
-    speculative_config = get_speculative_config(parser.parse_args(args))
-    monkeypatch.setattr(ModelConfig, 'from_pretrained', lambda *args, **kwargs: SimpleNamespace(bos_token_id=0))
+    speculative_config = get_speculative_config(parser.parse_args(['--speculative-algorithm', method]))
+    model = SimpleNamespace(bos_token_id=0, sliding_window=-1, states_shapes=[])
+    monkeypatch.setattr(ModelConfig, 'from_pretrained', lambda *args, **kwargs: model)
     dist_config = DistConfig(tp=2)
+    cache = CacheConfig(max_batches=1, block_size=16, num_cpu_blocks=0, num_gpu_blocks=8,
+                        enable_prefix_caching=local_cache,
+                        kv_transfer_config=(KVTransferConfig(kv_connector='MooncakeStoreConnector',
+                                                             kv_role='kv_consumer') if store else None))
     config = ConfigBuilder.build_specdecode_config(
         target_model='target', speculative_config=speculative_config, engine_config=PytorchEngineConfig(tp=2),
-        cache_config=CacheConfig(max_batches=1, block_size=16, num_cpu_blocks=0, num_gpu_blocks=8),
-        dist_config=dist_config)
+        cache_config=cache, dist_config=dist_config)
+    ExecutorBase('', model, cache, SimpleNamespace(), dist_config, SimpleNamespace(), specdecode_config=config)
     strategy = ARSpecStrategyFactory(config.model_config, config).build_sequence_strategy()
-    assert config.disable_prefix_cache_block_drop == no_drop
-    assert strategy.recompute_blocks == (0 if no_drop else 1)
-
-
-def test_spec_block_drop_config_rejects_missing_method_and_diffusion():
-    from argparse import ArgumentParser
-
-    from lmdeploy.cli.utils import ArgumentHelper, get_speculative_config
-    from lmdeploy.messages import SpeculativeConfig
-
-    for method in ('dflash', 'dspark'):
-        with pytest.raises(ValueError, match=f'not supported for {method}'):
-            SpeculativeConfig(method=method, disable_prefix_cache_block_drop=True)
-        assert not SpeculativeConfig(method=method).disable_prefix_cache_block_drop
-
-    parser = ArgumentParser()
-    ArgumentHelper.add_spec_group(parser)
-    flag = ['--speculative-disable-prefix-cache-block-drop']
-    with pytest.raises(ValueError, match='requires --speculative-algorithm'):
-        get_speculative_config(parser.parse_args(flag))
-    with pytest.raises(ValueError, match='not supported for dflash'):
-        get_speculative_config(parser.parse_args(['--speculative-algorithm', 'dflash'] + flag))
+    paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache,
+                       seq_meta=SequenceMeta(16, strategy=strategy))
+    seq = paging.add_session(0).add_sequence(range(33))
+    mtp = method in ('deepseek_mtp', 'hy3_mtp', 'qwen3_5_mtp')
+    assert seq._seq_meta.prefix_cache_token_lookahead == int(mtp)
+    assert seq.prefix_cache.recompute_overlap.recompute_blocks == (0 if mtp else 1)
+    paging.shutdown()
 
 
 @pytest.mark.parametrize('slots', [1, 8, 16])
@@ -117,26 +107,24 @@ def test_mooncake_rejects_unsupported_hybrid_configuration():
 
 
 @pytest.mark.parametrize('store', [False, True])
-@pytest.mark.parametrize(('model_type', 'method', 'no_drop', 'draft_states', 'draft_layers', 'error'), [
-    ('qwen3_5', 'qwen3_5_mtp', True, [], 1, None),
-    ('qwen3_5', 'qwen3_5_mtp', False, [], 1, None),
-    ('glm5_next', 'deepseek_mtp', True, [], 1, None),
-    ('glm5_next', 'deepseek_mtp', False, [], 1, None),
-    ('qwen3_5', 'eagle3', True, [], 1, 'Qwen3.5 with qwen3_5_mtp'),
-    ('qwen3_5', 'deepseek_mtp', True, [], 1, 'GLM-5.3 with deepseek_mtp'),
-    ('qwen3_5', 'qwen3_5_mtp', True, [((2,), torch.float32)], 1, 'one MTP layer without state caches'),
-    ('qwen3_5', 'qwen3_5_mtp', True, [], 2, 'one MTP layer without state caches'),
-    ('glm5_next', 'deepseek_mtp', True, [((2,), torch.float32)], 1, 'one MTP layer without state caches'),
-    ('glm5_next', 'deepseek_mtp', True, [], 2, 'one MTP layer without state caches'),
+@pytest.mark.parametrize(('model_type', 'method', 'draft_states', 'draft_layers', 'error'), [
+    ('qwen3_5', 'qwen3_5_mtp', [], 1, None),
+    ('glm5_next', 'deepseek_mtp', [], 1, None),
+    ('qwen3_5', 'eagle3', [], 1, 'Qwen3.5 with qwen3_5_mtp'),
+    ('qwen3_5', 'deepseek_mtp', [], 1, 'GLM-5.3 with deepseek_mtp'),
+    ('qwen3_5', 'qwen3_5_mtp', [((2,), torch.float32)], 1, 'one MTP layer without state caches'),
+    ('qwen3_5', 'qwen3_5_mtp', [], 2, 'one MTP layer without state caches'),
+    ('glm5_next', 'deepseek_mtp', [((2,), torch.float32)], 1, 'one MTP layer without state caches'),
+    ('glm5_next', 'deepseek_mtp', [], 2, 'one MTP layer without state caches'),
 ])
-def test_hybrid_checkpoints_validate_mtp_layout(store, model_type, method, no_drop, draft_states, draft_layers, error):
+def test_hybrid_checkpoints_validate_mtp_layout(store, model_type, method, draft_states, draft_layers, error):
     config = ConfigBuilder.build_cache_config(PytorchEngineConfig(
         max_batch_size=1, enable_prefix_caching=not store, prefix_cache_decode_save_first=not store,
         kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_producer')
         if store else None))
     model = SimpleNamespace(sliding_window=-1, states_shapes=[((2,), torch.float32)], is_gated_delta=True,
                             hf_config=SimpleNamespace(model_type=model_type))
-    spec = SpecDecodeConfig(model='draft', method=method, disable_prefix_cache_block_drop=no_drop,
+    spec = SpecDecodeConfig(model='draft', method=method,
                             model_config=SimpleNamespace(states_shapes=draft_states, num_layers=draft_layers))
     args = ('', model, config, SimpleNamespace(), SimpleNamespace(dp=1, world_size=1), SimpleNamespace())
     if error:
