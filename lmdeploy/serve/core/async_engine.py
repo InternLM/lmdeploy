@@ -518,6 +518,14 @@ class AsyncEngine:
                     f'Session {session.session_id} already has an active request.')
 
             chat_template_kwargs = chat_template_kwargs or {}
+            if getattr(self, 'arch', None) == 'Glm5NextForConditionalGeneration':
+                effort = (reasoning_effort if reasoning_effort is not None
+                          else chat_template_kwargs.get('reasoning_effort'))
+                if effort is not None and effort not in ('low', 'high', 'max'):
+                    raise RequestError(
+                        ErrorCode.INVALID_REQUEST,
+                        f'Unsupported reasoning_effort {effort!r} for GLM-5.3-Flash. '
+                        'Supported efforts are low, high and max.')
             if enable_thinking is not None:
                 logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
                 if chat_template_kwargs.get('enable_thinking') is None:
