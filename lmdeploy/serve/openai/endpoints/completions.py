@@ -67,8 +67,11 @@ class _ReasoningTokenCounter:
 def _resolve_reasoning_tag_ids(server_context) -> tuple[int, int] | None:
     """Resolve reasoning-tag token ids from the configured reasoning parser.
 
-    Returns ``None`` when no reasoning parser is configured (reasoning
-    usage is then left unreported, matching the previous behavior).
+    The two tags are looked up directly: copying the whole vocabulary
+    with ``get_vocab()`` costs >100 ms per request on large-vocab
+    tokenizers. Returns ``None`` when no reasoning parser is configured
+    or either tag is not a single vocabulary token (reasoning usage is
+    then left unreported, matching the previous behavior).
     """
     parser_cls = getattr(server_context, 'response_parser_cls', None)
     if parser_cls is None:
@@ -77,12 +80,15 @@ def _resolve_reasoning_tag_ids(server_context) -> tuple[int, int] | None:
     tokenizer = getattr(parser_cls, 'tokenizer', None)
     if reasoning_cls is None or tokenizer is None:
         return None
-    vocab = tokenizer.get_vocab()
-    try:
-        return (vocab[reasoning_cls.get_reasoning_open_tag()],
-                vocab[reasoning_cls.get_reasoning_close_tag()])
-    except KeyError:
+    tag_ids = tokenizer.convert_tokens_to_ids(
+        [reasoning_cls.get_reasoning_open_tag(), reasoning_cls.get_reasoning_close_tag()])
+    # A tag missing from the vocabulary resolves to None (tokenizers
+    # without an unk token) or to the unk fallback id; either way it is
+    # not a single vocabulary token and must not be counted.
+    unk_token_id = getattr(tokenizer, 'unk_token_id', None)
+    if any(tag_id is None or tag_id == unk_token_id for tag_id in tag_ids):
         return None
+    return tag_ids[0], tag_ids[1]
 
 
 def _ends_inside_reasoning(token_ids: list[int] | None, open_tag_id: int,

@@ -1,6 +1,10 @@
-# Tests for PR #5091 review fix: reasoning counters seeded from prompt state.
-# Covers: open reasoning prefix, closed reasoning prefix, plain text, mixed
-# batch - in both non-streaming and streaming (include_usage) modes.
+# Tests for PR #5091: reasoning token reporting in /v1/completions.
+# Covers: counters seeded from the prompt state (open reasoning prefix,
+# closed reasoning prefix, plain text, mixed batch), tag resolution through
+# convert_tokens_to_ids without copying the vocabulary (get_vocab is
+# poisoned in the fake tokenizer so any regression fails loudly), and the
+# missing-tag behavior for both None and unk-token fallbacks - all in both
+# non-streaming and streaming (include_usage) modes.
 import asyncio
 import json
 from collections import deque
@@ -14,6 +18,7 @@ from lmdeploy.serve.openai.protocol import CompletionRequest
 
 OPEN_TAG_ID = 100
 CLOSE_TAG_ID = 101
+UNK_TOKEN_ID = 7
 
 
 class _ReasoningParser:
@@ -28,14 +33,41 @@ class _ReasoningParser:
 
 
 class _Tokenizer:
+    """Fake HF-style tokenizer used for the reasoning tag lookups.
+
+    ``get_vocab`` is poisoned on purpose: the endpoint must resolve the
+    two tags with ``convert_tokens_to_ids`` instead of copying the whole
+    vocabulary on every completion request (>100 ms per call on
+    large-vocab tokenizers).
+
+    Args:
+        vocab: token-to-id mapping known to the tokenizer; tags missing
+            from it exercise the missing-tag behavior.
+        unk_token_id: id that unknown tokens fall back to, mirroring
+            tokenizers configured with an ``unk`` token.
+    """
+
+    def __init__(self, vocab=None, unk_token_id=None):
+        if vocab is None:
+            vocab = {'<think>': OPEN_TAG_ID, '</think>': CLOSE_TAG_ID}
+        self._vocab = dict(vocab)
+        self.unk_token_id = unk_token_id
+
+    def convert_tokens_to_ids(self, tokens):
+        return [self._vocab.get(token, self.unk_token_id) for token in tokens]
 
     def get_vocab(self):
-        return {'<think>': OPEN_TAG_ID, '</think>': CLOSE_TAG_ID}
+        raise AssertionError('the completions endpoint must not copy the tokenizer vocabulary')
 
 
 class _ResponseParser:
+
     reasoning_parser_cls = _ReasoningParser
     tokenizer = _Tokenizer()
+
+    def __init__(self, tokenizer=None):
+        if tokenizer is not None:
+            self.tokenizer = tokenizer
 
 
 class _Session:
@@ -84,12 +116,12 @@ class _AsyncEngine:
 
 class _ServerContext:
 
-    def __init__(self, engine):
+    def __init__(self, engine, tokenizer=None):
         self.async_engine = engine
         self.engine_config = SimpleNamespace(logprobs_mode=None)
         self.session_manager = _SessionManager()
         self.default_gen_config = {}
-        self.response_parser_cls = _ResponseParser()
+        self.response_parser_cls = _ResponseParser(tokenizer)
 
     def create_session(self, session_id=None):
         return _Session()
@@ -104,9 +136,11 @@ class _RawRequest:
         return False
 
 
-async def _collect_reasoning_tokens(prompt_input_ids, generated_ids, stream):
+async def _collect_completion_details(prompt_input_ids, generated_ids, stream,
+                                      tokenizer=None):
+    """Run the completions endpoint; return ``completion_tokens_details``."""
     engine = _AsyncEngine(prompt_input_ids, generated_ids)
-    context = _ServerContext(engine)
+    context = _ServerContext(engine, tokenizer)
     router = APIRouter()
     register(router, context)
     endpoint = router.routes[0].endpoint
@@ -118,7 +152,7 @@ async def _collect_reasoning_tokens(prompt_input_ids, generated_ids, stream):
         stream_options={'include_usage': True} if stream else None)
     response = await endpoint(request, _RawRequest())
     if not stream:
-        return response['usage']['completion_tokens_details']['reasoning_tokens']
+        return response['usage'].get('completion_tokens_details')
     usage = None
     async for chunk in response.body_iterator:
         if chunk.startswith('data: [DONE]'):
@@ -127,7 +161,7 @@ async def _collect_reasoning_tokens(prompt_input_ids, generated_ids, stream):
         if payload.get('usage'):
             usage = payload['usage']
     assert usage is not None
-    return usage['completion_tokens_details']['reasoning_tokens']
+    return usage.get('completion_tokens_details')
 
 
 # name, prompt_input_ids (per prompt), generated_ids (per prompt), expected
@@ -145,9 +179,11 @@ SINGLE_PROMPT_CASES = [
 @pytest.mark.parametrize('stream', [False, True])
 def test_reasoning_tokens_are_seeded_from_prompt_state(name, prompt_input_ids, generated_ids,
                                                        expected, stream):
-    reasoning = asyncio.run(
-        _collect_reasoning_tokens(prompt_input_ids, generated_ids, stream))
-    assert reasoning == expected
+    # the fake tokenizer's get_vocab raises, so these double as the
+    # regression test that tag resolution never copies the vocabulary
+    details = asyncio.run(
+        _collect_completion_details(prompt_input_ids, generated_ids, stream))
+    assert details['reasoning_tokens'] == expected
 
 
 def test_mixed_prompt_batch_sums_prompt_seeded_counters():
@@ -162,6 +198,23 @@ def test_mixed_prompt_batch_sums_prompt_seeded_counters():
         [3],  # outside (0)
     ]
     for stream in [False, True]:
-        reasoning = asyncio.run(
-            _collect_reasoning_tokens(prompt_input_ids, generated_ids, stream))
-        assert reasoning == 2
+        details = asyncio.run(
+            _collect_completion_details(prompt_input_ids, generated_ids, stream))
+        assert details['reasoning_tokens'] == 2
+
+
+@pytest.mark.parametrize('unk_token_id', [None, UNK_TOKEN_ID],
+                         ids=['none_fallback', 'unk_fallback'])
+@pytest.mark.parametrize('missing_tag', ['<think>', '</think>'])
+@pytest.mark.parametrize('stream', [False, True])
+def test_unresolvable_tags_leave_reasoning_usage_unreported(missing_tag, unk_token_id, stream):
+    # a tag that is not a single vocabulary token resolves to None on
+    # unk-less tokenizers and to the unk fallback id otherwise; both must
+    # keep the previous unreported behavior instead of counting tokens
+    # against the fallback id
+    vocab = {'<think>': OPEN_TAG_ID, '</think>': CLOSE_TAG_ID}
+    del vocab[missing_tag]
+    details = asyncio.run(
+        _collect_completion_details([[1, OPEN_TAG_ID]], [[9, CLOSE_TAG_ID, UNK_TOKEN_ID]], stream,
+                                    tokenizer=_Tokenizer(vocab, unk_token_id=unk_token_id)))
+    assert details is None
