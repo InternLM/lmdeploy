@@ -25,11 +25,124 @@ from lmdeploy.serve.openai.protocol import (
     CompletionResponseChoice,
     CompletionResponseStreamChoice,
     CompletionStreamResponse,
+    CompletionTokensDetails,
     LogProbs,
     UsageInfo,
 )
 from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
 from lmdeploy.serve.utils.server_utils import validate_json_request
+
+
+class _ReasoningTokenCounter:
+    """Count generated tokens inside the model reasoning tags.
+
+    Mirrors the token-id accounting used by the chat response parser
+    (``ResponseParser._update_reasoning_tokens``) so ``/v1/completions``
+    reports the same ``reasoning_tokens`` semantics: the number of tokens
+    between the configured reasoning parser open/close tag tokens.
+    Counting state is seeded from the prompt token ids: a prompt that
+    already ends inside the current turn's reasoning block starts in
+    counting mode (the prompt tokens themselves are never counted),
+    while reasoning tags mentioned in earlier turns - before the last
+    special-token turn boundary, e.g. a literal ``<think>`` inside a
+    user message - are not inherited. Otherwise counting starts at an
+    explicit open tag, so a raw completion that never emits reasoning
+    tags reports zero reasoning tokens.
+    """
+
+    def __init__(self, open_tag_id: int, close_tag_id: int,
+                 boundary_ids: frozenset[int] = frozenset(),
+                 prompt_token_ids: list[int] | None = None):
+        self._open_tag_id = open_tag_id
+        self._close_tag_id = close_tag_id
+        self._counting = _ends_inside_reasoning(prompt_token_ids, open_tag_id, close_tag_id,
+                                                boundary_ids)
+        self.reasoning_tokens = 0
+
+    def update(self, token_ids: list[int] | None) -> None:
+        for token_id in token_ids or []:
+            if token_id == self._open_tag_id:
+                self._counting = True
+            elif token_id == self._close_tag_id:
+                self._counting = False
+            elif self._counting:
+                self.reasoning_tokens += 1
+
+
+def _resolve_reasoning_tags(server_context) -> tuple[int, int, frozenset[int]] | None:
+    """Resolve reasoning tag token ids from the configured reasoning parser.
+
+    The two tags are looked up directly: copying the whole vocabulary
+    with ``get_vocab()`` costs >100 ms per request on large-vocab
+    tokenizers. Returns ``None`` when no reasoning parser is configured
+    or either tag is not a single vocabulary token (reasoning usage is
+    then left unreported, matching the previous behavior).
+
+    Also returns the tokenizer's special-token ids as turn boundaries:
+    chat templates delimit turns with special tokens (``<|im_start|>``,
+    ``<|assistant|>``, ...), so reasoning tags inside earlier turns are
+    not inherited by the current continuation.
+    """
+    parser_cls = getattr(server_context, 'response_parser_cls', None)
+    if parser_cls is None:
+        return None
+    reasoning_cls = getattr(parser_cls, 'reasoning_parser_cls', None)
+    tokenizer = getattr(parser_cls, 'tokenizer', None)
+    if reasoning_cls is None or tokenizer is None:
+        return None
+    tag_ids = tokenizer.convert_tokens_to_ids(
+        [reasoning_cls.get_reasoning_open_tag(), reasoning_cls.get_reasoning_close_tag()])
+    # A tag missing from the vocabulary resolves to None (tokenizers
+    # without an unk token) or to the unk fallback id; either way it is
+    # not a single vocabulary token and must not be counted.
+    unk_token_id = getattr(tokenizer, 'unk_token_id', None)
+    if any(tag_id is None or tag_id == unk_token_id for tag_id in tag_ids):
+        return None
+    boundary_ids = frozenset(getattr(tokenizer, 'all_special_ids', None) or ()) - set(tag_ids)
+    return tag_ids[0], tag_ids[1], boundary_ids
+
+
+def _ends_inside_reasoning(token_ids: list[int] | None, open_tag_id: int,
+                           close_tag_id: int,
+                           boundary_ids: frozenset[int] = frozenset()) -> bool:
+    """Whether a token sequence ends inside an open reasoning block.
+
+    Decided by the last reasoning tag token before any turn boundary: a
+    tag mentioned in an earlier turn (behind a special-token turn
+    boundary such as ``<|im_start|>``) does not put the current
+    continuation inside a reasoning block.
+    """
+    for token_id in reversed(token_ids or []):
+        if token_id == open_tag_id:
+            return True
+        if token_id == close_tag_id or token_id in boundary_ids:
+            return False
+    return False
+
+
+def _get_prompt_token_ids(prepared_request) -> list[int] | None:
+    """Prompt token ids of a prepared request, when available."""
+    inputs = getattr(prepared_request, 'inputs', None)
+    if isinstance(inputs, dict):
+        return inputs.get('input_ids')
+    return getattr(inputs, 'input_ids', None)
+
+
+def _build_reasoning_counters(reasoning_tags, prepared_requests):
+    """Create one reasoning counter per prepared request, or ``None``.
+
+    Each counter is seeded from its prompt's reasoning state - tags in
+    earlier turns excluded - so prompts that already end inside the
+    current turn's reasoning block are counted correctly.
+    """
+    if reasoning_tags is None:
+        return None
+    open_tag_id, close_tag_id, boundary_ids = reasoning_tags
+    return [
+        _ReasoningTokenCounter(open_tag_id, close_tag_id, boundary_ids,
+                               prompt_token_ids=_get_prompt_token_ids(prepared_request))
+        for prepared_request in prepared_requests
+    ]
 
 
 def check_request(request: CompletionRequest, server_context) -> str:
@@ -222,9 +335,15 @@ def register(router: APIRouter, server_context) -> None:
         async def completion_stream_generator() -> AsyncGenerator[str, None]:
             # First chunk with role
             final_usage = UsageInfo() if include_usage else None
+            # reasoning accounting is per-chunk work; skip it entirely
+            # for streams that will not report usage
+            counters = None if final_usage is None else _build_reasoning_counters(
+                _resolve_reasoning_tags(server_context), prepared_requests)
             try:
-                for generator in generators:
+                for gen_index, generator in enumerate(generators):
                     async for res in generator:
+                        if counters is not None:
+                            counters[gen_index].update(res.token_ids)
                         logprobs = None
                         if request.logprobs and res.logprobs:
                             raise ValueError('logprobs is removed')
@@ -251,6 +370,9 @@ def register(router: APIRouter, server_context) -> None:
                 yield 'data: [DONE]\n\n'
                 return
             if final_usage is not None:
+                if counters is not None:
+                    final_usage.completion_tokens_details = CompletionTokensDetails(
+                        reasoning_tokens=sum(counter.reasoning_tokens for counter in counters))
                 yield f'data: {json.dumps(create_stream_usage_response_json(final_usage))}\n\n'
             yield 'data: [DONE]\n\n'
 
@@ -267,8 +389,10 @@ def register(router: APIRouter, server_context) -> None:
         choices = [None] * len(generators)
         cache_block_ids = []
         remote_token_ids = []
+        counters = _build_reasoning_counters(_resolve_reasoning_tags(server_context),
+                                             prepared_requests)
 
-        async def _inner_call(i, generator, session):
+        async def _inner_call(i, generator, session, counter=None):
             nonlocal cache_block_ids, remote_token_ids
             final_logprobs = []
             final_token_ids = []
@@ -285,6 +409,8 @@ def register(router: APIRouter, server_context) -> None:
                             await session.async_abort()
                             return create_error_response(HTTPStatus.BAD_REQUEST,
                                                          'Client disconnected')
+                        if counter is not None:
+                            counter.update(res.token_ids)
                         final_res = res
                         text += res.response
                         cache_block_ids.append(res.cache_block_ids)
@@ -316,13 +442,18 @@ def register(router: APIRouter, server_context) -> None:
             usage.total_tokens += total_tokens
 
         call_results = await asyncio.gather(*[
-            _inner_call(i, generators[i], sessions[i])
+            _inner_call(i, generators[i], sessions[i],
+                        counters[i] if counters is not None else None)
             for i in range(len(generators))
         ])
         error_response = next(
             (result for result in call_results if result is not None), None)
         if error_response is not None:
             return error_response
+
+        if counters is not None:
+            usage.completion_tokens_details = CompletionTokensDetails(
+                reasoning_tokens=sum(counter.reasoning_tokens for counter in counters))
 
         response = CompletionResponse(
             id=request_id,
