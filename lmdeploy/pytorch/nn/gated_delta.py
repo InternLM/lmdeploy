@@ -12,6 +12,7 @@ from lmdeploy.pytorch.backends.causal_conv1d import CausalConv1dBuildSpec
 from lmdeploy.pytorch.backends.gated_delta_rule import (
     GatedDeltaMeta,
     GatedDeltaMetaBuildSpec,
+    GatedDeltaReplayState,
     GatedDeltaRuleBuildSpec,
 )
 from lmdeploy.pytorch.distributed import get_tp_world_rank
@@ -70,7 +71,7 @@ class CausalConv1dFunc:
         x: torch.Tensor,
         weight: torch.Tensor,
         bias: torch.Tensor,
-        conv_state: torch.Tensor,
+        conv_state: torch.Tensor | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
     ):
         return self.impl.forward(x, weight, bias, conv_state, gated_delta_meta, activation=self.activation)
@@ -190,6 +191,7 @@ class CausalConv1d(nn.Module):
         loaded_weight = torch.cat([q, k, v], dim=0)
         default_weight_loader(param, loaded_weight)
 
-    def forward(self, x: torch.Tensor, conv_state: torch.Tensor, gated_delta_meta: GatedDeltaMeta):
+    def forward(self, x: torch.Tensor, conv_state: torch.Tensor | GatedDeltaReplayState,
+                gated_delta_meta: GatedDeltaMeta):
         """forward."""
         return self.causal_conv1d_func(x, self.weight, self.bias, conv_state, gated_delta_meta)

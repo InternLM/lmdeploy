@@ -24,6 +24,10 @@ class CacheCheckpointInputs:
     kv_save_plan: torch.Tensor | None = None
     state_restore_plan: StateCacheCopyPlan | None = None
     state_save_plan: StateCacheCopyPlan | None = None
+    # Per-row standard ReplaySSM checkpoint publication mask. InputsMaker
+    # creates it on the host and the normal H2D payload path moves it once;
+    # ModelAgent must not allocate it on the decode stream.
+    replayssm_force_flush: torch.BoolTensor | None = None
     # Columns are (batch row, boundary, source slot, destination slot).
     # Decode copies are conditional on this forward's accepted prefix.
     decode_save_plan: torch.Tensor | None = None
@@ -58,6 +62,10 @@ class CacheCheckpointInputs:
         kv_save_plan = self.kv_save_plan
         if kv_save_plan is not None:
             kv_save_plan = kv_save_plan.to(device, non_blocking=non_blocking)
+        replayssm_force_flush = self.replayssm_force_flush
+        if replayssm_force_flush is not None:
+            replayssm_force_flush = replayssm_force_flush.to(
+                device, non_blocking=non_blocking)
         decode_save_plan = self.decode_save_plan
         if decode_save_plan is not None:
             decode_save_plan = decode_save_plan.to(device, non_blocking=non_blocking)
@@ -67,6 +75,7 @@ class CacheCheckpointInputs:
             kv_save_plan=kv_save_plan,
             state_restore_plan=self.state_restore_plan,
             state_save_plan=self.state_save_plan,
+            replayssm_force_flush=replayssm_force_flush,
             decode_save_plan=decode_save_plan,
             decode_save_id=self.decode_save_id,
             ssm_state_access_id=self.ssm_state_access_id,
@@ -74,6 +83,6 @@ class CacheCheckpointInputs:
 
     def record_stream(self, stream: torch.cuda.Stream) -> None:
         """Record forward-stream use of device-consumed plans."""
-        for plan in (self.kv_restore_plan, self.kv_save_plan, self.decode_save_plan):
+        for plan in (self.kv_restore_plan, self.kv_save_plan, self.replayssm_force_flush, self.decode_save_plan):
             if plan is not None and plan.is_cuda:
                 plan.record_stream(stream)

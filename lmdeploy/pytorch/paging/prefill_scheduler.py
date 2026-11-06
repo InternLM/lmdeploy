@@ -487,6 +487,11 @@ class _PrefillAdmissionAttempt:
 
     def run(self):
         """Apply policy, acquire resources, and commit one admission."""
+        if self.seq.replayssm_recompute_pending:
+            # Accepted MTP inputs may extend beyond the retained stopped history,
+            # including a folded checkpoint. Drop the entire private cache tuple.
+            self.seq.state.release_paging_resources()
+            self.seq.replayssm_recompute_pending = False
         if self.load_coordinator.lookup_enabled and not self._load_ready:
             if self.load_coordinator.is_lookup_pending(self.seq):
                 self.prefill_scheduler.last_schedule_had_pending_lookup = True
@@ -607,6 +612,10 @@ class _PrefillAdmissionAttempt:
         if admission is KVLoadAdmission.PENDING:
             self._prefix_match.rollback('external lookup pending')
             prefill.last_schedule_had_pending_lookup = True
+            return _PrefillAdmissionResult.skip()
+        if admission is KVLoadAdmission.LOAD_STATE_UNAVAILABLE:
+            self._prefix_match.rollback('shared load state unavailable')
+            # Local work can still run on auxiliary state and release I/O pins.
             return _PrefillAdmissionResult.skip()
         if admission is KVLoadAdmission.STARTED:
             seq = self.seq

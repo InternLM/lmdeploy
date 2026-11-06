@@ -83,9 +83,8 @@ class Scheduler:
                 if (not cache_config.use_mooncake_store
                         or not callable(getattr(kv_connector, 'bind_compact_state_manager', None))):
                     raise NotImplementedError('Compact scheduler requires the configured Store scheduler connector.')
-            expected = SSMStateCapacity.from_state_slots(
-                cache_config.num_state_caches, cache_config.prefix_cache_state_budget,
-                cache_config.num_store_state_caches, compact_capacity.max_update_tokens)
+            expected = SSMStateCapacity.from_cache_config(
+                cache_config, compact_capacity.max_update_tokens, runtime_is_auxiliary=cache_config.enable_replayssm)
             if not cache_config.states_shapes or compact_capacity != expected:
                 raise ValueError('Compact scheduler capacity must preserve the stateful request geometry.')
         self.scheduler_config = scheduler_config

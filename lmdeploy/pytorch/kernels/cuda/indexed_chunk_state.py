@@ -61,6 +61,13 @@ def _indexed_chunk_state_kernel(
     final_ids,
     checkpoint_ids,
     checkpoint_offsets,
+    checkpoint_pool,
+    cp_stride_unit: tl.constexpr,
+    cp_stride_head: tl.constexpr,
+    cp_stride_k: tl.constexpr,
+    cp_stride_v: tl.constexpr,
+    NUM_CHECKPOINTS: tl.constexpr,
+    SEPARATE_CHECKPOINT_POOL: tl.constexpr,
     stride_unit: tl.constexpr,
     stride_head: tl.constexpr,
     stride_k: tl.constexpr,
@@ -135,10 +142,10 @@ def _indexed_chunk_state_kernel(
         checkpoint_id = tl.load(checkpoint_ids + i_n).to(tl.int64)
         checkpoint_offset = tl.load(checkpoint_offsets + i_n)
         # c=e with a shared final ID is written only by the final store.
-        checkpoint_valid = (input_valid & (checkpoint_id > 0) & (checkpoint_id < NUM_UNITS)
-                            & (checkpoint_id != input_id) & (checkpoint_id != final_id)
+        checkpoint_valid = (input_valid & (checkpoint_id > 0) & (checkpoint_id < NUM_CHECKPOINTS)
+                            & (SEPARATE_CHECKPOINT_POOL | ((checkpoint_id != input_id) & (checkpoint_id != final_id)))
                             & (checkpoint_offset > 0) & (checkpoint_offset <= T))
-        hc = pool + checkpoint_id * stride_unit + i_h * stride_head
+        hc = checkpoint_pool + checkpoint_id * cp_stride_unit + i_h * cp_stride_head
 
     # load initial state
     o_v = i_v * BV + tl.arange(0, BV)
@@ -339,34 +346,34 @@ def _indexed_chunk_state_kernel(
         if STORE_CHECKPOINT:
             if checkpoint_valid and min((i_t + 1) * BT, T) == checkpoint_offset:
                 if STATE_V_FIRST:
-                    p_hc = hc + o_v[:, None] * stride_v + o_k1[None, :] * stride_k
+                    p_hc = hc + o_v[:, None] * cp_stride_v + o_k1[None, :] * cp_stride_k
                     m_ht = m_v[:, None] & m_k1[None, :]
                 else:
-                    p_hc = hc + o_k1[:, None] * stride_k + o_v[None, :] * stride_v
+                    p_hc = hc + o_k1[:, None] * cp_stride_k + o_v[None, :] * cp_stride_v
                     m_ht = m_k1[:, None] & m_v[None, :]
                 tl.store(p_hc, b_h1.to(p_hc.dtype.element_ty), mask=m_ht & checkpoint_valid)
                 if K > 64:
                     if STATE_V_FIRST:
-                        p_hc = hc + o_v[:, None] * stride_v + o_k2[None, :] * stride_k
+                        p_hc = hc + o_v[:, None] * cp_stride_v + o_k2[None, :] * cp_stride_k
                         m_ht = m_v[:, None] & m_k2[None, :]
                     else:
-                        p_hc = hc + o_k2[:, None] * stride_k + o_v[None, :] * stride_v
+                        p_hc = hc + o_k2[:, None] * cp_stride_k + o_v[None, :] * cp_stride_v
                         m_ht = m_k2[:, None] & m_v[None, :]
                     tl.store(p_hc, b_h2.to(p_hc.dtype.element_ty), mask=m_ht & checkpoint_valid)
                 if K > 128:
                     if STATE_V_FIRST:
-                        p_hc = hc + o_v[:, None] * stride_v + o_k3[None, :] * stride_k
+                        p_hc = hc + o_v[:, None] * cp_stride_v + o_k3[None, :] * cp_stride_k
                         m_ht = m_v[:, None] & m_k3[None, :]
                     else:
-                        p_hc = hc + o_k3[:, None] * stride_k + o_v[None, :] * stride_v
+                        p_hc = hc + o_k3[:, None] * cp_stride_k + o_v[None, :] * cp_stride_v
                         m_ht = m_k3[:, None] & m_v[None, :]
                     tl.store(p_hc, b_h3.to(p_hc.dtype.element_ty), mask=m_ht & checkpoint_valid)
                 if K > 192:
                     if STATE_V_FIRST:
-                        p_hc = hc + o_v[:, None] * stride_v + o_k4[None, :] * stride_k
+                        p_hc = hc + o_v[:, None] * cp_stride_v + o_k4[None, :] * cp_stride_k
                         m_ht = m_v[:, None] & m_k4[None, :]
                     else:
-                        p_hc = hc + o_k4[:, None] * stride_k + o_v[None, :] * stride_v
+                        p_hc = hc + o_k4[:, None] * cp_stride_k + o_v[None, :] * cp_stride_v
                         m_ht = m_k4[:, None] & m_v[None, :]
                     tl.store(p_hc, b_h4.to(p_hc.dtype.element_ty), mask=m_ht & checkpoint_valid)
 
@@ -417,6 +424,7 @@ def indexed_chunk_state_fwd(
     gk: torch.Tensor | None = None,
     checkpoint_ids: torch.Tensor | None = None,
     checkpoint_offsets: torch.Tensor | None = None,
+    checkpoint_pool: torch.Tensor | None = None,
     state_v_first: bool = False,
     cu_seqlens: torch.Tensor | None = None,
     chunk_indices: torch.Tensor | None = None,
@@ -470,6 +478,16 @@ def indexed_chunk_state_fwd(
     for gate, shape in ((g, (batch, length, value_heads)), (gk, (batch, length, value_heads, dim))):
         if gate is not None and (gate.shape != shape or gate.device != k.device or not gate.is_contiguous()):
             raise ValueError('Invalid cumulative gate layout.')
+    separate_checkpoint_pool = checkpoint_pool is not None
+    checkpoint_pool = pool if checkpoint_pool is None else checkpoint_pool
+    if (checkpoint_pool.ndim != 4 or tuple(checkpoint_pool.shape[1:]) != expected
+            or checkpoint_pool.dtype != pool.dtype or checkpoint_pool.device != pool.device):
+        raise ValueError('Checkpoint pool must match the runtime state payload, dtype and device.')
+    if separate_checkpoint_pool and checkpoint_pool.untyped_storage().data_ptr() == pool.untyped_storage().data_ptr():
+        raise ValueError('Separate checkpoint and runtime pools must not share storage.')
+    cp_stride_k, cp_stride_v = checkpoint_pool.stride()[-2:]
+    if state_v_first:
+        cp_stride_k, cp_stride_v = cp_stride_v, cp_stride_k
     chunks = triton.cdiv(length, 64) if cu_seqlens is None else len(chunk_indices)
     h = k.new_empty((batch, chunks, *expected))
     v_new = torch.empty_like(u)
@@ -497,6 +515,8 @@ def indexed_chunk_state_fwd(
         launch['num_warps'] = 4
     kernel[grid](
         k, u, w, v_new, g, gk, h, pool, input_ids, final_ids, checkpoint_ids, checkpoint_offsets,
+        checkpoint_pool, checkpoint_pool.stride(0), checkpoint_pool.stride(1), cp_stride_k, cp_stride_v,
+        checkpoint_pool.shape[0], separate_checkpoint_pool,
         pool.stride(0), pool.stride(1), stride_k, stride_v, pool.shape[0], cu_seqlens, chunk_offsets,
         T=length, H=heads, HV=value_heads, K=dim, V=value_dim, BT=64, STATE_V_FIRST=state_v_first,
          **launch)

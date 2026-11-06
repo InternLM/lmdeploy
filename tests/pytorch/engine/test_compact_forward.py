@@ -176,7 +176,8 @@ def _environment(monkeypatch, width):
     recurrent[0].zero_()
     model = _RecurrentModel(conv, recurrent, width)
     model_config = SimpleNamespace(vocab_size=16, use_mla_fp8_cache=False, use_flash_mla=False, mla_index_topk=None,
-                                   model_paradigm='ar', states_shapes=[(1,)], use_mrope=False, block_size=64)
+                                   model_paradigm='ar', enable_replayssm=False, states_shapes=[(1,)], use_mrope=False,
+                                   block_size=64)
     cache = SimpleNamespace(cache_config=SimpleNamespace(window_size=0, quant_policy=0), gpu_cache=[], block_caches={})
     state_cache = SimpleNamespace(compact_plan=SimpleNamespace(unit_specs=(object(),)),
                                   state_caches=[conv, recurrent], named_state_caches={})

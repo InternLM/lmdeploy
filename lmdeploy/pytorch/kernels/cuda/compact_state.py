@@ -225,4 +225,4 @@ def stage_compact_state_ids(source, destination):
             source.state_ids, source.input_state_ids, source.output_state_ids,
             destination.state_ids, destination.input_state_ids, destination.output_state_ids,
             B=batch, PAD_B=padded_batch, V=bank_width, W=width,
-            ROWS=32, COLS=triton.next_power_of_2(bank_width), num_warps=4)
+            ROWS=32, COLS=triton.next_power_of_2(max(bank_width, width)), num_warps=4)

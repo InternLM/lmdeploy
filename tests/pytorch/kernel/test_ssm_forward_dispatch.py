@@ -122,7 +122,7 @@ def test_metadata_build_selection_and_live_context(monkeypatch, execution, index
         assert impl._piecewise_forward is wrapper
     assert 'forward' not in vars(impl) and '_build' not in vars(impl)
     for decoding in (False, True):
-        context.ssm_state_meta = object()
+        context.ssm_state_meta = SimpleNamespace(runtime_is_auxiliary=False)
         context.ssm_prefill_meta = None if decoding else object()
         attn = SimpleNamespace(is_decoding=decoding)
         execution.value = SimpleNamespace(raw_tokens=3) if active else None

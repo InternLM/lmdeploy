@@ -5,7 +5,7 @@ from functools import lru_cache, partial
 import torch
 
 from ..causal_conv1d import CausalConv1dImpl
-from ..gated_delta_rule import GatedDeltaMeta
+from ..gated_delta_rule import GatedDeltaMeta, GatedDeltaReplayState
 from .step_metadata import register_piecewise_graph_impl
 from .utils import has_tilelang
 
@@ -95,7 +95,7 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
             x: torch.Tensor,
             weight: torch.Tensor,
             bias: torch.Tensor | None,
-            conv_state: torch.Tensor,
+            conv_state: torch.Tensor | GatedDeltaReplayState,
             gated_delta_meta: GatedDeltaMeta,
             activation: str,
         ) -> torch.Tensor:
@@ -114,7 +114,7 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
             x: torch.Tensor,
             weight: torch.Tensor,
             bias: torch.Tensor | None,
-            conv_state: torch.Tensor,
+            conv_state: torch.Tensor | GatedDeltaReplayState,
             gated_delta_meta: GatedDeltaMeta,
             activation: str,
         ) -> torch.Tensor:
@@ -163,16 +163,28 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
         x: torch.Tensor,
         weight: torch.Tensor,
         bias: torch.Tensor | None,
-        conv_state: torch.Tensor,
+        conv_state: torch.Tensor | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
         activation: str,
     ) -> torch.Tensor:
         """Dispatch causal convolution by state layout and inference phase."""
+        if isinstance(conv_state, GatedDeltaReplayState):
+            return self.forward_replay(x, weight, bias, conv_state, gated_delta_meta, activation)
         if self.indexed_state:
             return self.forward_indexed(x, weight, bias, conv_state, gated_delta_meta, activation)
         if gated_delta_meta.is_decoding:
             return self.decode(x, weight, bias, conv_state, gated_delta_meta, activation)
         return self._prefill(x, weight, bias, conv_state, gated_delta_meta, activation)
+
+    def forward_replay(self, x, weight, bias, state, metadata, activation):
+        from lmdeploy.pytorch.kernels.cuda.replayssm_indexed import replay_conv_boundaries
+        if not metadata.is_decoding:
+            replay_conv_boundaries(x, state, metadata, weight.shape[-1])
+            return self._prefill(x, weight, bias, state.conv_state, metadata, activation)
+        output = self.decode(x, weight, bias, state.conv_state, metadata, activation)
+        if state.cursor.Tmax == 1:
+            replay_conv_boundaries(x, state, metadata, weight.shape[-1])
+        return output
 
     @staticmethod
     def forward_indexed(

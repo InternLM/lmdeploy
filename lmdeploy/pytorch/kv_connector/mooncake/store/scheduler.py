@@ -342,7 +342,8 @@ class MooncakeStoreScheduler:
                 raise RuntimeError('Compact Store requires the paging state owner before load admission.')
             bank = self._compact_owner.bank_for(request)
             # Remaining record validation precedes the owner lease below.
-            state_unit_id = bank.unit_ids[0]
+            load_access = self._compact_owner.submit_load(bank, remote_token_len)
+            state_unit_id = load_access._writes[0].unit_id
         elif self._is_hybrid:
             state_slot = int(request.logical_state)
             runtime_pool_end = self._cache_config.num_state_caches - self._cache_config.num_store_state_caches
@@ -357,8 +358,6 @@ class MooncakeStoreScheduler:
             state_slot=state_slot,
             state_unit_id=state_unit_id,
         )
-        if state_unit_id is not None:
-            load_access = self._compact_owner.submit_load(bank, remote_token_len)
         # Commit only after every destination has been validated. A failed
         # binding leaves the lookup available for a later allocation attempt.
         self._lookup_plans.pop(req_id)

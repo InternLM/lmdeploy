@@ -9,9 +9,10 @@ import torch
 class SSMStateMetadata:
     """One immutable submitted bank/input/output table version.
 
-    Tensors contain IDs only. Bank promotion creates a new table; submitted tables must not be mutated in place.
-    Auxiliary request IDs remain in ModelInputs.state_offsets. Checkpoint reservation IDs and relative offsets
-    deliberately do not belong here.
+    Tensors contain IDs only. Bank promotion creates a new table; submitted tables must not be mutated in place. A zero-
+    column bank denotes auxiliary Replay runtime, not absent model work. Its output table contains only optional shared
+    checkpoint destinations; ordinary decode entries remain -1. Auxiliary request IDs remain in
+    ModelInputs.state_offsets. Checkpoint reservation IDs and relative offsets deliberately do not belong here.
     """
     state_ids: torch.Tensor
     input_state_ids: torch.Tensor
@@ -21,19 +22,24 @@ class SSMStateMetadata:
     partial_bank: bool = False
 
     def __post_init__(self):
-        minimum = 1
+        minimum = 0
         if self.state_ids.ndim != 2 or self.state_ids.shape[1] < minimum:
             raise ValueError(f'Expected compact bank table [B,V], V>={minimum}.')
         batch, width = self.state_ids.shape
         if (self.input_state_ids.shape != (batch, ) or self.output_state_ids.ndim != 2
                 or self.output_state_ids.shape[0] != batch):
             raise ValueError('Compact input/output batch dimensions must match bank rows.')
-        maximum = width
+        maximum = width or self.output_state_ids.shape[1]
         if not 1 <= self.output_state_ids.shape[1] <= maximum:
-            raise ValueError('Compact output width must satisfy 1<=W<=V.')
+            raise ValueError('Compact output needs W>=1 and, for full-state banks, W<=V.')
         for tensor in (self.state_ids, self.input_state_ids, self.output_state_ids):
             if tensor.dtype != torch.int64 or tensor.device != self.state_ids.device or not tensor.is_contiguous():
                 raise ValueError('Compact ID tensors must be contiguous int64 on one device.')
+
+    @property
+    def runtime_is_auxiliary(self) -> bool:
+        """No full-state destinations: mutable runtime lives in request slots."""
+        return self.state_ids.shape[1] == 0
 
     def index_select(self, indices):
         """Reindex only small metadata; never index state payloads."""
@@ -79,6 +85,10 @@ class SSMStateCursor:
     def bind(self, state: SSMStateMetadata, request_ids: torch.Tensor, history_lengths: torch.Tensor,
              source_ids: torch.Tensor | None = None, *,
              prefill: 'SSMPrefillMetadata | None' = None) -> SSMStateMetadata:
+        if state.runtime_is_auxiliary:
+            inputs = torch.full_like(state.input_state_ids, -1) if source_ids is None else source_ids
+            inputs = torch.where(history_lengths > 0, inputs, -1)
+            return SSMStateMetadata(state.state_ids, inputs, state.output_state_ids)
         from .kernels.cuda.compact_state import select_compact_state_ids
         inputs, outputs = select_compact_state_ids(state.state_ids, state.input_state_ids,
                                                    state.output_state_ids.shape[1],
@@ -89,6 +99,10 @@ class SSMStateCursor:
 
     def advance(self, state: SSMStateMetadata, request_ids: torch.Tensor, consumed: torch.Tensor,
                 width: int | None = None) -> SSMStateMetadata:
+        if state.runtime_is_auxiliary:
+            width = state.output_state_ids.shape[1] if width is None else width
+            return SSMStateMetadata(state.state_ids, torch.full_like(state.input_state_ids, -1),
+                                    state.output_state_ids.new_full((len(request_ids), width), -1))
         from .kernels.cuda.compact_state import select_compact_state_ids
         width = state.output_state_ids.shape[1] if width is None else width
         inputs, outputs = select_compact_state_ids(state.state_ids, state.input_state_ids, width,
@@ -106,6 +120,13 @@ class SSMStateCursor:
         from .kernels.cuda.compact_state import select_compact_state_ids
         if bank_ids.shape != state.state_ids.shape:
             raise ValueError('Rebinding cannot change bank capacity or batch rows.')
+        if state.runtime_is_auxiliary:
+            outputs = torch.full_like(state.output_state_ids, -1)
+            if decode_ids is not None:
+                if outputs.shape[1] != 1:
+                    raise ValueError('Auxiliary decode checkpoint export requires AR width one.')
+                outputs = decode_ids[:, None].contiguous()
+            return SSMStateMetadata(bank_ids, state.input_state_ids, outputs)
         inputs, outputs = select_compact_state_ids(bank_ids, state.input_state_ids, state.output_state_ids.shape[1],
                                                    decode_ids=decode_ids)
         return SSMStateMetadata(bank_ids, inputs, outputs)

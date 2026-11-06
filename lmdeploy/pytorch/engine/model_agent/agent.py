@@ -1,11 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 import importlib
+import json
 import time
 from collections import deque
 from collections.abc import Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
@@ -21,6 +22,7 @@ from tqdm.auto import tqdm
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.graph_runner import prefill_preparation_scope
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from lmdeploy.pytorch.consts import GDN_REPLAY_CURSOR_CACHE_NAME
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.distributed import DistContext, get_dist_manager
@@ -262,6 +264,27 @@ def model_forward(
         # Attach operator-owned block caches and configured state caches.
         context.block_caches = cache_engine.block_caches
         context.named_state_caches = state_cache_engine.named_state_caches
+        replay_enabled = getattr(model_config, 'enable_replayssm', False)
+        context.replayssm_force_flush = None
+        if (replay_enabled and model_config.model_paradigm == 'ar' and context.is_decoding
+                and cache_inputs is not None and cache_inputs.state_save_plan is not None):
+            force_flush = cache_inputs.replayssm_force_flush
+            if force_flush is None or force_flush.shape != inputs.state_offsets.shape:
+                raise RuntimeError('Standard ReplaySSM decode checkpoint save requires one '
+                                   'device force-flush flag per input row.')
+            if force_flush.device != inputs.state_offsets.device:
+                raise RuntimeError('ReplaySSM force-flush mask must be on the model input device.')
+            context.replayssm_force_flush = force_flush
+
+        if replay_enabled and context.ssm_state_meta is not None:
+            if context.is_decoding and model_config.model_paradigm == 'ar':
+                context.replayssm_force_flush = context.ssm_state_meta.output_state_ids[:, 0] > 0
+            elif not context.is_decoding:
+                from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import reset_gdn_replayssm_cursor
+                # Fresh/restore discards the previous slot occupant, but continuation must fold its accepted history.
+                reset = (inputs.history_lengths == 0) | (context.ssm_state_meta.input_state_ids > 0)
+                reset_gdn_replayssm_cursor(context.named_state_caches[GDN_REPLAY_CURSOR_CACHE_NAME],
+                                           torch.where(reset, context.state_offsets, -1))
 
         with ctx_mgr.context(context):
             # Some backends synchronize while building context. Queue restore
@@ -278,6 +301,19 @@ def model_forward(
                 context=context,
             )
             output = model(**input_dict)
+            if replay_enabled:
+                from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm import (
+                    advance_gdn_replayssm_standard_cursor,
+                    reset_gdn_replayssm_cursor,
+                )
+                cursor = context.named_state_caches[GDN_REPLAY_CURSOR_CACHE_NAME]
+                # All layers must consume the original cursor before it advances.
+                if not context.is_decoding:
+                    reset_gdn_replayssm_cursor(cursor, context.state_offsets)
+                elif model_config.model_paradigm == 'ar':
+                    advance_gdn_replayssm_standard_cursor(
+                        cursor, context.state_offsets, model_config.replayssm_buffer_len,
+                        force_flush=context.replayssm_force_flush)
             if not isinstance(output, dict):
                 output = dict(hidden_states=output)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
@@ -930,6 +966,8 @@ class BaseModelAgent:
         with self.spec_agent.post_broadcast(extra_inputs, self.dist_ctx, need_broadcast_next):
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
+        self._commit_mtp_replayssm(inputs, extra_inputs)
+
         if self.spec_agent.is_enabled():
             logits = None
 
@@ -985,12 +1023,29 @@ class BaseModelAgent:
         with self.spec_agent.post_broadcast(extra_inputs, self.dist_ctx, need_broadcast_next):
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
+        self._commit_mtp_replayssm(inputs, extra_inputs)
+
         if self.spec_agent.is_enabled():
             next_token_ids = extra_inputs.next_token_ids
 
         extra_outputs = self.agent_strategy.make_extra_outputs(extra_inputs)
 
         return inputs, next_token_ids, extra_inputs, extra_outputs
+
+    def _commit_mtp_replayssm(self, inputs: ModelInputs, extra_inputs: ExtraInputs) -> None:
+        """Commit accepted target-input prefixes after rejection broadcast."""
+        if (not self.model_config.enable_replayssm or self.spec_agent.num_spec_tokens == 0
+                or not inputs.is_decoding or inputs.is_dummy):
+            return
+        rejected = getattr(extra_inputs, 'num_rejected_tokens', None)
+        if rejected is None:
+            raise RuntimeError('MTP ReplaySSM requires broadcast rejection counts before commit.')
+        from lmdeploy.pytorch.kernels.cuda.gated_delta_replayssm_spec import commit_gdn_replayssm_spec_cursor
+        commit_gdn_replayssm_spec_cursor(
+            self.state_cache_engine.named_state_caches[GDN_REPLAY_CURSOR_CACHE_NAME], inputs.state_offsets,
+            inputs.seq_length, rejected, self.model_config.replayssm_buffer_len,
+            self.spec_agent.num_spec_tokens + 1)
+
 
     def _save_decode_checkpoints(self, cache_inputs: CacheCheckpointInputs, inputs: ModelInputs,
                                  output: BatchedOutputs | None) -> None:
@@ -1480,6 +1535,10 @@ class BaseModelAgent:
         model_path = self.model_path
         adapters = self.adapters
         device = self.device
+        if self.model_config.enable_replayssm:
+            capability = torch.cuda.get_device_capability(device)
+            if capability[0] != 9:
+                raise ValueError(f'ReplaySSM requires SM90 on every worker, got SM{capability[0]}{capability[1]}.')
         rank = self.rank
         custom_module_map = self.model_config.custom_module_map
         if custom_module_map is not None:
@@ -1501,7 +1560,8 @@ class BaseModelAgent:
                                             tie_word_embeddings=self.model_config.tie_word_embeddings,
                                             num_spec_tokens=self.spec_agent.num_spec_tokens,
                                             max_batch_size=self.cache_config.max_batches,
-                                            spec_model_ctx=spec_model_ctx)
+                                            spec_model_ctx=spec_model_ctx,
+                                            replayssm_buffer_len=self.model_config.replayssm_buffer_len)
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
@@ -1651,6 +1711,17 @@ class BaseModelAgent:
             connector_caches[f'{_MTP_CACHE_PREFIX}{name}'] = cache
         return connector_caches
 
+    def _get_connector_cache_schema(self) -> str:
+        """Include logical dtypes/rows hidden by packed uint8 transfer
+        pools."""
+        engines = (self.cache_engine, self.spec_agent.cache_engine)
+        schema = dict(
+            block=[[asdict(spec) for spec in engine.block_cache_plan.tensor_specs]
+                   if engine is not None else None for engine in engines],
+            state=[asdict(spec) for spec in self.model_config.state_cache_specs],
+        )
+        return json.dumps(schema, sort_keys=True, default=str)
+
     def _get_compact_store_schema(self) -> str | None:
         """Fingerprint retained layouts and execution contracts, not weights.
 
@@ -1709,6 +1780,7 @@ class BaseModelAgent:
                 self.ssm_state_cursor = SSMStateCursor(plan.capacity.request_slots, self.device)
                 self.step_inputs.ssm_state_cursor = self.ssm_state_cursor
                 self.make_dummy_meta.compact_bank_width = plan.capacity.bank_width
+                self.make_dummy_meta.compact_auxiliary_runtime = plan.capacity.runtime_is_auxiliary
             self.spec_agent.build_cache_engine(self.cache_stream)
             schema = self._get_compact_store_schema()
 
@@ -1724,6 +1796,8 @@ class BaseModelAgent:
                 self.kv_connector.register_kv_caches(
                     self._get_connector_kv_caches(),
                     state_cache_pools=self.state_cache_engine.connector_state_cache_pools,
+                    **({'cache_schema': self._get_connector_cache_schema()}
+                       if self.model_config.enable_replayssm else {}),
                     **({'state_cache_schema': schema} if schema is not None else {}),
                 )
 

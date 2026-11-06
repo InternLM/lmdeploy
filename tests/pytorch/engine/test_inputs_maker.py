@@ -1880,6 +1880,82 @@ def test_prepare_prefill_cache_inputs_rejects_mismatched_save_steps():
         maker._prepare_prefill_cache_inputs([_state_seq(4, 11)], save_steps=())
 
 
+@pytest.mark.parametrize('replay', [False, True])
+@pytest.mark.parametrize('spec', [False, True])
+def test_legacy_decode_saves_use_accepted_output_coordinator(replay, spec):
+    valid_seqs = [_state_seq(4), _state_seq(5)]
+
+    class _StateCheckpoints:
+
+        def reserve_decode_save_batch(self, seqs, interval):
+            raise AssertionError('Legacy save reservation must use the accepted-output coordinator')
+
+    cache_config = SimpleNamespace(
+        max_batches=8,
+        max_prefill_token_num=512,
+        role=EngineRole.Hybrid,
+        block_size=64,
+        kernel_block_size=64,
+        window_size=-1,
+        states_shapes=[((1, ), torch.float32)],
+        enable_prefix_caching=True,
+        prefix_cache_decode_state_interval=16,
+        enable_decode_checkpoints=True,
+    )
+    engine = SimpleNamespace(
+        cache_config=cache_config,
+        model_config=SimpleNamespace(use_mrope=False,
+                                     enable_replayssm=replay),
+        engine_config=SimpleNamespace(prefill_interval=None),
+        specdecode_config=None,
+        dist_config=SimpleNamespace(dp=1),
+        misc_config=SimpleNamespace(enable_chunked_prefill=False),
+    )
+    config = InputsMakerConfig.from_engine(engine)
+    assert config.enable_replayssm == replay
+
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
+    maker.config = config
+    maker.state_checkpoints = _StateCheckpoints()
+    maker.spec_decoding = spec
+    delta = SimpleNamespace(max_q_seqlen=1)
+
+    # Legacy row copies now belong to the accepted-output coordinator, not this direct compact path.
+    assert config.enable_decode_checkpoints
+    assert maker._make_decode_cache_inputs(valid_seqs, delta) is None
+
+
+@pytest.mark.parametrize(
+    ('is_ssm', 'enabled', 'interval', 'spec_decoding', 'max_q_seqlen'),
+    [
+        (False, True, 16, False, 1),
+        (True, False, 16, False, 1),
+        (True, True, 0, False, 1),
+        (True, True, 16, True, 1),
+        (True, True, 16, False, 2),
+    ],
+)
+def test_make_decode_cache_inputs_respects_feature_gates(is_ssm, enabled, interval, spec_decoding,
+                                                         max_q_seqlen):
+
+    class _StateCheckpoints:
+
+        def reserve_decode_save_batch(self, seqs, interval):
+            raise AssertionError('disabled decode checkpoint path must not reserve state')
+
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
+    maker.config = SimpleNamespace(is_ssm=is_ssm,
+                                   enable_prefix_caching=enabled,
+                                   prefix_cache_decode_state_interval=interval)
+    maker.state_checkpoints = _StateCheckpoints()
+    maker.spec_decoding = spec_decoding
+    delta = SimpleNamespace(max_q_seqlen=max_q_seqlen)
+
+    assert maker._make_decode_cache_inputs([_state_seq(4)], delta) is None
+
+
 @pytest.mark.parametrize('max_q_seqlen', [1, 4])  # standard decode, then spec/MTP
 def test_create_model_inputs_delta_valid_only_matches_one_decode_advance(max_q_seqlen):
     # Regression for #4024. The delta is built from the (stale) scheduler seqs
@@ -1919,6 +1995,37 @@ def test_normal_prefill_rejects_nonfinal_chunk_before_building_inputs():
         task._build_prefill_inputs([SimpleNamespace(kv_token_limit=64)])
 
 
+@pytest.mark.parametrize('with_peer', [False, True])
+def test_resumed_chunked_prefill_reindexes_old_decode_row_before_reactivation(with_peer):
+    from lmdeploy.pytorch.engine.inputs_maker import _ForwardInputsTask
+
+    seq = _DummySeq(0, 900, {}, {})
+    seq.status = MessageStatus.READY  # Admission has not reactivated the new turn yet.
+    peer = SimpleNamespace(status=MessageStatus.RUNNING, num_all_ids=40)
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = _make_inputs_maker_config()
+    maker.scheduler = _FakeScheduler([seq])
+    maker.engine_strategy = SimpleNamespace(get_prealloc_size=lambda _: 0, get_num_decode_tokens=lambda: 4)
+    maker.model_agent_strategy = _FakeModelAgentStrategy()
+    maker.long_context_chunker = LongContextChunker(512)
+    maker.running_seqs = [seq, peer] if with_peer else [seq]
+    maker.create_model_inputs_long_context = lambda *args: SimpleNamespace(is_chunk=True, max_q_seqlen=512)
+    maker.create_model_inputs = lambda *args: _fake_model_inputs()
+    maker._prepare_prefill_cache_inputs = lambda *args, **kwargs: None
+    task = _ForwardInputsTask(maker, prefill=True, enable_empty=False)
+
+    first = task._schedule_prefill()
+    # The worker must drop the old row too; host-side de-duplication is insufficient.
+    assert first.delta is not None
+    assert first.delta.indice_cpu.tolist() == ([1] if with_peer else [])
+    assert maker.running_seqs == ([peer] if with_peer else [])
+
+    seq.status = MessageStatus.RUNNING
+    maker.update_running_seqs([seq], first.inputs)
+    seq.num_token_ids = 900 - seq.num_history_ids
+    final = task._build_active_chunk()
+    maker.update_running_seqs([seq], final.inputs)
+    assert maker.running_seqs == ([peer, seq] if with_peer else [seq])
 @pytest.mark.parametrize('history,end,budget,span,shift,expected_e,expected_c', [
     (0, 200, 200, (120, 180), 0, 200, 192),
     (0, 200, 200, (180, 200), 0, 200, 128),
