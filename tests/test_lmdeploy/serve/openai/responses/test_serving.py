@@ -409,6 +409,30 @@ def test_responses_forwards_reasoning_effort(responses_endpoint, fake_raw_reques
 
 
 @pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('reasoning_payload', [{}, {'summary': 'auto'}, {'effort': None}])
+def test_responses_accepts_reasoning_without_effort(responses_endpoint, fake_raw_request, stream,
+                                                    reasoning_payload):
+    """A reasoning object omitting effort is accepted and means no
+    reasoning."""
+    endpoint, context = responses_endpoint
+
+    async def run():
+        response = await endpoint(
+            ResponsesRequest(model='fake-model',
+                             input='Hi',
+                             stream=stream,
+                             reasoning=reasoning_payload), fake_raw_request)
+        if stream:
+            return [event async for event in response.body_iterator]
+        return response
+
+    asyncio.run(run())
+    kwargs = context.async_engine.preprocess_kwargs
+    assert kwargs['reasoning_effort'] is None
+    assert kwargs['chat_template_kwargs'] == {'enable_thinking': False}
+
+
+@pytest.mark.parametrize('stream', [False, True])
 def test_responses_preserves_cached_tokens(responses_endpoint, fake_raw_request, sse_payloads, stream):
     endpoint, context = responses_endpoint
     original_generate = context.async_engine.generate
