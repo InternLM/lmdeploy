@@ -1,0 +1,41 @@
+name: Upstream Sync
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: "0 * * * *" # 每天 UTC 时间 0点运行一次 (你可以修改这个 cron 表达式)
+  workflow_dispatch: # 允许你手动点击按钮触发
+
+jobs:
+  sync_latest_from_upstream:
+    name: Sync latest commits from upstream repo
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork }} # 只有当这是一个 Fork 仓库时才运行
+
+    steps:
+      # 第一步：检出你的代码
+      - name: Checkout target repo
+        uses: actions/checkout@v3
+
+      # 第二步：运行同步 Action
+      - name: Sync upstream changes
+        id: sync
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+        with:
+          upstream_sync_repo: InternLM/lmdeploy # 【重要】请修改为源仓库的 用户名/仓库名
+          upstream_sync_branch: main    # 【重要】源仓库的分支名 (main 或 master)
+          target_sync_branch: main      # 你想要同步到的本地分支名
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }} # 自动生成的 Token，无需修改
+
+          # 设置为 true 会在发生冲突时导致 Action 失败，并在测试模式下运行
+          test_mode: false
+
+      # 第三步：如果同步失败（通常是因为有冲突），打印提示
+      - name: Sync check
+        if: failure()
+        run: |
+          echo "[Error] 由于上游仓库的变更与本地变更冲突，无法自动同步。"
+          echo "请手动解决冲突。"
+          exit 1

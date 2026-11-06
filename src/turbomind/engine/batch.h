@@ -68,11 +68,16 @@ struct BatchData {
 
     Buffer_<int> perm;
 
+    // Shared language scratch; contents are reused in executor order.
+    Buffer_<uint8_t> symm_buf;
+
     std::vector<ResolvedCopy> restore_copies;  // run before BatchOp::kPrepare
     std::vector<ResolvedCopy> publish_copies;  // run after BatchOp::kUnprep
 
     std::vector<int> local_token_num;
     int              global_token_num = 0;
+
+    std::vector<uint8_t> submitted_frontier_reanchor;
 
     Event ready;
     Event done;

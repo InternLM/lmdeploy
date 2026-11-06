@@ -26,7 +26,33 @@ public:
 
     void Run(BatchOp op, int phase, TensorMap& env);
 
-    void Forward(int phase, TensorMap& env, const std::vector<WeightType*>& weights);
+    // `selected_hidden_buffer` is the caller's request to write selected
+    // hidden states into its own buffer (and receive `pre_final_residual`);
+    // empty leaves selection to the decoder. The typed argument is the
+    // request — env keys carry no activation.
+    void Forward(int                     phase,
+                 TensorMap&              env,
+                 const std::vector<WeightType*>& weights,
+                 const Tensor&           selected_hidden_buffer = {});
+
+    void CommitAcceptedState(int phase, const Buffer_<int>& accept_len)
+    {
+        if (linear_attn_layer_) {
+            linear_attn_layer_->CommitAcceptedState(phase, accept_len);
+        }
+    }
+
+    size_t SpeculativeStateJournalBytes(int request_count, int verification_positions) const
+    {
+        return linear_attn_layer_ ?
+                   linear_attn_layer_->SpeculativeStateJournalBytes(request_count, verification_positions) :
+                   0;
+    }
+
+    void SetAttentionForwardMetadata(int phase, const AttentionForwardMetadata& metadata)
+    {
+        attn_layer_->SetForwardMetadata(phase, metadata);
+    }
 
 private:
     const size_t layer_num_;
@@ -44,6 +70,9 @@ private:
 
     // Per-layer post-FFN reduce group, precomputed in the constructor.
     std::vector<int> ffn_group_;
+
+    // All-valid per-token mask, materialized when no producer supplies `token_mask`.
+    Buffer_<bool> all_valid_mask_;
 
     comm::DeviceCommImpl* const d_comm_;
 

@@ -39,9 +39,10 @@ struct Llama3RopeKernelParam {
 struct MropeRopeKernelParam {
     int3 section;
 
+    int  stride{};  // per-batch row stride of the [batch, rows, 3] ids table (legacy per-batch layout)
     int* position_ids{};
     int* position_delta{};
-    int* position_offsets{};
+    int* position_offsets{};  // per-token row offsets into a flat [rows, 3] table (no per-batch tables)
     int* length{};
 };
 

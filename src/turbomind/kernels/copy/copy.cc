@@ -3,6 +3,7 @@
 #include "src/turbomind/core/logger.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <numeric>
 #include <vector>
 
@@ -15,56 +16,32 @@ void VectorizedCopy(
 void TransposeCopy(
     const void* data_a, void* data_b, const Layout& a, const Layout& b, DataType dtype, cudaStream_t stream);
 
-// Merge adjacent batch dims (positions ≥ 2) of (a, b) when their strides are
-// proportional in BOTH a and b. Single forward pass over positions 3..rank-1.
-//
-// Precondition: a and b have the same shape and rank, with positions 0 and 1
-// being the (I, J) transpose pair (not coalesceable). Only positions 2.. are
-// considered batch dims.
-//
-// Why the joint-proportionality requirement?
-// A batch dim is shared between src and dst: the kernel decodes blockIdx.z
-// once into a multi-dim batch coord and dots it with the batch strides on
-// BOTH sides to compute the per-block src and dst pointer offsets. Merging
-// two adjacent batch dims into one collapses that pair of coords into a
-// single linear index whose decode (idx / inner_shape, idx % inner_shape)
-// only reproduces the original (outer_idx, inner_idx) — and therefore the
-// original outer_idx*outer_stride + inner_idx*inner_stride offset — when
-// outer_stride == inner_shape * inner_stride. Since the same merged index
-// is dotted into both layouts, that proportionality must hold in BOTH a
-// and b; otherwise the merged single-dim decode would land at different
-// positions in src vs dst and produce wrong results.
-static std::pair<Layout, Layout> coalesce_batch_dims(const Layout& a, const Layout& b)
+// Both kernels decode one coordinate for source and destination. Remove
+// singleton dimensions and merge contiguous dimensions jointly, in the
+// innermost-first order used by the kernels. The first `begin` dimensions
+// are preserved when coalescing only the batch axes of a transpose.
+static std::pair<Layout, Layout> coalesce_copy_dims(const Layout& a, const Layout& b, int begin = 0)
 {
-    const int rank = a.rank();
-    if (rank < 4)
-        return {a, b};  // need ≥ 2 batch dims to merge
-
-    std::vector<ssize_t> ash(a.shape().begin(), a.shape().begin() + 3);
-    std::vector<ssize_t> ast(a.stride().begin(), a.stride().begin() + 3);
-    std::vector<ssize_t> bsh(b.shape().begin(), b.shape().begin() + 3);
-    std::vector<ssize_t> bst(b.stride().begin(), b.stride().begin() + 3);
-
-    for (int i = 3; i < rank; ++i) {
-        const ssize_t ai_sh = a.shape(i), ai_st = a.stride(i);
-        const ssize_t bi_sh = b.shape(i), bi_st = b.stride(i);
-
-        // Merge with the previously accumulated batch dim if its stride equals
-        // shape * stride of that dim, in BOTH a and b.
-        if (ai_st == ash.back() * ast.back() && bi_st == bsh.back() * bst.back()) {
-            ash.back() *= ai_sh;
-            bsh.back() *= bi_sh;
-            // strides at the back stay unchanged (they remain the inner stride)
+    std::vector<ssize_t> shape, src_stride, dst_stride;
+    for (int i = 0; i < a.rank(); ++i) {
+        if (i >= begin && a.shape(i) == 1) {
+            continue;
+        }
+        if (shape.size() > static_cast<size_t>(begin)
+            && a.stride(i) == shape.back() * src_stride.back()
+            && b.stride(i) == shape.back() * dst_stride.back()) {
+            shape.back() *= a.shape(i);
         }
         else {
-            ash.push_back(ai_sh);
-            ast.push_back(ai_st);
-            bsh.push_back(bi_sh);
-            bst.push_back(bi_st);
+            shape.push_back(a.shape(i));
+            src_stride.push_back(a.stride(i));
+            dst_stride.push_back(b.stride(i));
         }
     }
-
-    return {Layout{ash, ast}, Layout{bsh, bst}};
+    if (shape.empty()) {
+        return {Layout{{1}, {1}}, Layout{{1}, {1}}};
+    }
+    return {Layout{shape, src_stride}, Layout{shape, dst_stride}};
 }
 
 // ============================================================================
@@ -75,33 +52,34 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
     auto a = src.layout();
     auto b = dst.layout();
 
-    TM_CHECK_EQ(a.size(), b.size()) << "GenericCopy: src and dst must have the same number of elements";
+    TM_CHECK(src.dtype() == dst.dtype()) << "GenericCopy: src and dst must have the same dtype";
+    TM_CHECK(a.shape() == b.shape()) << "GenericCopy: src and dst must have the same shape";
+    TM_CHECK_GT(byte_size(src.dtype()), 0) << "GenericCopy: sub-byte elements are unsupported";
+    if (a.size() == 0) {
+        return;
+    }
 
-    // Sort strides ascending so innermost (fastest-varying) dim is first
+    // Put physical source axes first, keeping broadcast axes outside them.
+    // Apply exactly the same permutation and coalescing to both layouts.
     std::vector<int> idxs(a.rank());
     std::iota(idxs.begin(), idxs.end(), 0);
-    std::sort(idxs.begin(), idxs.end(), [&](int i, int j) { return a.stride()[i] < a.stride()[j]; });
+    std::stable_sort(idxs.begin(), idxs.end(), [&](int i, int j) {
+        if ((a.stride(i) == 0) != (a.stride(j) == 0)) {
+            return a.stride(i) != 0;
+        }
+        return a.stride(i) < a.stride(j);
+    });
 
     a = a.permute(idxs);
     b = b.permute(idxs);
 
-    a = a.coalesce();
-    b = b.coalesce();
-
-    int rank = std::max(a.rank(), b.rank());
-
-    if (a.rank() < rank) {
-        a = a.view(b.shape());
-    }
-    else if (b.rank() < rank) {
-        b = b.view(a.shape());
-    }
+    std::tie(a, b) = coalesce_copy_dims(a, b);
+    const int rank = a.rank();
 
     const DataType dtype = src.dtype();
 
     // --- Transpose detection (2D + batched) ---
-    // After the src-stride-ascending sort above, position 0 holds the smallest
-    // src stride (innermost). We dispatch to TransposeCopy when:
+    // After joint normalization, we dispatch to TransposeCopy when:
     //   - position 0 has src stride 1 (call it I),
     //   - some position J ∈ [1, rank-1] has dst stride 1,
     //   - both shape(0) and shape(J) are divisible by the per-dtype tile.
@@ -120,23 +98,24 @@ void GenericCopy(const Tensor& src, Tensor& dst, cudaStream_t stream)
     bool is_transpose = (J >= 1) && (a.stride(0) == 1) && (a.stride(J) > 1) && (b.stride(0) > 1)
                         && (a.shape(0) % kTileDim == 0) && (a.shape(J) % kTileDim == 0);
 
+    // TransposeCopy uses 16-byte atoms. Every row and batch base must satisfy
+    // that alignment; otherwise the generic path chooses a legal copy width.
+    is_transpose = is_transpose && reinterpret_cast<uintptr_t>(src.raw_data()) % 16 == 0
+                   && reinterpret_cast<uintptr_t>(dst.raw_data()) % 16 == 0;
+    for (int i = 0; is_transpose && i < rank; ++i) {
+        is_transpose = (i == 0 || byte_size(dtype, a.stride(i)) % 16 == 0)
+                       && (i == J || byte_size(dtype, b.stride(i)) % 16 == 0);
+    }
+
     if (is_transpose) {
         if (J != 1) {
             a = a.transpose(1, J);
             b = b.transpose(1, J);
         }
-        std::tie(a, b) = coalesce_batch_dims(a, b);
+        std::tie(a, b) = coalesce_copy_dims(a, b, 2);
 
-        // Compute total batch (product of post-coalesce batch dims, positions ≥ 2).
-        int64_t total_batch = 1;
-        for (int i = 2; i < a.rank(); ++i)
-            total_batch *= a.shape(i);
-
-        // Dispatch only when the kernel can handle it:
-        //   1. post-coalesce rank ≤ 4 (only 2/3/4 are instantiated in TransposeCopy host),
-        //   2. total_batch ≤ gridDim.z hardware limit (65535 on all current archs).
-        // Otherwise, fall through to VectorizedCopy.
-        if (a.rank() <= 4 && total_batch <= 65535) {
+        // TransposeCopy maps all logical tile axes onto bounded linear launches.
+        if (a.rank() <= 4) {
             TransposeCopy(src.raw_data(), dst.raw_data(), a, b, dtype, stream);
             return;
         }

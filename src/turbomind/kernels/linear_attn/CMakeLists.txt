@@ -2,6 +2,7 @@ add_subdirectory(kernel)
 
 add_library(linear_attn STATIC
         delta_rule.cu
+        gdn_state_transaction.cu
         registry.cu)
 
 set_property(TARGET linear_attn PROPERTY POSITION_INDEPENDENT_CODE ON)

@@ -102,6 +102,93 @@ class NativeBridge:
             finished=self.tensor(kwargs.get('finished')),
         )
 
+    def build_state_store_mask(self, out, finished, speculative):
+        self.tm.gdn_build_state_store_mask(
+            self.tensor(out),
+            self.tensor(finished),
+            self.tensor(speculative),
+            stream_ptr=_current_stream_ptr(out),
+        )
+
+    def capture_transitions(
+        self,
+        raw_projection,
+        normalized_key,
+        value,
+        log_decay,
+        beta,
+        q_offsets,
+        request_indices,
+        *,
+        gdn_layer,
+        verify_positions,
+        journal,
+    ):
+        self.tm.gdn_capture_transitions(
+            self.tensor(raw_projection),
+            self.tensor(normalized_key),
+            self.tensor(value),
+            self.tensor(log_decay),
+            self.tensor(beta),
+            self.tensor(q_offsets),
+            self.tensor(request_indices),
+            gdn_layer,
+            verify_positions,
+            *(self.tensor(tensor) for tensor in journal),
+            stream_ptr=_current_stream_ptr(raw_projection),
+        )
+
+    def commit_conv_state(
+        self,
+        raw_conv,
+        conv_state_ptrs,
+        request_indices,
+        entry_sequence_length,
+        accept_len,
+        conv_state_offsets,
+        *,
+        conv_dim,
+        d_conv,
+    ):
+        self.tm.gdn_commit_conv_state(
+            self.tensor(raw_conv),
+            self.tensor(conv_state_ptrs),
+            self.tensor(request_indices),
+            self.tensor(entry_sequence_length),
+            self.tensor(accept_len),
+            self.tensor(conv_state_offsets),
+            conv_dim,
+            d_conv,
+            stream_ptr=_current_stream_ptr(raw_conv),
+        )
+
+    def commit_recurrent_state(
+        self,
+        key,
+        value,
+        log_decay,
+        beta,
+        recurrent_state_ptrs,
+        request_indices,
+        accept_len,
+        *,
+        state_dtype,
+        layers_per_block,
+        heads_per_block,
+    ):
+        self.tm.gdn_commit_recurrent_state(
+            self.tensor(key),
+            self.tensor(value),
+            self.tensor(log_decay),
+            self.tensor(beta),
+            self.tensor(recurrent_state_ptrs),
+            self.tensor(request_indices),
+            self.tensor(accept_len),
+            state_dtype,
+            layers_per_block,
+            heads_per_block,
+            stream_ptr=_current_stream_ptr(key),
+        )
 
 def validate_benchmark_case(run: RunCase, request: BenchmarkRequest) -> None:
     if run.input.input_dtype != torch.bfloat16:
@@ -186,10 +273,16 @@ def _state_kwargs(
     state,
     state_dtype,
     chunk_size: int | None = None,
+    *,
+    recurrent: bool | None = None,
+    suppress_state_store: bool = False,
 ):
     del inputs, bridge, state_dtype
-    if _is_recurrent_run(run, chunk_size):
-        finished = torch.zeros(run.input.real_batch_size, device=device, dtype=torch.bool)
+    if recurrent is None:
+        recurrent = _is_recurrent_run(run, chunk_size)
+    if recurrent:
+        finished = torch.full(
+            (run.input.real_batch_size,), suppress_state_store, device=device, dtype=torch.bool)
         return native_inputs, {
             'state_ptrs': state.ptrs[:, None],
             'finished': finished,
@@ -197,7 +290,7 @@ def _state_kwargs(
         }, True
     q_offsets = _q_offsets_for_tensors(native_inputs)
     sequence_num = _sequence_num(run.input, q_offsets)
-    finished = torch.zeros(sequence_num, device=device, dtype=torch.bool)
+    finished = torch.full((sequence_num,), suppress_state_store, device=device, dtype=torch.bool)
     kwargs = {'state_ptrs': state.ptrs, 'finished': finished}
     if q_offsets is not None:
         kwargs['q_offsets'] = q_offsets
@@ -247,17 +340,18 @@ def chunk_gated_delta_rule_fwd(
 ) -> torch.Tensor:
     bridge = NativeBridge(_require_native_bridge())
     if plan is not None:
+        effective_mode = plan['kernel']['mode']
         effective_chunk_size = int(plan['problem']['chunk_size'])
-        recurrent = plan['kernel']['mode'] == 'recurrent'
     elif mode is not None:
-        recurrent = mode == 'recurrent'
-        effective_chunk_size = 1 if recurrent and chunk_size is None else chunk_size
+        effective_mode = mode
+        effective_chunk_size = 1 if mode == 'recurrent' and chunk_size is None else chunk_size
     else:
         effective_chunk_size = chunk_size
         recurrent = effective_chunk_size == 1 or (
             effective_chunk_size is None and q_offsets is None and q.dtype == torch.bfloat16 and q.shape[1] == 1
         )
-    if q_offsets is None and not recurrent:
+        effective_mode = 'recurrent' if recurrent else 'chunked'
+    if q_offsets is None and effective_mode == 'chunked':
         q_offsets = torch.arange(0, (q.shape[0] + 1) * q.shape[1], q.shape[1], device=q.device, dtype=torch.int32)
 
     tensors = InputTensors(q=q, k=k, v=v, g=g, beta=beta, h0=None, offsets=q_offsets)
@@ -266,15 +360,17 @@ def chunk_gated_delta_rule_fwd(
             tensors,
             q_offsets=q_offsets,
             state_dtype=state_dtype,
-            mode='recurrent' if recurrent else 'chunked',
-            chunk_size=chunk_size,
+            mode=effective_mode,
+            chunk_size=effective_chunk_size,
             cp_level=cp_level,
             num_head_groups=num_head_groups,
             heads_per_block=heads_per_block or v.shape[2],
         )
 
-    execution_state_ptrs = state_ptrs[:, None] if recurrent and state_ptrs.ndim == 1 else state_ptrs
-    if recurrent and state_tma_descs is None and plan['kernel']['arch'] != 'pre_sm90':
+    needs_2d_state_ptrs = effective_mode in ('recurrent', 'verify')
+    execution_state_ptrs = state_ptrs[:, None] if needs_2d_state_ptrs and state_ptrs.ndim == 1 else state_ptrs
+    uses_state_tma = needs_2d_state_ptrs and plan['kernel']['arch'] != 'pre_sm90'
+    if uses_state_tma and state_tma_descs is None:
         prepared_descs = torch.empty(
             (layer_groups, execution_state_ptrs.shape[-2], plan['problem']['num_head_groups'], 128),
             device=q.device,
@@ -317,8 +413,12 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
     native_inputs = make_packed_qkv_views(_native_aligned_tensors(inputs))
     state_arg = _state_dtype_arg(request.state_dtype)
     chunk_size = request.chunk_size
+    mode = request.gdr_mode
+    if mode == 'auto':
+        mode = 'recurrent' if _is_recurrent_run(run, chunk_size) else 'chunked'
+    recurrent = mode == 'recurrent'
     state = make_state_buffer(inputs.h0, run, device)
-    run_inputs, kwargs, recurrent = _state_kwargs(
+    run_inputs, kwargs, _ = _state_kwargs(
         run,
         inputs,
         native_inputs,
@@ -327,13 +427,15 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
         state,
         request.state_dtype,
         chunk_size,
+        recurrent=recurrent,
+        suppress_state_store=request.suppress_state_store,
     )
     out = torch.empty_like(inputs.v)
     plan = bridge.plan(
         run_inputs,
         q_offsets=kwargs.get('q_offsets'),
         state_dtype=state_arg,
-        mode='recurrent' if recurrent else 'chunked',
+        mode=mode,
         chunk_size=chunk_size,
         cp_level=request.cp_level,
         num_head_groups=1,
@@ -361,7 +463,10 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
         )
         run_inputs.g.copy_(controlled_inputs.g)
         inputs = controlled_inputs
-    if recurrent and plan['kernel']['arch'] != 'pre_sm90':
+    uses_state_tma = mode in ('recurrent', 'verify') and plan['kernel']['arch'] != 'pre_sm90'
+    if uses_state_tma and kwargs['state_ptrs'].ndim == 1:
+        kwargs['state_ptrs'] = kwargs['state_ptrs'][:, None]
+    if uses_state_tma:
         prepared_descs = torch.empty(
             (1, run.input.real_batch_size, 1, 128),
             device=device,
@@ -378,9 +483,12 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
         state.tma_descs = prepared_descs
         kwargs['state_tma_descs'] = state.tma_descs
     planned_chunk_size = int(plan['problem']['chunk_size'])
-    if recurrent:
+    if mode == 'recurrent':
         if planned_chunk_size != 1:
             raise RuntimeError(f'native recurrent plan selected chunk_size={planned_chunk_size}, expected 1')
+    elif mode == 'verify':
+        if planned_chunk_size not in (8, 16):
+            raise RuntimeError(f'native verify plan selected chunk_size={planned_chunk_size}, expected 8 or 16')
     elif planned_chunk_size <= 1:
         raise RuntimeError(f'native chunked plan selected chunk_size={planned_chunk_size}, expected > 1')
     workspace = (
@@ -397,6 +505,7 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
         cp_level=request.cp_level,
         cp_pattern=request.cp_pattern,
         cp_enabled=cp_enabled,
+        gdr_mode=mode,
     )
     def prepare():
         state.reset(inputs.h0)
@@ -412,6 +521,7 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
             q_offsets=kwargs.get('q_offsets'),
             finished=kwargs['finished'],
             state_dtype=state_arg,
+            mode=mode,
             chunk_size=planned_chunk_size,
             cp_level=request.cp_level,
             out=out,
@@ -424,7 +534,8 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
         prepare()
         actual_o = execute()
         torch.cuda.synchronize(device)
-        expected_o, expected_state = reference_chunk_gated_delta_rule_fwd(
+        reference_chunk_size = 64 if mode == 'verify' else planned_chunk_size
+        expected_o, transitioned_state = reference_chunk_gated_delta_rule_fwd(
             inputs.q,
             inputs.k,
             inputs.v,
@@ -432,8 +543,10 @@ def _turbomind_task(run: RunCase, inputs: InputTensors, request: BenchmarkReques
             inputs.beta,
             initial_state=inputs.h0,
             cu_seqlens=inputs.offsets,
-            chunk_size=planned_chunk_size,
+            chunk_size=reference_chunk_size,
         )
+        entry_state = torch.zeros_like(transitioned_state) if inputs.h0 is None else inputs.h0
+        expected_state = entry_state if mode == 'verify' or request.suppress_state_store else transitioned_state
         if request.validate_outputs:
             torch.testing.assert_close(actual_o, expected_o, rtol=8e-2, atol=8e-2)
             torch.testing.assert_close(state.storage.float(), expected_state, rtol=8e-2, atol=8e-2)

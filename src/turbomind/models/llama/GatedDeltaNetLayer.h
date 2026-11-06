@@ -38,6 +38,10 @@ public:
 
     void Forward(ForwardParam p);
 
+    void CommitAcceptedState(int phase, const Buffer_<int>& accept_len);
+
+    size_t SpeculativeStateJournalBytes(int request_count, int verify_positions) const;
+
 private:
     void Setup(int phase, TensorMap& env);
 
@@ -57,13 +61,31 @@ private:
         Buffer_<int>                                 q_offsets;
         Buffer_<int>                                 k_offsets;
         Buffer_<bool>                                finished;
+        Buffer_<bool>                                finished_on_entry;
+        Buffer_<bool>                                speculative_row;
+        Buffer_<bool>                                state_store_suppressed;
+        bool                                         build_state_store_mask{};
+        Buffer_<int>                                 speculative_request_indices;
+        Buffer_<int>                                 conv_state_offsets;
+        int                                          speculative_request_count{};
+        int                                          verify_positions{};
+        Buffer_<int>                                 entry_sequence_length;
+        linear_attn::delta_rule::TransitionJournal   journal;
         Buffer_<void*>                               conv_state_ptrs;
         Buffer_<void*>                               recurrent_state_ptrs;
+        int                                          verify_count{};
         int                                          decode_count{};
         int                                          prefill_count{};
+        std::optional<linear_attn::delta_rule::Plan> verify_plan;
+        std::optional<linear_attn::delta_rule::Plan> commit_plan;
         std::optional<linear_attn::delta_rule::Plan> recurrent_plan;
         std::optional<linear_attn::delta_rule::Plan> chunked_plan;
+        Buffer_<void*>                               commit_state_ptrs_buf;
+        core::Tensor                                 commit_state_ptrs;
+        core::Tensor                                 commit_state_tma_descs;
+        core::Tensor                                 commit_lengths;
         core::Tensor                                 chunked_workspace;
+        Buffer_<uint8_t>                             verify_state_tma_descs;
         Buffer_<uint8_t>                             recurrent_state_tma_descs;
     };
     std::vector<Data> data_;
@@ -83,6 +105,8 @@ private:
     // staging buffers
     Buffer_<void*> conv_state_ptrs_buf_;
     Buffer_<void*> recurrent_state_ptrs_buf_;
+    Buffer_<int>   speculative_request_indices_buf_;
+    Buffer_<int>   conv_state_offsets_buf_;
 
     DataType                                input_dtype_{kNull};
     int                                     arch_{};
@@ -90,6 +114,8 @@ private:
     int                                     num_v_heads_{};
     int                                     head_dim_{};
     int                                     gate_stride_{};
+    int                                     d_conv_{};
+    int                                     conv_dim_{};
     linear_attn::delta_rule::GatedDeltaRule delta_rule_;
 
     int          sm_count_{};

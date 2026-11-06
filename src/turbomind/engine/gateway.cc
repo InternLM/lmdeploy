@@ -32,7 +32,7 @@ void Gateway::push(std::shared_ptr<Request> r)
 {
     if (TM_UNLIKELY(!size_)) {
         TM_LOG_ERROR("No queues available for submitting the request");
-        notify({[r = std::move(r)] { UpdateState(*r, Request::kNoQueue, 0); }});
+        notify({MakeRequestSignal(std::move(r), Request::kNoQueue, 0)});
         return;
     }
     const int rank = next_.fetch_add(1, std::memory_order_relaxed) % size_;
@@ -80,9 +80,7 @@ void Gateway::cancel(std::shared_ptr<Request> r)
 {
     // {-1: canceled, 0: queued, 1: active}
     if (r->cancel_flag.exchange(-1, std::memory_order_acq_rel) == 0) {
-        notify({[r = std::move(r)] {  //
-            UpdateState(*r, Request::kCancel, 0);
-        }});
+        notify({MakeRequestSignal(std::move(r), Request::kCancel, 0)});
     }
     else {
         // request is picked up by engine

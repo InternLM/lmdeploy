@@ -33,4 +33,6 @@ struct CpPostContext {
 
 void CpPost(void* context);
 
+void invokeFillNegInfML(float* data, size_t n_pairs, cudaStream_t stream);
+
 }  // namespace turbomind

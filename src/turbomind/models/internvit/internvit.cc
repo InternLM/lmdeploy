@@ -58,14 +58,15 @@ struct InternVit::Impl {
     const int                    tp_group_;
     const int                    tp_size_;
     const DataType               engine_data_type_;
+    const bool                   successor_embeddings_;
 
     Buffer_<int> attn_cu_seqlens_buf_;
 
     struct Data {
         Tensor                           batch_input;
         int                              batch_size{};
-        std::vector<std::pair<int, int>> image_embeds_coords;
-        std::vector<std::pair<int, int>> input_embeds_coords;
+        std::vector<EmbeddingPatch>     target_patches;
+        std::vector<EmbeddingPatch>     successor_patches;
         Tensor_<int>                     attn_cu_seqlens;
         Tensor_<bool>                    attn_finished;
         int                              token_num{};
@@ -76,14 +77,18 @@ struct InternVit::Impl {
             batch_size = 0;
             token_num  = 0;
             seq_len    = 0;
-            image_embeds_coords.clear();
-            input_embeds_coords.clear();
+            target_patches.clear();
+            successor_patches.clear();
         }
     };
 
     std::vector<Data> data_;
 
-    Impl(const EngineParam& engine, const Context& ctx, const InternVitWeight& weights, int phases):
+    Impl(const EngineParam&     engine,
+         const Context&         ctx,
+         const InternVitWeight& weights,
+         int                    phases,
+         bool                   successor_embeddings):
         weights_{weights},
         config_{weights.config()},
         h_tp_group{ctx.comm.h_comm},
@@ -91,7 +96,8 @@ struct InternVit::Impl {
         d_comm_{ctx.comm.d_comm},
         tp_group_{ctx.comm.d_tp_group},
         tp_size_{ctx.comm.h_tp_group ? ctx.comm.h_tp_group->n_ranks() : 1},
-        engine_data_type_{engine.data_type}
+        engine_data_type_{engine.data_type},
+        successor_embeddings_{successor_embeddings}
     {
         const auto& cfg = weights.config();
         for (int i = 0; i < phases; ++i) {
@@ -239,29 +245,42 @@ struct InternVit::Impl {
 
         Buffer_<Sequence*> rc = env.at("requests").buffer();
         for (int i = 0; i < rc.size(); ++i) {
-            const auto& s = *rc[i];
+            const Sequence&     s         = *rc[i];
+            const SubmittedRow& submitted = *s.submitted;
 
-            if ((not s.autoregres) && (not s.multimodal_inputs.empty())) {
+            if ((not submitted.autoregres) && (not s.multimodal_inputs.empty())) {
                 ++mm_prefill_seqs;
                 images_total += (int)s.multimodal_inputs.size();
-                Interval text{s.history_len + s.inflight_input_len, Interval::Size{s.input_len}};
+                const int           begin     = submitted.history_len + s.inflight_input_len;
+                const int           end       = begin + submitted.input_len;
+                const Interval      target{begin, end};
+                const Interval      successor{begin + 1, std::min(end + 1, s.seq_len)};
                 for (const auto& mm : s.multimodal_inputs) {
-                    auto o = mm->interval & text;
-                    if (auto size = (int)o.size()) {
+                    const Interval target_overlap    = mm->interval & target;
+                    const Interval successor_overlap = successor_embeddings_ ? mm->interval & successor : Interval{};
+                    if (!target_overlap.empty() || !successor_overlap.empty()) {
                         pixel_values.push_back(mm->data);
                         d.batch_size += mm->data.shape(0);
 
-                        const int text_offset  = input_ids_offsets + o.begin() - text.begin();
-                        const int image_offset = image_embeds_offsets + o.begin() - mm->interval.begin();
-                        d.input_embeds_coords.emplace_back(size, text_offset);
-                        d.image_embeds_coords.emplace_back(size, image_offset);
+                        if (!target_overlap.empty()) {
+                            d.target_patches.push_back(
+                                {static_cast<int>(target_overlap.size()),
+                                 image_embeds_offsets + target_overlap.begin() - mm->interval.begin(),
+                                 input_ids_offsets + target_overlap.begin() - target.begin()});
+                        }
+                        if (!successor_overlap.empty()) {
+                            d.successor_patches.push_back(
+                                {static_cast<int>(successor_overlap.size()),
+                                 image_embeds_offsets + successor_overlap.begin() - mm->interval.begin(),
+                                 input_ids_offsets + successor_overlap.begin() - successor.begin()});
+                        }
 
                         image_embeds_offsets += (int)mm->interval.size();
                     }
                 }
             }
 
-            input_ids_offsets += s.autoregres ? 1 : s.input_len;
+            input_ids_offsets += submitted.input_len;
         }
 
         // Prefix-cache observability: on a fully-cached image, the window filter
@@ -613,13 +632,16 @@ struct InternVit::Impl {
 
         EnsureFloatDtype(image_embeds, engine_data_type_);
 
-        args.produce("multimodal",
-                     MultiModalEmbeddingData{image_embeds, d.image_embeds_coords, d.input_embeds_coords}.buf());
+        args.produce("multimodal", MultiModalEmbeddingData{image_embeds, d.target_patches, d.successor_patches}.buf());
     }
 };
 
-InternVit::InternVit(const EngineParam& engine, const Context& ctx, const InternVitWeight& weights, int phases):
-    impl_{std::make_unique<Impl>(engine, ctx, weights, phases)}
+InternVit::InternVit(const EngineParam&     engine,
+                     const Context&         ctx,
+                     const InternVitWeight& weights,
+                     int                    phases,
+                     bool                   successor_embeddings):
+    impl_{std::make_unique<Impl>(engine, ctx, weights, phases, successor_embeddings)}
 {
 }
 
