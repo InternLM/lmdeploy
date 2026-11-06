@@ -8,6 +8,7 @@ from lmdeploy.pytorch.paging.scheduler import Scheduler
 
 
 def _make_ssm_scheduler(max_batch_size: int = 1, prefix_cache_state_budget: int = 0, num_gpu_blocks: int = 16):
+    """Exercise state capacity and ownership without prefill save filtering."""
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
     block_size = 16
     cache_config = CacheConfig(max_batches=max_batch_size,
@@ -23,7 +24,9 @@ def _make_ssm_scheduler(max_batch_size: int = 1, prefix_cache_state_budget: int 
                                        max_request_output_len=64,
                                        eviction_type='recompute')
     seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
-    return Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+    scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+    scheduler.seq_meta.prefill_save_alignment = 0
+    return scheduler
 
 
 def _add_published_ssm_checkpoint(scheduler: Scheduler, token_ids: list[int]):

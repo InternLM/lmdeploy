@@ -233,7 +233,8 @@ def plan_long_context_chunk(seq: 'SchedulerSequence',
             end = save_end
             if stride:
                 checkpoint_step = end
-    if stride and not checkpoint_step and end > start and not seq._seq_meta.prefill_save_last_only:
+    if (stride and not checkpoint_step and end > start and not seq._seq_meta.prefill_save_last_only
+            and (not save_alignment or end % save_alignment == 0)):
         checkpoint_step = end
 
     chunk_size = end - start

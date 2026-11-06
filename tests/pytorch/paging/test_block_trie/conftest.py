@@ -70,9 +70,12 @@ def ssm_cache_config(block_size, num_cpu_blocks, num_gpu_blocks, max_batch_size)
 
 @pytest.fixture
 def ssm_scheduler(ssm_cache_config, scheduler_config, seq_meta):
-    return Scheduler(scheduler_config=scheduler_config,
-                     cache_config=ssm_cache_config,
-                     seq_meta=seq_meta)
+    """Exercise exact checkpoint ownership independently of save policy."""
+    scheduler = Scheduler(scheduler_config=scheduler_config,
+                          cache_config=ssm_cache_config,
+                          seq_meta=seq_meta)
+    scheduler.seq_meta.prefill_save_alignment = 0
+    return scheduler
 
 
 @pytest.fixture

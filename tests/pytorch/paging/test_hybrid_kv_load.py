@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from threading import Event
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 import torch
@@ -53,10 +53,12 @@ def make_scheduler():
 
 
 def _publish_local_checkpoint(scheduler, step):
+    """Seed exact local states to test load arbitration, not save policy."""
     seq = scheduler.add_session(0).add_sequence(torch.arange(step))
     scheduler.block_manager.allocate(seq)
     scheduler.block_trie.allocate(seq)
-    assert scheduler.block_trie.state_checkpoints.reserve_save(seq) > 0
+    with patch.object(scheduler.seq_meta, 'prefill_save_alignment', 0):
+        assert scheduler.block_trie.state_checkpoints.reserve_save(seq) > 0
     assert scheduler.block_trie.state_checkpoints.publish_save(seq)
     checkpoint = seq.prefix_cache.trie_cursor.state_checkpoint
     scheduler.end_session(0)

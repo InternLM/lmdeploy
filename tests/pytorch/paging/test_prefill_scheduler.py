@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import time
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 import torch
@@ -470,7 +470,8 @@ def test_scheduler_preserves_usage_after_decode_preemption_and_admission_rollbac
         cached = scheduler.add_session(0).add_sequence(prefix)
         assert scheduler.schedule(is_prefill=True).running == [cached]
         if ssm:
-            assert scheduler.state_checkpoints.reserve_save(cached) > 0
+            with patch.object(scheduler.seq_meta, 'prefill_save_alignment', 0):
+                assert scheduler.state_checkpoints.reserve_save(cached) > 0
             assert scheduler.state_checkpoints.publish_save(cached)
         scheduler.end_session(0)
 
