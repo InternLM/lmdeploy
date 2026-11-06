@@ -70,6 +70,17 @@ ALLOF_OBJECT = {'allOf': [{'type': 'object'}]}
 ONEOF_STRING_INTEGER = {'oneOf': [{'type': 'string'}, {'type': 'integer'}]}
 REF_SELFCYCLE = {'$ref': '#/$defs/Loop'}
 REF_MUTUAL_CYCLE = {'$ref': '#/$defs/MutA'}
+REF_INTERMEDIATE = {'$ref': '#/$defs/A'}
+ANYOF_ENUM_STRING = {
+    'anyOf': [{'type': 'string'}, {'type': 'boolean'}],
+    'enum': ['true', 'false'],
+}
+ALLOF_CONST_STRING = {'allOf': [{'minLength': 1}], 'const': 'true'}
+REF_NULLABLE_SIBLING_MIXED = {
+    '$ref': '#/$defs/NV',
+    'anyOf': [{'type': 'string'}, {'type': 'integer'}],
+}
+ENUM_MIXED = {'enum': ['true', 1]}
 
 PARSERS = [
     pytest.param(Qwen3CoderToolParser, id='qwen3coder'),
@@ -96,6 +107,9 @@ def _parameters(param_schema):
             'Loop': {'anyOf': [{'type': 'null'}, {'$ref': '#/$defs/Loop'}]},
             'MutA': {'$ref': '#/$defs/MutB'},
             'MutB': {'$ref': '#/$defs/MutA'},
+            'A': {'$ref': '#/$defs/B', 'type': 'string'},
+            'B': {'anyOf': [{'type': 'string'}, {'type': 'integer'}]},
+            'NV': {'anyOf': [{'type': 'string'}, {'type': 'null'}]},
         },
     }
 
@@ -205,6 +219,21 @@ VALID_CASES = [
     # quoted null decodes to the string 'null'
     pytest.param(NULLABLE_TYPE_LIST_STRING, '"null"', 'null', id='nullable-string-quoted-null'),
     pytest.param(ANYOF_STRING_INTEGER, '"null"', 'null', id='mixed-union-quoted-null'),
+    # every $ref hop keeps its adjacent constraints: the intermediate layer's
+    # type governs even when the chain continues past it
+    pytest.param(REF_INTERMEDIATE, '42', '42', id='ref-intermediate-type-string'),
+    pytest.param(REF_INTERMEDIATE, '"42"', '42', id='ref-intermediate-type-string-quoted'),
+    # composition keywords merge with same-level enum/const constraints
+    pytest.param(ANYOF_ENUM_STRING, 'true', 'true', id='anyof-enum-sibling-true'),
+    pytest.param(ANYOF_ENUM_STRING, 'false', 'false', id='anyof-enum-sibling-false'),
+    pytest.param(ALLOF_CONST_STRING, 'true', 'true', id='allof-const-sibling'),
+    # a sibling union without null still forbids null beside a nullable $ref
+    pytest.param(REF_NULLABLE_SIBLING_MIXED, 'null', 'null', id='ref-sibling-union-forbids-null'),
+    pytest.param(REF_NULLABLE_SIBLING_MIXED, '42', '42', id='ref-sibling-union-string'),
+    # mixed-type enums keep the interpretation that matches one literal
+    pytest.param(ENUM_MIXED, 'true', 'true', id='mixed-enum-bare-boolean'),
+    pytest.param(ENUM_MIXED, '1', 1, id='mixed-enum-bare-number'),
+    pytest.param(ENUM_MIXED, '"true"', 'true', id='mixed-enum-quoted'),
 ]
 
 
@@ -243,6 +272,12 @@ STREAM_CASES = [
     pytest.param(ANYOF_STRING_INTEGER, 'null', 'null', id='mixed-union-bare-null-stream'),
     # non-finite numerics degrade to strings while streaming too
     pytest.param(ANYOF_STRING_INTEGER, 'NaN', 'NaN', id='mixed-union-nan-stream'),
+    # intermediate $ref layers / enum siblings / mixed enums while streaming
+    pytest.param(REF_INTERMEDIATE, '42', '42', id='ref-intermediate-type-string-stream'),
+    pytest.param(ANYOF_ENUM_STRING, 'true', 'true', id='anyof-enum-sibling-stream'),
+    pytest.param(REF_NULLABLE_SIBLING_MIXED, 'null', 'null', id='ref-sibling-union-forbids-null-stream'),
+    pytest.param(ENUM_MIXED, 'true', 'true', id='mixed-enum-bare-boolean-stream'),
+    pytest.param(ENUM_MIXED, '1', 1, id='mixed-enum-bare-number-stream'),
 ]
 
 
@@ -358,6 +393,42 @@ def test_very_long_ref_chain_is_bounded(parser_cls):
     parser.adjust_request(_request_with_parameters(parser_cls, parameters))
     streamed = stream_tool_arguments(parser, _chunks(parser_cls, '42'))
     assert json.loads(streamed) == {'value': '42'}
+
+
+@pytest.mark.parametrize('parser_cls', PARSERS)
+def test_shared_ref_union_targets_resolve_once(parser_cls, monkeypatch):
+    """Unions whose branches share ``$ref`` targets cost node-count work.
+
+    A 20-level doubling diamond has 2**20 root-to-leaf paths; without memoization every path is re-expanded inside the
+    serving loop.
+    """
+    from lmdeploy.serve.parsers.tool_parser.xml_tool_parser import XmlToolParser
+
+    levels = 20
+    parameters = _parameters({'$ref': '#/$defs/E0'})
+    for i in range(levels):
+        parameters['$defs'][f'E{i}'] = {
+            'anyOf': [{'$ref': f'#/$defs/E{i + 1}'}, {'$ref': f'#/$defs/E{i + 1}'}],
+        }
+    parameters['$defs'][f'E{levels}'] = {'type': 'string'}
+
+    calls = []
+    original = XmlToolParser._resolve_schema_impl.__func__
+
+    def counting(cls, schema, root_schema, depth, cache, visits):
+        calls.append(schema)
+        return original(cls, schema, root_schema, depth, cache, visits)
+
+    monkeypatch.setattr(XmlToolParser, '_resolve_schema_impl', classmethod(counting))
+
+    parser = parser_cls()
+    parser.adjust_request(_request_with_parameters(parser_cls, parameters))
+    tool_call = final_tool_call(parser, _payload(parser_cls, '42'))
+    assert json.loads(tool_call.function.arguments) == {'value': '42'}
+
+    # The streaming decision and the argument finish each resolve once; both
+    # stay in the order of magnitude of the ~60 unique schema nodes.
+    assert len(calls) < 200
 
 
 MULTI_PARAM_PARAMETERS = {
