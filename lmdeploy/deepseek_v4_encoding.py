@@ -721,26 +721,30 @@ def parse_message_from_completion_text(text: str, thinking_mode: str) -> dict[st
     if is_thinking:
         index, content_delta, stop_token = _read_until_stop(index, text, [thinking_end_token, tool_calls_start_token])
         reasoning_content = content_delta
-        assert stop_token == thinking_end_token, 'Invalid thinking format: missing </think>'
+        if stop_token != thinking_end_token:
+            raise ValueError('Invalid thinking format: missing </think>')
 
     index, content_delta, stop_token = _read_until_stop(index, text, [eos_token, tool_calls_start_token])
     summary_content = content_delta
     if stop_token == tool_calls_start_token:
         is_tool_calling = True
     else:
-        assert stop_token == eos_token, 'Invalid format: missing EOS token'
+        if stop_token != eos_token:
+            raise ValueError('Invalid format: missing EOS token')
 
     if is_tool_calling:
         index, stop_token, tool_calls = parse_tool_calls(index, text)
 
         index, tool_ends_text, stop_token = _read_until_stop(index, text, [eos_token])
-        assert not tool_ends_text, 'Unexpected content after tool calls'
+        if tool_ends_text:
+            raise ValueError('Unexpected content after tool calls')
 
-    assert len(text) == index and stop_token in [eos_token, None], 'Unexpected content at end'
+    if len(text) != index or stop_token not in [eos_token, None]:
+        raise ValueError('Unexpected content at end')
 
     for sp_token in [bos_token, eos_token, thinking_start_token, thinking_end_token, dsml_token]:
-        assert sp_token not in summary_content and sp_token not in reasoning_content, \
-            f"Unexpected special token '{sp_token}' in content"
+        if sp_token in summary_content or sp_token in reasoning_content:
+            raise ValueError(f"Unexpected special token '{sp_token}' in content")
 
     return {
         'role': 'assistant',
