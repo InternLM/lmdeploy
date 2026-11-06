@@ -19,6 +19,7 @@ from lmdeploy.serve.openai.chat_completions import register
 from lmdeploy.serve.openai.chat_completions.logprobs import _create_chat_completion_logprobs
 from lmdeploy.serve.openai.chat_completions.validation import check_request
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+from lmdeploy.serve.openai.responses import create_responses_router
 from lmdeploy.serve.processors.multimodal import MultimodalProcessor
 
 
@@ -190,6 +191,7 @@ def preprocessing_client(chat_endpoint, monkeypatch):
     model."""
     _, context = chat_endpoint
     engine = context.async_engine
+    engine.arch = 'Qwen3ForCausalLM'
     engine.session_mgr = SessionManager()
     engine.session_len = 128
     engine.backend_config.enable_prefix_caching = False
@@ -206,6 +208,7 @@ def preprocessing_client(chat_endpoint, monkeypatch):
     app, router = FastAPI(), APIRouter()
     register(router, context)
     app.include_router(router)
+    app.include_router(create_responses_router(context))
     with TestClient(app) as client:
         yield client, engine
     load_media.assert_not_called()
@@ -255,5 +258,73 @@ def test_http_text_blocks_still_generate(preprocessing_client, stream):
         assert 'data: [DONE]' in response.text
     else:
         assert response.json()['choices'][0]['message']['content'] == 'choice-1'
+    assert engine.call_count == 1
+    assert engine.session_mgr.sessions == {}
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('api', ['chat/completions', 'responses'])
+@pytest.mark.parametrize('with_image', [False, True])
+def test_glm53_rejects_medium_effort_before_preprocessing(preprocessing_client, stream, api, with_image):
+    client, engine = preprocessing_client
+    engine.arch = 'Glm5NextForConditionalGeneration'
+    content = 'hi'
+    if with_image:
+        content = [dict(type='text', text='hi'),
+                   dict(type='image_url', image_url=dict(url='https://example.com/image.png'))]
+    messages = [dict(role='user', content=content)]
+    payload = dict(model='fake-model', stream=stream)
+    if api == 'responses':
+        if with_image:
+            messages[0]['content'] = [dict(type='input_text', text='hi'),
+                                      dict(type='input_image', image_url='https://example.com/image.png')]
+        payload.update(input=messages, reasoning={'effort': 'medium'}, max_output_tokens=16)
+    else:
+        payload.update(messages=messages, reasoning_effort='medium', max_completion_tokens=16)
+    response = client.post('/v1/' + api, json=payload)
+
+    assert response.status_code == 400, response.text
+    assert response.headers['content-type'].startswith('application/json')
+    error = response.json()
+    if api == 'responses':
+        error = error['error']
+    assert error['type'] == 'invalid_request_error'
+    assert 'reasoning_effort' in error['message']
+    assert 'low, high and max' in error['message']
+    assert engine.call_count == 0
+    assert engine.session_mgr.sessions == {}
+
+
+@pytest.mark.parametrize('options, expected_status', [
+    ({}, 200),
+    ({'reasoning_effort': None}, 200),
+    ({'reasoning_effort': 'low'}, 200),
+    ({'reasoning_effort': 'high'}, 200),
+    ({'reasoning_effort': 'max'}, 200),
+    ({'chat_template_kwargs': {'reasoning_effort': 'medium'}}, 400),
+    ({'chat_template_kwargs': {'reasoning_effort': 'invalid'}}, 400),
+    ({'reasoning_effort': 'high', 'chat_template_kwargs': {'reasoning_effort': 'medium'}}, 200),
+    ({'reasoning_effort': 'medium', 'chat_template_kwargs': {'reasoning_effort': 'high'}}, 400),
+])
+def test_glm53_effort_validation_honors_top_level_precedence(preprocessing_client, options, expected_status):
+    client, engine = preprocessing_client
+    engine.arch = 'Glm5NextForConditionalGeneration'
+    response = client.post('/v1/chat/completions', json=dict(
+        model='fake-model', messages=[dict(role='user', content='hi')], max_completion_tokens=16, **options))
+
+    assert response.status_code == expected_status, response.text
+    assert engine.call_count == (1 if expected_status == 200 else 0)
+    assert engine.session_mgr.sessions == {}
+
+
+@pytest.mark.parametrize('arch', ['GlmForCausalLM', 'Qwen3ForCausalLM', 'GptOssForCausalLM'])
+def test_other_models_still_accept_medium_effort(preprocessing_client, arch):
+    client, engine = preprocessing_client
+    engine.arch = arch
+    response = client.post('/v1/chat/completions', json=dict(
+        model='fake-model', messages=[dict(role='user', content='hi')], reasoning_effort='medium',
+        max_completion_tokens=16))
+
+    assert response.status_code == 200, response.text
     assert engine.call_count == 1
     assert engine.session_mgr.sessions == {}

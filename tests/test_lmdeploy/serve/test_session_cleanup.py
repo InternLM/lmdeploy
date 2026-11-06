@@ -167,6 +167,7 @@ async def _run_prompt_cancel_updates_metrics():
     metrics_processor.scheduler_stats = SchedulerStats()
     try:
         engine = AsyncEngine.__new__(AsyncEngine)
+        engine.arch = 'Qwen3ForCausalLM'
         engine.session_mgr = SessionManager()
         engine.prompt_processor = _FakePromptProcessor()
         engine.request_logger = _FakeRequestLogger()
@@ -196,6 +197,7 @@ async def _run_max_new_tokens_zero_cleans_up_session():
     metrics_processor.scheduler_stats = SchedulerStats()
     try:
         engine = AsyncEngine.__new__(AsyncEngine)
+        engine.arch = 'Qwen3ForCausalLM'
         engine.session_mgr = SessionManager()
         engine.session_mgr.build_request_handle_pool(_FakeEngine(), 1)
         engine.session_len = 4096
@@ -250,6 +252,7 @@ async def _run_input_logprob_outputs(engine_outputs,
 
     handle = _Handle()
     engine = AsyncEngine.__new__(AsyncEngine)
+    engine.arch = 'Qwen3ForCausalLM'
     engine.session_mgr = SessionManager()
     engine.session_mgr.build_request_handle_pool(
         SimpleNamespace(create_instance=lambda: handle), 1)
