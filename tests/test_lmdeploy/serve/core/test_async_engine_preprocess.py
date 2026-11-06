@@ -7,6 +7,7 @@ from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.async_engine import AsyncEngine, PreprocessedRequest
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.managers import SessionManager
+from lmdeploy.vl.media.base import MediaInputError
 
 
 class _RequestLogger:
@@ -100,12 +101,12 @@ def test_preprocess_hides_unexpected_exception_details():
     asyncio.run(_run())
 
 
-def test_preprocess_reports_missing_media_file_detail():
+def test_preprocess_reports_media_input_error_detail():
 
     class _PromptProcessor:
 
         async def get_prompt_input(self, **kwargs):
-            raise FileNotFoundError(2, 'No such file or directory', '/data/missing.png')
+            raise MediaInputError('Failed to read media file /data/missing.png: No such file or directory')
 
     async def _run():
         engine = _engine(_PromptProcessor())
@@ -115,6 +116,32 @@ def test_preprocess_reports_missing_media_file_detail():
         assert exc_info.value.code is ErrorCode.PREPROCESS_FAILED
         assert 'No such file or directory' in exc_info.value.message
         assert '/data/missing.png' in exc_info.value.message
+        assert engine.session_mgr.sessions == {}
+
+    asyncio.run(_run())
+
+
+def test_preprocess_hides_internal_file_errors():
+    # Same exception type as a user-path failure, but raised against a
+    # server-internal temp file: decoding an HTTP/base64 video stages the bytes
+    # in a NamedTemporaryFile, and a vanished temp dir makes it raise
+    # FileNotFoundError naming that internal path. The type alone must not make
+    # the detail client-visible.
+    internal_path = '/tmp/server-internal-video-cache/tmp9f3k.mp4'
+
+    class _PromptProcessor:
+
+        async def get_prompt_input(self, **kwargs):
+            raise FileNotFoundError(2, 'No such file or directory', internal_path)
+
+    async def _run():
+        engine = _engine(_PromptProcessor())
+        with pytest.raises(RequestError) as exc_info:
+            await engine.preprocess('hello', 9)
+
+        assert exc_info.value.code is ErrorCode.PREPROCESS_FAILED
+        assert exc_info.value.message == 'Request preprocessing failed.'
+        assert internal_path not in exc_info.value.message
         assert engine.session_mgr.sessions == {}
 
     asyncio.run(_run())

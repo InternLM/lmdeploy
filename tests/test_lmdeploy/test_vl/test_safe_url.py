@@ -4,7 +4,8 @@ from urllib.parse import urlparse
 
 import pytest
 
-from lmdeploy.vl.media.connection import _is_safe_url, _load_http_url
+from lmdeploy.vl.media.base import MediaInputError
+from lmdeploy.vl.media.connection import _is_safe_url, _load_file_url, _load_http_url
 
 
 @pytest.mark.parametrize(
@@ -177,3 +178,33 @@ def test_load_http_url_blocks_unsafe_url_after_redirect(mock_safe, mock_get):
                        allowed_media_domains=['example.com', '127.0.0.1'])
 
     assert mock_get.call_count == 1
+
+
+def test_load_file_url_wraps_user_path_errors_as_media_input_error():
+    media_io = MagicMock()
+    media_io.load_file.side_effect = FileNotFoundError(2, 'No such file or directory', '/data/missing.png')
+
+    with pytest.raises(MediaInputError) as exc_info:
+        _load_file_url(urlparse('file:///data/missing.png'), media_io)
+
+    message = str(exc_info.value)
+    assert '/data/missing.png' in message
+    assert 'No such file or directory' in message
+    assert isinstance(exc_info.value.__cause__, FileNotFoundError)
+
+
+def test_load_file_url_message_omits_internal_paths():
+    # Backends like OpenCVVideoLoader.load_file stage the user file's bytes
+    # through a NamedTemporaryFile before decoding; if that internal staging
+    # fails, the MediaInputError message must keep only the user-supplied path
+    # and the errno text, never the internal one.
+    media_io = MagicMock()
+    media_io.load_file.side_effect = FileNotFoundError(
+        2, 'No such file or directory', '/tmp/server-internal-video-cache/tmpabc.mp4')
+
+    with pytest.raises(MediaInputError) as exc_info:
+        _load_file_url(urlparse('file:///data/user/video.mp4'), media_io)
+
+    message = str(exc_info.value)
+    assert '/data/user/video.mp4' in message
+    assert 'server-internal-video-cache' not in message

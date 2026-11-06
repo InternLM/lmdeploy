@@ -35,6 +35,7 @@ from lmdeploy.serve.managers import Session, SessionManager
 from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
+from lmdeploy.vl.media.base import MediaInputError
 
 from .exceptions import ErrorCode, RequestError, SafeRunException
 
@@ -91,28 +92,22 @@ class PreprocessedRequest:
 
 
 # class AsyncEngine(LogitsMixin):
-# Preprocessing failures caused directly by user-supplied input paths. Their
-# messages name the offending path, which is safe and useful to return to the
-# client. Every other exception keeps the generic message so that internal
-# details are not leaked; the full traceback still goes to the server log.
-_PREPROCESS_INPUT_PATH_ERRORS = (FileNotFoundError, IsADirectoryError, NotADirectoryError,
-                                 PermissionError)
-
-
+# Client-visible detail for preprocessing failures is scoped to MediaInputError,
+# which media loading raises only at the boundary where a user-supplied path is
+# opened, with a message naming just that path. The exception *type* cannot be
+# trusted for this: e.g. decoding an HTTP/base64 video stages the bytes in a
+# NamedTemporaryFile, and if the server's temp dir vanishes the resulting
+# FileNotFoundError names an internal path. Every other exception keeps the
+# generic message; the full traceback still goes to the server log.
 def _client_visible_preprocess_message(exc: Exception) -> str:
     """Build the client-visible message for a preprocessing failure.
 
-    Input-path errors surface ``str(exc)`` (which includes the offending file
-    path); unexpected internal errors keep the generic message, with details
-    preserved only in the server log.
+    MediaInputError surfaces its message, which names the offending user-supplied path; every other exception keeps the
+    generic message, with details preserved only in the server log.
     """
-    if not isinstance(exc, _PREPROCESS_INPUT_PATH_ERRORS):
+    if not isinstance(exc, MediaInputError):
         return 'Request preprocessing failed.'
-    detail = str(exc) or repr(exc)
-    filename = getattr(exc, 'filename', None)
-    if filename and filename not in detail:
-        detail = f'{detail}: {filename}'
-    return f'Request preprocessing failed: {detail}'
+    return f'Request preprocessing failed: {exc}'
 
 
 class AsyncEngine:
