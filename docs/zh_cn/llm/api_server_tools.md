@@ -67,7 +67,11 @@ print(response.choices[0].message.tool_calls)  # 一个或多个调用
 
 设置 `tool_choice="auto"` 时，由模型自行决定是否调用工具。例如，即使提供了工具，问候语也可能得到普通文本回复，并返回 `finish_reason="stop"`。
 
-设置 `tool_choice="none"` 时，默认响应解析器关闭工具调用解析，但请求中的 `tools` 仍会传给对话模板。模型可能继续生成工具调用格式的文本，这些文本不会被提取为结构化的 `tool_calls`。GPT-OSS 的 Harmony 解析器在此模式下会先移除 `tools`，再渲染对话模板。
+设置 `tool_choice="none"` 时，LMDeploy 会从对话模板的输入中移除请求提供的工具定义，并关闭结构化工具调用解析。这是 Chat Completions 路径上跨模型的通用行为，也适用于没有配置工具调用解析器的请求，与 Responses API 和 GPT-OSS Harmony 的提示词处理保持一致。历史中的助手工具调用和 `tool` 结果消息仍然保留，模型可以继续总结先前的结果。模型仍可能生成类似工具调用的文本；禁用工具并不限制生成文本的格式。对于流式和非流式响应，这类输出都作为文本处理，不会返回结构化的 `tool_calls`，正常结束时仍返回 `finish_reason="stop"`。
+
+移除工具定义会缩短提示词，但在多轮对话中从 `auto` 或 `required` 切换到 `none`，可能缩短两次请求的公共前缀，从而减少前缀缓存复用。实际延迟取决于模板、对话内容和缓存状态，不能仅凭提示词变短就判断响应更快。只有仍允许模型调用工具时，才应继续使用 `auto`。
+
+指定名称的 `tool_choice`（例如 `{"type": "function", "function": {"name": "get_current_weather"}}`）必须匹配 `tools` 中的函数。名称不存在，或者指定名称时 `tools` 为空或未提供，都会在生成前返回 HTTP 400。
 
 ## 多轮调用
 
