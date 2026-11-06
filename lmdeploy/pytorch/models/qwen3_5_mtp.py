@@ -59,13 +59,14 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
         self.input_layernorm = RMSNorm(config.hidden_size,
                                        config.rms_norm_eps,
                                        quant_config=quantization_config,
-                                       dtype=dtype,
+                                       dtype=torch.float32,
                                        device=device,
                                        prefix=add_prefix('input_layernorm', prefix=prefix),
                                        )
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size, config.rms_norm_eps, dtype=torch.float32, device=device)
 
 
 class Qwen3_5MultiTokenPredictor(nn.Module):
@@ -94,9 +95,11 @@ class Qwen3_5MultiTokenPredictor(nn.Module):
             for idx in range(self.num_mtp_layers)
         })
 
-        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
-        self.pre_fc_norm_hidden = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
-        self.pre_fc_norm_embedding = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
+        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=torch.float32, device=device)
+        self.pre_fc_norm_hidden = RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps, dtype=torch.float32, device=device)
+        self.pre_fc_norm_embedding = RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps, dtype=torch.float32, device=device)
 
         # shared with target model
         self.embed_tokens = None
@@ -419,7 +422,7 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
                     else:
                         for rms_norm_key in rms_norm_keys:
                             if rms_norm_key in name and 'weight' in name:
-                                loaded_weight = loaded_weight + 1
+                                loaded_weight = loaded_weight.float() + 1
                                 break
                         param = params_dict[name]
                         load_weight(param, loaded_weight)

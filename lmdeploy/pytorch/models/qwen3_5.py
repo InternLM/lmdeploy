@@ -657,7 +657,7 @@ class Qwen3_5Attention(nn.Module):
             head_dim,
             config.rms_norm_eps,
             quant_config=quantization_config,
-            dtype=dtype,
+            dtype=torch.float32,
             device=device,
             prefix=add_prefix('q_norm', prefix),
         )
@@ -665,7 +665,7 @@ class Qwen3_5Attention(nn.Module):
             head_dim,
             config.rms_norm_eps,
             quant_config=quantization_config,
-            dtype=dtype,
+            dtype=torch.float32,
             device=device,
             prefix=add_prefix('k_norm', prefix),
         )
@@ -760,13 +760,14 @@ class Qwen3_5DecoderLayer(nn.Module):
             config.hidden_size,
             config.rms_norm_eps,
             quant_config=quantization_config,
-            dtype=dtype,
+            dtype=torch.float32,
             device=device,
             prefix=add_prefix('input_layernorm', prefix),
         )
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size, config.rms_norm_eps, dtype=torch.float32, device=device)
 
     def forward(
         self,
@@ -842,7 +843,7 @@ class Qwen3_5TextModel(nn.Module):
         self._aux_hidden_state_layers_set: frozenset[int] = frozenset(self.aux_hidden_state_layers)
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=torch.float32, device=device)
 
         # build rotary embedding
         self.rotary_emb = build_rotary_embedding_from_config(config, device=device)
@@ -1270,7 +1271,7 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, PiecewiseCu
                 else:
                     for rms_norm_key in rms_norm_keys:
                         if rms_norm_key in name and 'weight' in name:
-                            loaded_weight = loaded_weight + 1
+                            loaded_weight = loaded_weight.float() + 1
                             break
                     param = params_dict[name]
                     load_weight(param, loaded_weight)
