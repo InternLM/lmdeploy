@@ -90,6 +90,7 @@ def build_prefix_block_hashes(
     extra_identity: bytes | bytearray | memoryview | str = b'',
     previous_hashes: Sequence[bytes] = (),
     block_extra_identities: Mapping[int, bytes] | None = None,
+    token_lookahead: int = 0,
 ) -> tuple[bytes, ...]:
     """Build stable, prefix-chained hashes for complete token blocks.
 
@@ -98,12 +99,17 @@ def build_prefix_block_hashes(
     active adapter from ``extra_identity``. A mutable partial tail is
     intentionally excluded. ``previous_hashes`` lets callers extend an
     append-only request without rehashing its existing prefix.
+    ``token_lookahead`` includes the accepted successors consumed by shifted
+    draft KV. Only blocks with all those successors present are hashed; their
+    encoding is distinct from legacy target-only blocks of any size.
     """
+    if token_lookahead < 0:
+        raise ValueError('token_lookahead must be non-negative')
     identity = _identity_bytes(extra_identity)
     if len(identity) >= 2**32:
         raise ValueError('extra_identity is too large')
 
-    full_block_count = len(token_ids) // block_size
+    full_block_count = max(0, len(token_ids) - token_lookahead) // block_size
     block_hashes = []
     for block_hash in previous_hashes:
         if not isinstance(block_hash, (bytes, bytearray, memoryview)):
@@ -123,7 +129,7 @@ def build_prefix_block_hashes(
         return tuple(block_hashes)
 
     first_new_token = first_new_block * block_size
-    complete_token_end = full_block_count * block_size
+    complete_token_end = full_block_count * block_size + token_lookahead
     packed_numpy_tokens = None
     if (isinstance(token_ids, np.ndarray) and token_ids.ndim == 1
             and token_ids.dtype.kind in ('i', 'u')):
@@ -134,31 +140,34 @@ def build_prefix_block_hashes(
                 complete_token_end,
             ))
 
-    block_struct = _token_block_struct(block_size)
+    block_struct = _token_block_struct(block_size + token_lookahead)
+    hash_schema = _BLOCK_HASH_SCHEMA
+    if token_lookahead:
+        hash_schema = b'lmdeploy-mooncake-prefix-block-lookahead-v1\x00' + struct.pack('>I', token_lookahead)
     encoded_block_size = struct.pack('>I', block_size)
     encoded_identity = struct.pack('>I', len(identity)) + identity
-    packed_block_bytes = block_struct.size
+    packed_block_bytes = block_size * 8
     for block_index in range(first_new_block, full_block_count):
         digest = hashlib.sha256()
-        digest.update(_BLOCK_HASH_SCHEMA)
+        digest.update(hash_schema)
         if parent_hash is not None:
             digest.update(parent_hash)
         digest.update(encoded_block_size)
         if packed_numpy_tokens is not None:
             packed_offset = (block_index - first_new_block) * packed_block_bytes
             digest.update(
-                packed_numpy_tokens[packed_offset:packed_offset + packed_block_bytes])
+                packed_numpy_tokens[packed_offset:packed_offset + block_struct.size])
         else:
             start = block_index * block_size
             digest.update(
                 _pack_python_token_block(
-                    token_ids[start:start + block_size],
+                    token_ids[start:start + block_size + token_lookahead],
                     block_struct,
                 ))
         digest.update(encoded_identity)
         if block_extra_identities and block_index in block_extra_identities:
-            # Text-only hashes retain their existing byte format. Multimodal
-            # blocks add a domain-separated, length-prefixed stable identity.
+            # Multimodal blocks add a domain-separated, length-prefixed stable
+            # identity covering both block tokens and their lookahead.
             extra = block_extra_identities[block_index]
             digest.update(b'\x00multimodal-v1\x00')
             digest.update(struct.pack('>I', len(extra)))

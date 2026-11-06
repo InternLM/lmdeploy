@@ -34,9 +34,8 @@ Hybrid attention 模型复用前缀时，需要同时具备 full-attention KV bl
 该选项可减少追加式 agent 多轮对话的 checkpoint 拷贝和 Store 提交次数，
 代价是编辑历史或分叉对话时可复用的中间前缀更少。仅含 full attention 的模型忽略此参数。
 
-若 MTP 配置仍采用整块回退，远端复用还需要 state 边界之后的 KV。
-此策略不保存这段后缀，因此 Store 中尚无这些 blocks 时，最新 state 可能无法远端命中。
-GLM MTP 开启本地 prefix caching 时使用 token lookahead，不采用整块回退，无需这段额外 Store KV。
+支持的 MTP 方法在本地和 Store 匹配时均使用 token lookahead，不采用整块回退，
+因此远端复用无需 state 边界之后的额外 KV blocks。
 
 ## GLM-5.3-Flash
 
