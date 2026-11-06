@@ -119,6 +119,15 @@ def _normalize_request_messages(messages: list[dict]) -> list[dict] | None:
     for msg_idx, message in enumerate(messages):
         if not isinstance(message, dict) or message.get('role') != 'assistant':
             continue
+        reasoning = message.get('reasoning')
+        if reasoning is not None and message.get('reasoning_content') != reasoning:
+            if normalized_messages is None:
+                normalized_messages = list(messages)
+            message = dict(message)
+            # Keep the alias consumed by model templates; reasoning takes precedence.
+            message['reasoning_content'] = reasoning
+            normalized_messages[msg_idx] = message
+
         tool_calls = message.get('tool_calls')
         if not isinstance(tool_calls, list):
             continue
@@ -159,7 +168,8 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
     - ``response_format``: ``ResponseFormat → dict``, ``type='text' → None``
     - ``stop``: ``str → list[str]``
     - ``max_completion_tokens``: resolves from deprecated ``max_tokens``
-    - ``messages``: tool call ``arguments`` JSON strings → dicts for template rendering
+    - ``messages``: ``reasoning`` → ``reasoning_content`` for template compatibility;
+      tool call ``arguments`` JSON strings → dicts for template rendering
     """
     if not hasattr(request, 'model_copy'):
         return request
