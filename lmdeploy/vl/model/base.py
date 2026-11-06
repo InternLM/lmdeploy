@@ -157,11 +157,7 @@ class VisionModel(ABC):
         mm_processor_kwargs = mm_processor_kwargs or {}
         if raw_images:
             kwargs['images'] = raw_images
-            image_size = get_override_size(self.processor.image_processor,
-                                           mm_processor_kwargs.get('image'),
-                                           modality='image')
-            if image_size is not None:
-                images_kwargs['size'] = image_size
+            images_kwargs = self.get_image_processor_kwargs(mm_processor_kwargs.get('image'))
         if raw_videos:
             kwargs['videos'] = raw_videos
             videos_kwargs['video_metadata'] = video_metadatas
@@ -328,6 +324,12 @@ class VisionModel(ABC):
         """
         if self.backend == 'turbomind':
             raise NotImplementedError()
+
+    def get_image_processor_kwargs(self, overrides: dict[str, Any] | None) -> dict[str, Any]:
+        """Translate request image budgets without mutating the shared
+        processor."""
+        size = get_override_size(self.processor.image_processor, overrides, modality='image')
+        return {'size': size} if size is not None else {}
 
     @staticmethod
     def collect_multimodal_items(messages):
