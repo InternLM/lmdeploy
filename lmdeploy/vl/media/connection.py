@@ -64,33 +64,35 @@ def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M],
     elif isinstance(media_io, VideoMediaIO):
         fetch_timeout = int(os.environ.get('LMDEPLOY_VIDEO_FETCH_TIMEOUT', 30))
 
-    client = requests.Session()
     max_redirects = 3
-    for _ in range(max_redirects + 1):
-        parsed = parse_url(url)
-        if parsed.scheme not in ('http', 'https'):
-            raise ValueError(f'URL is blocked for security reasons: Unsupported scheme: {parsed.scheme}')
-        if not parsed.hostname:
-            raise ValueError('URL is blocked for security reasons: Could not parse hostname from URL')
-        if allowed_media_domains and parsed.hostname not in allowed_media_domains:
-            raise ValueError('The URL must be from one of the allowed domains: '
-                             f'{allowed_media_domains}. Input URL domain: {parsed.hostname}')
+    # Each fetch owns its connection pool. Close it on successful decoding and
+    # on timeout, HTTP/decoder failures or rejected redirects alike.
+    with requests.Session() as client:
+        for _ in range(max_redirects + 1):
+            parsed = parse_url(url)
+            if parsed.scheme not in ('http', 'https'):
+                raise ValueError(f'URL is blocked for security reasons: Unsupported scheme: {parsed.scheme}')
+            if not parsed.hostname:
+                raise ValueError('URL is blocked for security reasons: Could not parse hostname from URL')
+            if allowed_media_domains and parsed.hostname not in allowed_media_domains:
+                raise ValueError('The URL must be from one of the allowed domains: '
+                                 f'{allowed_media_domains}. Input URL domain: {parsed.hostname}')
 
-        is_safe, reason = _is_safe_url(parsed.url)
-        if not is_safe:
-            raise ValueError(f'URL is blocked for security reasons: {reason}')
+            is_safe, reason = _is_safe_url(parsed.url)
+            if not is_safe:
+                raise ValueError(f'URL is blocked for security reasons: {reason}')
 
-        response = client.get(parsed.url, headers=headers, timeout=fetch_timeout, allow_redirects=False)
+            response = client.get(parsed.url, headers=headers, timeout=fetch_timeout, allow_redirects=False)
 
-        if response.is_redirect:
-            location = response.headers.get('Location')
-            if not location:
-                raise ValueError('Redirect response missing Location header')
-            url = urljoin(parsed.url, location)
-            continue
+            if response.is_redirect:
+                location = response.headers.get('Location')
+                if not location:
+                    raise ValueError('Redirect response missing Location header')
+                url = urljoin(parsed.url, location)
+                continue
 
-        response.raise_for_status()
-        return media_io.load_bytes(response.content)
+            response.raise_for_status()
+            return media_io.load_bytes(response.content)
 
     raise ValueError('Exceeded maximum media URL redirects')
 
