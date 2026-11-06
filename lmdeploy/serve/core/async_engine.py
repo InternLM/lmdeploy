@@ -91,6 +91,30 @@ class PreprocessedRequest:
 
 
 # class AsyncEngine(LogitsMixin):
+# Preprocessing failures caused directly by user-supplied input paths. Their
+# messages name the offending path, which is safe and useful to return to the
+# client. Every other exception keeps the generic message so that internal
+# details are not leaked; the full traceback still goes to the server log.
+_PREPROCESS_INPUT_PATH_ERRORS = (FileNotFoundError, IsADirectoryError, NotADirectoryError,
+                                 PermissionError)
+
+
+def _client_visible_preprocess_message(exc: Exception) -> str:
+    """Build the client-visible message for a preprocessing failure.
+
+    Input-path errors surface ``str(exc)`` (which includes the offending file
+    path); unexpected internal errors keep the generic message, with details
+    preserved only in the server log.
+    """
+    if not isinstance(exc, _PREPROCESS_INPUT_PATH_ERRORS):
+        return 'Request preprocessing failed.'
+    detail = str(exc) or repr(exc)
+    filename = getattr(exc, 'filename', None)
+    if filename and filename not in detail:
+        detail = f'{detail}: {filename}'
+    return f'Request preprocessing failed: {detail}'
+
+
 class AsyncEngine:
     """Async inference engine. Maintaining a bunch of tm_model instances.
 
@@ -605,13 +629,8 @@ class AsyncEngine:
             metrics_processor.increase_total_requests()
             metrics_processor.increase_failed_requests('error')
             remove_session()
-            detail = repr(e)
-            filename = getattr(e, 'filename', None)
-            if filename:
-                detail = f'{detail}: {filename}'
-            raise RequestError(
-                ErrorCode.PREPROCESS_FAILED,
-                f'Request preprocessing failed: {detail}') from e
+            raise RequestError(ErrorCode.PREPROCESS_FAILED,
+                               _client_visible_preprocess_message(e)) from e
 
     @staticmethod
     def _request_error_from_status(status: ResponseType) -> RequestError:

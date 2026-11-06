@@ -100,6 +100,26 @@ def test_preprocess_hides_unexpected_exception_details():
     asyncio.run(_run())
 
 
+def test_preprocess_reports_missing_media_file_detail():
+
+    class _PromptProcessor:
+
+        async def get_prompt_input(self, **kwargs):
+            raise FileNotFoundError(2, 'No such file or directory', '/data/missing.png')
+
+    async def _run():
+        engine = _engine(_PromptProcessor())
+        with pytest.raises(RequestError) as exc_info:
+            await engine.preprocess('hello', 9)
+
+        assert exc_info.value.code is ErrorCode.PREPROCESS_FAILED
+        assert 'No such file or directory' in exc_info.value.message
+        assert '/data/missing.png' in exc_info.value.message
+        assert engine.session_mgr.sessions == {}
+
+    asyncio.run(_run())
+
+
 def test_preprocess_rejects_active_session_without_removing_it():
 
     async def _run():
