@@ -490,7 +490,9 @@ class XmlToolParser(ToolParser):
                       depth: int = 0) -> dict[str, Any] | None:
         """Resolve a local ``$ref`` pointer (``#/$defs/...``) against the root.
 
-        Returns the referenced schema, or the original schema when the pointer is absent or cannot be resolved.
+        Pointer tokens are unescaped per RFC 6901 first (``~1`` decodes to ``/``,
+        ``~0`` to ``~``). Returns the referenced schema, or the original schema when the pointer
+        is absent or cannot be resolved.
         """
         if not isinstance(schema, dict) or depth > 8:
             return schema
@@ -498,7 +500,9 @@ class XmlToolParser(ToolParser):
         if not isinstance(ref, str) or not ref.startswith('#/'):
             return schema
         target: Any = root_schema if isinstance(root_schema, dict) else None
-        for part in ref[2:].split('/'):
+        for token in ref[2:].split('/'):
+            # RFC 6901: decode pointer escapes, ``~1`` before ``~0``.
+            part = token.replace('~1', '/').replace('~0', '~')
             if not isinstance(target, dict) or part not in target:
                 return schema
             target = target[part]
@@ -513,13 +517,39 @@ class XmlToolParser(ToolParser):
         """Resolve the effective JSON type and nullability of a schema.
 
         Returns ``(schema_type, allows_null)``. ``$ref`` pointers are
-        resolved against ``root_schema`` and ``enum`` values imply their
-        common type; ``schema_type`` is ``None`` only when no single JSON
-        type governs the value (mixed unions, typeless schemas).
+        resolved against ``root_schema``; constraints adjacent to a ``$ref``
+        apply alongside the referenced target (Draft 2020-12), so the
+        referencing schema's own ``type``/``enum``/``const`` governs
+        coercion when present. ``enum`` and ``const`` values imply their
+        type; ``schema_type`` is ``None`` only when no single JSON type
+        governs the value (mixed unions, typeless schemas).
         """
         # TODO: Fully support union and nullable schemas, preserving all allowed types
         # in streaming decisions and value coercion.
-        schema = cls._deref_schema(param_schema, root_schema)
+        if not isinstance(param_schema, dict):
+            return None, False
+        target = cls._deref_schema(param_schema, root_schema)
+        if target is param_schema:
+            # No local ``$ref`` was followed: interpret the schema itself.
+            return cls._resolve_local_schema(param_schema, root_schema)
+        own_type, own_nullable = cls._resolve_local_schema(param_schema, root_schema)
+        target_type, target_nullable = cls._resolve_schema_coercion(target, root_schema)
+        if own_type is None:
+            return target_type, target_nullable
+        # The sibling constraints and the referenced target both apply: the
+        # sibling type governs coercion, and null is allowed only when both
+        # sides accept it.
+        return own_type, own_nullable and target_nullable
+
+    @classmethod
+    def _resolve_local_schema(cls, schema: dict[str, Any] | None,
+                              root_schema: dict[str, Any] | None = None
+                              ) -> tuple[str | None, bool]:
+        """Resolve a schema's own constraints, ignoring a ``$ref`` keyword.
+
+        Union branches resolve through ``_resolve_schema_coercion`` so ``$ref``
+        pointers nested inside ``anyOf``/``oneOf`` are still followed.
+        """
         if not isinstance(schema, dict):
             return None, False
         schema_type = schema.get('type')
@@ -550,6 +580,9 @@ class XmlToolParser(ToolParser):
             if len(distinct) == 1:
                 return distinct.pop(), nullable
             return None, nullable
+        if 'const' in schema:
+            const_type = cls._json_type_of(schema['const'])
+            return const_type, const_type == 'null'
         if isinstance(schema.get('properties'), dict):
             return 'object', False
         if schema.get('items') is not None:
