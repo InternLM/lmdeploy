@@ -282,6 +282,7 @@ class MultimodalProcessor:
                                                            do_preprocess=do_preprocess,
                                                            adapter_name=adapter_name,
                                                            tools=tools,
+                                                           reasoning_effort=reasoning_effort,
                                                            chat_template_kwargs=chat_template_kwargs,
                                                            media_io_kwargs=media_io_kwargs,
                                                            mm_processor_kwargs=mm_processor_kwargs,
@@ -426,6 +427,7 @@ class MultimodalProcessor:
                                            do_preprocess: bool,
                                            adapter_name: str,
                                            tools: list[object] | None = None,
+                                           reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
                                            chat_template_kwargs: dict | None = None,
                                            media_io_kwargs: dict[str, Any] | None = None,
                                            mm_processor_kwargs: dict[str, Any] | None = None,
@@ -433,6 +435,11 @@ class MultimodalProcessor:
         """Process multimodal prompt and return processed data for inference
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
+        # Match the text path: the top-level effort overrides template kwargs.
+        # Copy the caller's dict so subsequent requests cannot inherit this value.
+        chat_template_kwargs = dict(chat_template_kwargs or {})
+        if reasoning_effort is not None:
+            chat_template_kwargs['reasoning_effort'] = reasoning_effort
         messages = await self.async_parse_multimodal_item(messages,
                                                           media_io_kwargs,
                                                           allowed_media_domains=self.allowed_media_domains)
