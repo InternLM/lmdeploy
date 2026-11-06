@@ -85,7 +85,7 @@ LMDeploy 不会自动将 `medium` 映射为 `high`。
 校验模板参数；两者都省略或为 null 时，采用模型默认值。
 
 该校验根据模型架构 `Glm5NextForConditionalGeneration` 生效，使用自定义
-`--chat-template-config` 时也适用。其他模型架构的推理强度处理方式保持不变。
+`--chat-template` 时也适用。其他模型架构的推理强度处理方式保持不变。
 
 ## 自定义 parser
 

@@ -88,8 +88,8 @@ omitted or null, the template kwarg is used and validated instead. If both
 are omitted or null, the model default applies.
 
 This validation follows the `Glm5NextForConditionalGeneration` model
-architecture and also applies when a custom `--chat-template-config` is
-used. Other model architectures retain their existing effort handling.
+architecture and also applies when a custom `--chat-template` is used.
+Other model architectures retain their existing effort handling.
 
 ## Custom parser
 
