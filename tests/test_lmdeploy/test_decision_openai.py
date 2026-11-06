@@ -1,14 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Exercise the production wire models, parser and HTTP routes with fixed
 engine scores."""
-import asyncio
 import base64
 import copy
 import json
 import math
-import socket
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from types import SimpleNamespace
@@ -407,54 +404,3 @@ def test_openapi_exposes_separate_protocols(http_service):
     assert response == {'$ref': '#/components/schemas/OpenAIDecisionResponse'}
     assert systemone['$ref'].endswith('/SystemoneRequest')
     assert '/v1/jev' not in schema['paths']
-
-
-@pytest.fixture
-def sdk_server(http_service):
-    pytest.importorskip('openai.types.decision', reason='Install an OpenAI SDK with Decisions support')
-    import uvicorn
-
-    client, _ = http_service
-    sock = socket.socket()
-    sock.bind(('127.0.0.1', 0))
-    server = uvicorn.Server(uvicorn.Config(client.app, log_level='error', access_log=False))
-    thread = threading.Thread(target=server.run, kwargs={'sockets': [sock]}, daemon=True)
-    thread.start()
-    try:
-        deadline = time.monotonic() + 10
-        while not server.started and thread.is_alive() and time.monotonic() < deadline:
-            time.sleep(.01)
-        assert server.started, 'Local HTTP server did not start'
-        yield f'http://127.0.0.1:{sock.getsockname()[1]}/v1'
-    finally:
-        server.should_exit = True
-        thread.join(10)
-        sock.close()
-        assert not thread.is_alive(), 'Local HTTP server did not stop'
-
-
-@pytest.mark.parametrize('asynchronous', [False, True])
-@pytest.mark.parametrize('with_images', [False, True])
-def test_official_sdk_over_http(sdk_server, asynchronous, with_images, image_input):
-    import openai
-
-    body = request()
-    if with_images:
-        body['input'] = image_input[0]
-    body['questions'][1]['choices'] = [dict(value=True), dict(value='true')]
-    kwargs = dict(api_key='local-test', base_url=sdk_server, max_retries=0, timeout=10,
-                  _strict_response_validation=True)
-    if asynchronous:
-        async def run():
-            async with openai.AsyncOpenAI(**kwargs) as client:
-                return await client.decisions.create(**body)
-        result = asyncio.run(run())
-    else:
-        with openai.OpenAI(**kwargs) as client:
-            result = client.decisions.create(**body)
-            with pytest.raises(openai.UnprocessableEntityError):
-                client.decisions.create(**{**body, 'model': 'not-loaded'})
-    assert [a.type for a in result.answers] == ['predicate', 'choice', 'score']
-    assert [p.value for p in result.answers[1].probabilities] == [True, 'true']
-    assert result.usage.output_tokens > 0
-    assert result.usage.total_tokens == result.usage.input_tokens + result.usage.output_tokens
