@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch import distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.backends.cuda.attention.sparse_mla import FlashMLASparseImpl
 from lmdeploy.pytorch.backends.cuda.kpool import (
     CudaKPoolAttention,
@@ -108,19 +109,23 @@ def _glm_swiglu_impl(intermediate: torch.Tensor,
     """GLM/DeepSeek-V4 clamped SwiGLU used by dense and routed experts."""
     from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul, silu_and_mul_moe_ep
     if masked_m is not None:
-        return silu_and_mul_moe_ep(intermediate, masked_m, swiglu_limit=swiglu_limit, precise_mul=precise_mul)
+        return silu_and_mul_moe_ep(intermediate, masked_m, swiglu_limit=swiglu_limit, precise_mul=precise_mul,
+                                    round_silu=envs.glm53_swiglu_training_round)
     input_shape = intermediate.shape
     intermediate = intermediate.flatten(0, -2)
     output = silu_and_mul(intermediate,
                           swiglu_limit=swiglu_limit,
-                          precise_mul=precise_mul)
+                          precise_mul=precise_mul,
+                          round_silu=envs.glm53_swiglu_training_round)
     return output.unflatten(0, input_shape[:-1])
 
 
 _GLM53_COMPACT_FP8_MOE_ACT = partial(
     _glm_swiglu_impl, swiglu_limit=10.0, precise_mul=True)
 _GLM53_COMPACT_FP8_MOE_ACT.masked_post_quant = partial(
-    silu_and_mul_masked_post_quant_fwd, swiglu_limit=10.0, precise_mul=True)
+    silu_and_mul_masked_post_quant_fwd, swiglu_limit=10.0, precise_mul=True,
+    training_contract=envs.glm53_w2_training_contract,
+    round_silu=envs.glm53_swiglu_training_round)
 
 
 class Glm5NextVisionPatchEmbed(Glm4vVisionPatchEmbed):

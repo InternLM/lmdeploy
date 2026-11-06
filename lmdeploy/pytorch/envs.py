@@ -244,6 +244,10 @@ with set_envs():
     # Disable dense prefill for sparse MLA; set before startup.
     mla_disable_dense_prefill = env_to_bool('LMDEPLOY_MLA_DISABLE_DENSE_PREFILL', False)
 
+    # GLM53 training rounding/quantization policies; set before model/worker imports.
+    glm53_w2_training_contract = env_to_bool('LMDEPLOY_GLM53_W2_TRAINING_CONTRACT', False)
+    glm53_swiglu_training_round = env_to_bool('LMDEPLOY_GLM53_SWIGLU_TRAINING_ROUND', False)
+
     # cudagraph
     # fake capture flag for debug cudagraph padding behavior
     fake_capture = env_to_bool('LMDEPLOY_FAKE_CUDA_GRAPH_CAPTURE', False)
