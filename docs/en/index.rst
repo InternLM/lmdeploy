@@ -119,6 +119,7 @@ Documentation
    advance/context_parallel.md
    advance/prefix_caching.md
    advance/spec_decoding.md
+   advance/glm53_moe_optimization.md
    advance/update_weights.md
    advance/checkpoint_engine.md
 

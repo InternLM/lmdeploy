@@ -1,0 +1,181 @@
+diff --git a/csrc/deep_ep.cpp b/csrc/deep_ep.cpp
+index 0789cd5..991b5a3 100644
+--- a/csrc/deep_ep.cpp
++++ b/csrc/deep_ep.cpp
+@@ -1093,7 +1093,7 @@ Buffer::low_latency_dispatch(const torch::Tensor& x, const torch::Tensor& topk_i
+                              const std::optional<torch::Tensor>& dispatch_wait_recv_cost_stats,
+                              int num_max_dispatch_tokens_per_rank, int num_experts,
+                              bool use_fp8, bool round_scale, bool use_ue8m0,
+-                             bool async, bool return_recv_hook) {
++                             bool async, bool return_recv_hook, bool prepared_send) {
+ #ifndef DISABLE_NVSHMEM
+     EP_HOST_ASSERT(low_latency_mode);
+ 
+@@ -1179,7 +1179,7 @@ Buffer::low_latency_dispatch(const torch::Tensor& x, const torch::Tensor& topk_i
+                                num_topk, num_experts, rank, num_ranks,
+                                use_fp8, round_scale, use_ue8m0,
+                                workspace, num_device_sms,
+-                               launch_stream, phases);
++                               launch_stream, phases, prepared_send);
+     };
+     launcher(return_recv_hook ? LOW_LATENCY_SEND_PHASE : (LOW_LATENCY_SEND_PHASE | LOW_LATENCY_RECV_PHASE));
+ 
+@@ -1309,6 +1309,24 @@ Buffer::low_latency_combine(const torch::Tensor& x, const torch::Tensor& topk_id
+ #endif
+ }
+ 
++torch::Tensor
++Buffer::get_low_latency_dispatch_send_buffer(int num_max_dispatch_tokens_per_rank, int hidden, int num_experts) const {
++#ifndef DISABLE_NVSHMEM
++    EP_HOST_ASSERT(low_latency_mode and hidden == 4096);
++    LowLatencyLayout layout(rdma_buffer_ptr, num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts);
++    EP_HOST_ASSERT(layout.total_bytes <= num_rdma_bytes);
++    auto buffer = layout.buffers[low_latency_buffer_idx];
++    // FP8 message: int4 header, packed E4M3 activations, FP32 scales.
++    const int message_bytes = 16 + hidden + hidden / 128 * sizeof(float);
++    return torch::from_blob(buffer.dispatch_rdma_send_buffer,
++                            {num_max_dispatch_tokens_per_rank, message_bytes},
++                            torch::TensorOptions().dtype(torch::kUInt8).device(torch::kCUDA));
++#else
++    EP_HOST_ASSERT(false and "NVSHMEM is disabled during compilation");
++    return {};
++#endif
++}
++
+ torch::Tensor
+ Buffer::get_next_low_latency_combine_buffer(int num_max_dispatch_tokens_per_rank, int hidden, int num_experts) const {
+ #ifndef DISABLE_NVSHMEM
+@@ -1375,6 +1393,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+         .def("internode_combine", &deep_ep::Buffer::internode_combine)
+         .def("clean_low_latency_buffer", &deep_ep::Buffer::clean_low_latency_buffer)
+         .def("low_latency_dispatch", &deep_ep::Buffer::low_latency_dispatch)
++        .def("get_low_latency_dispatch_send_buffer", &deep_ep::Buffer::get_low_latency_dispatch_send_buffer)
+         .def("low_latency_combine", &deep_ep::Buffer::low_latency_combine)
+         .def("get_next_low_latency_combine_buffer", &deep_ep::Buffer::get_next_low_latency_combine_buffer);
+ 
+diff --git a/csrc/deep_ep.hpp b/csrc/deep_ep.hpp
+index aa62ccb..d693d38 100644
+--- a/csrc/deep_ep.hpp
++++ b/csrc/deep_ep.hpp
+@@ -149,7 +149,10 @@ public:
+                          const std::optional<torch::Tensor>& dispatch_wait_recv_cost_stats,
+                          int num_max_dispatch_tokens_per_rank, int num_experts,
+                          bool use_fp8, bool round_scale, bool use_ue8m0,
+-                         bool async, bool return_recv_hook);
++                         bool async, bool return_recv_hook, bool prepared_send);
++
++    torch::Tensor
++    get_low_latency_dispatch_send_buffer(int num_max_dispatch_tokens_per_rank, int hidden, int num_experts) const;
+ 
+     std::tuple<torch::Tensor, std::optional<EventHandle>, std::optional<std::function<void()>>>
+     low_latency_combine(const torch::Tensor& x, const torch::Tensor& topk_idx, const torch::Tensor& topk_weights,
+diff --git a/csrc/kernels/api.cuh b/csrc/kernels/api.cuh
+index d34775f..95d3d4e 100644
+--- a/csrc/kernels/api.cuh
++++ b/csrc/kernels/api.cuh
+@@ -151,7 +151,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
+               int num_topk, int num_experts, int rank, int num_ranks,
+               bool use_fp8, bool round_scale, bool use_ue8m0,
+               void* workspace, int num_device_sms,
+-              cudaStream_t stream, int phases);
++              cudaStream_t stream, int phases, bool prepared_send);
+ 
+ void combine(void* combined_x,
+              void* rdma_recv_x, int* rdma_recv_flag, void* rdma_send_x,
+diff --git a/csrc/kernels/internode_ll.cu b/csrc/kernels/internode_ll.cu
+index cfd0d2b..825053a 100644
+--- a/csrc/kernels/internode_ll.cu
++++ b/csrc/kernels/internode_ll.cu
+@@ -36,7 +36,7 @@ void clean_low_latency_buffer(int* clean_0, int num_clean_int_0,
+                   clean_0, num_clean_int_0, clean_1, num_clean_int_1);
+ }
+ 
+-template <bool kUseFP8, bool kUseUE8M0, int kHidden>
++template <bool kUseFP8, bool kUseUE8M0, int kHidden, bool kPreparedSend = false>
+ __global__ __launch_bounds__(1024, 1) void
+ dispatch(void* packed_recv_x, void* packed_recv_x_scales,
+          int* packed_recv_src_info, int64_t* packed_recv_layout_range,
+@@ -105,6 +105,7 @@ dispatch(void* packed_recv_x, void* packed_recv_x_scales,
+ 
+             // Overlap top-k index read and source token index writes
+             auto dst_expert_idx = warp_id < num_topk ? static_cast<int>(__ldg(topk_idx + token_idx * num_topk + warp_id)) : -1;
++            if constexpr (not kPreparedSend) {
+             thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
+ 
+             // FP8 cast
+@@ -147,6 +148,7 @@ dispatch(void* packed_recv_x, void* packed_recv_x_scales,
+                 }
+             }
+             asm volatile("bar.sync 1, %0;" :: "r"(num_threads));
++            }
+ 
+             // Issue IBGDA sends
+             if (dst_expert_idx >= 0) {
+@@ -346,7 +348,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
+               int num_topk, int num_experts, int rank, int num_ranks,
+               bool use_fp8, bool round_scale, bool use_ue8m0,
+               void* workspace, int num_device_sms,
+-              cudaStream_t stream, int phases) {
++              cudaStream_t stream, int phases, bool prepared_send) {
+     constexpr int kNumMaxTopK = 11;
+     const int num_warp_groups = ceil_div(num_experts, num_device_sms);
+     const int num_warps_per_group = 32 / num_warp_groups;
+@@ -356,6 +358,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
+     const auto num_warps = num_warp_groups * num_warps_per_group;
+     const auto num_sms = ceil_div(num_experts, num_warp_groups);
+     EP_HOST_ASSERT(num_topk <= kNumMaxTopK);
++    EP_HOST_ASSERT(not prepared_send or (use_fp8 and not use_ue8m0 and not round_scale and hidden == 4096));
+ 
+     // Workspace checks
+     auto atomic_counter_per_expert = static_cast<int*>(workspace);
+@@ -372,6 +375,9 @@ if (use_fp8 and not use_ue8m0) \
+     dispatch_func = dispatch<true, false, hidden>; \
+ if (use_fp8 and use_ue8m0) \
+     dispatch_func = dispatch<true, true, hidden>; \
++if constexpr (hidden == 4096) { \
++    if (prepared_send) dispatch_func = dispatch<true, false, hidden, true>; \
++} \
+ LAUNCH_KERNEL(&cfg, dispatch_func, \
+               packed_recv_x, packed_recv_x_scales, \
+               packed_recv_src_info, packed_recv_layout_range, \
+diff --git a/deep_ep/buffer.py b/deep_ep/buffer.py
+index 505e9b8..c5a2b8c 100644
+--- a/deep_ep/buffer.py
++++ b/deep_ep/buffer.py
+@@ -532,7 +532,8 @@ class Buffer:
+                              cumulative_local_expert_recv_stats: Optional[torch.Tensor] = None,
+                              dispatch_wait_recv_cost_stats: Optional[torch.Tensor] = None,
+                              use_fp8: bool = True, round_scale: bool = False, use_ue8m0: bool = False,
+-                             async_finish: bool = False, return_recv_hook: bool = False) -> \
++                             async_finish: bool = False, return_recv_hook: bool = False,
++                             prepared_send: bool = False) -> \
+             Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor, Tuple, EventOverlap, Callable]:
+         """
+         A low-latency implementation for dispatching with IBGDA.
+@@ -587,7 +588,7 @@ class Buffer:
+                                               dispatch_wait_recv_cost_stats,
+                                               num_max_dispatch_tokens_per_rank, num_experts,
+                                               use_fp8, round_scale, use_ue8m0,
+-                                              async_finish, return_recv_hook)
++                                              async_finish, return_recv_hook, prepared_send)
+         handle = (packed_recv_src_info, packed_recv_layout_range, num_max_dispatch_tokens_per_rank, x.size(1), num_experts)
+         tensors_to_record = (x, topk_idx,
+                              packed_recv_x, packed_recv_x_scales, packed_recv_count,
+@@ -596,6 +597,17 @@ class Buffer:
+         return (packed_recv_x, packed_recv_x_scales) if use_fp8 else packed_recv_x, packed_recv_count, handle, \
+             EventOverlap(event, tensors_to_record if async_finish else None), hook
+ 
++    def get_low_latency_dispatch_send_buffer(self, num_max_dispatch_tokens_per_rank: int,
++                                            hidden: int, num_experts: int) -> torch.Tensor:
++        """View the next symmetric FP8 send buffer without advancing it.
++
++        The producer must finish on the compute stream before the immediately
++        following ``low_latency_dispatch(..., prepared_send=True)``. No other
++        low-latency operation may intervene. Buffer lifetime is process-owned.
++        """
++        return self.runtime.get_low_latency_dispatch_send_buffer(
++            num_max_dispatch_tokens_per_rank, hidden, num_experts)
++
+     # noinspection PyTypeChecker
+     def low_latency_combine(self, x: torch.Tensor, topk_idx: torch.Tensor, topk_weights: torch.Tensor,
+                             handle: tuple, use_logfmt: bool = False, zero_copy: bool = False, async_finish: bool = False,
