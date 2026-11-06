@@ -261,18 +261,18 @@ class FusedMoELowLatency:
         down_scale: torch.Tensor,
         expert_list: list[int] = None,
         act_func: Callable = None,
-        inputs_prepared: bool = False,
+        routes_prepared: bool = False,
     ):
         recv_hidden_states, topk_idx, topk_weights, masked_m, expected_m = self.token_dispatcher.dispatch(
             hidden_states, topk_ids, topk_weights, self.num_experts,
-            output_scale=self.output_scale if self._fuse_route_prepare and not inputs_prepared else 1.0,
-            prepared_send=inputs_prepared)
+            output_scale=self.output_scale if self._fuse_route_prepare and not routes_prepared else 1.0,
+            routes_prepared=routes_prepared)
         out_states = self.experts(recv_hidden_states, up_weights, up_scale, down_weights, down_scale, masked_m,
                                   expected_m, act_func=act_func)
         # DeepEP LL accumulates weighted BF16 expert outputs in FP32, then
         # stores BF16. Scale FP32 weights here (not in routing) so scaling
         # precedes that sole store. Only FP32 reassociation differs from TP.
-        if self.output_scale != 1.0 and not self._fuse_route_prepare and not inputs_prepared:
+        if self.output_scale != 1.0 and not self._fuse_route_prepare and not routes_prepared:
             topk_weights = topk_weights.float() * self.output_scale
         return self.token_dispatcher.combine(out_states, topk_idx, topk_weights)
 
@@ -432,18 +432,11 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
 
     output_scale = 1.0
 
-    def prepare_routes(self, hidden_states, logits, bias):
-        from lmdeploy.pytorch.kernels.cuda.moe.glm53_prepare import glm53_prepare
+    def prepare_routes(self, logits, bias):
+        from lmdeploy.pytorch.kernels.cuda.moe.glm53_prepare import glm53_prepare_routes
 
-        moe = self.fusedmoe_build(True)
-        buffer = moe.token_dispatcher.get_buffer()
-        if not hasattr(buffer, 'get_low_latency_dispatch_send_buffer'):
-            raise RuntimeError('GLM fused preparation requires the matching DeepEP prepared-send build.')
-        send = buffer.get_low_latency_dispatch_send_buffer(
-            self.num_max_dispatch_tokens_per_rank, self.hidden_dim, self.num_experts)
         context = get_step_ctx_manager().current_context()
-        return glm53_prepare(logits, bias, hidden_states, send,
-                              context.moe_valid_token_count, context.is_dummy)
+        return glm53_prepare_routes(logits, bias, context.moe_valid_token_count, context.is_dummy)
 
     def __init__(self,
                  ep_size: int,
@@ -525,7 +518,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         moe = self.fusedmoe_build(low_latency_mode)
         out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, gate_up_scale, down_weights,
                                  down_scale, expert_list, act_func=act_func,
-                                 **({'inputs_prepared': True} if kwargs.get('inputs_prepared') else {}))
+                                 **({'routes_prepared': True} if kwargs.get('routes_prepared') else {}))
 
         out_states = gather_outputs_by_attn_tp(out_states, split_size)
         return out_states

@@ -726,10 +726,10 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         topk_weights: torch.Tensor,
         num_experts: int,
         output_scale: float = 1.0,
-        prepared_send: bool = False,
+        routes_prepared: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         topk_idx = topk_idx.to(torch.int64)
-        if prepared_send:
+        if routes_prepared:
             assert output_scale == 1.0
         elif output_scale == 1.0:
             mask_invalid_tokens(topk_idx)
@@ -753,7 +753,6 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
             use_fp8=True,
             async_finish=not self.return_recv_hook,
             return_recv_hook=self.return_recv_hook,
-            **({'prepared_send': True} if prepared_send else {}),
         ))
         hook() if self.return_recv_hook else event.current_stream_wait()
         packed_recv_hidden = [DisposibleTensor(x) for x in packed_recv_hidden]

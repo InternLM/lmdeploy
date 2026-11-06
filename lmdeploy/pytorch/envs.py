@@ -194,7 +194,6 @@ with set_envs():
     enable_skinny_gemm = env_to_bool('LMDEPLOY_ENABLE_SKINNY_GEMM', False)
     glm53_shared_expert_overlap = env_to_bool('LMDEPLOY_GLM53_SHARED_EXPERT_OVERLAP', False)
     glm53_fuse_route_prepare = env_to_bool('LMDEPLOY_GLM53_FUSE_ROUTE_PREPARE', False)
-    glm53_fused_moe_prepare = env_to_bool('LMDEPLOY_GLM53_FUSED_MOE_PREPARE', False)
     router_single_group_fused = env_to_bool(
         'LMDEPLOY_ROUTER_SINGLE_GROUP_FUSED',
         False,

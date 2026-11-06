@@ -1,48 +1,41 @@
 # Experimental GLM-5.3-Flash decode optimizations
 
-These opt-in PyTorch backend optimizations target GLM-5.3-Flash on SM90 GPUs. They are disabled by default.
+These opt-in PyTorch backend optimizations target GLM-5.3-Flash on SM90 GPUs. All switches default to disabled. They use the existing DeepEP Python API and require no DeepEP patch or custom build.
 
 ## Available optimizations
 
-| Environment variable                     | Effect                                                                                                 | Requirements                                                                                                                     |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `LMDEPLOY_ENABLE_SKINNY_GEMM=1`          | Select measured Triton BF16 schedules for small KDA and KPool projections.                             | SM90, supported matrix and token-row shapes, no bias, deterministic mode disabled. Other shapes use the existing linear backend. |
-| `LMDEPLOY_GLM53_SHARED_EXPERT_OVERLAP=1` | Run the shared expert on an auxiliary CUDA stream while routed experts execute.                        | DP8/EP8 with TP1, deterministic mode disabled, all DP ranks decoding.                                                            |
-| `LMDEPLOY_GLM53_FUSED_MOE_PREPARE=1`     | Fuse routing, FP8 quantization and preparation of DeepEP's symmetric send buffer.                      | DP8/EP8 with TP1, deterministic mode disabled, all DP ranks decoding, matching DeepEP prepared-send build.                       |
-| `LMDEPLOY_GLM53_FUSE_ROUTE_PREPARE=1`    | Fuse valid-token route masking and combine-weight scaling without changing DeepEP's quantization path. | GLM-5.3 low-latency DeepEP path. This is an alternative to full preparation and does not require the DeepEP patch.               |
+| Environment variable                     | Effect                                                                                       | Requirements                                                                                                                 |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `LMDEPLOY_ENABLE_SKINNY_GEMM=1`          | Select measured Triton BF16 schedules for small KDA and KPool projections.                   | SM90, supported matrix/token-row shapes, no bias, deterministic mode disabled. Other shapes use the existing linear backend. |
+| `LMDEPLOY_GLM53_SHARED_EXPERT_OVERLAP=1` | Run the shared expert on an auxiliary CUDA stream while routed experts execute.              | DP8/EP8 with TP1, deterministic mode disabled, all DP ranks decoding.                                                        |
+| `LMDEPLOY_GLM53_FUSE_ROUTE_PREPARE=1`    | Fuse sigmoid/top-8 routing, valid-token masking, int64 ID output and combine-weight scaling. | GLM-5.3 DP8/EP8 with TP1, deterministic mode disabled, all DP ranks decoding.                                                |
 
-The full preparation kernel specializes the GLM-5.3 geometry: BF16 hidden states of width 4096, 288 experts, top-8 sigmoid routing with correction bias, normalized routing weights scaled by 2.5, and E4M3 activations quantized in groups of 128. It preserves routing tie-breaking and the original FP32 scale calculation. It writes the 16-byte header, 4096 FP8 values and 32 FP32 scales directly into each 4240-byte DeepEP message.
+The fused route kernel follows the official GLM-5.3 contract: 288 experts, sigmoid scoring with correction bias, top-8 selection with the original tie-breaking, normalized FP32 weights scaled by 2.5, and int64 IDs. It reads the graph-owned valid-token count on device, so padding and idle DP ranks remain masked when CUDA Graphs replay with a different batch.
 
-Prefill and globally mixed prefill/decode steps retain the original MoE path. Explicit routed-expert collection also retains the original routing path. Shared-expert overlap preserves the original BF16 addition order and joins both streams before the result is consumed. No SM reservation is required by this implementation.
+The decode pipeline is:
 
-Skinny GEMM uses FP32 accumulation and BF16 output. It preserves parameter ownership and checkpoint names, but its reduction order can differ from the default GEMM. It does not establish token-identical full-model generation.
-
-## Build the optional DeepEP extension
-
-The full preparation path requires the bundled experimental patch against DeepEP `c997a4ece7831f617ae70d10696f419e9bd33f38`. It is not available in an unpatched DeepEP installation. The other optimization switches can be used independently.
-
-Build against the same PyTorch, CUDA and NVSHMEM environment used for serving. Set `NVSHMEM_DIR` if DeepEP cannot discover the installed NVSHMEM package. CUDA 12.8 was used for the measured build.
-
-```bash
-export DEEPEP_SOURCE_DIR=/path/to/deepep-prepared-send
-PYTHON=python3 CUDA_HOME=/usr/local/cuda-12.8 \
-  bash benchmark/glm53_moe/build_deepep_prepare.sh "$DEEPEP_SOURCE_DIR"
-export PYTHONPATH="$DEEPEP_SOURCE_DIR:${PYTHONPATH:-}"
+```text
+router GEMM
+  -> fused routing + masking + combine-weight scaling
+  -> native DeepEP dispatch(BF16 input, built-in FP8 quantization/packing/communication)
+  -> routed experts and shared expert
+  -> native DeepEP combine + original BF16 shared-expert addition
 ```
 
-The script builds in place and leaves the installed DeepEP package unchanged. The patched Python wrapper and compiled extension must be used together. Enabling full preparation with an unpatched provider raises an explicit error.
+The original BF16 hidden states are passed to `low_latency_dispatch(..., use_fp8=True)` with its existing arguments. This implementation neither accesses DeepEP's private send buffers nor bypasses its quantization or packing. Routing, quantization and staging are not combined into a single kernel: the native interface accepts BF16 activations and owns the latter two operations.
 
-The patch adds a non-owning view of the next symmetric send buffer and a `prepared_send=False` argument to low-latency dispatch. With prepared sends, dispatch skips activation loading, quantization and message packing, while retaining the existing communication, receive and combine implementations. The producer and dispatch must run consecutively on the same stream, with no intervening low-latency buffer operation. The new path requires hidden width 4096, FP8 enabled, FP32 scales, no scale rounding and no UE8M0 scales. Existing Python calls use the original path by default.
+Prefill and globally mixed steps retain the original routing path. Explicit routed-expert collection also retains the original router, with masking and combine scaling fused in the low-latency dispatcher. Shared-expert overlap joins the streams before the original BF16 addition. No SM reservation is introduced.
+
+Skinny GEMM preserves parameter ownership and checkpoint names and uses FP32 accumulation with BF16 output. Its reduction order can differ from the default GEMM, so it does not establish token-identical full-model generation.
 
 ## Enable the stack
 
-Configure NCCL and NVSHMEM for the deployment network as usual. For example, after building the optional provider:
+Use the normal DeepEP installation and configure NCCL/NVSHMEM for the deployment network as usual. No provider overlay or custom extension is needed.
 
 ```bash
 export LMDEPLOY_ENABLE_SKINNY_GEMM=1
 export LMDEPLOY_GLM53_SHARED_EXPERT_OVERLAP=1
-export LMDEPLOY_GLM53_FUSED_MOE_PREPARE=1
-export LMDEPLOY_GLM53_FUSE_ROUTE_PREPARE=0
+export LMDEPLOY_GLM53_FUSE_ROUTE_PREPARE=1
 
 lmdeploy serve api_server "$MODEL_PATH" \
   --proxy-url "$ROUTER_URL" \
@@ -57,45 +50,18 @@ lmdeploy serve api_server "$MODEL_PATH" \
   --enable-prefix-caching --prefix-cache-state-budget 32
 ```
 
-MTP is optional; the example matches the AgentX measurement below. For the control arm, set all four optimization variables to `0`. Restart the model and router before each arm, keeping the same provider, model, network, cache policy and routing policy.
+MTP is optional. For a control arm, set all three optimization variables to `0`; keep the model, provider, routing and cache policies identical and restart the service before each arm. Multi-turn tests through a consistent-hash router should preserve a stable session identifier.
 
-## Validation and performance
-
-The kernel and model-hook tests cover exact routing/FP8 message bytes, changing valid-token counts during CUDA Graph replay, stream ordering, serial fallbacks, projection fallback behavior and FP64 projection references. The eight-rank microbenchmark checks bitwise equality against the unfused MoE layer with synthetic weights; it is not a full-model accuracy evaluation.
+## Validation and performance scope
 
 ```bash
 pytest -q tests/pytorch/kernel/test_glm53_fused_prepare.py \
   tests/pytorch/kernel/test_glm53_moe_prepare.py \
   tests/pytorch/kernel/test_skinny_gemm.py \
-  tests/pytorch/test_glm53_shared_expert_overlap.py
-
-torchrun --standalone --nproc-per-node=8 benchmark/glm53_moe/bench_layer.py \
-  --model "$MODEL_PATH" --output layer-results.json
+  tests/pytorch/test_glm53_shared_expert_overlap.py \
+  tests/pytorch/test_glm53_native_deepep.py
 ```
 
-AgentX was measured with AIPerf 0.12.0 at commit `89b21867872a5bbc4b0676bf5005c404da5e9f94`, `inferencex-agentx-mvp` and `semianalysis_cc_traces_weka_062126_256k`. The baseline was LMDeploy `33c75413b91ecb5085f0913dc5d0e90e9f29c1c5`. Both arms used eight H200 GPUs, DP8/EP8, MTP with five draft tokens, consistent-hash routing, concurrency 80, identical decode checkpoint settings and separate 1800-second profiling windows. The model revision was `3f1971b7b5f7a528c9c4ef6212c8785298a8c24a`.
+Tests cover routing weights/IDs against the original router, ties and extreme scores, live valid-token counts during CUDA Graph replay, stream dependencies, serial fallbacks, FP64 projection references and the original BF16 DeepEP dispatch signature. The native-interface test deliberately supplies no prepared-send argument or send-buffer getter.
 
-Run the same client against each freshly started serving arm:
-
-```bash
-AIPERF_URL="$ROUTER_URL/v1" TOKENIZER="$MODEL_PATH" \
-  bash benchmark/glm53_moe/bench_agentx.sh artifacts/baseline
-# Restart with the optimization stack enabled, then:
-AIPERF_URL="$ROUTER_URL/v1" TOKENIZER="$MODEL_PATH" \
-  bash benchmark/glm53_moe/bench_agentx.sh artifacts/candidate
-```
-
-Use a stable `X-Session-ID` with consistent-hash routing so conversation prefixes remain local. The client script enables the AIPerf session-affinity header. With this AIPerf revision, leave global `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE` unset in the client when using a local tokenizer path. Serving can remain offline; `HF_DATASETS_OFFLINE=1` can separately reuse a prepared dataset cache.
-
-| Metric                                            | Baseline | Optimization stack |                  Change |
-| ------------------------------------------------- | -------: | -----------------: | ----------------------: |
-| Output throughput, tokens/s                       |  1096.27 |            1144.50 |                  +4.40% |
-| Goodput, requests/s                               |    0.526 |              0.605 |                 +15.10% |
-| Mean TTFT, ms                                     |  1487.16 |            1427.69 |                  -4.00% |
-| Mean whole-response inter-token latency, ms       |    34.77 |              31.97 |                  -8.05% |
-| Mean whole-response per-user throughput, tokens/s |    45.12 |              48.27 |                  +6.99% |
-| Prompt-cache token hit rate                       |   89.96% |             90.57% | +0.61 percentage points |
-
-Changes use unrounded exported values. Goodput uses the requested SLOs: TTFT at most 3000 ms and output throughput per user at least 40 tokens/s. Whole-response metrics include reasoning and avoid an outlier in the default content-window TPS metric. The machine-readable results are in `benchmark/glm53_moe/results_h200_agentx.json`.
-
-Both runs reported `submission_valid=true`. The baseline had 2262 successful requests and no request errors. The optimization stack had 2345 successful requests and one empty-visible-content response error for a request limited to two output tokens, about 0.043% of completed records; its cause is unresolved. This was one run per arm, with no replicated confidence interval. Full-model numerical equivalence, model accuracy and agent task success rates remain unvalidated. The measured gains belong to the complete stack and are not an isolated attribution to the DeepEP patch.
+Full-duration AgentX performance, full-model numerical equivalence, model accuracy and agent success rates require separate evaluation for this implementation.

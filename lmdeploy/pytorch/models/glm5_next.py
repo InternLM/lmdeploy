@@ -572,21 +572,21 @@ class Glm5NextMoE(DeepseekV2MoE):
             and not get_build_model_context().enable_deterministic
         )
         self._shared_expert_ready_event = None
-        self._enable_fused_moe_prepare = (
-            envs.glm53_fused_moe_prepare
+        self._enable_fused_route_prepare = (
+            envs.glm53_fuse_route_prepare
             and dist_config.dp == dist_config.ep == dist_config.world_size == 8
             and not get_build_model_context().enable_deterministic
         )
 
-    def _forward_experts(self, hidden_states, topk_weights, topk_ids, inputs_prepared=False):
+    def _forward_experts(self, hidden_states, topk_weights, topk_ids, routes_prepared=False):
         context = get_step_ctx_manager().current_context()
         # Globally mixed steps use prefill's piecewise graph, whose eager
         # boundaries must not split an active auxiliary-stream capture.
         overlap = (self._enable_shared_expert_overlap and hidden_states.is_cuda
                    and context is not None and context.global_is_decoding())
-        if not overlap and not inputs_prepared:
+        if not overlap and not routes_prepared:
             return super()._forward_experts(hidden_states, topk_weights, topk_ids)
-        expert_forward = self.experts.forward_prepared if inputs_prepared else self.experts
+        expert_forward = self.experts.forward_prepared_routes if routes_prepared else self.experts
         if not overlap:
             out_states = expert_forward(hidden_states, topk_weights, topk_ids)
             if self.shared_experts is not None:
@@ -615,7 +615,7 @@ class Glm5NextMoE(DeepseekV2MoE):
         hidden_states: torch.Tensor,
         all_routed_experts: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if (getattr(self, '_enable_fused_moe_prepare', False) and hidden_states.is_cuda
+        if (getattr(self, '_enable_fused_route_prepare', False) and hidden_states.is_cuda
                 and hidden_states.dtype == torch.bfloat16 and hidden_states.is_contiguous()
                 and all_routed_experts is None):
             context = get_step_ctx_manager().current_context()
@@ -623,8 +623,8 @@ class Glm5NextMoE(DeepseekV2MoE):
                 original_shape = hidden_states.shape
                 x = hidden_states.view(-1, self.hidden_dim)
                 logits = self.gate.router_gemm(x, self.gate.weight)
-                weights, ids = self.experts.prepare_routes(x, logits, self.gate.e_score_correction_bias)
-                out = self._forward_experts(x, weights, ids, inputs_prepared=True)
+                weights, ids = self.experts.prepare_routes(logits, self.gate.e_score_correction_bias)
+                out = self._forward_experts(x, weights, ids, routes_prepared=True)
                 return out.view(*original_shape[:-1], self.hidden_dim)
         out = super().forward(hidden_states, all_routed_experts=all_routed_experts)
         if self._fp32_tp_reduce:

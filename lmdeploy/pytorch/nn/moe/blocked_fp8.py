@@ -146,20 +146,20 @@ class FusedMoEBlockedF8(FusedMoEBase):
 
     output_scale = 1.0
 
-    def prepare_routes(self, hidden_states, logits, bias):
-        """Prepare a local TP1 DeepEP send with backend-owned routing."""
+    def prepare_routes(self, logits, bias):
+        """Prepare scaled routes without accessing DeepEP-owned buffers."""
         assert self.ep_size == 8 and self.tp == 1 and not self.all_reduce
-        return self.impl.prepare_routes(hidden_states, logits, bias)
+        return self.impl.prepare_routes(logits, bias)
 
-    def forward_prepared(self, hidden_states, topk_weights, topk_ids):
-        """Consume already scaled routes and a prepared symmetric FP8 send."""
+    def forward_prepared_routes(self, hidden_states, topk_weights, topk_ids):
+        """Dispatch original BF16 inputs with already scaled routes."""
         assert self.ep_size == 8 and self.tp == 1 and not self.all_reduce
         return self.impl.forward(
             hidden_states, topk_weights, topk_ids,
             self.gate_up.weight, self.gate_up.weight_scale_inv,
             self.down.weight, self.down.weight_scale_inv,
             gate_up_bias=self.gate_up.bias, down_bias=self.down.bias,
-            expert_list=self.expert_list, act_func=self.act_func, inputs_prepared=True)
+            expert_list=self.expert_list, act_func=self.act_func, routes_prepared=True)
 
     def __init__(self,
                  hidden_dim: int,
