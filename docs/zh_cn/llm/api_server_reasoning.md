@@ -67,6 +67,26 @@ response = client.chat.completions.create(
 推理。将其设为 `False` 可移除已经完成的较早轮次中的推理。保留的推理内容会
 成为输入提示词的一部分，并增加输入 Token 数量。
 
+## GLM-5.3-Flash 的推理强度
+
+GLM-5.3-Flash 支持 `low`、`high` 和 `max` 三种推理强度，详见
+[Z.ai API 文档](https://docs.z.ai/api-reference/llm/chat-completion)。
+Chat Completions 使用 `reasoning_effort` 参数，Responses 使用
+`reasoning.effort` 参数。
+
+**兼容性说明：** GLM-5.3-Flash 请求中的 `medium` 现在会在加载媒体或开始生成
+之前返回 HTTP 400（`invalid_request_error`）。此前，模型的默认模板会将
+`medium` 静默按 `max` 处理。请将发送 `medium` 的客户端改为显式选择
+`low`、`high` 或 `max`，也可以省略推理强度以使用模型默认值 `max`。
+LMDeploy 不会自动将 `medium` 映射为 `high`。
+
+对于 Chat Completions，非 null 的顶层 `reasoning_effort` 优先于
+`chat_template_kwargs.reasoning_effort`。顶层参数省略或为 null 时，使用并
+校验模板参数；两者都省略或为 null 时，采用模型默认值。
+
+该校验根据模型架构 `Glm5NextForConditionalGeneration` 生效，使用自定义
+`--chat-template-config` 时也适用。其他模型架构的推理强度处理方式保持不变。
+
 ## 自定义 parser
 
 `--reasoning-parser` 当前支持以下注册名称：

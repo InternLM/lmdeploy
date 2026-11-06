@@ -191,6 +191,7 @@ def preprocessing_client(chat_endpoint, monkeypatch):
     model."""
     _, context = chat_endpoint
     engine = context.async_engine
+    engine.arch = 'Qwen3ForCausalLM'
     engine.session_mgr = SessionManager()
     engine.session_len = 128
     engine.backend_config.enable_prefix_caching = False

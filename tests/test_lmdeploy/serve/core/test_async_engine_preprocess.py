@@ -20,6 +20,7 @@ class _RequestLogger:
 
 def _engine(prompt_processor=None, *, session_len=32):
     engine = AsyncEngine.__new__(AsyncEngine)
+    engine.arch = 'Qwen3ForCausalLM'
     engine.session_mgr = SessionManager()
     engine.session_len = session_len
     engine.backend_config = SimpleNamespace(enable_prefix_caching=False)

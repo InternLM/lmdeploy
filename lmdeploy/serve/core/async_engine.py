@@ -518,7 +518,7 @@ class AsyncEngine:
                     f'Session {session.session_id} already has an active request.')
 
             chat_template_kwargs = chat_template_kwargs or {}
-            if getattr(self, 'arch', None) == 'Glm5NextForConditionalGeneration':
+            if self.arch == 'Glm5NextForConditionalGeneration':
                 effort = (reasoning_effort if reasoning_effort is not None
                           else chat_template_kwargs.get('reasoning_effort'))
                 if effort is not None and effort not in ('low', 'high', 'max'):
