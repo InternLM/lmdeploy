@@ -10,7 +10,7 @@ from urllib.request import url2pathname
 import requests
 from urllib3.util import parse_url
 
-from .base import MediaIO
+from .base import MediaInputError, MediaIO
 from .image import ImageMediaIO
 from .video import VideoMediaIO
 
@@ -119,7 +119,16 @@ def _load_file_url(url_spec: ParseResult, media_io: MediaIO[_M]) -> _M:
     url_spec_path = url_spec.path or ''
     url_spec_netloc = url_spec.netloc or ''
     filepath = Path(url2pathname(url_spec_netloc + url_spec_path))
-    return media_io.load_file(filepath)
+    try:
+        return media_io.load_file(filepath)
+    except OSError as exc:
+        # This is the only place a user-supplied path is opened directly, so an
+        # OSError escaping media_io.load_file is attributable to the user's
+        # file. Wrap it with a message built from the resolved path and the
+        # errno text only: str(exc) may also name server-internal files (some
+        # backends stage the bytes through a NamedTemporaryFile before
+        # decoding), which must stay private to the server log.
+        raise MediaInputError(f'Failed to read media file {filepath}: {exc.strerror or exc}') from exc
 
 
 def load_from_url(url: str, media_io: MediaIO[_M], allowed_media_domains: list[str] | None = None) -> _M:

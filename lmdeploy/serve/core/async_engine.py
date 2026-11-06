@@ -35,6 +35,7 @@ from lmdeploy.serve.managers import Session, SessionManager
 from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
+from lmdeploy.vl.media.base import MediaInputError
 
 from .exceptions import ErrorCode, RequestError, SafeRunException
 
@@ -91,6 +92,24 @@ class PreprocessedRequest:
 
 
 # class AsyncEngine(LogitsMixin):
+# Client-visible detail for preprocessing failures is scoped to MediaInputError,
+# which media loading raises only at the boundary where a user-supplied path is
+# opened, with a message naming just that path. The exception *type* cannot be
+# trusted for this: e.g. decoding an HTTP/base64 video stages the bytes in a
+# NamedTemporaryFile, and if the server's temp dir vanishes the resulting
+# FileNotFoundError names an internal path. Every other exception keeps the
+# generic message; the full traceback still goes to the server log.
+def _client_visible_preprocess_message(exc: Exception) -> str:
+    """Build the client-visible message for a preprocessing failure.
+
+    MediaInputError surfaces its message, which names the offending user-supplied path; every other exception keeps the
+    generic message, with details preserved only in the server log.
+    """
+    if not isinstance(exc, MediaInputError):
+        return 'Request preprocessing failed.'
+    return f'Request preprocessing failed: {exc}'
+
+
 class AsyncEngine:
     """Async inference engine. Maintaining a bunch of tm_model instances.
 
@@ -613,7 +632,8 @@ class AsyncEngine:
             metrics_processor.increase_total_requests()
             metrics_processor.increase_failed_requests('error')
             remove_session()
-            raise RequestError(ErrorCode.PREPROCESS_FAILED) from e
+            raise RequestError(ErrorCode.PREPROCESS_FAILED,
+                               _client_visible_preprocess_message(e)) from e
 
     @staticmethod
     def _request_error_from_status(status: ResponseType) -> RequestError:

@@ -8,6 +8,15 @@ from typing import Generic, TypeVar
 _T = TypeVar('_T')
 
 
+class MediaInputError(Exception):
+    """Failed to read media that the client supplied by path.
+
+    Raised only at the boundary that opens a user-supplied path directly, with a message built from that path and a
+    generic errno description, so the message is safe to return to the client. Server-internal I/O errors (e.g.
+    temporary files staged for downloaded media) must never be wrapped into this exception.
+    """
+
+
 class MediaIO(ABC, Generic[_T]):
 
     @abstractmethod
