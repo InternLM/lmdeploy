@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -251,11 +252,10 @@ class GLM5NextVisionModel(VisionModel):
                 'do_resize': True,
                 'do_sample_frames': False,
             }
-        image_size = get_override_size(self.processor.image_processor,
-                                       mm_processor_kwargs.get('image'),
-                                       modality='image')
-        if image_size is not None:
-            kwargs['images_kwargs'] = {'size': image_size}
+        if raw_images:
+            image_kwargs = self.get_image_processor_kwargs(mm_processor_kwargs.get('image'))
+            if image_kwargs:
+                kwargs['images_kwargs'] = image_kwargs
         if raw_videos:
             video_size = get_override_size(self.processor.video_processor,
                                            mm_processor_kwargs.get('video'),
@@ -288,3 +288,21 @@ class GLM5NextVisionModel(VisionModel):
         self._shared_token_offsets(input_ids, mm_items, collected)
         expanded = get_expanded_mm_items(collected, self.mm_tokens)
         return dict(input_ids=input_ids.tolist(), multimodal=expanded)
+
+    def get_image_processor_kwargs(self, overrides: dict[str, Any] | None) -> dict[str, Any]:
+        processor = self.processor.image_processor
+        if not overrides or not all(hasattr(processor, name)
+                                    for name in ('min_image_tokens', 'max_image_tokens')):
+            return super().get_image_processor_kwargs(overrides)
+        # Native GLM-5 consumes token budgets and ignores size. Preserve the
+        # spatiotemporal pixel contract used by our GLM-4V compatibility path.
+        pixels_per_token = processor.temporal_patch_size * (processor.patch_size * processor.merge_size)**2
+        minimum = overrides.get('min_pixels', processor.min_image_tokens * pixels_per_token)
+        maximum = overrides.get('max_pixels', processor.max_image_tokens * pixels_per_token)
+        if minimum <= 0 or maximum <= 0 or minimum > maximum:
+            raise ValueError('GLM image pixel budgets require 0 < min_pixels <= max_pixels.')
+        min_tokens = math.ceil(minimum / pixels_per_token)
+        max_tokens = math.floor(maximum / pixels_per_token)
+        if min_tokens > max_tokens:
+            raise ValueError('GLM image pixel budget cannot fit an aligned visual token.')
+        return dict(min_image_tokens=min_tokens, max_image_tokens=max_tokens)
