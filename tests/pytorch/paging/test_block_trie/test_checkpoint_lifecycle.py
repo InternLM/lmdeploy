@@ -314,6 +314,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
             self, ssm_cache_config, scheduler_config, seq_meta, num_slots):
         ssm_cache_config.num_state_caches = num_slots + 1
         ssm_cache_config.prefix_cache_state_budget = num_slots
+        ssm_cache_config.prefill_save_alignment = seq_meta.block_size * 4
         scheduler = Scheduler(scheduler_config, ssm_cache_config, seq_meta=seq_meta)
         checkpoints = scheduler.state_checkpoints
         block_size = scheduler.seq_meta.block_size
@@ -595,6 +596,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         cache_config = ssm_cache_config
         cache_config.prefix_cache_state_budget = 0
         cache_config.num_state_caches = 2
+        cache_config.prefill_save_alignment = seq_meta.block_size
         scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
         block_size = scheduler.seq_meta.block_size
         token_ids_a = [1] * block_size * 2
@@ -626,6 +628,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         cache_config = ssm_cache_config
         cache_config.prefix_cache_state_budget = 0
         cache_config.num_state_caches = 2
+        cache_config.prefill_save_alignment = seq_meta.block_size
         scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
         block_size = scheduler.seq_meta.block_size
         token_ids_a = [1] * block_size * 2
@@ -666,6 +669,7 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         cache_config = ssm_cache_config
         cache_config.prefix_cache_state_budget = 0
         cache_config.num_state_caches = 3
+        cache_config.prefill_save_alignment = seq_meta.block_size
         scheduler = Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
         block_size = scheduler.seq_meta.block_size
         token_ids_a = [1] * block_size * 2

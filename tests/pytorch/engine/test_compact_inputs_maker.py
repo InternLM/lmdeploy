@@ -2,6 +2,7 @@
 """Real scheduler/InputMaker bank snapshots before worker-side ID binding."""
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -22,7 +23,7 @@ from tests.pytorch.compact_state_reference import checkpoint_ready
 
 
 def _maker(width=4, budget=256, requests=2, *, prefix=False, block_size=16, checkpoint_budget=0, compact=True,
-           store_role=None, store_credits=1, auxiliary=False):
+           store_role=None, store_credits=1, auxiliary=False, save_alignment=None):
     from lmdeploy.messages import KVTransferConfig
     from lmdeploy.pytorch.kv_connector import KVConnectorRole, build_kv_connector
 
@@ -34,7 +35,8 @@ def _maker(width=4, budget=256, requests=2, *, prefix=False, block_size=16, chec
                         num_state_caches=requests + 1 + checkpoint_budget + credits,
                         kv_transfer_config=transfer, mooncake_state_save_slots=store_credits,
                         prefix_cache_state_budget=checkpoint_budget, enable_prefix_caching=prefix,
-                        prefill_save_alignment=block_size, max_prefill_token_num=budget)
+                        prefill_save_alignment=block_size if save_alignment is None else save_alignment,
+                        max_prefill_token_num=budget)
     capacity = SSMStateCapacity(requests + 1, width, checkpoint_budget, credits, auxiliary) if compact else None
     cache.compact_state_capacity = capacity
     cache.enable_replayssm = auxiliary
@@ -698,6 +700,101 @@ def _seed_real_scheduler(maker, tokens, boundary):
 
 
 @pytest.mark.parametrize('compact', [False, True])
+@pytest.mark.parametrize('explicit_step', [False, True])
+def test_prefill_save_alignment_rejection_preserves_existing_checkpoint(compact, explicit_step):
+    maker = _maker(1, requests=1, prefix=True, block_size=64, checkpoint_budget=1,
+                   compact=compact, save_alignment=256)
+    scheduler = maker.scheduler
+    scheduler.seq_meta.prefix_cache_checkpoint_block_size = 64
+    tokens = list(range(256))
+    slot = _seed_real_scheduler(maker, tokens, 256)
+    seq = scheduler.add_session(1).add_sequence([999] * 128)
+    scheduler.state_manager.allocate(seq)
+    scheduler.block_manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    free_blocks = scheduler.block_manager.get_num_free_gpu_blocks()
+    assert scheduler.state_manager.get_num_free() == 0
+    reserved = scheduler.state_checkpoints.reserve_save(seq, step=128 if explicit_step else None)
+    assert reserved == -1
+    assert not seq.prefix_cache.pending_save.is_pending
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == free_blocks
+
+    reader = scheduler.add_session(2).add_sequence(tokens + [2])
+    scheduler.block_trie.match(reader)
+    assert reader.num_history_ids == 256
+    assert reader.prefix_cache.restore.slot == slot
+    for session_id in tuple(scheduler.sessions):
+        scheduler.end_session(session_id)
+    scheduler.reset_cache_after_worker_drain()
+    scheduler.shutdown()
+
+
+@pytest.mark.parametrize('width', [1, 4])
+@pytest.mark.parametrize('apc,store_role', [(True, None), (True, 'kv_producer'), (False, 'kv_producer')])
+def test_compact_prefill_save_alignment_preserves_chunk_progress(width, apc, store_role):
+    from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
+    from lmdeploy.pytorch.long_context import plan_long_context_chunk
+
+    maker = _maker(width, budget=128, requests=1, prefix=apc, block_size=64,
+                   checkpoint_budget=4 if apc else 0, store_role=store_role, save_alignment=256)
+    scheduler, owner = maker.scheduler, maker.compact_state_manager
+    seq = scheduler.add_session(0).add_sequence(list(range(513)))
+    try:
+        for start, end, checkpoint in ((0, 128, 0), (128, 256, 256), (256, 384, 0),
+                                       (384, 512, 512), (512, 513, 0)):
+            plan = plan_long_context_chunk(seq, 128)
+            assert (plan.chunk_end, plan.checkpoint_step) == (end, checkpoint)
+            packet = maker._make_forward_inputs(True)
+            inputs, carrier = packet['inputs'], packet['cache_inputs']
+            assert inputs.history_lengths.tolist() == [start]
+            assert inputs.seq_length.tolist() == [end - start]
+            checkpoint_id, = inputs.ssm_prefill_meta.checkpoint_ids.tolist()
+            assert (checkpoint_id >= 0) == bool(checkpoint)
+            assert seq.prefix_cache.pending_save.step == (checkpoint if apc else 0)
+            metadata = packet['kv_connector_metadata']
+            saves = () if metadata is None else metadata.save_requests
+            assert [save.state.boundary_tokens for save in saves] == (
+                [checkpoint] if checkpoint and store_role else [])
+            assert owner.bank_for(seq).unit_ids
+
+            scheduler.activate_seqs([seq])
+            maker.update_running_seqs([seq], inputs)
+            ticket = carrier.ssm_state_access_id
+            scheduler.state_checkpoints.publish_forward(ticket)
+            owner.acknowledge(ticket)
+            scheduler.state_checkpoints.complete_forward(ticket)
+            if saves:
+                scheduler.update_connector_output(KVConnectorOutput(
+                    completed_save_ids={save.save_id for save in saves}))
+        assert not maker.has_pending_long_context_chunk()
+        decode = maker._make_forward_inputs(False)
+        assert decode['delta'] is not None
+        assert decode['cache_inputs'].ssm_state_access_id != ticket
+    finally:
+        _finish_store_maker(maker)
+
+
+def test_compact_prefill_save_alignment_allows_mixed_checkpoint_batch():
+    maker = _maker(1, budget=1024, prefix=True, block_size=64, checkpoint_budget=2, save_alignment=256)
+    scheduler = maker.scheduler
+    seqs = [scheduler.add_session(index).add_sequence([index] * length)
+            for index, length in enumerate((128, 264))]
+    try:
+        packet = maker._make_forward_inputs(True)
+        assert packet['running'] == seqs
+        inputs = packet['inputs']
+        assert inputs.seq_length.tolist() == [128, 264]
+        assert inputs.ssm_prefill_meta.checkpoint_offsets.tolist() == [0, 256]
+        checkpoint_ids = inputs.ssm_prefill_meta.checkpoint_ids.tolist()
+        assert checkpoint_ids[0] == -1 and checkpoint_ids[1] >= 0
+        assert not seqs[0].prefix_cache.pending_save.is_pending
+        assert seqs[1].prefix_cache.pending_save.step == 256
+        assert all(maker.compact_state_manager.bank_for(seq).unit_ids for seq in seqs)
+    finally:
+        _finish_store_maker(maker)
+
+
+@pytest.mark.parametrize('compact', [False, True])
 def test_real_scheduler_and_inputmaker_emit_72_or_legacy_checkpoint_cut(compact):
     maker = _maker(1, budget=4096, prefix=True, block_size=64, checkpoint_budget=4, compact=compact)
     tokens = list(range(2120))
@@ -731,7 +828,8 @@ def test_real_scheduler_and_inputmaker_emit_72_or_legacy_checkpoint_cut(compact)
 def test_real_scheduler_unsupported_relative56_falls_back_before_submission():
     maker = _maker(1, budget=4096, prefix=True, block_size=64, checkpoint_budget=4)
     tokens = list(range(2120))
-    _seed_real_scheduler(maker, tokens, 2056)
+    with patch.object(maker.scheduler.seq_meta, 'prefill_save_alignment', 0):
+        _seed_real_scheduler(maker, tokens, 2056)
     seq = maker.scheduler.add_session(1).add_sequence(tokens)
     packet = maker._make_forward_inputs(True)
     assert packet['inputs'].history_lengths.tolist() == [2056]
@@ -751,7 +849,7 @@ def test_real_scheduler_unsupported_relative56_falls_back_before_submission():
     (2048, 2112, 128, 2112, 2112),
     (0, 137, 72, 72, 64),
     (72, 137, 72, 128, 128),
-    (128, 137, 72, 137, 137),
+    (128, 137, 72, 137, 0),
     (0, 1024, 4096, 1024, 960),
 ])
 def test_compact_shared_planner_separates_forward_and_checkpoint(history, end, budget, expected_e, expected_c):

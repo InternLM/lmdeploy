@@ -169,8 +169,11 @@ class MooncakeStoreScheduler:
             return 0, 0
 
         block_size = self._cache_config.block_size
-        token_len = request.clamp_prefix_cache_match_step(
-            request.get_prefix_cache_max_candidate_step())
+        token_len = request.get_prefix_cache_max_candidate_step()
+        lookahead = self._cache_config.prefix_cache_token_lookahead
+        if lookahead:
+            token_len = min(token_len, request.num_valid_ids - lookahead)
+        token_len = request.clamp_prefix_cache_match_step(token_len)
         recompute_blocks = max(0, request.prefix_cache.recompute_overlap.recompute_blocks)
         recompute_tokens = recompute_blocks * block_size
         lookup_alignment = self._cache_config.state_lookup_alignment if self._is_hybrid else block_size
@@ -283,27 +286,24 @@ class MooncakeStoreScheduler:
             return tracker.block_hashes[:num_blocks]
 
         block_extras = {}
-        lookahead = self._cache_config.prefix_cache_token_lookahead if self._is_hybrid else 0
-        if not request.history_multimodals.empty() or lookahead:
+        lookahead = self._cache_config.prefix_cache_token_lookahead
+        if not request.history_multimodals.empty():
             for block_index in range(len(tracker.block_hashes), num_blocks):
                 start = block_index * block_size
                 end = start + block_size
                 spans = request.get_prefix_cache_multimodal_identity(start, end + lookahead)
                 identity = [(span.modality, span.content_hash, span.start - start, span.end - start)
                             for span in spans]
-                if lookahead:
-                    # A shifted MTP row also depends on the next accepted token.
-                    # Include it for both prompt and generated Store prefixes.
-                    identity.append(('mtp_lookahead', tuple(int(x) for x in request.all_ids[end:end + lookahead])))
                 if identity:
                     block_extras[block_index] = json.dumps(identity, separators=(',', ':')).encode('utf-8')
 
         tracker.block_hashes = build_prefix_block_hashes(
-            request.all_ids[:token_len],
+            request.all_ids[:token_len + lookahead],
             block_size,
             extra_identity=adapter_identity,
             previous_hashes=tracker.block_hashes,
             block_extra_identities=block_extras,
+            token_lookahead=lookahead,
         )
         return tracker.block_hashes
 
@@ -386,6 +386,7 @@ class MooncakeStoreScheduler:
             raise ValueError('hybrid saves require one runtime state slot per running request')
 
         block_size = self._cache_config.block_size
+        lookahead = self._cache_config.prefix_cache_token_lookahead
         pending_starts = {}
         if self._is_hybrid:
             for operation in self._inflight_saves.values():
@@ -400,6 +401,11 @@ class MooncakeStoreScheduler:
 
             request_id = int(request.seq_id)
             full_blocks = int(token_len) // block_size
+            if lookahead:
+                # The final prefill's sampled successor is not known yet on
+                # the host. Never key its draft row with an absent or proposed
+                # token; a later save can extend this accepted prefix.
+                full_blocks = min(full_blocks, max(0, request.num_valid_ids - lookahead) // block_size)
             first_block = self._next_save_block.get(request_id, 0)
             is_decode_save = step_input.is_decode_checkpoint or (
                 self._is_hybrid and self._cache_config.prefix_cache_decode_save_first
@@ -422,7 +428,6 @@ class MooncakeStoreScheduler:
                 if (token_len % alignment != 0
                         or not request.is_prefix_cache_boundary_safe(token_len)):
                     continue
-                lookahead = self._cache_config.prefix_cache_token_lookahead
                 if lookahead and token_len + lookahead > request.num_valid_ids:
                     continue
                 if step_input.connector_state_ids[index] <= 0:

@@ -174,7 +174,8 @@ class StateCheckpointLifecycle:
         return True
 
     def reserve_save(self, seq: SchedulerSequence, step: int = None):
-        """Reserve a checkpoint at an exact safe prefill boundary."""
+        """Reserve a checkpoint at a policy-aligned, model-safe prefill
+        boundary."""
         self.discard_save(seq)
 
         if not self._prefix_cache_enabled or not self._state_checkpoints_enabled:
@@ -182,13 +183,16 @@ class StateCheckpointLifecycle:
 
         if step is None:
             step = seq.num_valid_ids
+        save_alignment = seq._seq_meta.prefill_save_alignment
+        if save_alignment and step % save_alignment:
+            return -1
         if seq._seq_meta.prefill_save_last_only and step != get_last_prefill_save_step(seq):
             return -1
         lookahead = seq._seq_meta.prefix_cache_token_lookahead
         if lookahead and (step + lookahead > seq.input_end_pos or seq.logprob_start_pos >= 0):
             return -1
-        alignment = seq._seq_meta.prefix_cache_checkpoint_block_size
-        if alignment and step % alignment:
+        required_block_alignment = seq._seq_meta.prefix_cache_checkpoint_block_size
+        if required_block_alignment and step % required_block_alignment:
             return -1
         if step <= 0:
             return -1

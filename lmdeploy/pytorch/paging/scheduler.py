@@ -106,7 +106,7 @@ class Scheduler:
             if cache_config.enable_prefix_caching and cache_config.prefix_cache_block_aligned else 0)
         seq_meta.prefix_cache_token_lookahead = (
             cache_config.prefix_cache_token_lookahead
-            if cache_config.enable_prefix_caching or (self.is_ssm and cache_config.use_mooncake_store) else 0)
+            if cache_config.enable_prefix_caching or cache_config.use_mooncake_store else 0)
         # Selected compact GDN/KDA backends export recurrent state at relative
         # 64-token chunk boundaries; conv supports these same boundaries.
         seq_meta.compact_prefill_checkpoint_stride = (
