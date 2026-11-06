@@ -153,6 +153,38 @@ def _normalize_request_messages(messages: list[dict]) -> list[dict] | None:
     return normalized_messages
 
 
+def _validate_tool_result_ids(messages: list[dict]) -> None:
+    """Validate result ownership when the request includes its tool-call
+    history.
+
+    Keep support for partial histories which start at a tool result. Once calls are present, accepting an unknown or
+    repeated result silently corrupts the association between a tool call and its text or image output.
+    """
+    declared: set[str] = set()
+    consumed: set[str] = set()
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get('role') == 'assistant':
+            calls = message.get('tool_calls') or []
+            if calls:
+                # Match the template's per-assistant-group ownership contract.
+                declared.clear()
+                consumed.clear()
+            for call in calls:
+                if isinstance(call, dict) and isinstance(call.get('id'), str) and call['id']:
+                    declared.add(call['id'])
+        elif message.get('role') == 'tool':
+            call_id = message.get('tool_call_id')
+            if not isinstance(call_id, str) or not call_id:
+                raise ValueError('A tool result requires a nonempty tool_call_id.')
+            if declared and call_id not in declared:
+                raise ValueError('Tool result tool_call_id does not match a preceding tool call.')
+            if call_id in consumed:
+                raise ValueError('Duplicate tool result tool_call_id.')
+            consumed.add(call_id)
+
+
 def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequest:
     """Normalize a ChatCompletionRequest for downstream consumption.
 
@@ -182,6 +214,7 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
 
     messages = request.messages
     if isinstance(messages, list):
+        _validate_tool_result_ids(messages)
         normalized_messages = _normalize_request_messages(messages)
         if normalized_messages is not None:
             updates['messages'] = normalized_messages
