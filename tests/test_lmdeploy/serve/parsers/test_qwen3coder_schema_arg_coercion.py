@@ -1,13 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Schema-aware coercion for hard-schema (KVV-style) tool parameters.
+"""Schema-aware coercion for hard-schema tool parameters.
 
-Hard-schema suites declare parameters whose JSON Schema needs more than a
-scalar ``type`` lookup: ``anyOf``/``oneOf`` unions, ``$ref`` references,
-typeless object schemas and typeless enums. The model emits values as bare
-JSON (or bare words) inside the XML value tags, and the assembled
-``arguments`` must both keep the parsed JSON value and validate against
-the declared schema (GLM-5.3-Flash 1030 report F2 / the Sage-A1.5 +
-Agents-A1 overlapping failures).
+Some tool suites declare parameters whose JSON Schema needs more than a
+scalar ``type`` lookup: ``anyOf``/``oneOf``/``allOf`` combinations,
+``$ref`` references, typeless object schemas and typeless enums. The model
+emits values as bare JSON (or bare words) inside the XML value tags, and
+the assembled ``arguments`` must both keep the parsed JSON value and
+validate against the declared schema.
 """
 import json
 
@@ -29,6 +28,12 @@ ANYOF_OBJECT_ARRAY = {
         {'type': 'array', 'items': {'type': 'string'}},
     ],
 }
+ANYOF_STRING_INTEGER = {
+    'anyOf': [
+        {'type': 'string'},
+        {'type': 'integer'},
+    ],
+}
 ANYOF_NULLABLE_OBJECT = {
     'anyOf': [
         {'type': 'object', 'properties': {}},
@@ -42,8 +47,11 @@ NULLABLE_INTEGER = {
     ],
 }
 NULLABLE_TYPE_LIST_STRING = {'type': ['string', 'null']}
+NUMBER_TYPE = {'type': 'number'}
 REF_OBJECT = {'$ref': '#/$defs/Shape'}
 REF_STRING = {'$ref': '#/$defs/V'}
+REF_EXTERNAL = {'$ref': 'https://example.com/schemas/value.json'}
+REF_MISSING = {'$ref': '#/$defs/Missing'}
 ENUM_STRING = {'enum': ['true', 'false']}
 ENUM_INTEGER = {'enum': [1, 2]}
 ENUM_NULLABLE_STRING = {'enum': ['a', None]}
@@ -56,6 +64,12 @@ REF_STRING_ESCAPED_TILDE = {'$ref': '#/$defs/A~0B'}
 SIBLING_TYPE_STRING = {'$ref': '#/$defs/Union', 'type': 'string'}
 SIBLING_NULLABLE_STRING = {'$ref': '#/$defs/V', 'type': ['string', 'null']}
 SIBLING_ENUM_STRING = {'$ref': '#/$defs/Empty', 'enum': ['true', 'false']}
+ALLOF_STRING = {'allOf': [{'type': 'string'}]}
+ALLOF_REF_MIN_LENGTH = {'allOf': [{'$ref': '#/$defs/Str'}, {'minLength': 1}]}
+ALLOF_OBJECT = {'allOf': [{'type': 'object'}]}
+ONEOF_STRING_INTEGER = {'oneOf': [{'type': 'string'}, {'type': 'integer'}]}
+REF_SELFCYCLE = {'$ref': '#/$defs/Loop'}
+REF_MUTUAL_CYCLE = {'$ref': '#/$defs/MutA'}
 
 PARSERS = [
     pytest.param(Qwen3CoderToolParser, id='qwen3coder'),
@@ -74,15 +88,19 @@ def _parameters(param_schema):
                 'properties': {'kind': {'type': 'string'}},
             },
             'V': {'type': 'string'},
+            'Str': {'type': 'string'},
             'A/B': {'type': 'string'},
             'A~B': {'type': 'string'},
             'Union': {'anyOf': [{'type': 'string'}, {'type': 'integer'}]},
             'Empty': {},
+            'Loop': {'anyOf': [{'type': 'null'}, {'$ref': '#/$defs/Loop'}]},
+            'MutA': {'$ref': '#/$defs/MutB'},
+            'MutB': {'$ref': '#/$defs/MutA'},
         },
     }
 
 
-def _request(parser_cls, param_schema):
+def _request_with_parameters(parser_cls, parameters):
     model = GLM_MODEL_ID if parser_cls is Glm47ToolParser else QWEN_MODEL_ID
     return ChatCompletionRequest(
         model=model,
@@ -91,11 +109,15 @@ def _request(parser_cls, param_schema):
             'type': 'function',
             'function': {
                 'name': 'submit_value',
-                'parameters': _parameters(param_schema),
+                'parameters': parameters,
             },
         }],
         tool_choice='required',
     )
+
+
+def _request(parser_cls, param_schema):
+    return _request_with_parameters(parser_cls, _parameters(param_schema))
 
 
 def _payload(parser_cls, raw_value):
@@ -169,6 +191,20 @@ VALID_CASES = [
     # sibling nullable + strict target: only the string form stays valid
     pytest.param(SIBLING_NULLABLE_STRING, 'null', 'null', id='sibling-nullable-target-strict'),
     pytest.param(SIBLING_NULLABLE_STRING, 'hi', 'hi', id='sibling-nullable-target-value'),
+    # allOf members all constrain the value; agreeing types govern coercion
+    pytest.param(ALLOF_STRING, '42', '42', id='allof-string-bare-number'),
+    pytest.param(ALLOF_STRING, '"42"', '42', id='allof-string-quoted'),
+    pytest.param(ALLOF_REF_MIN_LENGTH, 'hi', 'hi', id='allof-ref-minlength-string'),
+    pytest.param(ALLOF_OBJECT, '{"kind": "circle"}', {'kind': 'circle'}, id='allof-object'),
+    # oneOf mixed unions coerce bare JSON but keep bare null a string
+    pytest.param(ONEOF_STRING_INTEGER, '5', 5, id='oneof-integer'),
+    pytest.param(ONEOF_STRING_INTEGER, 'null', 'null', id='oneof-mixed-bare-null'),
+    # bare null stays a string unless the schema accepts null
+    pytest.param(ANYOF_STRING_INTEGER, 'null', 'null', id='mixed-union-bare-null'),
+    pytest.param(TYPELESS_OBJECT, 'null', 'null', id='typeless-bare-null'),
+    # quoted null decodes to the string 'null'
+    pytest.param(NULLABLE_TYPE_LIST_STRING, '"null"', 'null', id='nullable-string-quoted-null'),
+    pytest.param(ANYOF_STRING_INTEGER, '"null"', 'null', id='mixed-union-quoted-null'),
 ]
 
 
@@ -199,6 +235,14 @@ STREAM_CASES = [
     pytest.param(SIBLING_TYPE_STRING, '42', '42', id='sibling-type-string-stream'),
     pytest.param(SIBLING_ENUM_STRING, 'true', 'true', id='sibling-enum-string-stream'),
     pytest.param(SIBLING_NULLABLE_STRING, 'null', 'null', id='sibling-nullable-target-strict-stream'),
+    # a leading quote split across chunks still selects the buffered path
+    pytest.param(ANYOF_STRING_INTEGER, '"null"', 'null', id='mixed-union-quoted-null-stream'),
+    # allOf / oneOf coercions behave identically while streaming
+    pytest.param(ALLOF_STRING, '42', '42', id='allof-string-bare-number-stream'),
+    pytest.param(ONEOF_STRING_INTEGER, 'null', 'null', id='oneof-mixed-bare-null-stream'),
+    pytest.param(ANYOF_STRING_INTEGER, 'null', 'null', id='mixed-union-bare-null-stream'),
+    # non-finite numerics degrade to strings while streaming too
+    pytest.param(ANYOF_STRING_INTEGER, 'NaN', 'NaN', id='mixed-union-nan-stream'),
 ]
 
 
@@ -236,3 +280,128 @@ UNRESOLVED_CASES = [
 def test_unresolved_schema_keeps_json_value(parser_cls, schema, raw_value, expected):
     """Bare JSON values must survive coercion, not become strings."""
     assert _parse_complete(parser_cls, schema, raw_value) == expected
+
+
+def _strict_loads(text: str):
+    """json.loads rejecting NaN/Infinity, like strict client parsers."""
+    def _reject(token: str):
+        raise ValueError(token)
+
+    return json.loads(text, parse_constant=_reject)
+
+
+# Non-finite numerics must degrade to their string form so the assembled
+# arguments stay parseable by strict JSON clients.
+STRICT_JSON_CASES = [
+    pytest.param(NUMBER_TYPE, 'NaN', 'NaN', id='number-nan'),
+    pytest.param(NUMBER_TYPE, 'Infinity', 'Infinity', id='number-infinity'),
+    pytest.param(NUMBER_TYPE, '1e999', '1e999', id='number-overflow-exponent'),
+    pytest.param(ANYOF_STRING_INTEGER, 'NaN', 'NaN', id='mixed-union-nan'),
+    pytest.param(ANYOF_STRING_INTEGER, '{"a": NaN}', '{"a": NaN}', id='nested-nan-object'),
+]
+
+
+@pytest.mark.parametrize('parser_cls', PARSERS)
+@pytest.mark.parametrize(('schema', 'raw_value', 'expected'), STRICT_JSON_CASES)
+def test_arguments_remain_strict_json(parser_cls, schema, raw_value, expected):
+    """Non-finite numerics degrade to strings so ``arguments`` stays strict
+    JSON."""
+    parser = parser_cls()
+    parser.adjust_request(_request(parser_cls, schema))
+    tool_call = final_tool_call(parser, _payload(parser_cls, raw_value))
+    assert _strict_loads(tool_call.function.arguments) == {'value': expected}
+
+
+# Cyclic or unresolvable $ref graphs must degrade deterministically to the
+# string-preserving fallback instead of recursing without bound; these
+# schemas are pathological so their outputs are only checked for stable
+# complete/streaming equivalence, not schema validity.
+DEGENERATE_REF_CASES = [
+    pytest.param(REF_SELFCYCLE, 'null', None, id='anyof-self-cycle-null'),
+    pytest.param(REF_SELFCYCLE, 'hi', 'hi', id='anyof-self-cycle-string'),
+    pytest.param(REF_MUTUAL_CYCLE, '42', '42', id='mutual-cycle-string'),
+    pytest.param(REF_MISSING, '{"a": 1}', '{"a": 1}', id='missing-target-object'),
+    pytest.param(REF_EXTERNAL, '42', '42', id='external-ref-string'),
+]
+
+
+@pytest.mark.parametrize('parser_cls', PARSERS)
+@pytest.mark.parametrize(('schema', 'raw_value', 'expected'), DEGENERATE_REF_CASES)
+def test_degenerate_refs_degrade_without_recursing_forever(parser_cls, schema, raw_value, expected):
+    """Cyclic/missing/external $refs never raise RecursionError and stream
+    exactly like the complete parse."""
+    complete = _parse_complete(parser_cls, schema, raw_value)
+    assert complete == {'value': expected}
+
+    parser = parser_cls()
+    parser.adjust_request(_request(parser_cls, schema))
+    streamed = stream_tool_arguments(parser, _chunks(parser_cls, raw_value))
+    assert json.loads(streamed) == complete
+
+
+@pytest.mark.parametrize('parser_cls', PARSERS)
+def test_very_long_ref_chain_is_bounded(parser_cls):
+    """A ~1500-hop non-cyclic $ref chain resolves within the depth budget
+    instead of exhausting the Python stack."""
+    hops = 1500
+    parameters = _parameters({'$ref': '#/$defs/N0'})
+    for i in range(hops):
+        parameters['$defs'][f'N{i}'] = {'$ref': f'#/$defs/N{i + 1}'}
+    parameters['$defs'][f'N{hops}'] = {'type': 'string'}
+
+    parser = parser_cls()
+    parser.adjust_request(_request_with_parameters(parser_cls, parameters))
+    tool_call = final_tool_call(parser, _payload(parser_cls, '42'))
+    assert json.loads(tool_call.function.arguments) == {'value': '42'}
+
+    parser = parser_cls()
+    parser.adjust_request(_request_with_parameters(parser_cls, parameters))
+    streamed = stream_tool_arguments(parser, _chunks(parser_cls, '42'))
+    assert json.loads(streamed) == {'value': '42'}
+
+
+MULTI_PARAM_PARAMETERS = {
+    'type': 'object',
+    'properties': {
+        'name': {'type': 'string'},
+        'payload': ANYOF_OBJECT_ARRAY,
+    },
+    'required': ['name', 'payload'],
+}
+
+
+@pytest.mark.parametrize('parser_cls', PARSERS)
+def test_interleaved_params_mix_streaming_and_buffered(parser_cls):
+    """A streamed string parameter followed by a buffered object parameter
+    assemble in order, including when fragments span chunks."""
+    expected = {'name': 'Ada Lovelace', 'payload': {'kind': 'circle'}}
+    if parser_cls is Glm47ToolParser:
+        payload = ('submit_value<arg_key>name</arg_key><arg_value>Ada Lov'
+                   'elace</arg_value><arg_key>payload</arg_key><arg_value>'
+                   '{"kind": "circle"}</arg_value></tool_call>')
+        chunks = [
+            'submit_value<arg_key>name</arg_key><arg_value>Ada Lov',
+            'elace</arg_value><arg_key>payload</arg_key><arg_value>{"kind": ',
+            '"circle"}</arg_value>',
+        ]
+    else:
+        payload = ('<function=submit_value>\n<parameter=name>Ada Lovelace</parameter>\n'
+                   '<parameter=payload>{"kind": "circle"}</parameter>\n</function>')
+        chunks = [
+            '<function=submit_value>',
+            '<parameter=name>Ada Lov',
+            'elace</parameter>',
+            '<parameter=payload>{"kind": ',
+            '"circle"}</parameter>',
+        ]
+
+    parser = parser_cls()
+    parser.adjust_request(_request_with_parameters(parser_cls, MULTI_PARAM_PARAMETERS))
+    tool_call = final_tool_call(parser, payload)
+    assert json.loads(tool_call.function.arguments) == expected
+
+    parser = parser_cls()
+    parser.adjust_request(_request_with_parameters(parser_cls, MULTI_PARAM_PARAMETERS))
+    streamed = stream_tool_arguments(parser, chunks)
+    assert json.loads(streamed) == expected
+    Draft202012Validator(MULTI_PARAM_PARAMETERS).validate(json.loads(streamed))
