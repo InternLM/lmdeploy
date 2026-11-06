@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch import distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.backends.cuda.attention.sparse_mla import FlashMLASparseImpl
 from lmdeploy.pytorch.backends.cuda.kpool import (
     CudaKPoolAttention,
@@ -1238,7 +1239,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         nope_size = self.kv_lora_rank
         kpool_tail_state = None if tail_k is None else (tail_k, tail_score)
         if not attn_metadata.is_decoding:
-            use_sparse = int(attn_metadata.max_kv_seqlen) > self.index_topk
+            use_sparse = (envs.mla_disable_dense_prefill
+                          or int(attn_metadata.max_kv_seqlen) > self.index_topk)
             logical_indices = self._kpool_indices(
                 hidden_states,
                 q_lora,
