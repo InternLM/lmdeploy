@@ -843,6 +843,11 @@ class HFChatTemplate(BaseChatTemplate):
     def messages2prompt(self, messages, **kwargs):
         if isinstance(messages, str):
             messages = [{'role': 'user', 'content': messages}]
+        if self.is_glm5_next:
+            # The checkpoint template only renders system/user/assistant/tool.
+            # Preserve developer instructions using its native instruction role.
+            messages = [dict(message, role='system') if message.get('role') == 'developer' else message
+                        for message in messages]
         assert all(isinstance(m, dict) and 'role' in m and 'content' in m for m in messages), \
             'Each message should be a dict with "role" and "content" keys.'
 
