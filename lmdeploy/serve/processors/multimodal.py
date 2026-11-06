@@ -410,15 +410,23 @@ class MultimodalProcessor:
             template_reasoning_effort = chat_template_kwargs.pop('reasoning_effort', None)
         else:
             chat_template_kwargs.pop('reasoning_effort', None)
-        prompt = chat_template.messages2prompt(prompt,
-                                               tools=tools,
-                                               reasoning_effort=template_reasoning_effort,
-                                               **chat_template_kwargs)
-        if prompt is None:
-            raise ValueError(
-                f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
-            )
-        input_ids = self.tokenizer.encode(prompt, add_bos=True)
+        input_ids = chat_template.messages2input_ids(prompt,
+                                                     tools=tools,
+                                                     reasoning_effort=template_reasoning_effort,
+                                                     **chat_template_kwargs)
+        if input_ids is None:
+            prompt = chat_template.messages2prompt(prompt,
+                                                   tools=tools,
+                                                   reasoning_effort=template_reasoning_effort,
+                                                   **chat_template_kwargs)
+            if prompt is None:
+                raise ValueError(
+                    f'You are using base template to handle chat task. Please specify a `--chat-template` name chosen from `lmdeploy list` if you want to use OpenAI messages input.'  # noqa
+                )
+            input_ids = self.tokenizer.encode(prompt, add_bos=True)
+        else:
+            # Only decode for logging/display; inference consumes the original IDs.
+            prompt = self.tokenizer.decode(input_ids, skip_special_tokens=False)
         return {'prompt': prompt, 'input_ids': input_ids}
 
     async def _get_multimodal_prompt_input(self,
