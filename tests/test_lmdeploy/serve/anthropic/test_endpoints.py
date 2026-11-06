@@ -402,6 +402,7 @@ def test_http_unknown_extension_block_is_preserved_as_text(stream):
         pytest.param('top_p', -0.1, id='top-p-below-range'),
         pytest.param('top_p', 1.1, id='top-p-above-range'),
         pytest.param('top_k', -2, id='top-k-below-minus-one'),
+        pytest.param('repetition_penalty', 'invalid', id='repetition-penalty-invalid-number'),
     ],
 )
 def test_messages_rejects_invalid_sampling_parameter(field_name, value):
@@ -423,6 +424,42 @@ def test_messages_normalizes_top_k_override(top_k):
     config = context.async_engine.preprocess_calls[0][1]['gen_config']
     assert config.top_k == max(0, top_k)
     assert config.temperature == 1.0
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('raw_tokens', [False, True])
+@pytest.mark.parametrize(
+    ('overrides', 'defaults', 'expected'),
+    [
+        pytest.param({}, {}, 1.0, id='generation-default'),
+        pytest.param({}, {'repetition_penalty': 1.3}, 1.3, id='server-default'),
+        pytest.param({'repetition_penalty': None}, {'repetition_penalty': 1.3}, 1.3, id='null-uses-server-default'),
+        pytest.param({'repetition_penalty': 0.8}, {'repetition_penalty': 1.3}, 0.8, id='encourage-repetition'),
+        pytest.param({'repetition_penalty': 1.0}, {'repetition_penalty': 1.3}, 1.0, id='disable-server-penalty'),
+        pytest.param({'repetition_penalty': 2.01}, {'repetition_penalty': 1.3}, 2.01, id='above-two'),
+    ],
+)
+def test_http_messages_repetition_penalty_reaches_engine(stream, raw_tokens, overrides, defaults, expected):
+    context = _FakeServerContext()
+    context.default_gen_config = defaults
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    payload = _messages_payload(stream=stream, **overrides)
+    if raw_tokens:
+        payload.update(messages=[], input_ids=[1, 2, 3])
+
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', json=payload, headers=ANTHROPIC_HEADERS)
+
+    assert response.status_code == 200, response.text
+    if stream:
+        assert 'event: message_stop' in response.text
+    else:
+        assert response.json()['stop_reason'] == 'end_turn'
+    assert len(context.async_engine.preprocess_calls) == 1
+    config = context.async_engine.preprocess_calls[0][1]['gen_config']
+    assert config.repetition_penalty == expected
+    assert len(context.async_engine.generate_calls) == 1
 
 
 def test_messages_count_tokens_rejects_empty_messages():

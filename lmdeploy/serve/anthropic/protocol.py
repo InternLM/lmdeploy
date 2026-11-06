@@ -121,6 +121,8 @@ class MessagesRequest(BaseModel):
     tools: list[ToolParam] | None = None
     tool_choice: ToolChoiceParam | Literal['auto', 'any'] | None = None
     service_tier: Literal['auto', 'standard_only'] | None = None
+    # LMDeploy-compatible generation extensions.
+    repetition_penalty: float | None = None
     # Extended input fields from /generate endpoint.
     # input_ids and image_data are fallback inputs — they are only used when
     # messages is empty. When messages is non-empty, it takes priority.

@@ -67,6 +67,7 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             temperature=request.temperature,
             top_p=request.top_p,
             top_k=request.top_k,
+            repetition_penalty=request.repetition_penalty,
             stop=request.stop_sequences,
             tools=to_openai_tools(request.tools),
             tool_choice=normalize_tool_choice(request.tool_choice),
