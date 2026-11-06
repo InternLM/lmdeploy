@@ -1,10 +1,12 @@
 # Tests for PR #5091: reasoning token reporting in /v1/completions.
 # Covers: counters seeded from the prompt state (open reasoning prefix,
-# closed reasoning prefix, plain text, mixed batch), tag resolution through
-# convert_tokens_to_ids without copying the vocabulary (get_vocab is
-# poisoned in the fake tokenizer so any regression fails loudly), and the
-# missing-tag behavior for both None and unk-token fallbacks - all in both
-# non-streaming and streaming (include_usage) modes.
+# closed reasoning prefix, plain text, mixed batch; tags inside earlier
+# turns are not inherited across special-token turn boundaries), tag
+# resolution through convert_tokens_to_ids without copying the vocabulary
+# (get_vocab is poisoned in the fake tokenizer so any regression fails
+# loudly), the missing-tag behavior for both None and unk-token fallbacks,
+# and skipping the accounting for streams that do not request usage - all
+# in both non-streaming and streaming (include_usage) modes.
 import asyncio
 import json
 from collections import deque
@@ -19,6 +21,9 @@ from lmdeploy.serve.openai.protocol import CompletionRequest
 OPEN_TAG_ID = 100
 CLOSE_TAG_ID = 101
 UNK_TOKEN_ID = 7
+IM_START_ID = 5
+IM_END_ID = 6
+TEXT_ID = 9
 
 
 class _ReasoningParser:
@@ -38,7 +43,9 @@ class _Tokenizer:
     ``get_vocab`` is poisoned on purpose: the endpoint must resolve the
     two tags with ``convert_tokens_to_ids`` instead of copying the whole
     vocabulary on every completion request (>100 ms per call on
-    large-vocab tokenizers).
+    large-vocab tokenizers). Like Qwen-style tokenizers, the reasoning
+    tags themselves are special tokens; the turn boundary tokens
+    (im_start/im_end) model a chat template's message delimiters.
 
     Args:
         vocab: token-to-id mapping known to the tokenizer; tags missing
@@ -47,13 +54,19 @@ class _Tokenizer:
             tokenizers configured with an ``unk`` token.
     """
 
+    # tags included on purpose: the endpoint must exclude them from the
+    # turn-boundary set or the tags themselves would act as boundaries
+    all_special_ids = (OPEN_TAG_ID, CLOSE_TAG_ID, IM_START_ID, IM_END_ID)
+
     def __init__(self, vocab=None, unk_token_id=None):
         if vocab is None:
             vocab = {'<think>': OPEN_TAG_ID, '</think>': CLOSE_TAG_ID}
         self._vocab = dict(vocab)
         self.unk_token_id = unk_token_id
+        self.lookup_calls = 0
 
     def convert_tokens_to_ids(self, tokens):
+        self.lookup_calls += 1
         return [self._vocab.get(token, self.unk_token_id) for token in tokens]
 
     def get_vocab(self):
@@ -218,3 +231,58 @@ def test_unresolvable_tags_leave_reasoning_usage_unreported(missing_tag, unk_tok
         _collect_completion_details([[1, OPEN_TAG_ID]], [[9, CLOSE_TAG_ID, UNK_TOKEN_ID]], stream,
                                     tokenizer=_Tokenizer(vocab, unk_token_id=unk_token_id)))
     assert details is None
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_history_reasoning_tags_do_not_seed_counting(stream):
+    # a <think> mentioned inside an earlier user turn - with the
+    # assistant turn already continuing a normal answer behind a
+    # special-token boundary - must not count the answer as reasoning
+    # (3 ordinary tokens were previously reported as reasoning_tokens=3)
+    prompt_input_ids = [[TEXT_ID, TEXT_ID, OPEN_TAG_ID, TEXT_ID, IM_END_ID, IM_START_ID, TEXT_ID,
+                         TEXT_ID]]
+    generated_ids = [[TEXT_ID, TEXT_ID, TEXT_ID]]
+    details = asyncio.run(
+        _collect_completion_details(prompt_input_ids, generated_ids, stream))
+    assert details['reasoning_tokens'] == 0
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_tags_after_last_boundary_seed_counting(stream):
+    # an assistant turn already inside a reasoning block behind the turn
+    # boundary keeps counting: boundaries exclude earlier turns, not the
+    # current one
+    prompt_input_ids = [[IM_START_ID, OPEN_TAG_ID, TEXT_ID]]
+    generated_ids = [[TEXT_ID, TEXT_ID, CLOSE_TAG_ID, TEXT_ID]]
+    details = asyncio.run(
+        _collect_completion_details(prompt_input_ids, generated_ids, stream))
+    assert details['reasoning_tokens'] == 2
+
+
+def test_streaming_without_usage_skips_reasoning_accounting():
+    # a stream that does not request usage must not run the reasoning
+    # accounting at all (observable through the tokenizer lookups)
+    tokenizer = _Tokenizer()
+    engine = _AsyncEngine([[IM_START_ID, OPEN_TAG_ID]], [[TEXT_ID, CLOSE_TAG_ID]])
+    context = _ServerContext(engine, tokenizer)
+    router = APIRouter()
+    register(router, context)
+    endpoint = router.routes[0].endpoint
+    request = CompletionRequest(model='fake-model',
+                                prompt=['p'],
+                                max_tokens=8,
+                                stream=True,
+                                stream_options=None)
+    response = asyncio.run(endpoint(request, _RawRequest()))
+    usage_chunks = 0
+    async def _drain():
+        nonlocal usage_chunks
+        async for chunk in response.body_iterator:
+            if chunk.startswith('data: [DONE]'):
+                continue
+            payload = json.loads(chunk.removeprefix('data: '))
+            if payload.get('usage'):
+                usage_chunks += 1
+    asyncio.run(_drain())
+    assert usage_chunks == 0
+    assert tokenizer.lookup_calls == 0
