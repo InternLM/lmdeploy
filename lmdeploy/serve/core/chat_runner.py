@@ -260,7 +260,8 @@ class ChatRunner:
             parser_kwargs = {'output_chunks': output_chunks} if output_chunks is not None else {}
             text, tool_calls, reasoning_content = self.response_parser.parse_complete(
                 text, final_token_ids, **parser_kwargs)
-            if (isinstance(tool_calls, list) and len(tool_calls) and final_res.finish_reason == 'stop'
+            if (self.request.tool_choice != 'none'
+                    and isinstance(tool_calls, list) and len(tool_calls) and final_res.finish_reason == 'stop'
                     and getattr(final_res, 'stop_sequence', None) is None):
                 final_res.finish_reason = 'tool_calls'
         except Exception as err:

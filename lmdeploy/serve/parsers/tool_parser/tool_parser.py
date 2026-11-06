@@ -36,9 +36,21 @@ class _ToolCallParts:
     arguments: list[str] = field(default_factory=list)
 
 
+def validate_named_tool_choice(request: ChatCompletionRequest) -> None:
+    """Reject a named tool choice that is absent from the supplied tools."""
+    from lmdeploy.serve.openai.protocol import ToolChoice
+
+    if isinstance(request.tool_choice, ToolChoice):
+        name = request.tool_choice.function.name
+        if not any(item.function.name == name for item in request.tools or []):
+            raise ValueError(f'Tool {name!r} selected by tool_choice not found in request.tools.')
+
+
 def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
     """Dump tools to a list of dicts to fit jinja chat template."""
     from lmdeploy.serve.openai.protocol import AllowedToolChoice
+
+    validate_named_tool_choice(request)
 
     if isinstance(request.tool_choice, AllowedToolChoice):
         allowed_names: set[str] = set()
