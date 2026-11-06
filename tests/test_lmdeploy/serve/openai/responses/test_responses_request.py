@@ -185,6 +185,112 @@ def test_responses_maps_function_call_history_to_chat_messages():
     ]
 
 
+def test_responses_attaches_function_call_to_preceding_assistant_message():
+    request = ResponsesRequest(
+        model='fake-model',
+        input=[
+            {
+                'type': 'message',
+                'role': 'user',
+                'content': 'Search for lmdeploy.',
+            },
+            {
+                'type': 'message',
+                'role': 'assistant',
+                'content': [{
+                    'type': 'output_text',
+                    'text': 'Let me look it up. ',
+                    'annotations': [],
+                }],
+            },
+            {
+                'type': 'function_call',
+                'call_id': 'call_123',
+                'name': 'search',
+                'arguments': '{"query":"lmdeploy"}',
+            },
+            {
+                'type': 'function_call_output',
+                'call_id': 'call_123',
+                'output': '{"result":"ok"}',
+            },
+        ],
+    )
+
+    # One assistant turn stays one message: replaying it as two consecutive
+    # assistant messages renders an end-of-turn marker before the tool call.
+    assert messages_from_input(request) == [
+        {
+            'role': 'user',
+            'content': 'Search for lmdeploy.',
+        },
+        {
+            'role': 'assistant',
+            'content': 'Let me look it up. ',
+            'tool_calls': [{
+                'id': 'call_123',
+                'type': 'function',
+                'function': {
+                    'name': 'search',
+                    'arguments': '{"query":"lmdeploy"}',
+                },
+            }],
+        },
+        {
+            'role': 'tool',
+            'tool_call_id': 'call_123',
+            'content': '{"result":"ok"}',
+        },
+    ]
+
+
+def test_responses_groups_parallel_function_calls_into_one_message():
+    request = ResponsesRequest(
+        model='fake-model',
+        input=[
+            {
+                'type': 'message',
+                'role': 'user',
+                'content': 'Search twice.',
+            },
+            {
+                'type': 'function_call',
+                'call_id': 'call_1',
+                'name': 'search',
+                'arguments': '{"query":"a"}',
+            },
+            {
+                'type': 'function_call',
+                'call_id': 'call_2',
+                'name': 'search',
+                'arguments': '{"query":"b"}',
+            },
+        ],
+    )
+
+    messages = messages_from_input(request)
+
+    assert [message['role'] for message in messages] == ['user', 'assistant']
+    assert messages[1]['tool_calls'] == [
+        {
+            'id': 'call_1',
+            'type': 'function',
+            'function': {
+                'name': 'search',
+                'arguments': '{"query":"a"}',
+            },
+        },
+        {
+            'id': 'call_2',
+            'type': 'function',
+            'function': {
+                'name': 'search',
+                'arguments': '{"query":"b"}',
+            },
+        },
+    ]
+
+
 def test_responses_rejects_non_string_function_call_arguments():
     request = ResponsesRequest(
         model='fake-model',
