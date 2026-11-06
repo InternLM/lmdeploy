@@ -579,10 +579,11 @@ class Glm5NextMoE(DeepseekV2MoE):
         )
 
     def _forward_experts(self, hidden_states, topk_weights, topk_ids, routes_prepared=False):
-        context = get_step_ctx_manager().current_context()
+        manager = get_step_ctx_manager()
+        context = manager.current_context() if manager is not None else None
         # Globally mixed steps use prefill's piecewise graph, whose eager
         # boundaries must not split an active auxiliary-stream capture.
-        overlap = (self._enable_shared_expert_overlap and hidden_states.is_cuda
+        overlap = (getattr(self, '_enable_shared_expert_overlap', False) and hidden_states.is_cuda
                    and context is not None and context.global_is_decoding())
         if not overlap and not routes_prepared:
             return super()._forward_experts(hidden_states, topk_weights, topk_ids)
