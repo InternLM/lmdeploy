@@ -803,20 +803,19 @@ class DeepseekV2MoE(nn.Module):
             routed_experts = all_routed_experts[:, self.layer_idx, :]
         topk_weights, topk_ids = self.gate(hidden_states, routed_experts=routed_experts)
 
-        out_states = self.experts(
-            hidden_states,
-            topk_weights,
-            topk_ids,
-        )
-
-        if self.shared_experts is not None:
-            shared_states = self.shared_experts(hidden_states)
-            out_states += shared_states
+        out_states = self._forward_experts(hidden_states, topk_weights, topk_ids)
         out_states = out_states.reshape(batch_size, sequence_length, -1)
 
         if self._all_reduce:
             dist.all_reduce(out_states)
 
+        return out_states
+
+    def _forward_experts(self, hidden_states, topk_weights, topk_ids):
+        """Run routed and shared experts in their original arithmetic order."""
+        out_states = self.experts(hidden_states, topk_weights, topk_ids)
+        if self.shared_experts is not None:
+            out_states += self.shared_experts(hidden_states)
         return out_states
 
 

@@ -44,6 +44,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..hc_prepost import HCPrePostBuildSpec
         from ..indexer import V4IndexerBuildSpec
         from ..kda import KdaBuildSpec
+        from ..linear import LinearBuildSpec
         from ..lora import LoRABuildSpec
         from ..moe import (
             FusedMoEBlockedF8BuildSpec,
@@ -60,6 +61,14 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
         from ..rejection_sampling import RejectionSamplingBuildSpec
         from ..static_fp8_modules import LinearStaticF8BuildSpec
+        if isinstance(spec, LinearBuildSpec):
+            from lmdeploy.pytorch import envs
+            if envs.enable_skinny_gemm and not enable_deterministic and spec.dtype == torch.bfloat16 and not spec.bias:
+                from .skinny_gemm_plans import SM90_SKINNY_GEMM_PLANS
+                plans = SM90_SKINNY_GEMM_PLANS.get((spec.out_features, spec.in_features))
+                if plans and torch.cuda.get_device_capability() == (9, 0):
+                    from .linear import SkinnyLinearImpl
+                    return cast(ImplT, SkinnyLinearImpl(spec.out_features, spec.in_features, plans))
         if isinstance(spec, SiluAndMulBuildSpec):
             from .activation import TritonSiluAndMulImpl
             return cast(ImplT, TritonSiluAndMulImpl(spec.inplace))
