@@ -204,7 +204,7 @@ class ChatCompletionRequest(BaseModel):
     reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
     # additional argument of lmdeploy
-    repetition_penalty: float | None = None
+    repetition_penalty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
@@ -422,7 +422,7 @@ class CompletionRequest(BaseModel):
     frequency_penalty: float | None = 0.0
     user: str | None = None
     # additional argument of lmdeploy
-    repetition_penalty: float | None = None
+    repetition_penalty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
@@ -617,7 +617,7 @@ class GenerateReqInput(BaseModel):
     stop_token_ids: list[int] | None = None
     stream: bool | None = False
     temperature: float | None = None
-    repetition_penalty: float | None = None
+    repetition_penalty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     ignore_eos: bool | None = False
     top_p: float | None = None
     top_k: int | None = None
