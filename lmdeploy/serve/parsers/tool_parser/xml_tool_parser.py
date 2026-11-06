@@ -98,6 +98,7 @@ class XmlToolParser(ToolParser):
     def __init__(self):
         super().__init__()
         self._function_param_schemas: dict[str, dict[str, dict[str, Any]]] = {}
+        self._function_root_schemas: dict[str, dict[str, Any]] = {}
         self._has_emitted_json_start = False
         self._json_closed = False
         self._emitted_arg_count = 0
@@ -107,7 +108,8 @@ class XmlToolParser(ToolParser):
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Cache parameter schemas and apply common tool request
         adjustments."""
-        self._function_param_schemas = self._build_function_param_schemas(request)
+        self._function_param_schemas, self._function_root_schemas = (
+            self._build_function_param_schemas(request))
         return super().adjust_request(request)
 
     def begin_tool_block(self) -> None:
@@ -276,12 +278,15 @@ class XmlToolParser(ToolParser):
             self._payload_closed = True
         return consumed
 
-    def _build_function_param_schemas(self, request: ChatCompletionRequest) -> dict[str, dict[str, dict[str, Any]]]:
-        """Build function->parameter schema map from request tools."""
+    def _build_function_param_schemas(
+            self, request: ChatCompletionRequest
+    ) -> tuple[dict[str, dict[str, dict[str, Any]]], dict[str, dict[str, Any]]]:
+        """Build function->parameter and function->root schema maps."""
         if not request.tools:
-            return {}
+            return {}, {}
 
         out: dict[str, dict[str, dict[str, Any]]] = {}
+        roots: dict[str, dict[str, Any]] = {}
         for tool in request.tools:
             parameters = tool.function.parameters
             if not isinstance(parameters, dict):
@@ -293,7 +298,8 @@ class XmlToolParser(ToolParser):
             param_schemas = {name: schema for name, schema in properties.items() if isinstance(schema, dict)}
             if param_schemas:
                 out[tool.function.name] = param_schemas
-        return out
+                roots[tool.function.name] = parameters
+        return out, roots
 
     def _consume_arg_delta(self, raw: str, json_fragments: list[str]) -> None:
         """Buffer typed or quoted values and stream plain string fragments.
@@ -334,8 +340,11 @@ class XmlToolParser(ToolParser):
                 text = text[1:]
 
         param_schema = self._get_param_schema(self._state.func_name, arg_name)
-        schema_type = self._get_schema_type(param_schema)
-        if param_schema is not None and schema_type != 'string':
+        schema_type, allows_null = self._resolve_schema_coercion(
+            param_schema, self._get_function_root_schema(self._state.func_name))
+        # A nullable schema must buffer: the bare word ``null`` can only be
+        # recognized once the value is complete, so it cannot stream raw.
+        if param_schema is not None and (schema_type != 'string' or allows_null):
             arg_state.mode = 'buffered'
             return
         if text.lstrip().startswith('"'):
@@ -393,7 +402,8 @@ class XmlToolParser(ToolParser):
             raw_value = self._normalize_complete_value(raw_value)
             func_name = self._state.func_name
             schema = self._get_param_schema(func_name, arg_name)
-            value = self._coerce_arg_value(raw_value, schema)
+            root_schema = self._get_function_root_schema(func_name)
+            value = self._coerce_arg_value(raw_value, schema, root_schema)
             self._append_completed_arg(json_fragments, arg_name, value)
         self._state.arg_name = None
         self._arg_state = _XmlArgState()
@@ -441,6 +451,12 @@ class XmlToolParser(ToolParser):
         param_schema = self._function_param_schemas.get(func_name, {}).get(param_name)
         return param_schema if isinstance(param_schema, dict) else None
 
+    def _get_function_root_schema(self, func_name: str | None) -> dict[str, Any] | None:
+        """Return the full parameters schema holding ``$defs`` for a
+        function."""
+        root_schema = self._function_root_schemas.get(func_name)
+        return root_schema if isinstance(root_schema, dict) else None
+
     @staticmethod
     def _get_schema_type(schema: dict[str, Any] | None) -> str | None:
         """Return the effective JSON type from an optional parameter schema."""
@@ -451,39 +467,100 @@ class XmlToolParser(ToolParser):
         return self._stable_prefix_end(payload, self.arg_value_close_prefixes, start)
 
     @staticmethod
-    def _resolve_schema_type(param_schema: dict[str, Any]) -> str | None:
-        """Resolve a scalar or nullable-list JSON Schema ``type`` value."""
+    def _json_type_of(value: Any) -> str | None:
+        """Map a Python value to its JSON Schema type name."""
+        if isinstance(value, bool):
+            return 'boolean'
+        if isinstance(value, int):
+            return 'integer'
+        if isinstance(value, float):
+            return 'number'
+        if isinstance(value, str):
+            return 'string'
+        if value is None:
+            return 'null'
+        if isinstance(value, list):
+            return 'array'
+        if isinstance(value, dict):
+            return 'object'
+        return None
+
+    @staticmethod
+    def _deref_schema(schema: dict[str, Any] | None, root_schema: dict[str, Any] | None,
+                      depth: int = 0) -> dict[str, Any] | None:
+        """Resolve a local ``$ref`` pointer (``#/$defs/...``) against the root.
+
+        Returns the referenced schema, or the original schema when the pointer is absent or cannot be resolved.
+        """
+        if not isinstance(schema, dict) or depth > 8:
+            return schema
+        ref = schema.get('$ref')
+        if not isinstance(ref, str) or not ref.startswith('#/'):
+            return schema
+        target: Any = root_schema if isinstance(root_schema, dict) else None
+        for part in ref[2:].split('/'):
+            if not isinstance(target, dict) or part not in target:
+                return schema
+            target = target[part]
+        if not isinstance(target, dict):
+            return schema
+        return XmlToolParser._deref_schema(target, root_schema, depth + 1)
+
+    @classmethod
+    def _resolve_schema_coercion(cls, param_schema: dict[str, Any] | None,
+                                 root_schema: dict[str, Any] | None = None
+                                 ) -> tuple[str | None, bool]:
+        """Resolve the effective JSON type and nullability of a schema.
+
+        Returns ``(schema_type, allows_null)``. ``$ref`` pointers are
+        resolved against ``root_schema`` and ``enum`` values imply their
+        common type; ``schema_type`` is ``None`` only when no single JSON
+        type governs the value (mixed unions, typeless schemas).
+        """
         # TODO: Fully support union and nullable schemas, preserving all allowed types
         # in streaming decisions and value coercion.
-        schema_type = param_schema.get('type')
+        schema = cls._deref_schema(param_schema, root_schema)
+        if not isinstance(schema, dict):
+            return None, False
+        schema_type = schema.get('type')
         if isinstance(schema_type, str):
-            return schema_type
+            return schema_type, False
         if isinstance(schema_type, list):
-            for item in schema_type:
-                if isinstance(item, str) and item != 'null':
-                    return item
-            for item in schema_type:
-                if isinstance(item, str):
-                    return item
-            return None
-        if 'anyOf' in param_schema or 'oneOf' in param_schema:
+            types = [item for item in schema_type if isinstance(item, str)]
+            nullable = 'null' in types
+            for item in types:
+                if item != 'null':
+                    return item, nullable
+            return None, nullable
+        if 'anyOf' in schema or 'oneOf' in schema:
             # Resolve a union only when every non-null branch agrees on one
             # JSON type; mixed unions coerce the raw value as JSON instead.
-            branches = param_schema.get('anyOf') or param_schema.get('oneOf') or []
-            branch_types = [
-                XmlToolParser._resolve_schema_type(branch)
-                for branch in branches
-                if isinstance(branch, dict)
-            ]
-            distinct = {t for t in branch_types if t not in (None, 'null')}
+            branches = schema.get('anyOf') or schema.get('oneOf') or []
+            resolved = [cls._resolve_schema_coercion(branch, root_schema)
+                        for branch in branches if isinstance(branch, dict)]
+            nullable = any(t == 'null' or allows_null for t, allows_null in resolved)
+            distinct = {t for t, _ in resolved if t not in (None, 'null')}
             if len(distinct) == 1:
-                return distinct.pop()
-            return None
-        if isinstance(param_schema.get('properties'), dict):
-            return 'object'
-        if param_schema.get('items') is not None:
-            return 'array'
-        return None
+                return distinct.pop(), nullable
+            return None, nullable
+        if isinstance(schema.get('enum'), list):
+            value_types = {cls._json_type_of(value) for value in schema['enum']}
+            nullable = 'null' in value_types
+            distinct = {t for t in value_types if t not in (None, 'null')}
+            if len(distinct) == 1:
+                return distinct.pop(), nullable
+            return None, nullable
+        if isinstance(schema.get('properties'), dict):
+            return 'object', False
+        if schema.get('items') is not None:
+            return 'array', False
+        return None, False
+
+    @classmethod
+    def _resolve_schema_type(cls, param_schema: dict[str, Any] | None,
+                             root_schema: dict[str, Any] | None = None) -> str | None:
+        """Resolve a scalar, ``$ref``, enum or nullable-list schema type."""
+        return cls._resolve_schema_coercion(param_schema, root_schema)[0]
 
     @staticmethod
     def _coerce_value(raw_value: str, schema_type: str | None) -> Any:
@@ -555,11 +632,9 @@ class XmlToolParser(ToolParser):
     def _coerce_json_value(raw_value: str) -> Any:
         """Coerce a value whose schema declares no single JSON type.
 
-        Union (``anyOf``/``oneOf``), ``$ref`` and typeless schemas keep the
-        raw property dict, so no scalar JSON type applies. The model still
-        emits the value in bare JSON form inside the parameter tags, so
-        parse it as a JSON value; quoted values decode as strings and
-        anything that is not valid JSON keeps its original string form.
+        Mixed unions and typeless schemas keep the raw property dict, so no scalar JSON type applies. The model still
+        emits the value in bare JSON form inside the parameter tags, so parse it as a JSON value; quoted values decode
+        as strings and anything that is not valid JSON keeps its original string form.
         """
         original = raw_value
         raw_value = raw_value.strip()
@@ -576,13 +651,16 @@ class XmlToolParser(ToolParser):
         except json.JSONDecodeError:
             return original
 
-    def _coerce_arg_value(self, raw_value: Any, schema: dict[str, Any] | None) -> Any:
+    def _coerce_arg_value(self, raw_value: Any, schema: dict[str, Any] | None,
+                          root_schema: dict[str, Any] | None = None) -> Any:
         """Apply schema-aware coercion to one argument value."""
         if not isinstance(raw_value, str):
             return raw_value
         if schema is None:
             return raw_value
-        schema_type = self._get_schema_type(schema)
+        schema_type, allows_null = self._resolve_schema_coercion(schema, root_schema)
+        if allows_null and raw_value.strip().lower() == 'null':
+            return None
         if schema_type is None:
             return self._coerce_json_value(raw_value)
         return self._coerce_value(raw_value, schema_type)
