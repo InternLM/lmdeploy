@@ -710,7 +710,12 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
                         rdma_config=node_manager.rdma_config,
                     ))
 
-        remote_session_id = int(prefill_info.get('id')) if prefill_info.get('id') else 0
+        # The public response ID is not the engine's cache owner.
+        remote_session_id = 0 if node_manager.dummy_prefill else prefill_info.get('cache_session_id')
+        if type(remote_session_id) is not int or remote_session_id < 0:
+            return create_error_response(HTTPStatus.BAD_GATEWAY,
+                                         'Prefill response is missing a valid cache_session_id; '
+                                         'upgrade the Prefill server together with the proxy.')
         remote_block_ids = prefill_info.get('cache_block_ids') or []
         remote_token_id = prefill_info.get('remote_token_ids')[-1] if prefill_info.get('remote_token_ids') else 0
 
@@ -724,7 +729,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
 
         start = node_manager.pre_call(d_url)
         if not node_manager.dummy_prefill:
-            node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
+            node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), remote_session_id)
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, d_url, '/v1/chat/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
@@ -735,7 +740,7 @@ async def chat_completions_v1(request: ChatCompletionRequest, raw_request: Reque
             resp = JSONResponse(json.loads(response))
 
         if not node_manager.dummy_prefill:
-            node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info['id'])
+            node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), remote_session_id)
 
         return resp
 
@@ -855,9 +860,13 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
                 except Exception as e:
                     logger.error(f'error Msg: {str(e)}')
                     return {'status': f'Connection error, cannot establish connection {(p_url, d_url)}'}
-            node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
 
-        remote_session_id = int(prefill_info.get('id')) if prefill_info.get('id') else 0
+        # The public response ID is not the engine's cache owner.
+        remote_session_id = 0 if node_manager.dummy_prefill else prefill_info.get('cache_session_id')
+        if type(remote_session_id) is not int or remote_session_id < 0:
+            return create_error_response(HTTPStatus.BAD_GATEWAY,
+                                         'Prefill response is missing a valid cache_session_id; '
+                                         'upgrade the Prefill server together with the proxy.')
         remote_block_ids = prefill_info.get('cache_block_ids') or []
         remote_token_id = prefill_info.get('remote_token_ids')[-1] if prefill_info.get('remote_token_ids') else 0
         request_dict['migration_request'] = MigrationRequest(
@@ -870,7 +879,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
 
         start = node_manager.pre_call(d_url)
         if not node_manager.dummy_prefill:
-            node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), prefill_info['id'])
+            node_manager.pd_connection_pool.shelf_prefill_session((p_url, d_url), remote_session_id)
         if request.stream is True:
             response = node_manager.stream_generate(request_dict, d_url, '/v1/completions')
             background_task = node_manager.create_background_tasks(d_url, start)
@@ -880,7 +889,7 @@ async def completions_v1(request: CompletionRequest, raw_request: Request = None
             node_manager.post_call(d_url, start)
             resp = JSONResponse(json.loads(response))
         if not node_manager.dummy_prefill:
-            node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), prefill_info.get('id'))
+            node_manager.pd_connection_pool.unshelf_prefill_session((p_url, d_url), remote_session_id)
         return resp
     else:
         raise ValueError(f'No serving strategy named {node_manager.serving_strategy}')
