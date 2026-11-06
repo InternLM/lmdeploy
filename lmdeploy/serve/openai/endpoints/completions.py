@@ -40,14 +40,18 @@ class _ReasoningTokenCounter:
     (``ResponseParser._update_reasoning_tokens``) so ``/v1/completions``
     reports the same ``reasoning_tokens`` semantics: the number of tokens
     between the configured reasoning parser open/close tag tokens.
-    Counting starts only at an explicit open tag, so a raw completion that
-    never emits reasoning tags reports zero reasoning tokens.
+    Counting state is seeded from the prompt token ids: a prompt that
+    already ends inside a reasoning block starts in counting mode (the
+    prompt tokens themselves are never counted); otherwise counting
+    starts at an explicit open tag, so a raw completion that never emits
+    reasoning tags reports zero reasoning tokens.
     """
 
-    def __init__(self, open_tag_id: int, close_tag_id: int):
+    def __init__(self, open_tag_id: int, close_tag_id: int,
+                 prompt_token_ids: list[int] | None = None):
         self._open_tag_id = open_tag_id
         self._close_tag_id = close_tag_id
-        self._counting = False
+        self._counting = _ends_inside_reasoning(prompt_token_ids, open_tag_id, close_tag_id)
         self.reasoning_tokens = 0
 
     def update(self, token_ids: list[int] | None) -> None:
@@ -79,6 +83,43 @@ def _resolve_reasoning_tag_ids(server_context) -> tuple[int, int] | None:
                 vocab[reasoning_cls.get_reasoning_close_tag()])
     except KeyError:
         return None
+
+
+def _ends_inside_reasoning(token_ids: list[int] | None, open_tag_id: int,
+                           close_tag_id: int) -> bool:
+    """Whether a token sequence ends inside an open reasoning block.
+
+    Decided by the last reasoning tag token present in the sequence.
+    """
+    for token_id in reversed(token_ids or []):
+        if token_id == open_tag_id:
+            return True
+        if token_id == close_tag_id:
+            return False
+    return False
+
+
+def _get_prompt_token_ids(prepared_request) -> list[int] | None:
+    """Prompt token ids of a prepared request, when available."""
+    inputs = getattr(prepared_request, 'inputs', None)
+    if isinstance(inputs, dict):
+        return inputs.get('input_ids')
+    return getattr(inputs, 'input_ids', None)
+
+
+def _build_reasoning_counters(reasoning_tag_ids, prepared_requests):
+    """Create one reasoning counter per prepared request, or ``None``.
+
+    Each counter is seeded from its prompt's reasoning state so prompts that already end inside a reasoning block are
+    counted correctly.
+    """
+    if reasoning_tag_ids is None:
+        return None
+    return [
+        _ReasoningTokenCounter(*reasoning_tag_ids,
+                               prompt_token_ids=_get_prompt_token_ids(prepared_request))
+        for prepared_request in prepared_requests
+    ]
 
 
 def check_request(request: CompletionRequest, server_context) -> str:
@@ -272,8 +313,7 @@ def register(router: APIRouter, server_context) -> None:
             # First chunk with role
             final_usage = UsageInfo() if include_usage else None
             reasoning_tag_ids = _resolve_reasoning_tag_ids(server_context)
-            counters = ([_ReasoningTokenCounter(*reasoning_tag_ids)
-                         for _ in generators] if reasoning_tag_ids is not None else None)
+            counters = _build_reasoning_counters(reasoning_tag_ids, prepared_requests)
             try:
                 for gen_index, generator in enumerate(generators):
                     async for res in generator:
@@ -325,8 +365,7 @@ def register(router: APIRouter, server_context) -> None:
         cache_block_ids = []
         remote_token_ids = []
         reasoning_tag_ids = _resolve_reasoning_tag_ids(server_context)
-        counters = ([_ReasoningTokenCounter(*reasoning_tag_ids)
-                     for _ in generators] if reasoning_tag_ids is not None else None)
+        counters = _build_reasoning_counters(reasoning_tag_ids, prepared_requests)
 
         async def _inner_call(i, generator, session, counter=None):
             nonlocal cache_block_ids, remote_token_ids
