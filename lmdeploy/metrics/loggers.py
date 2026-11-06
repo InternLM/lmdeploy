@@ -313,6 +313,16 @@ class PrometheusStatLogger(StatLoggerBase):
                 documentation='Total prefix-cached input tokens served.',
                 labelnames=labelnames).labels(*labelvalues)
 
+        self.counter_evicted_blocks_total = \
+            prometheus_client.Counter(
+                name='lmdeploy:evicted_blocks_total',
+                documentation='Total prefix-cache blocks evicted.',
+                labelnames=labelnames).labels(*labelvalues)
+        # schedule_metrics polls the cumulative eviction total, so track the
+        # last seen value and inc the counter only by the delta to avoid
+        # double-counting across polls.
+        self._last_num_evicted_blocks = 0
+
         self.histogram_iteration_tokens = \
             prometheus_client.Histogram(
                 name='lmdeploy:iteration_tokens_total',
@@ -414,6 +424,9 @@ class PrometheusStatLogger(StatLoggerBase):
             self.counter_external_prefix_cache_queries.inc(queries - last_queries)
             self.counter_external_prefix_cache_hits.inc(hits - last_hits)
             self._last_external_prefix_cache_counts = (queries, hits)
+        delta = stats.num_evicted_blocks - self._last_num_evicted_blocks
+        self.counter_evicted_blocks_total.inc(delta)
+        self._last_num_evicted_blocks = stats.num_evicted_blocks
 
     def record_iteration(self, stats: IterationStats) -> None:
         """Report token-related metrics to prometheus."""
