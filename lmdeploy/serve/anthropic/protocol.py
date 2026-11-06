@@ -91,7 +91,13 @@ class ToolChoiceToolParam(BaseModel):
     name: str
 
 
-ToolChoiceParam = ToolChoiceAutoParam | ToolChoiceAnyParam | ToolChoiceToolParam
+class ToolChoiceNoneParam(BaseModel):
+    """Disable tool use for this response."""
+
+    type: Literal['none'] = 'none'
+
+
+ToolChoiceParam = ToolChoiceAutoParam | ToolChoiceAnyParam | ToolChoiceToolParam | ToolChoiceNoneParam
 
 
 class ThinkingConfig(BaseModel):

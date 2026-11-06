@@ -83,7 +83,7 @@ def normalize_tool_choice(tool_choice: ToolChoiceParam | str | None) -> ToolChoi
         return ToolChoice(function=ToolChoiceFuncName(name=tool_choice.name))
     if tool_choice.type == 'any':
         return 'required'
-    return 'auto'
+    return tool_choice.type
 
 
 def _safe_parse_tool_input(arguments: str | None) -> dict[str, Any]:
@@ -197,13 +197,19 @@ def _block_get(block: ContentBlockParam | dict[str, Any], key: str, default: Any
 def _convert_image_source_to_url(source: Any) -> str:
     source_type = _block_get(source, 'type')
     if source_type == 'url':
-        return _block_get(source, 'url', '')
+        url = _block_get(source, 'url')
+        if not isinstance(url, str) or not url:
+            raise ValueError('Image URL source requires a non-empty url.')
+        return url
     if source_type == 'base64':
-        media_type = _block_get(source, 'media_type', 'image/jpeg')
-        data = _block_get(source, 'data', '')
-        if data:
-            return f'data:{media_type};base64,{data}'
-    return ''
+        media_type = _block_get(source, 'media_type')
+        if media_type not in ('image/jpeg', 'image/png', 'image/gif', 'image/webp'):
+            raise ValueError('Unsupported image media_type; use image/jpeg, image/png, image/gif or image/webp.')
+        data = _block_get(source, 'data')
+        if not isinstance(data, str) or not data:
+            raise ValueError('Base64 image source requires non-empty data.')
+        return f'data:{media_type};base64,{data}'
+    raise ValueError(f'Unsupported image source type {source_type!r}; use url or base64.')
 
 
 def _convert_system_message(content: str | list[ContentBlockParam]) -> list[dict[str, str]]:
@@ -264,6 +270,8 @@ def _convert_user_tool_result(block: ContentBlockParam | dict[str, Any]) -> list
                 url = _convert_image_source_to_url(_block_get(item, 'source', {}))
                 if url:
                     parts.append(dict(type='image_url', image_url=dict(url=url)))
+            else:
+                raise ValueError(f'Unsupported tool_result content block type {_block_get(item, "type")!r}.')
         # A separate user image message loses its tool_call_id and interrupts
         # the contiguous tool-result group used by chat templates.
         if any(part['type'] == 'image_url' for part in parts):
@@ -310,11 +318,8 @@ def to_openai_messages(
 
             if block_type == 'image':
                 source = _block_get(block, 'source')
-                if source:
-                    url = _convert_image_source_to_url(source)
-                    if url:
-                        content_parts.append(
-                            dict(type='image_url', image_url=dict(url=url)))
+                url = _convert_image_source_to_url(source)
+                content_parts.append(dict(type='image_url', image_url=dict(url=url)))
                 continue
 
             if block_type == 'tool_use':
