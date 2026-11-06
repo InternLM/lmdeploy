@@ -8,17 +8,23 @@ import os.path as osp
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from multiprocessing.reduction import ForkingPickler
 from typing import Any
 
-import pybase64
 import torch
 
 from lmdeploy._guided_decoding import compile_response_format
 from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType, ScheduleMetrics, TurbomindEngineConfig
 from lmdeploy.serve.openai.protocol import UpdateParamsRequest
 from lmdeploy.tokenizer import Tokenizer
-from lmdeploy.utils import get_logger, get_max_batch_size, get_model
+from lmdeploy.utils import (
+    coerce_update_params_tensor,
+    get_logger,
+    get_max_batch_size,
+    get_model,
+    is_pickle_serialized_named_tensors,
+    load_pickled_serialized_named_tensors,
+    load_safetensors_serialized_named_tensors,
+)
 
 from . import _tm
 from .parallel_config import derive_parallel_config
@@ -341,11 +347,19 @@ class TurboMind:
             return func(*args).clone()
 
         with torch.cuda.device(self.devices[0]):
-            if isinstance(request.serialized_named_tensors, str):
-                weights = ForkingPickler.loads(pybase64.b64decode(request.serialized_named_tensors))
+            payload = request.serialized_named_tensors
+            load_format = request.load_format
+            if load_format == 'safetensors':
+                weights = load_safetensors_serialized_named_tensors(payload)
+            elif is_pickle_serialized_named_tensors(payload, load_format):
+                if not isinstance(payload, str):
+                    raise ValueError('TurboMind pickle update_params expects a single string payload.')
+                weights = load_pickled_serialized_named_tensors(payload)
                 weights = {k: _construct(v) for k, v in weights}
+            elif isinstance(payload, dict):
+                weights = {k: coerce_update_params_tensor(v) for k, v in payload.items()}
             else:
-                weights = request.serialized_named_tensors
+                weights = payload
             self._update_params_que.put(weights)
             next(self._export_iter)
 

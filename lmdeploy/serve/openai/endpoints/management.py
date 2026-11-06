@@ -19,6 +19,14 @@ from lmdeploy.serve.openai.protocol import (
     UpdateWeightsFromIPCStatus,
 )
 from lmdeploy.serve.utils.server_utils import validate_json_request
+from lmdeploy.utils import allow_pickle_update_params, is_pickle_serialized_named_tensors
+
+_PICKLE_HTTP_ERROR = (
+    'serialized_named_tensors pickle payloads are not accepted over HTTP by default. '
+    'Use load_format="safetensors" or a structured dict of tensors. '
+    'Trusted same-node XTuner CUDA IPC may set LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1 '
+    'on the server process to accept serialize_state_dict / FlattenedTensorBucket pickle.'
+)
 
 
 def register(router: APIRouter, server_context) -> None:
@@ -56,7 +64,15 @@ def register(router: APIRouter, server_context) -> None:
                  dependencies=[Depends(validate_json_request)])
     def update_params(request: UpdateParamsRequest,
                       raw_request: Request = None):
-        """Update weights for the model."""
+        """Update weights for the model.
+
+        Pickle strings are rejected by default so request-controlled data never reaches ``pickle.loads`` on the
+        unauthenticated HTTP path. When ``LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1``, pickle blobs are forwarded to the
+        engine for trusted same-node XTuner CUDA IPC; this handler still does not unpickle.
+        """
+        if (is_pickle_serialized_named_tensors(request.serialized_named_tensors, request.load_format)
+                and not allow_pickle_update_params()):
+            return create_error_response(HTTPStatus.BAD_REQUEST, _PICKLE_HTTP_ERROR)
         server_context.async_engine.engine.update_params(request)
         return JSONResponse(content=None)
 
