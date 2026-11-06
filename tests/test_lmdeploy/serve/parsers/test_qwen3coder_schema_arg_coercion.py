@@ -48,6 +48,14 @@ ENUM_STRING = {'enum': ['true', 'false']}
 ENUM_INTEGER = {'enum': [1, 2]}
 ENUM_NULLABLE_STRING = {'enum': ['a', None]}
 TYPELESS_OBJECT = {'properties': {'kind': {'type': 'string'}}}
+CONST_STRING_TRUE = {'const': 'true'}
+CONST_NUMBER_STRING = {'const': '42'}
+CONST_NULL = {'const': None}
+REF_STRING_ESCAPED_SLASH = {'$ref': '#/$defs/A~1B'}
+REF_STRING_ESCAPED_TILDE = {'$ref': '#/$defs/A~0B'}
+SIBLING_TYPE_STRING = {'$ref': '#/$defs/Union', 'type': 'string'}
+SIBLING_NULLABLE_STRING = {'$ref': '#/$defs/V', 'type': ['string', 'null']}
+SIBLING_ENUM_STRING = {'$ref': '#/$defs/Empty', 'enum': ['true', 'false']}
 
 PARSERS = [
     pytest.param(Qwen3CoderToolParser, id='qwen3coder'),
@@ -66,6 +74,10 @@ def _parameters(param_schema):
                 'properties': {'kind': {'type': 'string'}},
             },
             'V': {'type': 'string'},
+            'A/B': {'type': 'string'},
+            'A~B': {'type': 'string'},
+            'Union': {'anyOf': [{'type': 'string'}, {'type': 'integer'}]},
+            'Empty': {},
         },
     }
 
@@ -142,6 +154,21 @@ VALID_CASES = [
     pytest.param(NULLABLE_TYPE_LIST_STRING, 'null', None, id='type-list-string-null'),
     pytest.param(NULLABLE_TYPE_LIST_STRING, 'hi', 'hi', id='type-list-string-value'),
     pytest.param(REF_OBJECT, '{"kind": "circle"}', {'kind': 'circle'}, id='ref-object'),
+    # const-only schemas imply their constant's JSON type
+    pytest.param(CONST_STRING_TRUE, 'true', 'true', id='const-string-bare-boolean'),
+    pytest.param(CONST_STRING_TRUE, '"true"', 'true', id='const-string-quoted'),
+    pytest.param(CONST_NUMBER_STRING, '42', '42', id='const-string-bare-number'),
+    pytest.param(CONST_NULL, 'null', None, id='const-null'),
+    # escaped JSON Pointer tokens resolve to the literal ``/``/``~`` keys
+    pytest.param(REF_STRING_ESCAPED_SLASH, '42', '42', id='pointer-escape-slash'),
+    pytest.param(REF_STRING_ESCAPED_TILDE, 'true', 'true', id='pointer-escape-tilde'),
+    # constraints adjacent to a $ref apply alongside the referenced target
+    pytest.param(SIBLING_TYPE_STRING, '42', '42', id='sibling-type-string'),
+    pytest.param(SIBLING_TYPE_STRING, '"42"', '42', id='sibling-type-string-quoted'),
+    pytest.param(SIBLING_ENUM_STRING, 'true', 'true', id='sibling-enum-string'),
+    # sibling nullable + strict target: only the string form stays valid
+    pytest.param(SIBLING_NULLABLE_STRING, 'null', 'null', id='sibling-nullable-target-strict'),
+    pytest.param(SIBLING_NULLABLE_STRING, 'hi', 'hi', id='sibling-nullable-target-value'),
 ]
 
 
@@ -166,6 +193,12 @@ STREAM_CASES = [
     # nullable string schemas must buffer in streaming so bare null survives
     pytest.param(NULLABLE_TYPE_LIST_STRING, 'null', None, id='type-list-string-null-stream'),
     pytest.param(ENUM_NULLABLE_STRING, 'null', None, id='nullable-enum-string-null-stream'),
+    # const / escaped-pointer / $ref-sibling schemas stream like plain strings
+    pytest.param(CONST_STRING_TRUE, 'true', 'true', id='const-string-bare-boolean-stream'),
+    pytest.param(REF_STRING_ESCAPED_SLASH, '42', '42', id='pointer-escape-slash-stream'),
+    pytest.param(SIBLING_TYPE_STRING, '42', '42', id='sibling-type-string-stream'),
+    pytest.param(SIBLING_ENUM_STRING, 'true', 'true', id='sibling-enum-string-stream'),
+    pytest.param(SIBLING_NULLABLE_STRING, 'null', 'null', id='sibling-nullable-target-strict-stream'),
 ]
 
 
