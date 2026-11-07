@@ -237,6 +237,8 @@ class SamplingInputsDelta:
     num_ignore_eos: torch.Tensor = None
     random_offsets: torch.Tensor = None
     all_ids: None | torch.Tensor = None
+    # right-aligned generated tokens, used by repetition penalty and n-gram filter
+    generated_ids: None | torch.Tensor = None
 
 
 @dataclass
