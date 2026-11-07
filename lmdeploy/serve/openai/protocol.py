@@ -5,7 +5,7 @@ import time
 from typing import Any, Literal
 
 import shortuuid
-from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field, model_validator
 
 
 class ErrorResponse(BaseModel):
@@ -605,6 +605,33 @@ class DestroyWeightsUpdateGroupRequest(BaseModel):
 
 # /generate input
 class GenerateReqInput(BaseModel):
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_miles_sampling_params(cls, values):
+        if not isinstance(values, dict) or 'sampling_params' not in values:
+            return values
+        values = dict(values)
+        if not isinstance(values['sampling_params'], dict):
+            raise ValueError('sampling_params must be an object')
+        sampling = dict(values.pop('sampling_params'))
+        rename = {'max_new_tokens': 'max_tokens',
+                  'no_stop_trim': 'include_stop_str_in_output'}
+        allowed = {'max_new_tokens', 'temperature', 'top_p', 'top_k', 'stop',
+                   'stop_token_ids', 'skip_special_tokens', 'no_stop_trim',
+                   'spaces_between_special_tokens', 'ignore_eos'}
+        if unsupported := sampling.keys() - allowed:
+            raise ValueError(f'Unsupported Miles sampling parameters: {sorted(unsupported)}')
+        for key, value in sampling.items():
+            target = rename.get(key, key)
+            if target == 'top_k' and value == -1:
+                value = 0
+            if target in values and values[target] != value:
+                raise ValueError(f'Conflicting sampling parameter: {target}')
+            values[target] = value
+        if values.get('stream'):
+            raise ValueError('The Miles compatibility protocol requires non-streaming generation')
+        return values
+
     session_id: int | None = -1
     prompt: str | None = None
     input_ids: list[int] | None = None
@@ -641,6 +668,7 @@ class GenerateReqInput(BaseModel):
 
 
 class GenerateReqMetaOutput(BaseModel):
+    weight_version: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     finish_reason: dict[str, Any] | None = None

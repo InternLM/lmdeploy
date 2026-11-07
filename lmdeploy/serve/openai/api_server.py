@@ -281,6 +281,7 @@ def serve(model_path: str,
           speculative_config: SpeculativeConfig | None = None,
           allowed_media_domains: list[str] | None = None,
           generation_config: str = 'auto',
+          miles_compat: bool = False,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -398,6 +399,9 @@ def serve(model_path: str,
     app.include_router(router)
     app.include_router(create_anthropic_router(server_context))
     app.include_router(create_responses_router(server_context))
+    if miles_compat:
+        from lmdeploy.serve.openai.endpoints.miles import install_miles_protocol
+        install_miles_protocol(app, server_context, model_path=model_path)
     app.add_exception_handler(RequestValidationError,
                               validation_exception_handler)
     mount_metrics(app, backend_config)

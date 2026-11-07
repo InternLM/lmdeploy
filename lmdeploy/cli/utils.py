@@ -841,7 +841,7 @@ class ArgumentHelper:
         return parser.add_argument('--logprobs-mode',
                                    type=str,
                                    default=None,
-                                   choices=[None, 'raw_logits', 'raw_logprobs'],
+                                   choices=[None, 'raw_logits', 'raw_logprobs', 'temperature_logprobs'],
                                    help='The mode of logprobs.')
 
     @staticmethod

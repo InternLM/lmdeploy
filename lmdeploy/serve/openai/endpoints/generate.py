@@ -120,6 +120,8 @@ def register(router: APIRouter, server_context) -> None:
 
     @router.post('/generate', dependencies=[Depends(validate_json_request)])
     async def generate(request: GenerateReqInput, raw_request: Request = None):
+        miles_state = getattr(server_context, 'miles_state', None)
+        weight_version = miles_state.weight_version if miles_state else None
         error_check_ret = validate_request(request, server_context,
                                            check_request)
         if error_check_ret is not None:
@@ -180,6 +182,7 @@ def register(router: APIRouter, server_context) -> None:
             # only output router experts in last chunk
             routed_experts = None if finish_reason is None else routed_experts
             meta = GenerateReqMetaOutput(
+                weight_version=weight_version,
                 finish_reason=dict(
                     type=finish_reason) if finish_reason else None,
                 output_token_logprobs=logprobs,
@@ -280,6 +283,7 @@ def register(router: APIRouter, server_context) -> None:
                 finish_reason=dict(
                     type=res.finish_reason) if res.finish_reason else None,
                 output_token_logprobs=output_token_logprobs or None,
+                weight_version=weight_version,
                 input_token_logprobs=input_token_logprobs,
                 output_top_logprobs=output_top_logprobs,
                 input_top_logprobs=input_top_logprobs,

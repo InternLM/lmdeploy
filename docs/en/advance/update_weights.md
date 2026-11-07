@@ -79,3 +79,24 @@ After update model weights, the server should onloads kv cache and provide servi
 response = requests.post(f"{BASE_URL}/wakeup", headers=headers, params=dict(tags=['kv_cache']))
 assert response.status_code == 200, response.status_code
 ```
+
+## Miles synchronous PPO adapter
+
+The `python -m lmdeploy.serve.miles` entrypoint serves the PyTorch TP=1 engine
+with Miles-compatible generation, health, memory-handoff and weight-transaction
+RPCs. Its optional `--gate-port` delays model allocation until Miles activates
+the worker. Use the matching Miles `--rollout-engine-backend lmdeploy` integration.
+
+This adapter targets colocated single-node dense-model PPO. It drains requests
+before updates and does not support in-place pauses, partial rollouts or LoRA.
+Weights and their version are committed before generation can resume; KV cache
+must also be explicitly restored. The `safetensors_file` update format reads a
+local, trainer-produced tensor bucket and completes GPU copies before acknowledging
+it, so the trainer can remove the file. This avoids incompatible CUDA IPC handles
+when training and serving use different Torch versions, at the cost of CPU copies
+and local file I/O.
+
+The `temperature_logprobs` mode returns FP32 `log_softmax(model_logits / temperature)`
+before other processors. Miles uses untruncated sampling (`top_p=1`, `top_k=0`)
+with this convention. These values are not probabilities after arbitrary grammar
+or top-k/top-p filtering.

@@ -430,6 +430,11 @@ class FusedLogitsProcessor:
 
         """
 
+        if self.logprobs_mode == 'temperature_logprobs':
+            # Keep the sampler and reported probabilities in the same FP32
+            # distribution. BF16 log_softmax rounds small logprobs too coarsely
+            # for PPO likelihood ratios.
+            scores = scores.float()
         num_logprobs = self.sampling_inputs.max_num_logprobs
         # get raw logprobs
         if num_logprobs < 0:
@@ -439,6 +444,14 @@ class FusedLogitsProcessor:
                 logprobs = scores.clone()
             elif self.logprobs_mode == 'raw_logprobs':
                 logprobs = scores.log_softmax(dim=-1)
+            elif self.logprobs_mode == 'temperature_logprobs':
+                # Match PPO's model distribution at the rollout temperature,
+                # before repetition, grammar, top-k/top-p and other processors.
+                scaled = scores.clone()
+                temperature = self.sampling_inputs.temperature
+                if temperature is not None:
+                    scaled = _process_temperature_(scaled, temperature)
+                logprobs = scaled.log_softmax(dim=-1)
             else:
                 logprobs = None
 
