@@ -15,6 +15,7 @@ from lmdeploy.serve.core.chat_runner import (
     ChatRunnerOptions,
 )
 from lmdeploy.serve.core.exceptions import RequestError
+from lmdeploy.serve.core.model_name import model_matches
 from lmdeploy.serve.openai.endpoints.common import validate_request
 from lmdeploy.serve.openai.errors import (
     create_error_response,
@@ -186,7 +187,7 @@ def register(router: APIRouter, server_context) -> None:
 
         model_name = request.model
         adapter_name = None
-        if model_name != server_context.async_engine.model_name:
+        if not model_matches(model_name, server_context.async_engine):
             adapter_name = model_name  # got a adapter name
         request_id = f'chatcmpl-{shortuuid.random()}'
         created_time = int(time.time())

@@ -117,7 +117,9 @@ class ArgumentHelper:
                                    default=None,
                                    help='The name of the served model. It can be accessed '
                                    'by the RESTful API `/v1/models`. If it is not specified, '
-                                   '`model_path` will be adopted')
+                                   '`model_path` will be adopted. Comma-separated aliases are '
+                                   'accepted (the first name is the primary one), and request '
+                                   'matching is case-insensitive')
 
     @staticmethod
     def dtype(parser, default: str = 'auto'):

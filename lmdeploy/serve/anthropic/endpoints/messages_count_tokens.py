@@ -7,9 +7,10 @@ from http import HTTPStatus
 
 from fastapi import APIRouter, Depends, Request
 
+from lmdeploy.serve.core.model_name import model_or_adapter_matches
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
-from ..adapter import count_input_tokens, get_model_list, to_lmdeploy_messages
+from ..adapter import count_input_tokens, to_lmdeploy_messages
 from ..errors import create_error_response
 from ..protocol import CountTokensRequest, CountTokensResponse
 
@@ -30,7 +31,8 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
         if header_error is not None:
             return header_error
 
-        if request.model not in get_model_list(server_context):
+        if not model_or_adapter_matches(request.model, server_context.async_engine,
+                                        getattr(server_context.engine_config, 'adapters', None)):
             return create_error_response(
                 HTTPStatus.NOT_FOUND,
                 f'The model {request.model!r} does not exist.',

@@ -5,8 +5,8 @@ from http import HTTPStatus
 
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.generation_config import build_generation_config
+from lmdeploy.serve.core.model_name import model_or_adapter_matches
 from lmdeploy.serve.openai.errors import create_error_response
-from lmdeploy.serve.openai.utils import get_model_list
 
 
 def build_serving_generation_config(request, server_context,
@@ -28,7 +28,9 @@ def validate_request(request, server_context, request_validator,
     """Validate the selected model and endpoint-specific request contract."""
     if hasattr(
             request,
-            'model') and request.model not in get_model_list(server_context):
+            'model') and not model_or_adapter_matches(
+                request.model, server_context.async_engine,
+                getattr(server_context.engine_config, 'adapters', None)):
         return create_error_response(
             HTTPStatus.NOT_FOUND,
             f'The model {request.model!r} does not exist.')
