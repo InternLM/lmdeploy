@@ -106,3 +106,16 @@ response = client.chat.completions.create(
     top_p=0.8)
 print(response)
 ```
+
+## Limits
+
+To protect the server's availability, grammar sources supplied through `response_format` are
+validated before compilation, and requests exceeding the following limits are rejected with
+HTTP 400:
+
+- the serialized grammar source (JSON schema, regex, or structural tag) may not exceed 16 KiB;
+- a JSON schema may not exceed a nesting depth of 128 raw JSON levels (a nested object spans
+  two levels through its `properties` wrapper), since grammar compile cost grows exponentially
+  with depth;
+- validation runs off the event loop with a 5-second budget; a schema that still takes longer
+  is rejected.
