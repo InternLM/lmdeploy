@@ -317,10 +317,10 @@ def _fwd_grouped_split_quant_kernel(
     """First step kernel of split k attention.
 
     Args:
-        stride_xp: stride of page num dim
-        stride_xbs: stride of block size dim
-        stride_h: stride of head num dim
-        stride_d: stride of head size dim
+        stride_kp: stride of the key page dim
+        stride_kbs: stride of the key block size dim
+        stride_kh: stride of the key head num dim
+        stride_kd: stride of the key head size dim
     """
     cur_batch = tl.program_id(2)
     cur_kv_head = tl.program_id(0)
