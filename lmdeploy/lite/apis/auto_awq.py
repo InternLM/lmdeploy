@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-import os
 import os.path as osp
 import shutil
+from pathlib import Path
 from typing import Literal
 
 import torch
@@ -15,27 +15,17 @@ from lmdeploy.lite.utils import collect_target_modules
 from lmdeploy.utils import try_import_deeplink
 
 
-def save_vl_model(vl_model, model_path, dst_path):
-    vl_model.save_pretrained(dst_path, safe_serialization=True)
-    candidate = [
-        'preprocessor_config.json', 'processor_config.json', 'vit', 'generation_config.json', 'added_tokens.json'
-    ]
-    for name in candidate:
-        tmp_path = osp.join(model_path, name)
-        if osp.exists(tmp_path):
-            if osp.isfile(tmp_path):
-                shutil.copy(tmp_path, osp.join(dst_path, name))
-            elif osp.isdir(tmp_path):
-                shutil.copytree(tmp_path, osp.join(dst_path, name))
-    # AutoProcessor files
-    allfiles = os.listdir(model_path)
-    for file in allfiles:
-        if not file.endswith('.py'):
+def copy_others(model: Path, work_dir: Path):
+    suffixes = ['.safetensors', '.bin', '.safetensors.index.json', '.bin.index.json']
+    for file in model.iterdir():
+        if file.name.endswith(tuple(suffixes)):
             continue
-        copy_src = osp.join(model_path, file)
-        copy_dst = osp.join(dst_path, file)
-        if not osp.exists(copy_dst):
-            shutil.copyfile(copy_src, copy_dst)
+
+        if file.name.startswith('.'):
+            continue
+
+        target_path = work_dir / (file.relative_to(model))
+        shutil.copy(file, target_path)
 
 
 def auto_awq(model: str,
@@ -87,12 +77,12 @@ def auto_awq(model: str,
         model = get_model(model, revision=revision, download_dir=download_dir)
     model_path = model
     if calib_samples == 0:
-        arch, vl_model, model, tokenizer, _, _ = load_model_and_tokenizer(model,
+        arch, vl_model, model, tokenizer, _, work_dir = load_model_and_tokenizer(model,
                                                                           dtype=dtype,
                                                                           work_dir=work_dir,
                                                                           trust_remote_code=trust_remote_code)
     else:
-        arch, vl_model, model, tokenizer, _ = calibrate(model,
+        arch, vl_model, model, tokenizer, work_dir = calibrate(model,
                                                         calib_dataset,
                                                         calib_samples,
                                                         calib_seqlen,
@@ -104,6 +94,8 @@ def auto_awq(model: str,
                                                         dtype=dtype,
                                                         batch_size=batch_size,
                                                         trust_remote_code=trust_remote_code)
+
+    copy_others(Path(model_path), work_dir)
 
     layer_type = LAYER_TYPE_MAP[type(model).__name__]
     layers = collect_target_modules(model, layer_type)
@@ -137,10 +129,7 @@ def auto_awq(model: str,
         quantization_config['modules_to_not_convert'] = skipped_modules
     model.config.update(dict(quantization_config=quantization_config))
 
-    if vl_model:
-        save_vl_model(vl_model, model_path, work_dir)
-    else:
-        model.save_pretrained(work_dir, safe_serialization=True)
+    model.save_pretrained(work_dir, safe_serialization=True)
     tokenizer.save_pretrained(work_dir)
 
 
