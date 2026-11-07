@@ -584,14 +584,13 @@ def _drop_thinking_messages(messages: list[dict[str, Any]]) -> list[dict[str, An
     message.
 
     Behavior:
-    - Messages with role in ["user", "system", "tool", "latest_reminder"] are always kept.
+    - Messages with role in ["user", "system", "tool", "latest_reminder", "developer"] are always kept.
     - Messages at or after the last user index are always kept.
     - Assistant messages before the last user get reasoning_content removed.
-    - Developer messages before the last user are dropped entirely.
     """
     last_user_idx = find_last_user_index(messages)
     result = []
-    keep_roles = {'user', 'system', 'tool', 'latest_reminder', 'direct_search_results'}
+    keep_roles = {'user', 'system', 'tool', 'latest_reminder', 'direct_search_results', 'developer'}
 
     for idx, msg in enumerate(messages):
         role = msg.get('role')
@@ -601,7 +600,7 @@ def _drop_thinking_messages(messages: list[dict[str, Any]]) -> list[dict[str, An
             msg = copy.copy(msg)
             msg.pop('reasoning_content', None)
             result.append(msg)
-        # developer and other roles before last_user_idx are dropped
+        # other unknown roles before last_user_idx are dropped
 
     return result
 
