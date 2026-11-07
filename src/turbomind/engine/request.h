@@ -156,6 +156,25 @@ struct CacheCopy {
     CacheBlock* dst{};
 };
 
+// Allocation-only restore reservation. Slots stay private until installation;
+// destruction releases any allocations that were not adopted by native blocks.
+struct CacheRestorePlan {
+    explicit CacheRestorePlan(ObjectAllocator& allocator): allocator{allocator} {}
+    ~CacheRestorePlan();
+    CacheRestorePlan(const CacheRestorePlan&) = delete;
+    CacheRestorePlan& operator=(const CacheRestorePlan&) = delete;
+
+    int                        start{};
+    int                        end{};
+    int                        preserve_end{};
+    bool                       admitted{};
+    std::vector<CacheBlockPtr> prefixes;
+    std::vector<CacheBlockPtr> checkpoints;
+
+private:
+    ObjectAllocator& allocator;
+};
+
 // What set this pass's resume_len. resume_len is a single number, produced by
 // whichever mechanism reached the highest skip position in Scheduler::PlanResume().
 // Observability-only; the scheduler stays category-agnostic.
@@ -228,6 +247,11 @@ struct Sequence {
 
     int resume_len = 0;  // prefix length every stateful module agrees can be skipped
     int filled_len = 0;  // prefix state actually produced by the latest completed forward
+
+    // Confirmed remote prefix from LOOKUP; STORE reservations do not advance it.
+    int                               lmcache_matched_end = 0;
+    CacheBlock*                       store_checkpoint = nullptr;  // next chunk checkpoint in the required working set
+    std::unique_ptr<CacheRestorePlan> restore_plan;
 
     int readonly_block_num = 0;  // leading block_ids reused read-only (no KV re-write)
 

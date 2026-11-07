@@ -101,6 +101,7 @@ LMDeploy 工具箱提供以下核心功能：
 
    inference/turbomind.md
    inference/pytorch.md
+   advance/lmcache.md
    advance/pytorch_new_model.md
    advance/long_context.md
    advance/chat_template.md

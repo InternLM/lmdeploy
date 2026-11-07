@@ -38,6 +38,7 @@
 namespace turbomind {
 
 struct AttentionData;
+struct AttentionCachePlan;
 
 class UnifiedAttentionLayer {
 public:
@@ -58,6 +59,7 @@ public:
 
     UnifiedAttentionLayer(std::vector<AttentionWeight*> weights,
                           CacheRegistry&                registry,
+                          const AttentionCachePlan&     cache_plan,
                           const EngineParam&            engine,
                           const Context&                context,
                           int                           phases);

@@ -13,16 +13,18 @@ namespace turbomind {
 class ModelWeight;
 class DecoderLayerWeight;
 class CacheRegistry;
+struct ObjectCachePlan;
 
 class UnifiedDecoder {
 public:
     using WeightType = DecoderLayerWeight;
 
-    UnifiedDecoder(CacheRegistry&     registry,
-                   const EngineParam& engine,
-                   const Context&     ctx,
-                   int                phases,
-                   const ModelWeight& model_weight);
+    UnifiedDecoder(CacheRegistry&         registry,
+                   const ObjectCachePlan& cache_plan,
+                   const EngineParam&     engine,
+                   const Context&         ctx,
+                   int                    phases,
+                   const ModelWeight&     model_weight);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 

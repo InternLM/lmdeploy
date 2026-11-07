@@ -26,6 +26,7 @@ add_library(models STATIC
         llama/LlamaLinear.cu
         llama/LlamaFfnLayer.cc
         llama/moe_ffn_layer.cc
+        llama/object_cache_plan.cc
         llama/unified_decoder.cc
         llama/unified_attention_layer.cc
         llama/llama_kernels.cu
