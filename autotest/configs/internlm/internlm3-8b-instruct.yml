@@ -15,16 +15,26 @@ h:
   - func
   interface:
     pytorch:
-      suites:
+    - suites:
       - base
       - logprob
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
+    - suites:
+      - toolcall
+      - hard_schema
+      extra:
+        tool-call-parser: internlm
     turbomind:
-      suites:
+    - suites:
       - base
       - logprob
       - anthropic
       extra:
         logprobs-mode: raw_logprobs
+    - suites:
+      - toolcall
+      - hard_schema
+      extra:
+        tool-call-parser: internlm

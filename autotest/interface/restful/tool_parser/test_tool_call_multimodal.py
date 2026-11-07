@@ -41,7 +41,6 @@ from .conftest import (
     mm_create_extra_body_for_media_type,
     mm_dallas_weather_messages,
     mm_file_to_data_url,
-    mm_miami_weather_messages,
     mm_weather_messages_for_media_type,
 )
 
@@ -384,7 +383,7 @@ class TestToolCallMultimodalChoice(_ToolCallTestBase):
 
     def test_tool_choice_required(self, backend, model_case):
         pose_url = self._require_mm_image(MM_TEST_IMAGE_POSE)
-        messages = mm_miami_weather_messages(pose_url)
+        messages = [build_multimodal_user_message('Hello', pose_url)]
         client, model_name = self._get_client()
 
         try:
@@ -393,7 +392,7 @@ class TestToolCallMultimodalChoice(_ToolCallTestBase):
                 messages=messages,
                 temperature=0,
                 max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
-                tools=[WEATHER_TOOL, SEARCH_TOOL],
+                tools=[SEARCH_TOOL],
                 tool_choice='required',
                 logprobs=False,
             )
@@ -402,15 +401,20 @@ class TestToolCallMultimodalChoice(_ToolCallTestBase):
 
         choice = response.choices[0]
         assert choice.message.role == 'assistant'
+        assert choice.finish_reason == 'tool_calls', (
+            f'tool_choice="required" finish_reason={choice.finish_reason!r} '
+            f'content={choice.message.content!r}')
         assert choice.message.tool_calls is not None
         assert len(choice.message.tool_calls) >= 1
         for tc in choice.message.tool_calls:
             assert_tool_call_fields(tc)
-            assert_arguments_parseable(tc.function.arguments)
+            assert tc.function.name == 'web_search'
+            parsed = assert_arguments_parseable(tc.function.arguments)
+            assert parsed.get('query'), parsed
 
     def test_tool_choice_required_streaming(self, backend, model_case):
         pose_url = self._require_mm_image(MM_TEST_IMAGE_POSE)
-        messages = mm_miami_weather_messages(pose_url)
+        messages = [build_multimodal_user_message('Hello', pose_url)]
         client, model_name = self._get_client()
 
         try:
@@ -419,7 +423,7 @@ class TestToolCallMultimodalChoice(_ToolCallTestBase):
                 messages=messages,
                 temperature=0,
                 max_completion_tokens=CAPPED_MAX_COMPLETION_TOKENS,
-                tools=[WEATHER_TOOL, SEARCH_TOOL],
+                tools=[SEARCH_TOOL],
                 tool_choice='required',
                 logprobs=False,
                 stream=True,
@@ -429,8 +433,8 @@ class TestToolCallMultimodalChoice(_ToolCallTestBase):
         r = collect_stream_tool_call(stream)
         validate_stream_tool_call_result(
             r,
-            expected_function_name=None,
-            **self._parser_validation_kwargs([WEATHER_TOOL, SEARCH_TOOL]),
+            expected_function_name='web_search',
+            **self._parser_validation_kwargs([SEARCH_TOOL]),
         )
 
 

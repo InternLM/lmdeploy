@@ -25,6 +25,7 @@ h:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -39,6 +40,7 @@ h:
       - base
       - logprob
       - toolcall
+      - hard_schema
       - reasoning
       extra:
         logprobs-mode: raw_logprobs
@@ -58,6 +60,24 @@ h:
     tp: 1
     extra:
       max-batch-size: 256
+      prefix-cache-state-budget: 256
+      max-prefill-token-num: 64
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - prefix_cache
+  gen_config:
+    chat-template-kwargs:
+      enable_thinking: true
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 1
+    extra:
+      max-batch-size: 256
       prefix-cache-decode-state-interval: 1024
       prefix-cache-state-budget: 256
   backends:
@@ -65,7 +85,7 @@ h:
     communicators:
     - nccl
   test_coverage:
-  - prefix_cache
+  - prefix_cache_evaluate
   gen_config:
     chat-template-kwargs:
       enable_thinking: true

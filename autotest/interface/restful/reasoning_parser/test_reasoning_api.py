@@ -4,6 +4,7 @@ from utils.constant import THINKING_MAX_COMPLETION_TOKENS
 from utils.restful_return_check import assert_usage
 from utils.tool_reasoning_definitions import (
     CALCULATOR_TOOL,
+    MESSAGES_HELLO,
     SEARCH_TOOL,
     THINK_END_TOKEN,
     THINK_START_TOKEN,
@@ -155,17 +156,17 @@ class TestReasoningWithTools(_ReasoningTestBase):
             assert len(content.strip()) > 0
 
     def test_tool_choice_required(self, backend, model_case, stream):
-        """tool_choice='required': must produce tool call."""
+        """tool_choice='required' + Hello/search: must tool-call, not greet."""
         try:
-            r = self._call_api(stream, MESSAGES_REASONING_WEATHER_TOOL, tools=[WEATHER_TOOL], tool_choice='required')
+            r = self._call_api(stream, MESSAGES_HELLO, tools=[SEARCH_TOOL], tool_choice='required')
         except BadRequestError as e:
             pytest.skip(f'tool_choice="required" rejected by server (HTTP 400): {e}')
-        assert len(r['tool_calls']) >= 1
+        assert len(r['tool_calls']) >= 1, r.get('content')
         assert r['finish_reason'] == 'tool_calls'
         tc = r['tool_calls'][0]
-        assert tc['name'] == 'get_current_weather'
+        assert tc['name'] == 'web_search'
         parsed = assert_tool_call_dict_fields(tc)
-        assert 'city' in parsed
+        assert parsed.get('query'), parsed
 
     def test_tool_choice_none(self, backend, model_case, stream):
         """tool_choice='none': no tool calls, text answer instead."""

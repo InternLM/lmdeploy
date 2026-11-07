@@ -75,3 +75,17 @@ h:
   quantization:
     turbomind:
     - awq
+- model_type:
+  - chat
+  - vl
+  engine_config:
+    tp: 2
+    extra:
+      prefix-cache-state-budget: 256
+      max-prefill-token-num: 64
+  backends:
+  - name: pytorch
+    communicators:
+    - nccl
+  test_coverage:
+  - prefix_cache

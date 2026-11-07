@@ -32,11 +32,13 @@ h:
     pytorch:
       suites:
       - toolcall
+      - hard_schema
       extra:
         tool-call-parser: glm47
     turbomind:
       suites:
       - toolcall
+      - hard_schema
       extra:
         tool-call-parser: glm47
 - model_type: chat
