@@ -8,6 +8,7 @@
 
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/gemm/types.h"
+#include "src/turbomind/kernels/linear_attn/gdn_state_transaction.h"
 
 namespace turbomind::linear_attn::delta_rule {
 
@@ -16,7 +17,9 @@ class GdrKernel;
 enum class GdrMode
 {
     kRecurrent,
-    kChunked
+    kChunked,
+    kVerify,
+    kCommit
 };
 
 constexpr int kAutoGdrChunkSize      = 0;
@@ -66,12 +69,16 @@ struct PlanningContext {
 struct Arguments {
     core::Tensor  q, k, v, g, beta;
     core::Tensor  state_ptrs, state_tma_descs, q_offsets, finished;
+    // Commit consumes [0, commit_lengths[request]) and writes only recurrent state.
+    // Device int32 [batch], with each length in [0, token_slots]. Q and out are unused.
+    core::Tensor  commit_lengths;
     core::Tensor* out{};
     core::Tensor* workspace{};
     int64_t       state_layer_offset{};
 };
 
 struct Problem {
+    GdrMode  mode{GdrMode::kChunked};
     int      arch{};
     int      sm_count{};
     DataType input_dtype{kNull};
@@ -95,12 +102,22 @@ struct Problem {
 
 inline bool IsRecurrentGdr(const Problem& problem) noexcept
 {
-    return problem.chunk_size == kRecurrentGdrChunkSize;
+    return problem.mode == GdrMode::kRecurrent;
 }
 
 inline bool IsChunkedGdr(const Problem& problem) noexcept
 {
-    return problem.chunk_size > kRecurrentGdrChunkSize;
+    return problem.mode == GdrMode::kChunked;
+}
+
+inline bool IsVerifyGdr(const Problem& problem) noexcept
+{
+    return problem.mode == GdrMode::kVerify;
+}
+
+inline bool IsCommitGdr(const Problem& problem) noexcept
+{
+    return problem.mode == GdrMode::kCommit;
 }
 
 struct TensorPlan {
@@ -145,6 +162,8 @@ public:
                       const delta_rule::Plan&,
                       cudaStream_t) const;
     void Run(const Arguments&, const delta_rule::Plan&, cudaStream_t) const;
+
+    void CommitAccepted(const AcceptedPrefixArguments&, DataType state_dtype, cudaStream_t) const;
 };
 
 }  // namespace turbomind::linear_attn::delta_rule

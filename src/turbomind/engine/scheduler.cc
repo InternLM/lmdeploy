@@ -24,6 +24,17 @@ inline int InitialResumeUpperBound(const Sequence& s)
     return std::max(0, std::min(s.seq_len, context_len - 1));
 }
 
+// Ordinary-row effects, shared by row planning and the partial-admission clamp.
+inline void SetOrdinaryEffects(SubmittedRow& row)
+{
+    row.verification_positions = row.generating;
+    row.min_grant              = 1;
+    row.inflight_input_delta   = row.input_len;
+    row.inflight_new_delta     = row.generating;
+    row.frontier_reanchor      = false;
+    row.primes_proposals       = false;
+}
+
 // Clear per-pass planning buffers (alloc, restore, publish); involved_blocks persists.
 inline void ResetPassBuffers(Sequence& s)
 {
@@ -213,7 +224,7 @@ struct GenStat {
 // within-pass facts. `bs` only where range math needs it.
 void LogAccept(const Sequence& s, int bs);
 void LogResume(const Sequence& s);
-void LogDeferred(const Sequence& s, int bs, const Scheduler::ProducerConflict& c);
+void LogDeferred(const Sequence& s, const SubmittedRow& candidate, int bs, const Scheduler::ProducerConflict& c);
 void LogPublished(const Sequence& s, int bs, const Scheduler::PublishStat& p);
 void LogFinalized(const Sequence& s, int bs, const GenStat& g);
 void LogCollision(const Sequence& s, CollisionSite site, int begin, int end);
@@ -251,6 +262,7 @@ struct Scheduler::ScheduleState {
     Replay                          replay;                    // alloc/evict ops of the current phase
     size_t                          committed_replay_size{0};  // replay prefix from committed requests (phase 1)
     std::vector<bool>               committed;
+    std::vector<SubmittedRow>       candidates;             // one prepared forward per request
     std::vector<LogicalBlock*>      pending_populate;      // partial sibling node per request, nullptr = none
     std::vector<PublishPlan>        pending_publish;       // checkpoint publication intent per request
     bool                            has_optionals{false};  // any optional intent recorded => run phase 2
@@ -289,11 +301,15 @@ Scheduler::Scheduler(ObjectAllocator&   alloc,
                      const std::string& cache_prompt,
                      int                cache_prompt_boundary_skip,
                      const std::string& cache_generation,
+                     int                session_len,
+                     const SpeculativePolicy* policy,
                      const int&         is_warm_up):
     enable_prefix_caching_{enable_prefix_caching},
     prompt_cache_mode_{ParseCacheMode(cache_prompt)},
     cache_prompt_boundary_skip_{cache_prompt_boundary_skip < 1 ? 1 : cache_prompt_boundary_skip},
     generation_cache_mode_{ParseCacheMode(cache_generation)},
+    session_len_{session_len},
+    policy_{policy},
     is_warm_up_{is_warm_up},
     alloc_{alloc},
     registry_{std::move(registry)},
@@ -323,11 +339,10 @@ Scheduler::~Scheduler()
     }
 }
 
-void Scheduler::EnsureBlocks(Sequence& s)
+void Scheduler::EnsureBlocks(Sequence& s, int end)
 {
     const int bs     = logical_.block_size();
-    const int length = s.seq_len + s.inflight_new_tokens;
-    const int needed = (length + bs - 1) / bs;
+    const int needed = (end + bs - 1) / bs;
     while (static_cast<int>(s.block_ids.size()) < needed) {
         const int       i = static_cast<int>(s.block_ids.size());
         LogicalBlockPtr h = logical_.Create(i);
@@ -517,7 +532,7 @@ void Scheduler::PlanResume(Sequence& s)
 
     s.resuming = true;
 
-    EnsureBlocks(s);
+    EnsureBlocks(s, s.seq_len + s.inflight_new_tokens);
 
     ResetPlanBuffers(s);
 
@@ -667,7 +682,7 @@ void Scheduler::PlanContinue(Sequence& s)
     s.resuming           = false;
 
     const int first_new = static_cast<int>(s.block_ids.size());
-    EnsureBlocks(s);
+    EnsureBlocks(s, s.seq_len + s.inflight_new_tokens);
 
     ResetPassBuffers(s);  // per-pass buffers only; involved_blocks persists
 
@@ -785,8 +800,7 @@ void Scheduler::Release(Sequence& s)
     s.resume_len         = 0;
     s.filled_len         = 0;
     s.readonly_block_num = 0;
-    s.input_len          = 0;
-    s.history_len        = 0;
+    s.submitted.reset();
 }
 
 void Scheduler::Finalize(Sequence& s)
@@ -1098,8 +1112,82 @@ void Scheduler::PlanRequests(ScheduleState& pass)
     }
 
     pass.committed.assign(pass.requests.size(), false);
+    pass.candidates.assign(pass.requests.size(), SubmittedRow{});
     pass.pending_populate.assign(pass.requests.size(), nullptr);
     pass.pending_publish.assign(pass.requests.size(), PublishPlan{});
+
+    for (int i = 0; i < static_cast<int>(pass.requests.size()); ++i) {
+        Sequence& s = *pass.requests[i];
+
+        const std::optional<SubmittedRow> prior       = s.submitted;
+        const std::optional<SubmittedRow> outstanding = s.inflight != 0 ? prior : std::nullopt;
+        const bool                        was_generating = prior && prior->generating;
+
+        const bool outstanding_speculative =
+            outstanding && outstanding->is_verification_row();
+        const bool outstanding_final_prompt =
+            outstanding && !outstanding->is_verification_row() && outstanding->generating
+            && outstanding->key_capacity_end == s.prompt_len;
+        const bool no_outstanding_decode_row =
+            s.inflight == 0 && s.seq_len > s.prompt_len && s.filled_len == s.seq_len - 1
+            && s.resume_len == s.filled_len;
+
+        const int begin       = s.resume_len + s.inflight_input_len;
+        const int context_end = s.seq_len + s.inflight_new_tokens;
+
+        SubmittedRow& row = pass.candidates[i];
+
+        if (policy_ != nullptr
+            && (outstanding_speculative || outstanding_final_prompt || no_outstanding_decode_row)) {
+            row.history_len = s.resume_len;
+            row.generating  = true;
+            row.autoregres  = true;
+
+            row.query_begin = outstanding_speculative
+                                  ? s.filled_len + outstanding->query_count
+                                  : (outstanding_final_prompt ? s.prompt_len : s.filled_len);
+            row.cache_write_begin = outstanding_speculative ? s.filled_len + 1 : row.query_begin;
+
+            const RoundExtent extent = policy_->Extent({row.query_begin, s.prompt_len});
+            row.query_count      = extent.query_rows;
+            row.input_len        = extent.query_rows;
+            row.key_capacity_end = row.query_begin + extent.query_rows;
+            row.cache_write_end  = row.key_capacity_end + extent.private_tail;
+
+            row.verification_positions = extent.query_rows;
+            row.min_grant              = extent.query_rows;
+            row.inflight_input_delta   = 0;
+            row.inflight_new_delta     = 0;
+            row.frontier_reanchor      = true;
+            row.primes_proposals       = false;
+        }
+        else {
+            const int end = ClampForwardEnd(s, begin, context_end, context_end);
+            if (end <= begin) {
+                continue;
+            }
+
+            row.history_len       = s.resume_len;
+            row.input_len         = end - begin;
+            row.query_begin       = begin;
+            row.query_count       = row.input_len;
+            row.key_capacity_end  = end;
+            row.cache_write_begin = begin;
+            row.cache_write_end   = end;
+            row.generating        = end == context_end;
+            row.autoregres        = s.is_active && was_generating && row.generating && row.query_count == 1;
+
+            SetOrdinaryEffects(row);
+
+            if (policy_ != nullptr && row.generating && row.key_capacity_end == s.prompt_len) {
+                if (auto bootstrap = policy_->Bootstrap(s.prompt_len);
+                    bootstrap && bootstrap->min_session_len <= session_len_) {
+                    row.cache_write_end  = bootstrap->cache_write_end;
+                    row.primes_proposals = true;
+                }
+            }
+        }
+    }
 }
 
 void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
@@ -1131,77 +1219,126 @@ void Scheduler::RunRequiredAdmission(ScheduleState& pass, Resource& resource)
             break;  // would run on memory evicted from a higher-priority request
         }
 
-        const int admitted = resource.Test(s);
+        if (is_warm_up_ && s.inflight_input_len != 0) {
+            s.is_active = false;
+            continue;
+        }
+
+        EvictingIterator evicting{evict_pos, pass.cutoff[i]};
+        uint64_t         evict_ts = max_evict_ts;
+
+        const bool was_active      = s.is_active;
+        const bool was_generating = s.submitted && s.submitted->generating;
+        const int  context_end    = s.seq_len + s.inflight_new_tokens;
+        SubmittedRow candidate     = pass.candidates[i];
+
+        if (candidate.query_count <= 0) {
+            continue;
+        }
+
+        const int admitted = resource.Test(s, candidate);
         if (admitted == 0) {
             TM_LOG_INFO("hit resource limit at {}/{}", i, pass.requests.size());
             break;
         }
 
-        s.history_len = s.resume_len;
+        if (admitted < candidate.query_count) {
+            const int end = ClampForwardEnd(s,
+                                            candidate.query_begin,
+                                            candidate.query_begin + admitted,
+                                            context_end);
+            candidate.query_count      = end - candidate.query_begin;
+            candidate.input_len        = candidate.query_count;
+            candidate.key_capacity_end = end;
+            candidate.cache_write_end  = end;
+            candidate.generating       = end == context_end;
+            candidate.autoregres       = was_active && was_generating && candidate.generating
+                                   && candidate.query_count == 1;
 
-        const int begin   = s.resume_len + s.inflight_input_len;
-        const int ctx_end = s.seq_len + s.inflight_new_tokens;  // == prompt_len for a fresh prefill
+            SetOrdinaryEffects(candidate);
 
-        const int end = ClampForwardEnd(s, begin, begin + admitted, ctx_end);
-        const int len = end - begin;
-        if (len <= 0) {
-            continue;  // nothing admitted this pass; CommitResults leaves it inactive
-        }
-        s.input_len = len;
-
-        // The publish decision is finalized in SetupPartialSiblings
-        // (prompt_boundary_node); the clamp lands a pass exactly on B iff it
-        // fired (an end past B implies begin >= B), so end == B identifies the
-        // prompt-boundary pass.
-        const bool at_prompt_boundary = s.prompt_boundary_node && end == s.prompt_boundary_pos;
-
-        if (const ProducerConflict conflict = CheckProducers(s, begin, end); conflict.producer) {
-            LogDeferred(s, bs, conflict);
-            continue;  // deferred; CommitResults leaves it inactive
+            if (candidate.query_count <= 0) {
+                continue;
+            }
         }
 
-        EvictingIterator   evicting{evict_pos, pass.cutoff[i]};
-        AllocatingIterator allocating{s.alloc_blocks};
+        const int existing_end = std::min(
+            candidate.cache_write_end,
+            static_cast<int>(s.block_ids.size()) * bs);
+        if (candidate.cache_write_begin < existing_end) {
+            if (const ProducerConflict conflict =
+                    CheckProducers(s, candidate.cache_write_begin, existing_end);
+                conflict.producer) {
+                LogDeferred(s, candidate, bs, conflict);
+                continue;
+            }
+        }
 
-        uint64_t                 evict_ts = 0;
+        const int required_end = candidate.cache_write_end;
+        std::vector<LogicalBlockPtr> staged_blocks;
+        std::vector<CacheBlock*>     staged_prefix;
+
+        const int first_staged  = static_cast<int>(s.block_ids.size());
+        const int needed_blocks = (required_end + bs - 1) / bs;
+        for (int index = first_staged; index < needed_blocks; ++index) {
+            LogicalBlockPtr block = logical_.Create(index);
+            block->prefix         = cache_.Create(registry_.prefix().object_id(), block.get());
+            staged_prefix.push_back(block->prefix.get());
+            staged_blocks.push_back(std::move(block));
+        }
+
+        std::vector<CacheBlock*> allocation_targets = s.alloc_blocks;
+        allocation_targets.insert(allocation_targets.end(), staged_prefix.begin(), staged_prefix.end());
+
         std::vector<CacheBlock*> planned_now;
-
-        bool ok = true;
-        while (allocating) {
-            bool success = allocating.Allocate(scratch, pass.planned, planned_now, pass.replay);
-            while (!success && evicting) {
-                evict_ts = evicting.Evict(scratch, pass.replay);
-                success  = allocating.Allocate(scratch, pass.planned, planned_now, pass.replay);
-            }
-            if (!success) {
-                ok = false;
-                break;
+        bool                     allocated = true;
+        {
+            AllocatingIterator allocating{allocation_targets};
+            while (allocating) {
+                bool success = allocating.Allocate(scratch, pass.planned, planned_now, pass.replay);
+                while (!success && evicting) {
+                    evict_ts = evicting.Evict(scratch, pass.replay);
+                    success  = allocating.Allocate(scratch, pass.planned, planned_now, pass.replay);
+                }
+                if (!success) {
+                    allocated = false;
+                    break;
+                }
             }
         }
 
-        if (!ok) {  // out of memory: roll back this request's planning, stop the pass
-            for (CacheBlock* b : planned_now) {
-                pass.planned.erase(b);
+        if (!allocated) {
+            for (CacheBlock* block : planned_now) {
+                pass.planned.erase(block);
             }
             TM_LOG_INFO("out of memory at {}/{}", i, pass.requests.size());
-            break;  // CommitResults leaves this and all later requests inactive
+            break;
         }
 
-        resource.Commit(s);
+        resource.Commit(s, candidate);
+        s.submitted = candidate;
         s.is_active                = true;
         pass.committed[i]          = true;
         pass.committed_replay_size = pass.replay.size();
-        max_evict_ts               = std::max(max_evict_ts, evict_ts);
+        max_evict_ts               = evict_ts;
         evict_pos                  = evicting;
 
-        // Optional optimizations (allocated later, from inactive memory). One
-        // checkpoint per forward, routed by its end.
-        PlanPublication(pass, i, s, end, at_prompt_boundary);
+        for (LogicalBlockPtr& block : staged_blocks) {
+            CacheBlock* prefix = block->prefix.get();
+            s.involved_blocks.push_back(prefix);
+            s.alloc_blocks.push_back(prefix);
+            s.block_ids.push_back(std::move(block));
+        }
 
-        SetProducers(s, begin, end);
+        const int target_end = candidate.query_begin + candidate.query_count;
+        if (policy_ == nullptr || target_end <= s.prompt_len) {
+            const bool at_prompt_boundary = s.prompt_boundary_node && target_end == s.prompt_boundary_pos;
+            PlanPublication(pass, i, s, target_end, at_prompt_boundary);
+        }
+
+        SetProducers(s, candidate.cache_write_begin, candidate.cache_write_end);
 
         if (s.resuming) {
-            // emit here so a producer's resume precedes any later consumer's defer log
             LogResume(s);
         }
     }
@@ -1324,13 +1461,14 @@ void Scheduler::CommitResults(ScheduleState& pass)
         // branch; do not zero these fields at reject sites.
         if (!pass.committed[i]) {
             s.is_active      = false;
-            s.input_len      = 0;
-            s.history_len    = 0;
             s.publish_target = nullptr;
             s.publish_end    = 0;
             s.alloc_blocks.clear();
             s.restore_copies.clear();
             s.publish_copies.clear();
+            if (s.inflight == 0) {
+                s.submitted.reset();
+            }
             continue;
         }
 
@@ -1345,8 +1483,9 @@ void Scheduler::CommitResults(ScheduleState& pass)
             s.filled_len = s.resume_len;
         }
 
-        const int begin = s.history_len + s.inflight_input_len;
-        const int end   = begin + s.input_len;
+        const SubmittedRow& row   = *s.submitted;
+        const int           begin = row.query_begin;
+        const int           end   = begin + row.query_count;
 
         bool ckpt_published = false;
 
@@ -1382,7 +1521,7 @@ void Scheduler::CommitResults(ScheduleState& pass)
 
         // Content is guaranteed to be produced by this iteration (device
         // execution is in submission order); no point deferring to Update().
-        PublishStat pub = MarkProduced(s, begin, end);
+        PublishStat pub = MarkProduced(s, row.cache_write_begin, row.cache_write_end);
         pub.forked      = pass.pending_populate[i] != nullptr;
         pub.ckpt        = ckpt_published;
         LogPublished(s, bs, pub);
@@ -1469,30 +1608,31 @@ void LogAccept(const Sequence& s, int bs)
 void LogResume(const Sequence& s)
 {
     auto msg = [&] {
-        const int begin = s.history_len + s.inflight_input_len;
-        const int end   = begin + s.input_len;
-        const int total = s.seq_len + s.inflight_new_tokens;
-        const int pct   = total > 0 ? 100 * s.history_len / total : 0;
+        const SubmittedRow& row   = *s.submitted;
+        const int           begin = row.query_begin;
+        const int           end   = begin + row.query_count;
+        const int           total = s.seq_len + s.inflight_new_tokens;
+        const int           pct   = total > 0 ? 100 * row.history_len / total : 0;
         return fmt::format("req {} (uid {}) resume [0,{}) {} blk ro ({}%) source={} | computed [{},{}) {} tok",
                            s.req->id,
                            s.req->unique_id,
-                           s.history_len,
+                           row.history_len,
                            s.readonly_block_num,
                            pct,
                            ResumeSourceName(s.resume_source),
                            begin,
                            end,
-                           s.input_len);
+                           row.input_len);
     };
 
     TM_LOG(kCacheLogLevel, msg());
 }
 
-void LogDeferred(const Sequence& s, int bs, const Scheduler::ProducerConflict& c)
+void LogDeferred(const Sequence& s, const SubmittedRow& candidate, int bs, const Scheduler::ProducerConflict& c)
 {
     auto msg = [&] {
-        const int begin = s.resume_len + s.inflight_input_len;
-        const int end   = begin + s.input_len;
+        const int begin = candidate.query_begin;
+        const int end   = begin + candidate.query_count;
         const int b0    = std::max(begin, c.block * bs);
         const int b1    = std::min(end, (c.block + 1) * bs);
         return fmt::format("req {} (uid {}) deferred: tok [{},{}) held by producer uid {}",
@@ -1511,9 +1651,10 @@ void LogPublished(const Sequence& s, int bs, const Scheduler::PublishStat& p)
         return;
     }
     auto msg = [&] {
-        const int   end = s.history_len + s.inflight_input_len + s.input_len;  // forward end this pass
-        std::string body;
-        auto        add = [&](std::string c) { body += body.empty() ? c : ", " + c; };
+        const SubmittedRow& row = *s.submitted;
+        const int           end = row.query_begin + row.query_count;
+        std::string         body;
+        auto                add = [&](std::string c) { body += body.empty() ? c : ", " + c; };
         if (p.reusable_blocks > 0) {
             add(fmt::format("prefix [{},{}) ({} blk)", p.start, p.end, p.reusable_blocks));
         }

@@ -26,6 +26,7 @@ void BanBadWords(Tensor&             logits,
                  const Buffer_<int*> token_ids_ptrs,
                  const Buffer_<int>& sequence_length,
                  const Tensor_<int>& bad_words,
+                 const bool*         logits_active,
                  cudaStream_t        stream);
 
 }  // namespace turbomind

@@ -18,7 +18,8 @@ struct ModelWeightConfig: ModuleConfig {
     X(int, tp_size)                                                                                                    \
     X(int, tp_rank)                                                                                                    \
     X(DataType, data_type)                                                                                             \
-    X(int, hidden_units)
+    X(int, hidden_units)                                                                                               \
+    X(bool, decoder_only, false)
 
     MODEL_WEIGHT_FIELDS(TM_MEMBER)
     TM_FOR_EACH(ModelWeightConfig, MODEL_WEIGHT_FIELDS)
@@ -51,6 +52,7 @@ public:
 #define MODEL_WEIGHT_CHILDREN(X)                                                                                       \
     X(LinearWeight, output)                                                                                            \
     X(NormWeight, norm)                                                                                                \
+    X(core::Module, spec)                                                                                              \
     X(core::ModuleList, layers)                                                                                        \
     X(core::ModuleList, meta_experts)
 
@@ -76,6 +78,7 @@ public:
     // --- From ModelWeightConfig at construction ---
     int tp_size{};
     int tp_rank{};
+    bool decoder_only{};
 
 private:
     mutable std::vector<DecoderLayerWeight*> layers_cache_;

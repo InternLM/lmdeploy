@@ -10,6 +10,7 @@
 
 #include "src/turbomind/core/tensor.h"
 #include "src/turbomind/kernels/linear_attn/delta_rule.h"
+#include "src/turbomind/kernels/linear_attn/gdn_state_transaction.h"
 #include "src/turbomind/kernels/linear_attn/registry.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -136,6 +137,8 @@ py::dict ProblemToDict(const Problem& problem)
     out["num_head_groups"]   = problem.num_head_groups;
     out["heads_per_block"]   = problem.heads_per_block;
     out["recurrent"]         = IsRecurrentGdr(problem);
+    out["verify"]            = IsVerifyGdr(problem);
+    out["commit"]            = IsCommitGdr(problem);
     return out;
 }
 
@@ -146,6 +149,10 @@ const char* ToString(GdrMode mode)
             return "recurrent";
         case GdrMode::kChunked:
             return "chunked";
+        case GdrMode::kVerify:
+            return "verify";
+        case GdrMode::kCommit:
+            return "commit";
     }
     throw py::value_error("invalid GDR mode");
 }
@@ -198,7 +205,13 @@ GdrMode ParseMode(const std::string& mode)
     if (mode == "chunked") {
         return GdrMode::kChunked;
     }
-    throw py::value_error("mode must be one of: recurrent, chunked");
+    if (mode == "verify") {
+        return GdrMode::kVerify;
+    }
+    if (mode == "commit") {
+        return GdrMode::kCommit;
+    }
+    throw py::value_error("mode must be one of: recurrent, chunked, verify, commit");
 }
 
 DataType ParseStateDtype(const std::string& dtype)
@@ -265,11 +278,13 @@ Arguments MakeExecutionArguments(const py::object&          q,
                                  const py::object&          state_tma_descs,
                                  const py::object&          q_offsets,
                                  const py::object&          finished,
+                                 const py::object&          commit_lengths,
+                                 GdrMode                    mode,
                                  int64_t                    state_layer_offset,
                                  std::vector<core::Tensor>& storage)
 {
     Arguments args{};
-    args.q                  = TensorFromObject(q, "q", true);
+    args.q                  = TensorFromObject(q, "q", mode != GdrMode::kCommit);
     args.k                  = TensorFromObject(k, "k", true);
     args.v                  = TensorFromObject(v, "v", true);
     args.g                  = TensorFromObject(g, "g", true);
@@ -278,6 +293,7 @@ Arguments MakeExecutionArguments(const py::object&          q,
     args.state_tma_descs    = TensorFromObject(state_tma_descs, "state_tma_descs", false);
     args.q_offsets          = TensorFromObject(q_offsets, "q_offsets", false);
     args.finished           = TensorFromObject(finished, "finished", false);
+    args.commit_lengths     = TensorFromObject(commit_lengths, "commit_lengths", mode == GdrMode::kCommit);
     args.out                = OptionalTensorPtr(out, "out", storage);
     args.workspace          = OptionalTensorPtr(workspace, "workspace", storage);
     args.state_layer_offset = state_layer_offset;
@@ -320,7 +336,8 @@ py::dict PlanBridge(const py::object&  q,
                     int                num_head_groups,
                     int                heads_per_block)
 {
-    const auto q_tensor         = TensorFromObject(q, "q", true);
+    const auto parsed_mode      = ParseMode(mode);
+    const auto q_tensor         = TensorFromObject(q, "q", parsed_mode != GdrMode::kCommit);
     const auto k_tensor         = TensorFromObject(k, "k", true);
     const auto v_tensor         = TensorFromObject(v, "v", true);
     const auto g_tensor         = TensorFromObject(g, "g", true);
@@ -329,10 +346,9 @@ py::dict PlanBridge(const py::object&  q,
     static_cast<void>(k_tensor);
     static_cast<void>(beta_tensor);
 
-    const auto parsed_mode        = ParseMode(mode);
     const auto parsed_state_dtype = ParseStateDtype(state_dtype);
     const auto operation          = MakeOperation(parsed_mode, chunk_size, ParseContextParallelLevel(cp_level));
-    const auto context            = MakePlanningContext(q_tensor,
+    const auto context            = MakePlanningContext(parsed_mode == GdrMode::kCommit ? k_tensor : q_tensor,
                                              v_tensor,
                                              g_tensor,
                                              beta_tensor,
@@ -400,7 +416,8 @@ void RunBridge(const py::object& q,
                const py::object& state_tma_descs,
                const py::object& q_offsets,
                const py::object& finished,
-               int64_t           state_layer_offset)
+               int64_t           state_layer_offset,
+               const py::object& commit_lengths)
 {
     auto*                     plan_ptr = PlanFromDict(plan);
     std::vector<core::Tensor> storage;
@@ -416,6 +433,8 @@ void RunBridge(const py::object& q,
                                             state_tma_descs,
                                             q_offsets,
                                             finished,
+                                            commit_lengths,
+                                            plan_ptr->problem.mode,
                                             state_layer_offset,
                                             storage);
     GatedDeltaRule rule;
@@ -425,6 +444,115 @@ void RunBridge(const py::object& q,
     catch (const std::invalid_argument& e) {
         throw py::value_error(e.what());
     }
+}
+
+void BuildStateStoreMaskBridge(const py::object& out,
+                               const py::object& finished,
+                               const py::object& speculative,
+                               std::uintptr_t    stream_ptr)
+{
+    auto out_tensor         = TensorFromObject(out, "out", true);
+    auto finished_tensor    = TensorFromObject(finished, "finished", true);
+    auto speculative_tensor = TensorFromObject(speculative, "speculative", true);
+    invokeBuildGdnStateStoreMask(out_tensor.data<bool>(),
+                                 finished_tensor.data<bool>(),
+                                 speculative_tensor.data<bool>(),
+                                 static_cast<int>(out_tensor.size()),
+                                 reinterpret_cast<cudaStream_t>(stream_ptr));
+}
+
+void CaptureTransitionsBridge(const py::object& raw_projection,
+                              const py::object& normalized_key,
+                              const py::object& value,
+                              const py::object& log_decay,
+                              const py::object& beta,
+                              const py::object& q_offsets,
+                              const py::object& request_indices,
+                              int               gdn_layer,
+                              int               verify_positions,
+                              const py::object& journal_raw,
+                              const py::object& journal_key,
+                              const py::object& journal_value,
+                              const py::object& journal_decay,
+                              const py::object& journal_beta,
+                              std::uintptr_t    stream_ptr)
+{
+    TransitionJournal journal{TensorFromObject(journal_raw, "journal_raw", true),
+                              TensorFromObject(journal_key, "journal_key", true),
+                              TensorFromObject(journal_value, "journal_value", true),
+                              TensorFromObject(journal_decay, "journal_decay", true),
+                              TensorFromObject(journal_beta, "journal_beta", true)};
+    invokeCaptureGdnTransitions(TensorFromObject(raw_projection, "raw_projection", true),
+                                TensorFromObject(normalized_key, "normalized_key", true),
+                                TensorFromObject(value, "value", true),
+                                TensorFromObject(log_decay, "log_decay", true),
+                                TensorFromObject(beta, "beta", true),
+                                TensorFromObject(q_offsets, "q_offsets", true).buffer(),
+                                TensorFromObject(request_indices, "request_indices", true).buffer(),
+                                gdn_layer,
+                                verify_positions,
+                                std::move(journal),
+                                reinterpret_cast<cudaStream_t>(stream_ptr));
+}
+
+void CommitConvStateBridge(const py::object& raw_conv,
+                           const py::object& conv_state_ptrs,
+                           const py::object& request_indices,
+                           const py::object& entry_sequence_length,
+                           const py::object& accept_len,
+                           const py::object& conv_state_offsets,
+                           int               conv_dim,
+                           int               d_conv,
+                           std::uintptr_t    stream_ptr)
+{
+    auto           pointers = TensorFromObject(conv_state_ptrs, "conv_state_ptrs", true);
+    Buffer_<void*> pointer_buffer{static_cast<void**>(pointers.raw_data()), pointers.size(), pointers.device()};
+    invokeCommitAcceptedConvState(TensorFromObject(raw_conv, "raw_conv", true),
+                                  pointer_buffer,
+                                  TensorFromObject(request_indices, "request_indices", true).buffer(),
+                                  TensorFromObject(entry_sequence_length, "entry_sequence_length", true).buffer(),
+                                  TensorFromObject(accept_len, "accept_len", true).buffer(),
+                                  TensorFromObject(conv_state_offsets, "conv_state_offsets", true).buffer(),
+                                  conv_dim,
+                                  d_conv,
+                                  reinterpret_cast<cudaStream_t>(stream_ptr));
+}
+
+void CommitRecurrentStateBridge(const py::object&  key,
+                                const py::object&  value,
+                                const py::object&  log_decay,
+                                const py::object&  beta,
+                                const py::object&  recurrent_state_ptrs,
+                                const py::object&  request_indices,
+                                const py::object&  accept_len,
+                                const std::string& state_dtype,
+                                int                layers_per_block,
+                                int                heads_per_block,
+                                std::uintptr_t     stream_ptr)
+{
+    auto   key_tensor   = TensorFromObject(key, "key", true);
+    auto   value_tensor = TensorFromObject(value, "value", true);
+    auto   pointers     = TensorFromObject(recurrent_state_ptrs, "recurrent_state_ptrs", true);
+    Tensor pointer_tensor{pointers.raw_data(), pointers.layout(), data_type_v<void*>, pointers.device()};
+
+    AcceptedPrefixArguments args{};
+    args.key                  = key_tensor;
+    args.value                = value_tensor;
+    args.log_decay            = TensorFromObject(log_decay, "log_decay", true);
+    args.beta                 = TensorFromObject(beta, "beta", true);
+    args.recurrent_state_ptrs = std::move(pointer_tensor);
+    args.request_indices      = TensorFromObject(request_indices, "request_indices", true);
+    args.accept_len           = TensorFromObject(accept_len, "accept_len", true);
+    args.layer_count          = static_cast<int>(key_tensor.shape(0));
+    args.speculative_count    = static_cast<int>(key_tensor.shape(1));
+    args.position_count       = static_cast<int>(key_tensor.shape(2));
+    args.hq                   = static_cast<int>(key_tensor.shape(3));
+    args.hv                   = static_cast<int>(value_tensor.shape(3));
+    args.num_head_groups      = static_cast<int>(pointers.shape(2));
+    args.layers_per_block     = layers_per_block;
+    args.heads_per_block      = heads_per_block;
+    args.sm_count             = getSMCount();
+    invokeCommitAcceptedRecurrentState(args, ParseStateDtype(state_dtype), reinterpret_cast<cudaStream_t>(stream_ptr));
 }
 
 }  // namespace
@@ -470,7 +598,56 @@ void bind_delta_rule(py::module_& module)
                "state_tma_descs"_a    = py::none(),
                "q_offsets"_a          = py::none(),
                "finished"_a           = py::none(),
-               "state_layer_offset"_a = int64_t{0});
+               "state_layer_offset"_a = int64_t{0},
+               "commit_lengths"_a     = py::none());
+
+    module.def("gdn_build_state_store_mask",
+               &BuildStateStoreMaskBridge,
+               "out"_a,
+               "finished"_a,
+               "speculative"_a,
+               "stream_ptr"_a = std::uintptr_t{0});
+    module.def("gdn_capture_transitions",
+               &CaptureTransitionsBridge,
+               "raw_projection"_a,
+               "normalized_key"_a,
+               "value"_a,
+               "log_decay"_a,
+               "beta"_a,
+               "q_offsets"_a,
+               "request_indices"_a,
+               "gdn_layer"_a,
+               "verify_positions"_a,
+               "journal_raw"_a,
+               "journal_key"_a,
+               "journal_value"_a,
+               "journal_decay"_a,
+               "journal_beta"_a,
+               "stream_ptr"_a = std::uintptr_t{0});
+    module.def("gdn_commit_conv_state",
+               &CommitConvStateBridge,
+               "raw_conv"_a,
+               "conv_state_ptrs"_a,
+               "request_indices"_a,
+               "entry_sequence_length"_a,
+               "accept_len"_a,
+               "conv_state_offsets"_a,
+               "conv_dim"_a,
+               "d_conv"_a,
+               "stream_ptr"_a = std::uintptr_t{0});
+    module.def("gdn_commit_recurrent_state",
+               &CommitRecurrentStateBridge,
+               "key"_a,
+               "value"_a,
+               "log_decay"_a,
+               "beta"_a,
+               "recurrent_state_ptrs"_a,
+               "request_indices"_a,
+               "accept_len"_a,
+               "state_dtype"_a,
+               "layers_per_block"_a,
+               "heads_per_block"_a,
+               "stream_ptr"_a = std::uintptr_t{0});
 }
 
 }  // namespace turbomind::linear_attn::delta_rule

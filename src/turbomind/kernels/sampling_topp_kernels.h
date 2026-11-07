@@ -15,9 +15,13 @@
  */
 #pragma once
 
+#include <cstddef>
+
 #include <curand_kernel.h>
 
 namespace turbomind {
+
+size_t GetTopPSortWorkspaceBytes(int batch_size, int vocab_size, int vocab_size_padded, cudaStream_t stream);
 
 void invokeTopPSortInitialize(const int    vocab_size_padded,
                               const int    vocab_size,
