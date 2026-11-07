@@ -132,7 +132,7 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
             if meta.is_decoding:
                 cls._precompute_decode(meta, window_size, slot < 0)
             else:
-                cls._precompute_prefill(meta, window_size, slot)
+                cls._precompute_prefill(meta, window_size, slot, step_ctx.input_ids.numel())
 
         return meta
 
@@ -172,7 +172,7 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
                     meta, ratio, num_compressed)
 
     @staticmethod
-    def _precompute_prefill(meta, window_size, slot):
+    def _precompute_prefill(meta, window_size, slot, total_tokens: int):
         from lmdeploy.pytorch.backends.cuda.attention.v4_utils import (
             build_prefill_token_meta,
         )
@@ -193,7 +193,7 @@ class CudaV4AttentionMetadata(V4AttentionMetadata):
         max_q = meta.max_q_seqlen
         max_unkv = min(window_size, max_kv) + max_q
         cu_q_seqlens = meta.cu_q_seqlens
-        token_meta = build_prefill_token_meta(q_seqlens, cu_q_seqlens)
+        token_meta = build_prefill_token_meta(q_seqlens, cu_q_seqlens, total_tokens=total_tokens)
 
         # Pre-compute layer-invariant tensors to eliminate per-layer gather/scatter setup.
         meta.prefill_shared = _V4PrefillSharedMeta(
