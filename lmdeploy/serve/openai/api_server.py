@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -364,6 +365,9 @@ def serve(model_path: str,
         if backend_config is None:
             backend_config = PytorchEngineConfig()
         validate_decision_config(backend_config, speculative_config)
+        backend_config = replace(backend_config, hf_overrides={
+            **(backend_config.hf_overrides or {}), '_lmdeploy_task': 'intern-decision',
+        })
         # Input scoring is PyTorch-only; like the CLI, the task selects that backend.
         backend = 'pytorch'
         if not os.path.exists(model_path):

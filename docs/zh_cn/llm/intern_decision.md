@@ -141,6 +141,10 @@ lmdeploy serve api_server /path/to/Intern-Decision-0.8B --task intern-decision -
 `--task intern-decision` 只启用决策评分并选择 PyTorch 后端，不再接受旧的模型检查点名称作为任务名。
 其余 PyTorch 参数（批大小、TP、前缀缓存等）照常可用，决策请求只做输入评分，不生成 token。
 
+该任务为未量化的 dense Qwen3.5 检查点选择 Intern-Decision 专用模型子类，文本 zero-centered RMSNorm
+scale 按 FP32 保存，checkpoint offset 按 `offset.float() + 1` 折叠。Gated norm 和视觉 norm 保持配置的
+dtype；普通 Qwen3.5 生成使用原模型实现及其 norm dtype。本次实验尚未确立量化或分布式路径的数值等价性。
+
 此任务下服务专用于决策推理。其他推理 POST 入口（`/v1/chat/completions`、`/v1/completions`、`/v1/messages`、
 `/v1/responses`、`/generate`、`/pooling`、`/get_ppl`）会在进入推理引擎之前返回 400。
 普通生成应使用独立服务；引擎不支持在同一批次混合生成与决策评分。模型列表、分词和管理接口仍然可用。

@@ -213,6 +213,22 @@ def test_ordinary_server_keeps_raw_logprobs(server_startup, tmp_path):
     run.assert_called_once()
 
 
+def test_task_selects_specialized_model_without_mutating_user_config(server_startup, tmp_path):
+    api_server, build, _ = server_startup
+    overrides = {'text_config': {'rms_norm_eps': 1e-5}}
+    config = PytorchEngineConfig(hf_overrides=overrides)
+    api_server.serve(str(tmp_path), backend_config=config, task='intern-decision',
+                     decision_temperature=1.0, generation_config='lmdeploy')
+    selected = build.call_args.kwargs['backend_config']
+    assert selected.hf_overrides == {**overrides, '_lmdeploy_task': 'intern-decision'}
+    assert config.hf_overrides is overrides
+    assert overrides == {'text_config': {'rms_norm_eps': 1e-5}}
+
+    api_server.serve(str(tmp_path), backend_config=config, generation_config='lmdeploy')
+    assert build.call_args.kwargs['backend_config'] is config
+    assert '_lmdeploy_task' not in config.hf_overrides
+
+
 @pytest.mark.parametrize('temperature', [0, -1, float('nan'), float('inf'), True])
 def test_dp_invalid_temperature_fails_before_starting_workers(monkeypatch, temperature):
     import importlib

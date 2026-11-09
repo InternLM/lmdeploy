@@ -156,6 +156,11 @@ lmdeploy serve api_server /path/to/Intern-Decision-0.8B --task intern-decision -
 no longer accepted. All PyTorch engine options (batch size, TP, prefix caching, ...) remain available. Decision
 requests use input scoring and generate no tokens.
 
+This task uses an Intern-Decision model subclass for unquantized dense Qwen3.5 checkpoints. It stores text
+zero-centered RMSNorm scales in FP32 and folds checkpoint offsets as `offset.float() + 1`. Gated and vision
+norms retain their configured dtype. Ordinary Qwen3.5 generation uses the original model implementation and
+its configured norm dtype. This experimental change has not established quantized or distributed parity.
+
 This task dedicates the server to decision inference. Other inference POST routes (`/v1/chat/completions`,
 `/v1/completions`, `/v1/messages`, `/v1/responses`, `/generate`, `/pooling`, and `/get_ppl`) return 400 before
 entering the inference engine. Run generation on a separate server; the engine does not
