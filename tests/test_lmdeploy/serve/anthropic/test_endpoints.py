@@ -102,6 +102,18 @@ class _SystemFirstChatTemplate(_FakeChatTemplate):
         return '\n'.join(parts)
 
 
+class _ToolAwareChatTemplate(_FakeChatTemplate):
+    """Renders the declared tools into the prompt, as real templates do."""
+
+    def messages2prompt(self, messages, **kwargs):
+        prompt = super().messages2prompt(messages)
+        tools = kwargs.get('tools')
+        if not tools:
+            return prompt
+        names = ' '.join(tool.function.name for tool in tools)
+        return '\n'.join([f'tools:{names}', prompt])
+
+
 class _FakeEngine:
 
     def __init__(
@@ -502,6 +514,20 @@ def test_http_messages_rejects_invalid_repetition_penalty(stream, raw_tokens, re
     assert context.async_engine.preprocess_calls == []
     assert context.async_engine.generate_calls == []
     assert context.session_mgr.next_session_id == 0
+
+
+def test_messages_count_tokens_counts_declared_tools():
+    # The endpoint accepts `tools`, and the chat template renders their schemas
+    # into the prompt, so a count that ignores them is not the count the same
+    # request produces.
+    client = _make_client(server_context=_FakeServerContext(chat_template=_ToolAwareChatTemplate()))
+
+    without_tools = _post_count_tokens(client)
+    with_tools = _post_count_tokens(client, tools=[SEARCH_TOOL])
+
+    assert without_tools.status_code == 200
+    assert with_tools.status_code == 200
+    assert with_tools.json()['input_tokens'] > without_tools.json()['input_tokens']
 
 
 def test_messages_count_tokens_rejects_empty_messages():

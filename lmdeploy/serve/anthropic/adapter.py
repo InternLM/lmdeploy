@@ -397,11 +397,15 @@ def to_lmdeploy_messages(
     return lm_messages
 
 
-def count_input_tokens(async_engine, messages: list[dict[str, str]]) -> int:
+def count_input_tokens(async_engine,
+                       messages: list[dict[str, str]],
+                       tools: list[Tool] | None = None) -> int:
     """Approximate Anthropic token counting using LMDeploy
     tokenizer/template."""
 
-    prompt = async_engine.chat_template.messages2prompt(messages)
+    # Tool schemas are rendered into the prompt by the chat template, so a
+    # count that leaves them out is not the count the same request produces.
+    prompt = async_engine.chat_template.messages2prompt(messages, tools=tools)
     token_ids = async_engine.tokenizer.encode(prompt, add_bos=True)
     return len(token_ids)
 
