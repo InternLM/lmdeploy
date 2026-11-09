@@ -1472,8 +1472,9 @@ class BaseModelAgent:
             return dict()
 
         out, event = out
-        while not event.query():
-            await asyncio.sleep(0.001)
+        if not event.query():
+            # Avoid timer-based polling while keeping the event loop responsive.
+            await asyncio.to_thread(event.synchronize)
         with torch.cuda.stream(self.out_stream), torch.inference_mode(), record_function('outputs_D2H'):
             event.wait()
             out = out.to_cpu()
