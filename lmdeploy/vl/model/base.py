@@ -15,7 +15,7 @@ from lmdeploy.vl.model.preprocess_utils import (
     get_expanded_input_ids,
     get_expanded_mm_items,
     get_mm_items_offset,
-    get_override_size,
+    get_processor_kwargs,
 )
 
 VISION_MODELS = Registry('vision_model')
@@ -157,22 +157,16 @@ class VisionModel(ABC):
         mm_processor_kwargs = mm_processor_kwargs or {}
         if raw_images:
             kwargs['images'] = raw_images
-            image_size = get_override_size(self.processor.image_processor,
-                                           mm_processor_kwargs.get('image'),
-                                           modality='image')
-            if image_size is not None:
-                images_kwargs['size'] = image_size
+            images_kwargs = get_processor_kwargs(self.processor.image_processor,
+                                                  mm_processor_kwargs.get('image'), modality='image')
         if raw_videos:
             kwargs['videos'] = raw_videos
+            videos_kwargs = get_processor_kwargs(self.processor.video_processor,
+                                                  mm_processor_kwargs.get('video'), modality='video')
             videos_kwargs['video_metadata'] = video_metadatas
             # perform resize in hf processor, while sample frames has been done in video loader
-            videos_kwargs['do_resize'] = True
+            videos_kwargs.setdefault('do_resize', True)
             videos_kwargs['do_sample_frames'] = False
-            video_size = get_override_size(self.processor.video_processor,
-                                           mm_processor_kwargs.get('video'),
-                                           modality='video')
-            if video_size is not None:
-                videos_kwargs['size'] = video_size
         if raw_audios:
             kwargs['audio'] = raw_audios
             audio_kwargs = dict(mm_processor_kwargs.get('audio') or {})

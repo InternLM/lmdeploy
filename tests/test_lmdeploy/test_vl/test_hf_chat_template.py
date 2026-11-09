@@ -218,6 +218,29 @@ class TestGLM5NextProcessorCompatibility:
         model.hf_config = SimpleNamespace(image_token_id=42, video_token_id=43)
         return model
 
+    def test_native_image_overrides_reach_processor(self, model):
+        import torch
+
+        from lmdeploy.vl.constants import Modality
+        from lmdeploy.vl.model.base import MultimodalSpecialTokens
+
+        model._shared_video_token = False
+        model.mm_tokens = MultimodalSpecialTokens(image_token_id=42, video_token_id=43)
+        model.processor = Mock(return_value={
+            'image_grid_thw': torch.tensor([[1, 4, 4]]),
+            'pixel_values': torch.zeros(16, 1),
+        })
+        model.processor.image_processor = SimpleNamespace(min_image_tokens=16, max_image_tokens=8000, merge_size=2)
+        image = object()
+        options = {'min_image_tokens': 64, 'max_image_tokens': 64}
+        result = model.preprocess(
+            [{'role': 'user', 'content': [{'type': Modality.IMAGE, 'data': image}]}],
+            [1, 42], {'image': options})
+
+        assert model.processor.call_args.kwargs['images_kwargs'] == options
+        assert result['input_ids'] == [1, 42, 42, 42, 42]
+        assert model.processor.image_processor.min_image_tokens == 16
+
     @pytest.mark.parametrize('trust_remote_code', [False, True])
     @pytest.mark.parametrize('mode', ['native', 'missing_image', 'missing_video', ImportError, ValueError])
     def test_build_preprocessor(self, monkeypatch, model, trust_remote_code, mode):

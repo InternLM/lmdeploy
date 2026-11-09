@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -45,6 +46,8 @@ def get_override_size(processor, mm_processor_kwargs: dict[str, Any] | None = No
     override_min = mm_processor_kwargs.get('min_pixels', default_min)
     override_max = mm_processor_kwargs.get('max_pixels', default_max)
     tag = f'[{modality}] ' if modality else ''
+    if override_min is None or override_max is None:
+        raise ValueError(f'{tag}processor has no pixel-size defaults; use its native processor kwargs instead.')
     if override_min > override_max:
         logger.warning(
             f'{tag}Overriding min_pixels {override_min} > max_pixels {override_max}, '
@@ -53,6 +56,50 @@ def get_override_size(processor, mm_processor_kwargs: dict[str, Any] | None = No
         return None
     logger.info(f'{tag}Overriding processor size with min_pixels={override_min} and max_pixels={override_max}.')
     return {'shortest_edge': override_min, 'longest_edge': override_max}
+
+
+def get_processor_kwargs(processor, options: dict[str, Any] | None = None, modality: str = '') -> dict[str, Any]:
+    """Build request-local HF kwargs without confusing pixel and token
+    budgets."""
+    if options is None:
+        return {}
+    if not isinstance(options, dict):
+        raise ValueError(f'mm_processor_kwargs.{modality} must be an object.')
+    kwargs = deepcopy(options)
+    if modality == 'video':
+        if {'fps', 'num_frames', 'min_frames', 'max_frames'} & kwargs.keys() or kwargs.get('do_sample_frames'):
+            raise ValueError('Video sampling belongs in media_io_kwargs.video (fps/num_frames); '
+                             'HF frame resampling is not supported after media loading.')
+        if 'video_metadata' in kwargs:
+            raise ValueError('video_metadata is owned by the media loader, not mm_processor_kwargs.')
+
+    token_keys = ('min_image_tokens', 'max_image_tokens')
+    pixel_keys = ('min_pixels', 'max_pixels')
+    native_tokens = all(hasattr(processor, key) for key in token_keys)
+    if native_tokens:
+        if any(key in kwargs for key in (*pixel_keys, 'size')):
+            raise ValueError('This processor uses token budgets; use min_image_tokens/max_image_tokens, '
+                             'not min_pixels/max_pixels or size.')
+        if any(key in kwargs for key in token_keys):
+            bounds = [kwargs.get(key, getattr(processor, key)) for key in token_keys]
+            if any(type(value) is not int or value <= 0 for value in bounds) or bounds[0] > bounds[1]:
+                raise ValueError('min_image_tokens/max_image_tokens must be positive integers with min <= max.')
+    elif any(key in kwargs for key in token_keys):
+        raise ValueError('This processor does not support min_image_tokens/max_image_tokens; '
+                         'use pixel budgets or install native model processor support.')
+
+    if any(key in kwargs for key in pixel_keys):
+        if 'size' in kwargs:
+            raise ValueError('Specify either min_pixels/max_pixels or size, not both.')
+        for key in pixel_keys:
+            if key in kwargs and (type(kwargs[key]) is not int or kwargs[key] <= 0):
+                raise ValueError(f'{key} must be a positive integer.')
+        size = get_override_size(processor, kwargs, modality)
+        for key in pixel_keys:
+            kwargs.pop(key, None)
+        if size is not None:
+            kwargs['size'] = size
+    return kwargs
 
 
 def get_expanded_input_ids(input_prompt, collected_mm_items, processor,

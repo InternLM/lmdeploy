@@ -18,7 +18,7 @@ from lmdeploy.vl.model.base import (
 )
 from lmdeploy.vl.model.preprocess_utils import (
     get_expanded_mm_items,
-    get_override_size,
+    get_processor_kwargs,
 )
 
 
@@ -244,24 +244,15 @@ class GLM5NextVisionModel(VisionModel):
         kwargs: dict[str, Any] = {}
         if raw_images:
             kwargs['images'] = raw_images
+            kwargs['images_kwargs'] = get_processor_kwargs(self.processor.image_processor,
+                                                           mm_processor_kwargs.get('image'), modality='image')
         if raw_videos:
             kwargs['videos'] = raw_videos
-            kwargs['videos_kwargs'] = {
-                'video_metadata': video_metadatas,
-                'do_resize': True,
-                'do_sample_frames': False,
-            }
-        image_size = get_override_size(self.processor.image_processor,
-                                       mm_processor_kwargs.get('image'),
-                                       modality='image')
-        if image_size is not None:
-            kwargs['images_kwargs'] = {'size': image_size}
-        if raw_videos:
-            video_size = get_override_size(self.processor.video_processor,
-                                           mm_processor_kwargs.get('video'),
-                                           modality='video')
-            if video_size is not None:
-                kwargs['videos_kwargs']['size'] = video_size
+            videos_kwargs = get_processor_kwargs(self.processor.video_processor,
+                                                  mm_processor_kwargs.get('video'), modality='video')
+            videos_kwargs.setdefault('do_resize', True)
+            videos_kwargs.update(video_metadata=video_metadatas, do_sample_frames=False)
+            kwargs['videos_kwargs'] = videos_kwargs
 
         input_text = input_prompt if isinstance(input_prompt, str) else ''
         outputs = self.processor(text=[input_text],

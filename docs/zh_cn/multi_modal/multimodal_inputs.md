@@ -576,10 +576,24 @@ ______________________________________________________________________
 
 两个可选参数用于控制媒体处理行为：
 
-- **`mm_processor_kwargs`**：控制视觉 token 的分辨率（每张图片或视频帧的最小/最大像素数）
+- **`mm_processor_kwargs`**：按 `image`、`video`、`audio` 模态传递模型对应的 HF processor 参数
 - **`media_io_kwargs`**：控制媒体加载方式（如视频帧采样率/帧数和音频采样率）
 
 两者均通过 `extra_body` 作为请求体中的额外字段传入 API，或在使用 pipeline API 时直接传给 `pipe()`。
+
+`/generate`、`/v1/chat/completions` 和 Anthropic 兼容的 `/v1/messages` 均接受 JSON 请求体顶层的这两个字段；SDK 的 `extra_body` 会合并到请求体。
+
+原生 GLM-5.3-Flash processor 使用 **token 预算**，而不是像素预算：
+
+```json
+{"mm_processor_kwargs": {"image": {"min_image_tokens": 64, "max_image_tokens": 64}}}
+```
+
+视频空间处理也可在 `video` 下使用相同的 token 预算参数。覆盖只影响当前请求，不修改共享 processor 默认值；可以只传一侧边界，另一侧使用默认值。边界必须为正整数，且最小值不能大于最大值。
+
+原生 GLM 不使用通用 `size` 契约，因此 `min_pixels`、`max_pixels`、`size` 会被明确拒绝，不再静默忽略。Qwen 和旧版 GLM-4V 兼容 processor 保留下面的像素预算写法；兼容 processor 不支持原生 GLM token 预算覆盖。XTuner 的 GLM tokenizer 目前将 token 预算配置命名为 `min_pixels/max_pixels`，接入时应将其值映射到请求的 `min_image_tokens/max_image_tokens`，不能直接复制字段名。
+
+视频抽帧由媒体加载器负责：`fps/num_frames` 应放在 `media_io_kwargs.video`。为避免重采样后帧与元数据不一致，`mm_processor_kwargs.video` 不接受 `fps`、`min_frames`、`max_frames`、`num_frames` 或启用 `do_sample_frames`。这不代表训练侧与服务侧的视频采样已经完全一致。
 
 <details>
 <summary>API 服务示例（extra_body）</summary>

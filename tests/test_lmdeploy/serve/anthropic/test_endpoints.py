@@ -348,6 +348,22 @@ def _messages_payload(**overrides):
     return payload
 
 
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('raw_input', [False, True])
+def test_messages_forward_media_processing_kwargs(stream, raw_input):
+    client, context = _make_client(return_context=True)
+    mm_kwargs = {'image': {'min_image_tokens': 64, 'max_image_tokens': 64}}
+    io_kwargs = {'video': {'fps': 1, 'num_frames': 2}}
+    payload = _messages_payload(stream=stream, mm_processor_kwargs=mm_kwargs, media_io_kwargs=io_kwargs)
+    if raw_input:
+        payload.update(messages=[], input_ids=[1, 2], image_data='data:image/png;base64,AA==')
+    response = client.post('/v1/messages', headers=ANTHROPIC_HEADERS, json=payload)
+    assert response.status_code == 200
+    _, kwargs = context.async_engine.preprocess_calls[-1]
+    assert kwargs['mm_processor_kwargs'] == mm_kwargs
+    assert kwargs['media_io_kwargs'] == io_kwargs
+
+
 def _validation_error_response(path: str, exc: ValidationError):
     first_error = next(iter(exc.errors()), {})
     location = '.'.join(str(part) for part in first_error.get('loc', ()))

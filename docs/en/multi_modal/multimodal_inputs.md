@@ -577,10 +577,24 @@ ______________________________________________________________________
 
 Two optional parameters let you control media processing:
 
-- **`mm_processor_kwargs`**: controls vision token resolution (min/max pixels per image or video frame)
+- **`mm_processor_kwargs`**: passes model-specific HF processor options, keyed by `image`, `video`, or `audio`
 - **`media_io_kwargs`**: controls how media is loaded (e.g. video frame sampling rate/count and audio sampling rate)
 
 Both are passed as extra fields in the API request body via `extra_body`, or directly to `pipe()` when using the pipeline API.
+
+`/generate`, `/v1/chat/completions`, and the Anthropic-compatible `/v1/messages` endpoint accept these fields at the top level of the JSON body. SDK `extra_body` merges them into that body.
+
+For native GLM-5.3-Flash processors, use **token budgets**, not pixel budgets:
+
+```json
+{"mm_processor_kwargs": {"image": {"min_image_tokens": 64, "max_image_tokens": 64}}}
+```
+
+The same token-budget names can control video spatial processing under `video`. Overrides are request-local and do not change the shared processor defaults. A single bound can be supplied; the other bound uses the processor default. Bounds must be positive integers with minimum no greater than maximum.
+
+Native GLM processors do not use the generic `size` contract: `min_pixels`, `max_pixels`, and `size` are rejected rather than silently ignored. Qwen and the older GLM-4V compatibility processor retain the pixel-budget syntax shown below; the compatibility processor does not support native GLM token-budget overrides. XTuner's GLM tokenizer currently names its token-valued configuration `min_pixels/max_pixels`; map those values to the explicit `min_image_tokens/max_image_tokens` request keys instead of copying the names.
+
+Frame sampling is performed by the media loader. Put `fps/num_frames` in `media_io_kwargs.video`; `fps`, `min_frames`, `max_frames`, `num_frames`, and enabling `do_sample_frames` in `mm_processor_kwargs.video` are rejected to prevent resampling frames without updating their metadata. This does not establish identical video sampling between training and serving.
 
 <details>
 <summary>API server example (extra_body)</summary>
