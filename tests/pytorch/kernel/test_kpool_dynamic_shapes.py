@@ -143,12 +143,13 @@ def test_indexed_cache_strided_and_masked(pages, fp8, explicit_requests):
 
 @pytest.mark.parametrize('pages', [1, 16, 17, 513, 529, 545, 1023, 1024, 1025, 16384, 16385, 41952])
 @pytest.mark.parametrize('strided', [False, True])
-def test_score_pages_graph_replay(pages, strided):
-    if torch.cuda.get_device_capability()[0] < 9:
+@pytest.mark.parametrize('dtype', [torch.float8_e4m3fn, torch.bfloat16])
+def test_score_pages_graph_replay(pages, strided, dtype):
+    if dtype == torch.float8_e4m3fn and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip('FP8 dot requires Hopper or newer')
     torch.manual_seed(7)
     rows, heads, dim = 3, 16, 128
-    packed = torch.zeros(7, 16, 1, dim + 4, device='cuda', dtype=torch.uint8)
+    packed = torch.zeros(7, 16, 1, dim * dtype.itemsize + 4, device='cuda', dtype=torch.uint8)
     keys, scales = kpool_packed_cache_views(packed, dim)
     keys.copy_(torch.randn(keys.shape, device='cuda').to(keys.dtype))
     scales.copy_(torch.rand(scales.shape, device='cuda'))

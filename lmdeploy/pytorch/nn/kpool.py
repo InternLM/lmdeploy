@@ -18,7 +18,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES, DSA_INDEXER_K_CACHE_NAME, dsa_packed_indexer_k_cache_shape
+from lmdeploy.pytorch import envs
+from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES, DSA_INDEXER_K_CACHE_NAME
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequest, BlockCacheRequestContext
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
@@ -89,6 +90,10 @@ class KPoolIndexer(nn.Module):
 
     The seven parameter names and dtypes match the GLM-5.3/SGLang checkpoint contract.  Query/key rotary handling and
     cache ownership stay with the model/backend because they depend on model geometry and request metadata.
+
+    Set ``LMDEPLOY_GLM53_KPOOL_BF16=1`` before starting workers to store
+    unrotated BF16 pools. The default is rotated FP8. This changes the packed
+    cache layout and requires rebuilding the engine to switch precision.
     """
 
     def __init__(
@@ -121,6 +126,7 @@ class KPoolIndexer(nn.Module):
         self.index_kpool = index_kpool
         self.softmax_scale = index_head_dim**-0.5
         self.scale_fmt = scale_fmt
+        self.cache_dtype = torch.bfloat16 if envs.glm53_kpool_bf16 else torch.float8_e4m3fn
         self._block_cache_binding: BlockCacheBinding | None = None
 
         def add_prefix(name: str) -> str:
@@ -185,7 +191,8 @@ class KPoolIndexer(nn.Module):
             raise ValueError('GLM-5.3 KPool requires logical block_size=64 and kernel_block_size=64.')
         return (BlockCacheRequest(
             name=DSA_INDEXER_K_CACHE_NAME,
-            shape=dsa_packed_indexer_k_cache_shape(KPOOL_PAGE_SIZE // self.index_kpool, self.head_dim),
+            shape=(KPOOL_PAGE_SIZE // self.index_kpool, 1,
+                   self.head_dim * self.cache_dtype.itemsize + DSA_INDEX_SCALE_BYTES),
             dtype=torch.uint8,
             per_row_contiguous=True,
         ), )
@@ -408,14 +415,16 @@ def _validate_compress_inputs(closed_keys: Tensor, closed_scores: Tensor,
             f'got {tuple(ape.shape)}.')
 
 
-def _finish_compressed_pool(pooled: Tensor) -> Tensor:
+def _finish_compressed_pool(pooled: Tensor, rotate: bool = True) -> Tensor:
     # SGLang rounds both the pooled vector and the rotated vector through BF16.
-    pooled = pooled.to(torch.bfloat16).float()
-    return kpool_normalized_hadamard(pooled).to(torch.bfloat16)
+    pooled = pooled.to(torch.bfloat16)
+    if not rotate:
+        return pooled
+    return kpool_normalized_hadamard(pooled.float()).to(torch.bfloat16)
 
 
 def kpool_compress_online(closed_keys: Tensor, closed_scores: Tensor,
-                          ape: Tensor) -> Tensor:
+                          ape: Tensor, *, rotate: bool = True) -> Tensor:
     """Use the online recurrence from SGLang's extend assembly kernel.
 
     The explicit slot loop matches SGLang's compression kernel reduction order.  A vectorized max/exp/sum is
@@ -441,11 +450,11 @@ def kpool_compress_online(closed_keys: Tensor, closed_scores: Tensor,
         denominator = denominator * rescale + probability
         accumulator = accumulator * rescale + key * probability
         max_score = new_max
-    return _finish_compressed_pool(accumulator / denominator)
+    return _finish_compressed_pool(accumulator / denominator, rotate=rotate)
 
 
 def kpool_compress_two_pass(closed_keys: Tensor, closed_scores: Tensor,
-                            ape: Tensor) -> Tensor:
+                            ape: Tensor, *, rotate: bool = True) -> Tensor:
     """Use the max-then-sum order from SGLang's decode close-pool kernel."""
     _validate_compress_inputs(closed_keys, closed_scores, ape)
     groups, pool_size, head_dim = closed_keys.shape
@@ -467,7 +476,7 @@ def kpool_compress_two_pass(closed_keys: Tensor, closed_scores: Tensor,
         key = closed_keys[:, slot].float()
         denominator = denominator + probability
         accumulator = accumulator + key * probability
-    return _finish_compressed_pool(accumulator / denominator)
+    return _finish_compressed_pool(accumulator / denominator, rotate=rotate)
 
 
 def kpool_compress(
@@ -476,12 +485,13 @@ def kpool_compress(
     ape: Tensor,
     *,
     mode: KPoolCompressMode,
+    rotate: bool = True,
 ) -> Tensor:
     """Dispatch the explicit SGLang compression order for a forward mode."""
     if mode == 'extend':
-        return kpool_compress_online(closed_keys, closed_scores, ape)
+        return kpool_compress_online(closed_keys, closed_scores, ape, rotate=rotate)
     if mode == 'decode':
-        return kpool_compress_two_pass(closed_keys, closed_scores, ape)
+        return kpool_compress_two_pass(closed_keys, closed_scores, ape, rotate=rotate)
     raise ValueError(
         f'KPool compression mode must be extend or decode, got {mode!r}.')
 
@@ -586,10 +596,10 @@ def kpool_packed_cache_views(
     packed_cache: Tensor,
     head_dim: int,
 ) -> tuple[Tensor, Tensor]:
-    """Expose FP8 values and FP32 scales from one packed DSA cache row.
+    """Expose FP8/BF16 values and FP32 scales from a packed KPool cache.
 
     The byte layout intentionally matches the existing DeepGEMM DSA cache:
-    each page stores its value rows first, followed by its scales. Compact
+    each page stores its FP8 or BF16 value rows first, followed by its scales. Compact
     pages hold 16 rows; the legacy layout holds 64.
     """
     if packed_cache.dtype != torch.uint8:
@@ -599,8 +609,10 @@ def kpool_packed_cache_views(
     if packed_cache.dim() != 4 or packed_cache.size(2) != 1:
         raise ValueError(
             'Packed KPool cache must have shape '
-            '[num_blocks, entries, 1, head_dim + 4].')
-    packed_width = head_dim + DSA_INDEX_SCALE_BYTES
+            '[num_blocks, entries, 1, head_dim * value_bytes + 4].')
+    value_dtype = (torch.bfloat16 if packed_cache.size(-1) == head_dim * 2 + DSA_INDEX_SCALE_BYTES
+                   else torch.float8_e4m3fn)
+    packed_width = head_dim * value_dtype.itemsize + DSA_INDEX_SCALE_BYTES
     if packed_cache.size(-1) != packed_width:
         raise ValueError(
             f'Packed KPool cache last dim must be {packed_width}, '
@@ -608,9 +620,9 @@ def kpool_packed_cache_views(
 
     num_blocks, entries_per_block = packed_cache.shape[:2]
     flat = packed_cache.view(num_blocks, -1)
-    value_bytes = entries_per_block * head_dim
+    value_bytes = entries_per_block * head_dim * value_dtype.itemsize
     scale_bytes = entries_per_block * DSA_INDEX_SCALE_BYTES
-    values = flat[:, :value_bytes].view(torch.float8_e4m3fn).view(
+    values = flat[:, :value_bytes].view(value_dtype).view(
         num_blocks, entries_per_block, head_dim)
     scales = flat[:, value_bytes:value_bytes + scale_bytes].view(
         torch.float32).view(num_blocks, entries_per_block, 1)
@@ -705,11 +717,12 @@ def kpool_read_packed_cache(
     token_block_offsets: Tensor,
     num_groups: int,
     pool_size: int,
+    *, head_dim: int | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Gather a request's closed pools in logical order from paged storage."""
     if num_groups < 0:
         raise ValueError(f'num_groups must be non-negative, got {num_groups}.')
-    head_dim = packed_cache.size(-1) - DSA_INDEX_SCALE_BYTES
+    head_dim = packed_cache.size(-1) - DSA_INDEX_SCALE_BYTES if head_dim is None else head_dim
     values, scales = kpool_packed_cache_views(packed_cache, head_dim)
     group_ids = torch.arange(
         num_groups, dtype=torch.int64, device=packed_cache.device)
