@@ -164,7 +164,7 @@ def sample_random_requests(
     dataset_path: str,
 ) -> list[tuple[str, int, int]]:
     input_lens = np.random.randint(max(int(input_len * range_ratio), 1), input_len + 1, size=num_prompts)
-    output_lens = np.random.randint(int(output_len * range_ratio), output_len + 1, size=num_prompts)
+    output_lens = np.random.randint(max(int(output_len * range_ratio), 1), output_len + 1, size=num_prompts)
 
     with open(dataset_path) as f:
         dataset = json.load(f)
