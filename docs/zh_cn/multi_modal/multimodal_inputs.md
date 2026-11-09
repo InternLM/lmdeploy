@@ -593,7 +593,17 @@ ______________________________________________________________________
 
 原生 GLM 不使用通用 `size` 契约，因此 `min_pixels`、`max_pixels`、`size` 会被明确拒绝，不再静默忽略。Qwen 和旧版 GLM-4V 兼容 processor 保留下面的像素预算写法；兼容 processor 不支持原生 GLM token 预算覆盖。XTuner 的 GLM tokenizer 目前将 token 预算配置命名为 `min_pixels/max_pixels`，接入时应将其值映射到请求的 `min_image_tokens/max_image_tokens`，不能直接复制字段名。
 
-视频抽帧由媒体加载器负责：`fps/num_frames` 应放在 `media_io_kwargs.video`。为避免重采样后帧与元数据不一致，`mm_processor_kwargs.video` 不接受 `fps`、`min_frames`、`max_frames`、`num_frames` 或启用 `do_sample_frames`。这不代表训练侧与服务侧的视频采样已经完全一致。
+### 视频抽帧与向后兼容
+
+对于视频文件和 URL，LMDeploy 的媒体加载器在调用 HF processor **之前**解码并抽帧。使用 `media_io_kwargs.video.fps/num_frames` 控制抽帧。加载器默认最多取 32 帧；正值 `fps` 与 `num_frames` 同时起作用时，采用更严格的帧数限制。processor 自身的抽帧默认值不会自动配置媒体加载器。
+
+为兼容旧请求，`mm_processor_kwargs.video` 中的 `fps`、`num_frames`、`min_frames`、`max_frames`、`do_sample_frames` 和 `video_metadata` 会被**忽略并警告**，而不是报错或自动移到 `media_io_kwargs`。HF 二次抽帧仍被关闭，元数据仍由媒体加载器提供。`min_frames/max_frames` 目前没有对应的加载器选项。
+
+对于 Qwen、InternS2 等基于 `size` 的 processor，保留已有 `min_pixels/max_pixels` 语义：与 `size` 同时提供时，像素别名优先；最小值大于最大值时回退到 processor 默认值。其他受支持的 HF 选项在显式传入后会实际生效。上文原生 GLM 对像素字段的拒绝是单独的兼容性变化，不适用于基于 `size` 的 processor。
+
+如果调用者已在外部抽帧并发送 `video/jpeg` 帧序列，LMDeploy 会保留收到的全部帧，不再套用普通视频加载器的帧数限制。该路径下 `num_frames` 不会裁减序列，`fps` 仅用于构造缺省元数据，不用于选帧。
+
+这些规则描述的是服务侧行为，不代表训练侧与服务侧已完全一致。XTuner 与 LMDeploy 即使使用相同参数，也可能选出不同的帧或时间戳；还需要核对抽帧算法及元数据。
 
 <details>
 <summary>API 服务示例（extra_body）</summary>
@@ -642,34 +652,35 @@ print(response.choices[0].message.content)
 ```python
 from lmdeploy import pipeline, PytorchEngineConfig
 
-pipe = pipeline('<model_path>', backend_config=PytorchEngineConfig(tp=1))
+if __name__ == '__main__':
+    pipe = pipeline('<model_path>', backend_config=PytorchEngineConfig(tp=1))
 
-video_url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
+    video_url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
 
-messages = [{
-    'role': 'user',
-    'content': [
-        {'type': 'video_url', 'video_url': {'url': video_url}},
-        {'type': 'text', 'text': '描述这个视频。'},
-    ],
-}]
+    messages = [{
+        'role': 'user',
+        'content': [
+            {'type': 'video_url', 'video_url': {'url': video_url}},
+            {'type': 'text', 'text': '描述这个视频。'},
+        ],
+    }]
 
-response = pipe(
-    messages,
-    mm_processor_kwargs={
-        'video': {
-            'min_pixels': 4 * 32 * 32,
-            'max_pixels': 256 * 32 * 32,
+    response = pipe(
+        messages,
+        mm_processor_kwargs={
+            'video': {
+                'min_pixels': 4 * 32 * 32,
+                'max_pixels': 256 * 32 * 32,
+            },
         },
-    },
-    media_io_kwargs={
-        'video': {
-            'num_frames': 16,
-            'fps': 2,
+        media_io_kwargs={
+            'video': {
+                'num_frames': 16,
+                'fps': 2,
+            },
         },
-    },
-)
-print(response)
+    )
+    print(response)
 ```
 
 </details>

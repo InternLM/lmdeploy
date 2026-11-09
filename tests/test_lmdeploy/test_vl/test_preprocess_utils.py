@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import torch
@@ -50,21 +51,35 @@ def test_processor_kwargs_missing_pixel_defaults_and_unsupported_tokens():
         get_processor_kwargs(processor, {'min_image_tokens': 64}, 'image')
 
 
-@pytest.mark.parametrize('options', [
-    [], {'max_pixels': 0}, {'max_pixels': True}, {'max_pixels': 64, 'size': {}},
-])
-def test_processor_kwargs_reject_invalid_pixel_options(options):
+def test_processor_kwargs_reject_non_object_options():
     processor = SimpleNamespace(size={'shortest_edge': 64, 'longest_edge': 1024})
     with pytest.raises(ValueError):
-        get_processor_kwargs(processor, options, 'image')
+        get_processor_kwargs(processor, [], 'image')
 
 
 @pytest.mark.parametrize('options', [
-    {'fps': 1}, {'max_frames': 2}, {'do_sample_frames': True}, {'video_metadata': []},
+    {'max_pixels': 256, 'size': {'shortest_edge': 1, 'longest_edge': 1}},
+    {'min_pixels': 512, 'max_pixels': 256, 'size': {}},
+    {'max_pixels': 0}, {'min_pixels': True},
 ])
-def test_processor_kwargs_cannot_change_loaded_video_sampling(options):
-    with pytest.raises(ValueError, match='media|sampling'):
-        get_processor_kwargs(SimpleNamespace(), options, 'video')
+def test_processor_kwargs_preserve_legacy_pixel_alias_semantics(options):
+    processor = SimpleNamespace(size={'shortest_edge': 64, 'longest_edge': 1024})
+    size = get_override_size(processor, options, 'image')
+    assert get_processor_kwargs(processor, options, 'image') == ({} if size is None else {'size': size})
+
+
+def test_processor_kwargs_ignore_loader_owned_options_without_mutating_request(monkeypatch):
+    warning = Mock()
+    monkeypatch.setattr('lmdeploy.vl.model.preprocess_utils.logger.warning', warning)
+    options = {'fps': 1, 'num_frames': 2, 'min_frames': 2, 'max_frames': 8,
+               'do_sample_frames': True, 'video_metadata': [{'fps': 999}], 'max_pixels': 256}
+    processor = SimpleNamespace(size={'shortest_edge': 64, 'longest_edge': 1024})
+    output = get_processor_kwargs(processor, options, 'video')
+    assert output == {'size': {'shortest_edge': 64, 'longest_edge': 256}}
+    assert options['fps'] == 1 and options['video_metadata'] == [{'fps': 999}]
+    warning.assert_called_once()
+    assert 'Ignoring loader-owned' in warning.call_args.args[0]
+    assert 'fps' in warning.call_args.args[1]
 
 
 def test_processor_kwargs_real_native_image_is_request_local():

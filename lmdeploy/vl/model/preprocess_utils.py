@@ -67,11 +67,15 @@ def get_processor_kwargs(processor, options: dict[str, Any] | None = None, modal
         raise ValueError(f'mm_processor_kwargs.{modality} must be an object.')
     kwargs = deepcopy(options)
     if modality == 'video':
-        if {'fps', 'num_frames', 'min_frames', 'max_frames'} & kwargs.keys() or kwargs.get('do_sample_frames'):
-            raise ValueError('Video sampling belongs in media_io_kwargs.video (fps/num_frames); '
-                             'HF frame resampling is not supported after media loading.')
-        if 'video_metadata' in kwargs:
-            raise ValueError('video_metadata is owned by the media loader, not mm_processor_kwargs.')
+        loader_keys = {'fps', 'num_frames', 'min_frames', 'max_frames', 'do_sample_frames', 'video_metadata'}
+        ignored = loader_keys & kwargs.keys()
+        if ignored:
+            logger.warning(
+                '[video] Ignoring loader-owned mm_processor_kwargs.video options: %s. '
+                'Use media_io_kwargs.video for fps/num_frames; video metadata comes from the loader.',
+                ', '.join(sorted(ignored)))
+            for key in ignored:
+                kwargs.pop(key)
 
     token_keys = ('min_image_tokens', 'max_image_tokens')
     pixel_keys = ('min_pixels', 'max_pixels')
@@ -90,10 +94,8 @@ def get_processor_kwargs(processor, options: dict[str, Any] | None = None, modal
 
     if any(key in kwargs for key in pixel_keys):
         if 'size' in kwargs:
-            raise ValueError('Specify either min_pixels/max_pixels or size, not both.')
-        for key in pixel_keys:
-            if key in kwargs and (type(kwargs[key]) is not int or kwargs[key] <= 0):
-                raise ValueError(f'{key} must be a positive integer.')
+            logger.warning('Ignoring size because min_pixels/max_pixels take precedence for size-based processors.')
+            kwargs.pop('size')
         size = get_override_size(processor, kwargs, modality)
         for key in pixel_keys:
             kwargs.pop(key, None)
