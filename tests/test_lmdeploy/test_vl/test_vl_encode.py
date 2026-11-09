@@ -1,6 +1,10 @@
+import base64
 import math
+from io import BytesIO
 
 import numpy as np
+import pytest
+from PIL import Image, ImageFile
 
 from lmdeploy.vl import (
     encode_audio_base64,
@@ -91,11 +95,20 @@ def test_image_modes():
     assert img_out.mode == 'RGB'
 
 
-def test_truncated_image():
-    url = 'https://github.com/irexyc/lmdeploy/releases/download/v0.0.1/tr.jpeg'
-    im = load_image(url)
+def test_truncated_image(monkeypatch):
+    buffer = BytesIO()
+    Image.new('RGB', (1638, 2048), (120, 30, 200)).save(buffer, format='JPEG')
+    data = buffer.getvalue()[:-128]  # Truncate scan data; a missing EOI alone may be tolerated by the decoder.
+    with monkeypatch.context() as context:
+        context.setattr(ImageFile, 'LOAD_TRUNCATED_IMAGES', False)
+        with pytest.raises(OSError, match='truncated'):
+            Image.open(BytesIO(data)).load()
+
+    # A data URL exercises the HTTP byte decoder without a network dependency.
+    im = load_image('data:image/jpeg;base64,' + base64.b64encode(data).decode())
     assert im.width == 1638
     assert im.height == 2048
+    assert im.mode == 'RGB'
 
 
 def test_single_frame_video():
