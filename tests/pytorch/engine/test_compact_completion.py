@@ -7,6 +7,7 @@ scheduler admission/plan binding is separate.
 import asyncio
 import pickle
 from collections import deque
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -427,6 +428,68 @@ def test_decode_without_shared_input_skips_consumption_tensor_work(monkeypatch):
 
 
 @pytest.mark.parametrize('cancel', [False, True])
+def test_decode_input_retirement_waits_for_pending_worker_event(monkeypatch, cancel):
+    """Control readiness explicitly so the pending-event path is
+    deterministic."""
+    from lmdeploy.pytorch.config import SSMStateCapacity
+    from lmdeploy.pytorch.engine.engine_loop import EngineLoop
+    from lmdeploy.pytorch.paging.compact_state import SSMStateManager
+
+    owner = SSMStateManager(SSMStateCapacity(2, 1, 1))
+    bank = owner.allocate_bank()
+    checkpoint = owner.reserve_checkpoint(bank, 64)
+    owner.complete(submit(owner, (StateAccessRow(bank, 0, (checkpoint.unit_id,), checkpoint),)))
+    owner.bind_input(bank, checkpoint)
+    ref = bank.input_ref
+    owner.release_reference(checkpoint)
+    access = owner.submit_decode((bank,))
+    ready = False
+
+    def wait():
+        assert ready
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent._out_que = asyncio.Queue()
+    agent.out_stream = None
+    agent._release_completed_h2d_transfers = lambda: None
+    event = SimpleNamespace(query=lambda: ready, wait=wait)
+    agent._out_que.put_nowait((BatchedOutputs(torch.tensor([7]), None,
+                                             ssm_state_access_id=access.access_id), event))
+    monkeypatch.setattr(torch.cuda, 'stream', lambda _: nullcontext())
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.compact_state_manager = owner
+    loop.inputs_maker = SimpleNamespace(update_running_seqs=lambda *_: None)
+    loop._finish_forward_output = lambda *_: None
+    loop.executor = agent
+
+    async def prefetch():
+        assert ref.active and not access.finished
+        if cancel:
+            owner.release_bank(bank)
+        return None, None
+
+    loop._prefetch_next_inputs = prefetch
+    packet = dict(inputs=None, delta=SimpleNamespace(ssm_checkpoint_state_ids=None, max_q_seqlen=1),
+                  cache_inputs=CacheCheckpointInputs(ssm_state_access_id=access.access_id))
+
+    async def exercise():
+        nonlocal ready
+        task = asyncio.create_task(loop._main_loop_get_outputs([object()], packet))
+        await asyncio.sleep(0)
+        assert not task.done() and not access.finished
+        assert ref.active == (not cancel)
+        assert ref.unit_id in owner._units
+        ready = True
+        await task
+
+    asyncio.run(exercise())
+    assert access.finished and not ref.active
+    assert ref.unit_id not in owner._units
+    if not cancel:
+        owner.release_bank(bank)
+
+
+@pytest.mark.parametrize('cancel', [False, True])
 def test_decode_input_retirement_waits_for_real_worker_event(cancel):
     from lmdeploy.pytorch.config import SSMStateCapacity
     from lmdeploy.pytorch.engine.engine_loop import EngineLoop
@@ -463,7 +526,9 @@ def test_decode_input_retirement_waits_for_real_worker_event(cancel):
     loop.executor = agent
 
     async def prefetch():
-        assert not done.query() and ref.active and not access.finished
+        # Host scheduling may outlast the GPU delay. Even an already-ready
+        # event must not retire the reference before output acknowledgment.
+        assert ref.active and not access.finished
         if cancel:
             owner.release_bank(bank)
         assert ref.unit_id in owner._units
