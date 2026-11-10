@@ -65,6 +65,7 @@ def _request(
 ):
     return SimpleNamespace(
         seq_id=seq_id,
+        return_routed_experts=False,
         num_history_ids=0,
         adapter_name=adapter_name,
         all_ids=np.asarray(token_ids, dtype=np.int64),
@@ -1212,3 +1213,39 @@ def test_scheduler_rejects_sliding_window_cache():
 
     with pytest.raises(ValueError, match='sliding-window'):
         MooncakeStoreScheduler(config)
+
+
+def test_r3_deferred_frontier_retries_coalesced_blocks_and_end_does_not_wait():
+    config = _cache_config()
+    config.kv_transfer_config.kv_connector_extra_config['store_routed_experts'] = True
+    connector = MooncakeStoreScheduler(config)
+    request = _request(range(17))
+    request.return_routed_experts = True
+    history = np.arange(16 * 2 * 3, dtype=np.uint16).reshape(16, 2, 3)
+    class History:
+        def __len__(self):
+            return len(history)
+        def get_real(self):
+            return history
+    request.all_routed_experts = History()
+    request.num_history_ids = 8
+    connector.client.try_save_routed_experts = Mock(side_effect=[False, True, False])
+    try:
+        connector.cache_routed_experts([request])
+        assert request.seq_id not in connector._route_save_frontier
+        request.num_history_ids = 12
+        connector.cache_routed_experts([request])
+        hashes, snapshot = connector.client.try_save_routed_experts.call_args.args
+        assert len(hashes) == 3
+        np.testing.assert_array_equal(snapshot, history[:12])
+        assert connector._route_save_frontier[request.seq_id] == 3
+        request.num_history_ids = 16
+        connector.cache_routed_experts([request])
+        assert connector._route_save_frontier[request.seq_id] == 3
+        connector.client.drain_routed_experts = Mock(side_effect=AssertionError('request end must not drain'))
+        connector.request_finished(request)
+        assert request.seq_id not in connector._route_save_frontier
+        connector.client.drain_routed_experts.assert_not_called()
+    finally:
+        connector.client.drain_routed_experts.side_effect = None
+        connector.shutdown()

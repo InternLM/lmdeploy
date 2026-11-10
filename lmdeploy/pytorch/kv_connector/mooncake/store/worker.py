@@ -22,9 +22,11 @@ from .data import (
     MooncakeStoreKeyMetadata,
     MooncakeStoreRegistration,
     MooncakeStoreStateRegistration,
+    build_rl_store_cache_prefix,
     build_store_key,
 )
 from .lookup import LookupKeyServer
+from .routed import encode_routes, get_route_blocks, put_route_blocks, route_key
 from .worker_threads import KVCacheStoreRecvingThread, KVCacheStoreSendingThread
 
 if TYPE_CHECKING:
@@ -106,13 +108,21 @@ class MooncakeStoreWorker:
         self._completed_saves: dict[int, bool] = {}
 
         extra_config = kv_transfer_config.kv_connector_extra_config
+        self._store_routes = extra_config.get('store_routed_experts', False)
+        cache_prefix = extra_config.get('cache_prefix', '')
+        if extra_config.get('rl_weight_versioning', False):
+            cache_prefix = build_rl_store_cache_prefix(cache_prefix, extra_config.get('weight_version'))
         self.key_metadata = MooncakeStoreKeyMetadata(
             model_name=extra_config.get('model_name', 'unnamed-model'),
-            cache_prefix=extra_config.get('cache_prefix', ''),
+            cache_prefix=cache_prefix,
             tp_size=tp_size,
             block_size=cache_config.block_size,
             kv_head_replica_num=kv_head_replica_num,
         )
+
+        if extra_config.get('rl_weight_versioning', False):
+            logger.info('Mooncake Store namespace: model=%s cache_prefix=%s',
+                        self.key_metadata.model_name, self.key_metadata.cache_prefix)
 
         config_path = extra_config.get('mooncake_config_path')
         self.store_config = MooncakeStoreConfig.load_from_config(config_path)
@@ -621,6 +631,46 @@ class MooncakeStoreWorker:
             (time.perf_counter() - start) * 1000,
         )
         return matched_tokens
+
+    def save_routed_experts(self, block_hashes, routes) -> None:
+        if not self._store_routes or self.kv_role != 'kv_both' or self.store is None:
+            raise RuntimeError('R3 sidecars require an enabled kv_both Store')
+        start = time.perf_counter()
+        size = put_route_blocks(self.store, self.key_metadata, block_hashes, routes, self._replicate_config)
+        logger.info('Mooncake R3 save: blocks=%d rows=%d bytes=%d elapsed_ms=%.3f',
+                    len(block_hashes), len(routes), size, (time.perf_counter() - start) * 1000)
+
+    def lookup_routed_experts(self, token_len, block_hashes, recompute_blocks=0) -> bytes:
+        if not self._store_routes or self.store is None:
+            return (0).to_bytes(4, 'big')
+        start = time.perf_counter()
+        boundary = self.lookup(token_len, block_hashes, recompute_blocks=recompute_blocks)
+        count = boundary // self.key_metadata.block_size
+        if count == 0:
+            return (0).to_bytes(4, 'big')
+        keys = [route_key(self.key_metadata, digest) for digest in block_hashes[:count]]
+        exists = self.store.batch_is_exist(keys)
+        if len(exists) != len(keys):
+            raise ValueError('R3 existence result length mismatch')
+        complete = 0
+        for value in exists:
+            if value != 1:
+                break
+            complete += 1
+        if complete < count:
+            # Recheck the earlier exact hybrid checkpoint; flooring alone is unsafe.
+            token_len = min(token_len, (complete + recompute_blocks) * self.key_metadata.block_size)
+            boundary = self.lookup(token_len, block_hashes, recompute_blocks=recompute_blocks)
+        if boundary == 0:
+            return (0).to_bytes(4, 'big')
+        routes = get_route_blocks(self.store, self.key_metadata,
+                                  block_hashes[:boundary // self.key_metadata.block_size])
+        if len(routes) != boundary:
+            raise ValueError('R3 rows do not cover the remote boundary')
+        payload = encode_routes(routes)
+        logger.info('Mooncake R3 hit: rows=%d bytes=%d elapsed_ms=%.3f',
+                    boundary, len(payload), (time.perf_counter() - start) * 1000)
+        return boundary.to_bytes(4, 'big') + payload
 
     def shutdown(self) -> None:
         """Release Mooncake resources exactly once."""

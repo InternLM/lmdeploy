@@ -347,3 +347,120 @@ def test_lookup_channel_does_not_import_mooncake(monkeypatch, lookup_pair_factor
     client, _, _ = lookup_pair_factory(store_worker)
 
     assert client.lookup(8, 64, [b'h' * 16], non_block=False) == 19
+
+
+def test_r3_save_backpressure_keeps_engine_heartbeat_and_cancel_live(lookup_pair_factory):
+    import asyncio
+
+    import numpy as np
+
+    class SlowWorker(_FakeStoreWorker):
+        def __init__(self):
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.saved = []
+
+        def save_routed_experts(self, hashes, routes):
+            self.started.set()
+            assert self.release.wait(5), 'engine heartbeat did not release RPC'
+            self.saved.append(routes.copy())
+
+    worker = SlowWorker()
+    client, _, _ = lookup_pair_factory(worker)
+    routes = np.arange(24, dtype=np.uint16).reshape(4, 2, 3)
+    assert client.try_save_routed_experts((b'x' * 32,), routes)
+    assert worker.started.wait(2)
+
+    async def engine_tick():
+        assert not client.try_save_routed_experts((b'y' * 32,), routes)
+        assert not worker.release.is_set()
+        client.discard(99)  # Cancellation must not wait for the sidecar writer.
+        await asyncio.sleep(0)
+        assert not client._routed_saves[0].done()
+        worker.release.set()
+
+    try:
+        asyncio.run(engine_tick())
+        client.drain_routed_experts()
+        assert len(worker.saved) == 1
+        assert client.try_save_routed_experts((b'y' * 32,), routes)
+        client.drain_routed_experts()
+        assert len(worker.saved) == 2
+    finally:
+        worker.release.set()
+
+
+def test_r3_full_queue_does_not_encode_or_submit(monkeypatch):
+    from concurrent.futures import Future
+    from unittest.mock import Mock
+
+    import numpy as np
+
+    from lmdeploy.pytorch.kv_connector.mooncake.store import lookup as module
+
+    client = LookupKeyClient(_make_cache_config(f'ipc:///tmp/lmd-full-{uuid.uuid4().hex}.sock'))
+    pending = Future()
+    client._routed_saves = [pending]
+    encode = Mock(side_effect=AssertionError('full queue must not encode history'))
+    monkeypatch.setattr(module, 'encode_routes', encode)
+    try:
+        assert not client.try_save_routed_experts((b'x' * 32,), np.zeros((4, 2, 3), np.uint16))
+        encode.assert_not_called()
+        assert client._routed_saves == [pending]
+    finally:
+        pending.set_result(None)
+        client.close()
+    with pytest.raises(RuntimeError, match='closed'):
+        client.try_save_routed_experts((), None)
+
+
+def test_r3_accepted_payload_survives_history_mutation_and_request_discard():
+    import numpy as np
+
+    from lmdeploy.pytorch.kv_connector.mooncake.store.routed import decode_routes
+
+    client = LookupKeyClient(_make_cache_config(f'ipc:///tmp/lmd-freeze-{uuid.uuid4().hex}.sock'))
+    started, release = threading.Event(), threading.Event()
+    saved = []
+    def transport(hashes, payload):
+        started.set()
+        assert release.wait(5)
+        saved.append((hashes, decode_routes(payload)))
+    client._save_routed_experts = transport
+    routes = np.arange(24, dtype=np.uint16).reshape(4, 2, 3)
+    expected = routes.copy()
+    hashes = [b'x' * 32]
+    try:
+        assert client.try_save_routed_experts(hashes, routes)
+        assert started.wait(2)
+        routes.fill(0)
+        hashes.clear()
+        client.discard(17)
+        release.set()
+        client.drain_routed_experts()
+        assert saved[0][0] == (b'x' * 32,)
+        np.testing.assert_array_equal(saved[0][1], expected)
+        assert client._routed_saves == []
+    finally:
+        release.set()
+        client.close()
+
+
+def test_r3_save_timeout_drains_and_incomplete_lookup_fails_closed(tmp_path):
+    import numpy as np
+    client = LookupKeyClient(_make_cache_config(f'ipc://{tmp_path}/unserved.sock', timeout_ms=30))
+    hashes = (b'x' * 32,)
+    routes = np.zeros((4, 2, 3), np.uint16)
+    try:
+        assert client.try_save_routed_experts(hashes, routes)
+        client.drain_routed_experts()
+        assert client._routed_saves == []
+        assert client.lookup(17, 4, hashes, non_block=False, require_routes=True) == 0
+        assert client.take_routed_experts(17) is None
+        assert not client.queries
+        assert client.try_save_routed_experts(hashes, routes)
+        client.drain_routed_experts()
+        assert client._routed_saves == []
+    finally:
+        client.close()

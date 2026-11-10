@@ -9,6 +9,8 @@ use big-endian encoding. The worker applies the rewind before selecting a hybrid
 """
 
 LOOKUP_MSG = b'lookup'
+R3_LOOKUP_MSG = b'lookup-r3-v1'
+R3_SAVE_MSG = b'save-r3-v1'
 RESP_ERR = b'\x00'
 
 __all__ = ['LOOKUP_MSG', 'RESP_ERR']

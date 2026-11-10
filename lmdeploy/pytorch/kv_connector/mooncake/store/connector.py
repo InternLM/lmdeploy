@@ -133,6 +133,9 @@ class MooncakeStoreConnector(KVConnectorBase):
     def cancel_lookup(self, request_id: RequestId) -> None:
         return self._require_scheduler().cancel_lookup(request_id)
 
+    def reject_load_result(self, request_id: RequestId) -> None:
+        self._require_scheduler().reject_load_result(request_id)
+
     def update_connector_output(
         self,
         connector_output: KVConnectorOutput,
@@ -141,6 +144,12 @@ class MooncakeStoreConnector(KVConnectorBase):
 
     def finish_transfers_after_worker_drain(self) -> None:
         return self._require_scheduler().finish_transfers_after_worker_drain()
+
+    def cache_routed_experts(self, requests: Sequence[SchedulerSequence]) -> None:
+        self._require_scheduler().cache_routed_experts(requests)
+
+    def drain_routed_experts(self) -> None:
+        self._require_scheduler().drain_routed_experts()
 
     def request_finished(
         self,

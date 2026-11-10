@@ -1508,7 +1508,7 @@ class TestResetGraphRunner:
                 events.append('memdecode_reset')
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
-        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None, kv_transfer_config=None)
         agent.patched_model = _PatchedModel()
         agent.spec_agent = _SpecAgent()
         agent.memdecode_agent = _MemDecodeAgent()
@@ -1551,7 +1551,7 @@ class TestResetGraphRunner:
         events = []
         model = object()
         agent = BaseModelAgent.__new__(BaseModelAgent)
-        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None, kv_transfer_config=None)
         agent._model_update_group = {'update': object()}
         agent.patched_model = SimpleNamespace(
             get_model=lambda: model,
@@ -1747,6 +1747,7 @@ class TestModelAgentWakeup:
         model_agent.dist_config = SimpleNamespace(dp=1)
         model_agent.memdecode_agent = None
         model_agent.kv_connector = None
+        model_agent.cache_config = SimpleNamespace(kv_transfer_config=None)
         model_agent.cache_engine = object()
         model_agent.state_cache_engine = object()
         model_agent.patched_model = _PatchedModel()
@@ -1850,7 +1851,7 @@ class TestCheckpointEngineWeightUpdate:
                 return self.model
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
-        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None, kv_transfer_config=None)
         agent.patched_model = _PatchedModel()
         agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
         agent.spec_agent._enabled = False
@@ -1999,7 +2000,7 @@ class TestMemDecodeModelAgentLifecycle:
 
         monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
         agent, events = self._make_agent(enabled=True)
-        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None, kv_transfer_config=None)
 
         BaseModelAgent.release(agent)
 
@@ -2152,7 +2153,7 @@ class TestMemDecodeModelAgentLifecycle:
 @pytest.fixture(params=['flat', 'null_llm', 'nested', 'mirrored'])
 def weight_update_agent(request):
     agent = BaseModelAgent.__new__(BaseModelAgent)
-    agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+    agent.cache_config = SimpleNamespace(compact_state_capacity=None, kv_transfer_config=None)
     config = SimpleNamespace(num_hidden_layers=5, num_nextn_predict_layers=2)
     # Follower ranks have the draft config but no local proposer.
     agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)

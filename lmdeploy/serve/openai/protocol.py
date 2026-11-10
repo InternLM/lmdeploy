@@ -556,6 +556,7 @@ class UpdateParamsRequest(BaseModel):
     serialized_named_tensors: str | list[str] | dict
     load_format: str | None = None  # 'flattened_bucket' or None
     finished: bool = False
+    weight_version: str | None = None
 
 
 class UpdateWeightsFromIPCRequest(BaseModel):

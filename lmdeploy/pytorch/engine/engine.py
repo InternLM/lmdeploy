@@ -634,6 +634,7 @@ class Engine(EngineBase):
         if self._engine_loop is not None:
             await self._engine_loop.drain_for_sleep()
             logger.info('PyTorch engine loop drained for sleep.')
+        await asyncio.to_thread(self.scheduler.drain_routed_experts)
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
         await self.executor.sleep(level)
@@ -697,6 +698,7 @@ class Engine(EngineBase):
                             and self.cache_config.use_mooncake_store):
                         self._block_new_inputs()
                         self._cancel_and_end_all_sessions()
+                        await asyncio.to_thread(self.scheduler.drain_routed_experts)
                         await self.executor.drain_for_shutdown()
                         self.scheduler.finish_kv_transfers_after_worker_drain()
                 except BaseException:

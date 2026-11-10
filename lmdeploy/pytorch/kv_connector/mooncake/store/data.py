@@ -27,6 +27,21 @@ _BLOCK_HASH_SCHEMA = b'lmdeploy-mooncake-prefix-block-v1\x00'
 MooncakeMode = Literal['embedded']
 
 
+def build_rl_store_cache_prefix(cache_prefix: str, weight_version: str) -> str:
+    """Fingerprint the ordered prefix/version pair without delimiter ambiguity.
+
+    The canonical JSON array order and encoding define the v2 namespace. Bump the tag if that contract changes; never
+    fall back to ambiguous legacy keys.
+    """
+    if not isinstance(cache_prefix, str):
+        raise TypeError('cache_prefix must be a string')
+    if not isinstance(weight_version, str) or not weight_version:
+        raise ValueError('RL Mooncake Store requires a non-empty weight_version')
+    encoded = json.dumps([cache_prefix, weight_version], ensure_ascii=True,
+                         separators=(',', ':')).encode('ascii')
+    return 'rl-store-v2:' + hashlib.sha256(encoded).hexdigest()
+
+
 def validate_kv_head_replica_num(
     kv_head_replica_num: int,
     tp_size: int,

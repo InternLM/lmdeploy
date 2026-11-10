@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 import torch
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from lmdeploy.pytorch.messages import SchedulerSequence
     from lmdeploy.pytorch.paging.compact_state import StateReference
 
@@ -121,6 +123,7 @@ class KVLoadResult:
 
     request_id: RequestId
     success: bool
+    routed_experts: 'np.ndarray | None' = None
 
 
 @dataclass(frozen=True)
@@ -375,6 +378,10 @@ class KVConnectorBase(ABC):
         """Discard scheduler-side lookup state for an aborted request."""
         return None
 
+    def reject_load_result(self, request_id: RequestId) -> None:
+        """Fall back to computation when paging rejects a terminal load."""
+        return None
+
     def update_connector_output(
         self,
         connector_output: KVConnectorOutput,
@@ -385,6 +392,14 @@ class KVConnectorBase(ABC):
 
     def finish_transfers_after_worker_drain(self) -> None:
         """Drop scheduler-side transfer state after workers have drained."""
+        return None
+
+    def cache_routed_experts(self, requests: Sequence['SchedulerSequence']) -> None:
+        """Persist newly available CPU route history, when supported."""
+        return None
+
+    def drain_routed_experts(self) -> None:
+        """Complete CPU sidecar writes before worker Store shutdown."""
         return None
 
     def request_finished(

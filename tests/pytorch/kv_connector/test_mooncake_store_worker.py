@@ -30,6 +30,7 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     MooncakeStoreStateRegistration,
     MooncakeStoreStateSave,
     build_prefix_block_hashes,
+    build_rl_store_cache_prefix,
     build_store_key,
 )
 from lmdeploy.pytorch.kv_connector.mooncake.store.worker import MooncakeStoreWorker
@@ -1382,5 +1383,273 @@ def test_hybrid_load_failure_before_get_completes_once_and_receiver_continues(
         assert worker.get_finished() == KVConnectorOutput(finished_receiving={8})
         assert worker.get_finished() == KVConnectorOutput()
         assert [entry.args for entry in completed.call_args_list] == [(7, False), (8, True)]
+    finally:
+        worker.shutdown()
+
+
+def test_rl_weight_version_changes_both_kv_and_state_keys(tmp_path):
+    cfg = make_cache_config(write_store_config(tmp_path))
+    extra = cfg.kv_transfer_config.kv_connector_extra_config
+    extra.update(rl_weight_versioning=True, cache_prefix='run', weight_version='old')
+    old = MooncakeStoreWorker(cfg, store_factory=FakeStore)
+    extra['weight_version'] = 'new'
+    new = MooncakeStoreWorker(cfg, store_factory=FakeStore)
+    digest = build_prefix_block_hashes(list(range(64)), 64)[0]
+    for group in (0, 1):
+        assert build_store_key(old.key_metadata, 0, digest, group_id=group) != build_store_key(
+            new.key_metadata, 0, digest, group_id=group)
+    assert old.key_metadata.cache_prefix == build_rl_store_cache_prefix('run', 'old')
+    assert new.key_metadata.cache_prefix == build_rl_store_cache_prefix('run', 'new')
+    old.shutdown()
+    new.shutdown()
+
+
+@pytest.mark.parametrize('version', [None, '', 1])
+def test_rl_store_requires_explicit_bootstrap_version(tmp_path, version):
+    cfg = make_cache_config(write_store_config(tmp_path))
+    cfg.kv_transfer_config.kv_connector_extra_config.update(rl_weight_versioning=True, weight_version=version)
+    with pytest.raises(ValueError, match='weight_version'):
+        MooncakeStoreWorker(cfg, store_factory=FakeStore)
+
+
+class RouteMemoryStore(FakeStore):
+    """Pointer-copy Store double; the RPC tests use the real worker codec."""
+
+    def __init__(self):
+        super().__init__()
+        self.objects = {}
+        self.registered = set()
+
+    def register_buffer(self, address, size):
+        self.registered.add(address)
+        return 0
+
+    def unregister_buffer(self, address):
+        self.registered.remove(address)
+        return 0
+
+    def batch_put_from(self, keys, pointers, sizes, *args):
+        for key, pointer, size in zip(keys, pointers, sizes):
+            self.objects[key] = ctypes.string_at(pointer, size)
+        return [0] * len(keys)
+
+    def batch_get_into(self, keys, pointers, sizes):
+        results = []
+        for key, pointer, size in zip(keys, pointers, sizes):
+            value = self.objects.get(key)
+            if value is None or len(value) != size:
+                results.append(-1)
+            else:
+                ctypes.memmove(pointer, value, size)
+                results.append(size)
+        return results
+
+    def batch_is_exist(self, keys):
+        return [int(key in self.objects) for key in keys]
+
+    def get(self, key):
+        return self.objects.get(key, b'')
+
+
+def _route_memory_worker(hybrid=True):
+    worker = MooncakeStoreWorker.__new__(MooncakeStoreWorker)
+    worker.global_rank = worker.tp_rank = 0
+    worker.tp_size = 1
+    worker.kv_role = 'kv_both'
+    worker._store_routes = True
+    worker._replicate_config = None
+    worker._cache_config = CacheConfig(
+        max_batches=1, block_size=4, num_cpu_blocks=0, num_gpu_blocks=16,
+        states_shapes=[((2,), torch.float32)] if hybrid else [],
+        prefill_save_alignment=8)
+    worker.key_metadata = MooncakeStoreKeyMetadata('model', 'weights:v1', 1, 4)
+    worker.store = RouteMemoryStore()
+    return worker
+
+
+@pytest.mark.parametrize(('fault', 'expected'), [
+    ('none', 16), ('missing-last-r3', 8), ('missing-first-r3', 0),
+    ('missing-earlier-state', 16), ('new-weight-version', 0), ('new-tp-layout', 0),
+])
+def test_r3_lookup_intersects_kv_exact_state_and_all_route_pages(fault, expected):
+    import numpy as np
+
+    from lmdeploy.pytorch.kv_connector.mooncake.store.routed import decode_routes, route_key
+
+    worker = _route_memory_worker()
+    hashes = build_prefix_block_hashes(range(16), 4)
+    routes = np.arange(16 * 2 * 3, dtype=np.uint16).reshape(16, 2, 3)
+    worker.save_routed_experts(hashes, routes)
+    for digest in hashes:
+        worker.store.objects[build_store_key(worker.key_metadata, 0, digest)] = b'KV'
+    for index in (1, 3):
+        worker.store.objects[build_store_key(worker.key_metadata, 0, hashes[index], group_id=1)] = b'state'
+    if fault == 'missing-last-r3':
+        del worker.store.objects[route_key(worker.key_metadata, hashes[3])]
+    elif fault == 'missing-first-r3':
+        del worker.store.objects[route_key(worker.key_metadata, hashes[0])]
+    elif fault == 'missing-earlier-state':
+        del worker.store.objects[build_store_key(worker.key_metadata, 0, hashes[1], group_id=1)]
+    elif fault == 'new-weight-version':
+        worker.key_metadata = replace(worker.key_metadata, cache_prefix='weights:v2')
+    elif fault == 'new-tp-layout':
+        worker.key_metadata = replace(worker.key_metadata, tp_size=2)
+    result = worker.lookup_routed_experts(16, hashes)
+    assert int.from_bytes(result[:4], 'big') == expected
+    if expected:
+        np.testing.assert_array_equal(decode_routes(result[4:]), routes[:expected])
+    else:
+        assert len(result) == 4
+    assert not worker.store.registered
+
+
+@pytest.mark.parametrize('fault', ['truncated', 'wrong-shape', 'wrong-dtype'])
+def test_r3_wire_rejects_invalid_records_and_releases_registrations(fault):
+    import numpy as np
+
+    from lmdeploy.pytorch.kv_connector.mooncake.store.routed import (
+        decode_routes,
+        encode_routes,
+        get_route_blocks,
+        route_key,
+    )
+
+    worker = _route_memory_worker()
+    hashes = build_prefix_block_hashes(range(8), 4)
+    routes = np.zeros((8, 2, 3), dtype=np.uint16)
+    worker.save_routed_experts(hashes, routes)
+    if fault == 'truncated':
+        worker.store.objects[route_key(worker.key_metadata, hashes[1])] = b'bad'
+        with pytest.raises(RuntimeError, match='batch get failed'):
+            get_route_blocks(worker.store, worker.key_metadata, hashes)
+    elif fault == 'wrong-shape':
+        payload = encode_routes(routes)
+        with pytest.raises(ValueError):
+            decode_routes(payload[:-1])
+    else:
+        with pytest.raises(ValueError, match='uint16'):
+            encode_routes(routes.astype(np.float32))
+    assert not worker.store.registered
+
+
+def test_r3_real_rpc_save_lookup_drain_and_failed_payload(tmp_path):
+    import numpy as np
+
+    from lmdeploy.pytorch.kv_connector.mooncake.store.lookup import LookupKeyClient, LookupKeyServer
+    from lmdeploy.pytorch.kv_connector.mooncake.store.routed import route_key
+
+    worker = _route_memory_worker(hybrid=False)
+    config = CacheConfig(max_batches=1, block_size=4, num_cpu_blocks=0, num_gpu_blocks=16,
+                         kv_transfer_config=KVTransferConfig(
+                             kv_connector='MooncakeStoreConnector', kv_role='kv_both',
+                             kv_connector_extra_config={'lookup_rpc_path': f'ipc://{tmp_path}/r3.sock'}))
+    server = LookupKeyServer(worker, config)
+    client = LookupKeyClient(config)
+    hashes = build_prefix_block_hashes(range(8), 4)
+    routes = np.arange(8 * 2 * 3, dtype=np.uint16).reshape(8, 2, 3)
+    for digest in hashes:
+        worker.store.objects[build_store_key(worker.key_metadata, 0, digest)] = b'KV'
+    try:
+        assert client.try_save_routed_experts(hashes, routes)
+        client.drain_routed_experts()
+        assert client.lookup(1, 8, hashes, non_block=False, require_routes=True) == 8
+        np.testing.assert_array_equal(client.take_routed_experts(1), routes)
+        assert client.take_routed_experts(1) is None
+        worker.store.objects[route_key(worker.key_metadata, hashes[0])] = b'corrupt'
+        assert client.lookup(2, 8, hashes, non_block=False, require_routes=True) == 0
+        assert client.take_routed_experts(2) is None
+        client.discard_all()
+    finally:
+        client.close()
+        server.close()
+    assert not worker.store.registered
+
+
+@pytest.mark.parametrize('scope_a,scope_b', [
+    (('run', 'alpha@weights:beta'), ('run@weights:alpha', 'beta')),
+    (('', 'alpha@weights:beta'), ('@weights:alpha', 'beta')),
+    (('租户"\\', 'alpha@weights:beta'), ('租户"\\@weights:alpha', 'beta')),
+])
+def test_rl_scope_pairs_isolate_kv_state_and_routes(tmp_path, scope_a, scope_b):
+    import numpy as np
+
+    from lmdeploy.pytorch.kv_connector.mooncake.store.routed import decode_routes, route_key
+
+    config_path = write_store_config(tmp_path)
+    objects, workers = {}, []
+    try:
+        for prefix, version in (scope_a, scope_b, scope_a):
+            cfg = make_cache_config(config_path)
+            extra = cfg.kv_transfer_config.kv_connector_extra_config
+            extra.update(rl_weight_versioning=True, cache_prefix=prefix, weight_version=version,
+                         store_routed_experts=True)
+            store = RouteMemoryStore()
+            store.objects = objects
+            workers.append(MooncakeStoreWorker(cfg, store_factory=lambda: store))
+            assert extra['cache_prefix'] == prefix and extra['weight_version'] == version
+        a, b, same = workers
+        digest = build_prefix_block_hashes(range(64), 64)[0]
+        for group in (0, 1):
+            keys = [build_store_key(w.key_metadata, 0, digest, group_id=group) for w in workers]
+            assert keys[0] != keys[1]
+            assert keys[0] == keys[2]
+        assert route_key(a.key_metadata, digest) != route_key(b.key_metadata, digest)
+        assert route_key(a.key_metadata, digest) == route_key(same.key_metadata, digest)
+        objects[build_store_key(a.key_metadata, 0, digest)] = b'FA-existence-sentinel'
+        routes = np.arange(64 * 2 * 2, dtype=np.uint16).reshape(64, 2, 2)
+        a.save_routed_experts([digest], routes)
+        assert b.lookup(64, [digest]) == 0
+        assert b.lookup_routed_experts(64, [digest]) == bytes(4)
+        restored = same.lookup_routed_experts(64, [digest])
+        assert int.from_bytes(restored[:4], 'big') == 64
+        np.testing.assert_array_equal(decode_routes(restored[4:]), routes)
+    finally:
+        for worker in workers:
+            worker.shutdown()
+
+
+def test_rl_namespace_encoding_is_versioned_and_deterministic():
+    import hashlib
+
+    assert build_rl_store_cache_prefix('run', 'step-17') == (
+        'rl-store-v2:' + hashlib.sha256(b'["run","step-17"]').hexdigest())
+    scopes = [(prefix, version) for prefix in ('', 'run', '@weights:', '租户"\\')
+              for version in ('step-17', 'alpha@weights:beta', '["", ""]', '版本\nβ')]
+    keys = [build_rl_store_cache_prefix(*scope) for scope in scopes]
+    assert len(set(keys)) == len(scopes)
+    assert all('@weights:' not in key for key in keys)
+
+
+def test_rl_namespace_cold_misses_legacy_objects_without_deleting_them(tmp_path):
+    import numpy as np
+
+    from lmdeploy.pytorch.kv_connector.mooncake.store.routed import put_route_blocks, route_key
+
+    cfg = make_cache_config(write_store_config(tmp_path))
+    cfg.kv_transfer_config.kv_connector_extra_config.update(
+        rl_weight_versioning=True, cache_prefix='run', weight_version='step-17', store_routed_experts=True)
+    store = RouteMemoryStore()
+    worker = MooncakeStoreWorker(cfg, store_factory=lambda: store)
+    digest = build_prefix_block_hashes(range(64), 64)[0]
+    legacy = replace(worker.key_metadata, cache_prefix='run@weights:step-17')
+    old_kv = build_store_key(legacy, 0, digest)
+    old_routes = route_key(legacy, digest)
+    try:
+        store.objects[old_kv] = b'legacy-FA-sentinel'
+        put_route_blocks(store, legacy, [digest], np.ones((64, 2, 2), dtype=np.uint16))
+        assert worker.lookup(64, [digest]) == 0
+        assert worker.lookup_routed_experts(64, [digest]) == bytes(4)
+        assert old_kv in store.objects and old_routes in store.objects
+    finally:
+        worker.shutdown()
+
+
+def test_non_rl_namespace_keeps_existing_prefix(tmp_path):
+    cfg = make_cache_config(write_store_config(tmp_path))
+    cfg.kv_transfer_config.kv_connector_extra_config.update(
+        rl_weight_versioning=False, cache_prefix='run@weights:alpha', weight_version='beta')
+    worker = MooncakeStoreWorker(cfg, store_factory=FakeStore)
+    try:
+        assert worker.key_metadata.cache_prefix == 'run@weights:alpha'
     finally:
         worker.shutdown()

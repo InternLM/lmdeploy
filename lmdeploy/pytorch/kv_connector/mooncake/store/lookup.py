@@ -19,7 +19,8 @@ from lmdeploy.pytorch.kv_connector.base import RequestId
 from lmdeploy.utils import get_logger
 
 from .data import BlobBlockHashes
-from .protocol import LOOKUP_MSG, RESP_ERR
+from .protocol import LOOKUP_MSG, R3_LOOKUP_MSG, R3_SAVE_MSG, RESP_ERR
+from .routed import decode_routes, encode_routes
 
 if TYPE_CHECKING:
     from lmdeploy.messages import KVTransferConfig
@@ -166,6 +167,8 @@ class LookupKeyServer:
         hash_len = int.from_bytes(hash_len_frame, byteorder='big')
         block_hashes = BlobBlockHashes(frames[3].buffer, hash_len)
         recompute_blocks = int.from_bytes(recompute_frame, byteorder='big')
+        if bytes(frames[0]) == R3_LOOKUP_MSG:
+            return self.store_worker.lookup_routed_experts(token_len, block_hashes, recompute_blocks)
         result = self.store_worker.lookup(token_len, block_hashes, recompute_blocks=recompute_blocks)
         if (isinstance(result, bool) or not isinstance(result, int) or result < 0 or result > token_len
                 or result >= 2**32):
@@ -177,7 +180,17 @@ class LookupKeyServer:
             logger.warning('LookupKeyServer received an empty request.')
             return RESP_ERR
         msg_type = bytes(frames[0])
-        if msg_type == LOOKUP_MSG:
+        if msg_type == R3_SAVE_MSG:
+            try:
+                if len(frames) != 3:
+                    raise ValueError('R3 save requires hash and route frames')
+                hashes = BlobBlockHashes(frames[1].buffer, 32)
+                self.store_worker.save_routed_experts(hashes, decode_routes(bytes(frames[2])))
+                return b'ok'
+            except Exception:
+                logger.exception('Mooncake R3 save failed')
+                return RESP_ERR
+        if msg_type in (LOOKUP_MSG, R3_LOOKUP_MSG):
             try:
                 return self._handle_lookup(frames)
             except Exception as e:
@@ -251,6 +264,9 @@ class LookupKeyClient:
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='MooncakeLookupClient')
         self.queries: dict[RequestId, _LookupQuery] = {}
         self._closed = False
+        self._routed_results = {}
+        self._routed_saves = []
+        self._max_routed_saves = max(1, cache_config.max_batches)
 
     def _make_socket(self) -> zmq.Socket:
         assert self.context is not None
@@ -311,8 +327,11 @@ class LookupKeyClient:
             recompute_blocks.to_bytes(4, byteorder='big'),
         )
 
-    def _lookup(self, token_len: int, block_hashes: Sequence[bytes], recompute_blocks: int) -> int:
+    def _lookup(self, token_len: int, block_hashes: Sequence[bytes], recompute_blocks: int,
+                require_routes: bool = False):
         frames = self._encode_lookup(token_len, block_hashes, recompute_blocks)
+        if require_routes:
+            frames = (R3_LOOKUP_MSG, *frames[1:])
         rpc_socket = self._ensure_socket()
         try:
             rpc_socket.send_multipart(frames, copy=False)
@@ -320,6 +339,16 @@ class LookupKeyClient:
         except zmq.ZMQError:
             self._reconnect_socket()
             raise
+        if require_routes:
+            if len(response) < 4:
+                raise RuntimeError('truncated R3 lookup response')
+            result = int.from_bytes(response[:4], 'big')
+            if result > token_len:
+                raise RuntimeError('R3 lookup exceeds requested token length')
+            routes = decode_routes(response[4:]) if result else None
+            if (result and len(routes) != result) or (not result and len(response) != 4):
+                raise RuntimeError('R3 lookup length mismatch')
+            return result, routes
         if len(response) != 4:
             raise RuntimeError(f'lookup response must have 4 bytes, got {len(response)}')
         result = int.from_bytes(response, byteorder='big')
@@ -334,6 +363,7 @@ class LookupKeyClient:
         block_hashes: Sequence[bytes],
         *,
         recompute_blocks: int = 0,
+        require_routes: bool = False,
     ) -> None:
         """Start a query once, retaining even a completed result for
         admission."""
@@ -341,7 +371,8 @@ class LookupKeyClient:
             raise RuntimeError('LookupKeyClient is closed')
         if req_id not in self.queries:
             self.queries[req_id] = _LookupQuery(self.executor.submit(
-                self._lookup, token_len, tuple(block_hashes), recompute_blocks))
+                self._lookup, token_len, tuple(block_hashes), recompute_blocks,
+                **({'require_routes': True} if require_routes else {})))
 
     def lookup(
         self,
@@ -351,24 +382,69 @@ class LookupKeyClient:
         non_block: bool = True,
         *,
         recompute_blocks: int = 0,
+        require_routes: bool = False,
     ) -> int | None:
         """Submit once per request and poll without blocking by default."""
-        self.submit(req_id, token_len, block_hashes, recompute_blocks=recompute_blocks)
+        self.submit(req_id, token_len, block_hashes, recompute_blocks=recompute_blocks, require_routes=require_routes)
         query = self.queries[req_id]
         query.admission_started = True
         future = query.future
         if non_block and not future.done():
             return None
         try:
-            return future.result()
+            result = future.result()
+            if isinstance(result, tuple):
+                result, routes = result
+                if routes is not None:
+                    self._routed_results[req_id] = routes
+            return result
         except Exception as e:
             logger.error('Asynchronous Mooncake lookup failed for %s: %s', req_id, e, exc_info=True)
             return 0
         finally:
             self.queries.pop(req_id, None)
 
+    def take_routed_experts(self, req_id):
+        return self._routed_results.pop(req_id, None)
+
+    def _save_routed_experts(self, hashes, payload):
+        try:
+            rpc_socket = self._ensure_socket()
+            rpc_socket.send_multipart((R3_SAVE_MSG, b''.join(hashes), payload), copy=False)
+            if rpc_socket.recv() != b'ok':
+                raise RuntimeError('Store worker rejected R3 save')
+        except Exception:
+            self._reconnect_socket()
+            logger.exception('Mooncake R3 sidecar save failed; incomplete prefixes will miss')
+
+    def try_save_routed_experts(self, hashes, routes) -> bool:
+        """Submit frozen bytes without waiting; False leaves the frontier
+        retryable.
+
+        True means submitted, not persisted. Failed writes may safely become cache misses.
+        """
+        if self._closed:
+            raise RuntimeError('LookupKeyClient is closed')
+        self._routed_saves = [future for future in self._routed_saves if not future.done()]
+        if len(self._routed_saves) >= self._max_routed_saves:
+            return False
+        self._routed_saves.append(self.executor.submit(
+            self._save_routed_experts, tuple(hashes), encode_routes(routes)))
+        return True
+
+    def drain_routed_experts(self):
+        for future in self._routed_saves:
+            future.result()
+        self._routed_saves.clear()
+
+    def discard_all(self):
+        for req_id in tuple(self.queries):
+            self.discard(req_id)
+        self._routed_results.clear()
+
     def discard(self, req_id: RequestId) -> None:
         """Drop an in-flight or completed lookup for an aborted request."""
+        self._routed_results.pop(req_id, None)
         query = self.queries.pop(req_id, None)
         if query is not None:
             query.future.cancel()
@@ -386,7 +462,9 @@ class LookupKeyClient:
         """Cancel queued lookups and release the client socket exactly once."""
         if self._closed:
             return
+        self.drain_routed_experts()
         self._closed = True
+        self._routed_results.clear()
         queries = list(self.queries.values())
         self.queries.clear()
         for query in queries:
