@@ -130,7 +130,6 @@ class AuthenticationMiddleware:
             '/health',  # Health check endpoints
             '/docs',  # Swagger UI documentation
             '/redoc',  # ReDoc documentation
-            '/nodes',  # Endpoints about node operation between proxy and api_server
         ]
 
     def verify_token(self, headers: Headers) -> bool:
