@@ -15,7 +15,7 @@ import pytest
 import requests
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from lmdeploy.model import BaseChatTemplate
 from lmdeploy.serve.anthropic.adapter import to_openai_messages
@@ -28,6 +28,26 @@ from lmdeploy.serve.openai.responses.request import messages_from_input
 from lmdeploy.serve.processors.multimodal import MultimodalProcessor
 
 PATHS = {'chat': '/v1/chat/completions', 'messages': '/v1/messages', 'responses': '/v1/responses'}
+
+
+@pytest.mark.parametrize('item_type', ['image', 'image_url', 'image_data'])
+def test_direct_pil_exif_orientation(item_type):
+    image = Image.new('RGBA', (56, 112), (120, 30, 200, 128))
+    image.getexif()[274] = 6
+    expected = ImageOps.exif_transpose(image)
+    messages = [dict(role='user', content=[dict(type=item_type, **{item_type: dict(data=image)})])]
+    result = asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))
+    actual = result[0]['content'][0]['data']
+    assert actual.size == expected.size
+    assert actual.mode == 'RGBA'  # Direct PIL inputs retain their existing mode policy.
+    assert actual.tobytes() == expected.tobytes()
+    assert actual.getexif().get(274, 1) == 1
+    assert image.size == (56, 112) and image.getexif()[274] == 6
+    if item_type == 'image_data':
+        # Already prepared, non-PIL data is not reinterpreted as an encoded image.
+        marker = object()
+        messages[0]['content'][0][item_type]['data'] = marker
+        assert asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))[0]['content'][0]['data'] is marker
 
 
 class _Parser:

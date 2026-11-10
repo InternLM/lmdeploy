@@ -52,6 +52,10 @@ ______________________________________________________________________
 
 ## Single Image
 
+Image loading and encoding apply valid EXIF orientation before mode conversion or processing, including direct PIL image inputs. Applied orientation tags are removed so processing the result again does not rotate it twice; the caller's PIL image is not modified. Images without EXIF orientation retain their existing behavior. Invalid orientation metadata is ignored without hiding pixel-decoding errors. If you rotate pixels yourself, remove or reset the old orientation tag before passing the image to LMDeploy.
+
+This corrects the previous behavior for EXIF orientations 2–8 across models; it does not change pixel/token budget units or video frame sampling. Base64 JPEG video frames use the same image decoder and also inherit orientation normalization; this does not establish training/serving video preprocessing equivalence.
+
 <details>
 <summary>Complete example</summary>
 

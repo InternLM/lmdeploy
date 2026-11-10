@@ -10,7 +10,7 @@ from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.media.audio import AudioMediaIO
 from lmdeploy.vl.media.connection import load_from_url
-from lmdeploy.vl.media.image import ImageMediaIO
+from lmdeploy.vl.media.image import ImageMediaIO, apply_exif_orientation
 from lmdeploy.vl.media.time_series import TimeSeriesMediaIO
 from lmdeploy.vl.media.video import VideoMediaIO
 
@@ -193,6 +193,8 @@ class MultimodalProcessor:
             else:
                 raise NotImplementedError(f'unknown type: {item_type}')
 
+            if modality == Modality.IMAGE and isinstance(data, PIL.Image.Image):
+                data = apply_exif_orientation(data)
             out_message['content'].append({'type': modality.value, 'data': data, **item_params})
 
         out_messages[i] = out_message
