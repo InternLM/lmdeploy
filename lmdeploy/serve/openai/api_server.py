@@ -6,6 +6,7 @@ import asyncio
 import os
 import re
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -38,10 +39,11 @@ from lmdeploy.serve.openai.responses import create_responses_router
 from lmdeploy.serve.openai.utils import get_model_list
 from lmdeploy.serve.utils.server_utils import (
     AuthenticationMiddleware,
+    DecisionOnlyMiddleware,
     EngineSleepingMiddleware,
     protocol_error_response,
 )
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, get_model
 
 if TYPE_CHECKING:
     from lmdeploy.serve.managers import Session
@@ -63,6 +65,8 @@ class ServerContext:
         self.enable_abort_handling = False
         self.response_parser_cls: type[ResponseParser] | None = None
         self.default_gen_config: dict = {}
+        # A successfully initialized context enables decision scoring; otherwise the endpoint returns 503.
+        self.decision_context = None
 
     @property
     def engine_config(self):
@@ -281,6 +285,8 @@ def serve(model_path: str,
           speculative_config: SpeculativeConfig | None = None,
           allowed_media_domains: list[str] | None = None,
           generation_config: str = 'auto',
+          task: str | None = None,
+          decision_temperature: float | None = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -334,10 +340,42 @@ def serve(model_path: str,
         allow_terminate_by_client (bool): Allow request from client to terminate server.
         allowed_media_domains (list[str] | None): Optional exact hostname
             allowlist for HTTP(S) media URLs.
+        task (str | None): Set to ``'intern-decision'`` to enable decision scoring
+            on the PyTorch backend.
+        decision_temperature (float | None): Explicit decision calibration,
+            overriding checkpoint metadata and known model-path temperatures.
+            Must be finite and positive. Unknown models without calibration fail startup.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
+
+    if task not in (None, 'intern-decision'):
+        raise ValueError(f'Unknown task: {task!r}. Use task="intern-decision".')
+    if decision_temperature is not None:
+        if task != 'intern-decision':
+            raise ValueError('decision_temperature requires task="intern-decision".')
+        from lmdeploy.intern_decision_encoding import resolve_temperature
+        decision_temperature = resolve_temperature(model_path, temperature=decision_temperature)
+    original_model_path = model_path
+
+    if task is not None:
+        from lmdeploy.intern_decision_encoding import resolve_temperature
+        from lmdeploy.serve.parsers.decision_parser import validate_decision_config
+        if backend_config is None:
+            backend_config = PytorchEngineConfig()
+        validate_decision_config(backend_config, speculative_config)
+        backend_config = replace(backend_config, hf_overrides={
+            **(backend_config.hf_overrides or {}), '_lmdeploy_task': 'intern-decision',
+        })
+        # Input scoring is PyTorch-only; like the CLI, the task selects that backend.
+        backend = 'pytorch'
+        if not os.path.exists(model_path):
+            # Load weights and calibration metadata from the same resolved checkpoint.
+            model_name = model_name if model_name is not None else model_path
+            model_path = get_model(model_path, backend_config.download_dir, backend_config.revision)
+        decision_temperature = resolve_temperature(
+            model_path, temperature=decision_temperature, original_model_path=original_model_path)
 
     server_context = ServerContext()
     server_context.allow_terminate_by_client = allow_terminate_by_client
@@ -380,6 +418,15 @@ def serve(model_path: str,
         allowed_media_domains=allowed_media_domains,
         **kwargs)
     set_parsers(server_context, reasoning_parser, tool_call_parser)
+    if task is not None:
+        from lmdeploy.serve.parsers.decision_parser import create_decision_context
+        try:
+            server_context.decision_context = create_decision_context(
+                server_context.async_engine, model_path, temperature=decision_temperature,
+                original_model_path=original_model_path)
+        except BaseException:
+            server_context.async_engine.close()
+            raise
 
     # create FastAPI lifespan events
     lifespan = create_lifespan_handler(backend_config,
@@ -410,6 +457,9 @@ def serve(model_path: str,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+
+    if server_context.decision_context is not None:
+        app.add_middleware(DecisionOnlyMiddleware)
 
     if api_keys is not None and (tokens := [key for key in api_keys if key]):
         app.add_middleware(AuthenticationMiddleware, tokens=tokens)
