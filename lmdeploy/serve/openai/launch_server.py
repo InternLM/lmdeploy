@@ -116,6 +116,13 @@ def launch_server(num_nodes: int,
     log_level = kwargs.get('log_level', 'ERROR')
     logger.setLevel(log_level)
 
+    if kwargs.get('task') == 'intern-decision':
+        from lmdeploy.serve.parsers.decision_parser import validate_decision_config
+        validate_decision_config(backend_config, kwargs.get('speculative_config'))
+        if kwargs.get('decision_temperature') is not None:
+            from lmdeploy.intern_decision_encoding import resolve_temperature
+            resolve_temperature(model_path, temperature=kwargs['decision_temperature'])
+
     mp.set_start_method('spawn', force=True)
     dp = backend_config.dp
     tp = backend_config.tp

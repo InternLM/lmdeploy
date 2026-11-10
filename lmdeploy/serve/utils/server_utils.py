@@ -32,6 +32,30 @@ def validate_json_request(raw_request: Request):
         raise RequestValidationError(errors=["Unsupported Media Type: Only 'application/json' is allowed"])
 
 
+class DecisionOnlyMiddleware:
+    """Reject other engine tasks on a decision-only server."""
+
+    UNSUPPORTED_ROUTES = frozenset({
+        '/v1/chat/completions', '/v1/completions', '/v1/responses', '/v1/messages',
+        '/generate', '/pooling', '/get_ppl',
+    })
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    def __call__(self, scope: Scope, receive: Receive, send: Send) -> Awaitable[None]:
+        if scope['type'] == 'http' and scope['method'] == 'POST':
+            path = scope['path'].removeprefix(scope.get('root_path', '')).rstrip('/')
+            if path in self.UNSUPPORTED_ROUTES:
+                response = protocol_error_response(path, RequestError(
+                    ErrorCode.UNSUPPORTED_FEATURE,
+                    'This server uses --task intern-decision and only supports decision inference. '
+                    'Use POST /v1/decisions or POST /v1/systemone; run other inference on a separate server.',
+                ))
+                return response(scope, receive, send)
+        return self.app(scope, receive, send)
+
+
 class EngineSleepingMiddleware:
     """Pure ASGI middleware that returns 503 for configured inference routes
     when ``is_sleeping()`` is true (after ``POST /sleep``, until ``POST
@@ -50,6 +74,8 @@ class EngineSleepingMiddleware:
         ('POST', '/v1/completions'),
         ('POST', '/v1/responses'),
         ('POST', '/v1/messages'),
+        ('POST', '/v1/decisions'),
+        ('POST', '/v1/systemone'),
         ('POST', '/generate'),
     })
 

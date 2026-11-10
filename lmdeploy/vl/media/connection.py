@@ -54,8 +54,39 @@ def _is_safe_url(url: str) -> tuple[bool, str]:
         return False, f'URL validation failed: {str(e)}'
 
 
+def _close_redirect_body(response, **kwargs):
+    # Session.send prepares response.next even with allow_redirects=False and
+    # consumes redirect bodies in the process. Close before it can do so.
+    if response.is_redirect:
+        response.close()
+    return response
+
+
+def _read_http_body(response, max_download_bytes: int) -> bytes:
+    # Older urllib3 versions can inflate a compressed chunk without a bound.
+    # Require identity encoding to keep each decoded chunk bounded.
+    if response.headers.get('Content-Encoding', 'identity').strip().lower() not in ('', 'identity'):
+        raise ValueError('Bounded media downloads require identity Content-Encoding.')
+    if 'Transfer-Encoding' not in response.headers:
+        try:
+            content_length = int(response.headers.get('Content-Length', '0'))
+        except ValueError:
+            content_length = 0
+        if content_length > max_download_bytes:
+            raise ValueError(f'Media download exceeds the {max_download_bytes}-byte limit.')
+    data = bytearray()
+    for chunk in response.iter_content(chunk_size=65536):
+        if len(data) + len(chunk) > max_download_bytes:
+            raise ValueError(f'Media download exceeds the {max_download_bytes}-byte limit.')
+        data.extend(chunk)
+    return bytes(data)
+
+
 def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M],
-                   allowed_media_domains: list[str] | None = None) -> _M:
+                   allowed_media_domains: list[str] | None = None, *, max_download_bytes: int | None = None) -> _M:
+    if max_download_bytes is not None and (isinstance(max_download_bytes, bool)
+                                           or not isinstance(max_download_bytes, int) or max_download_bytes < 0):
+        raise ValueError('max_download_bytes must be a non-negative integer or None.')
     url = url_spec.geturl()
     allowed_media_domains = {domain.lower() for domain in allowed_media_domains} if allowed_media_domains else None
     fetch_timeout = 10
@@ -64,33 +95,41 @@ def _load_http_url(url_spec: ParseResult, media_io: MediaIO[_M],
     elif isinstance(media_io, VideoMediaIO):
         fetch_timeout = int(os.environ.get('LMDEPLOY_VIDEO_FETCH_TIMEOUT', 30))
 
-    client = requests.Session()
+    request_headers, request_options = headers, {}
+    if max_download_bytes is not None:
+        request_headers = {**headers, 'Accept-Encoding': 'identity'}
+        request_options = {'stream': True, 'hooks': {'response': _close_redirect_body}}
     max_redirects = 3
-    for _ in range(max_redirects + 1):
-        parsed = parse_url(url)
-        if parsed.scheme not in ('http', 'https'):
-            raise ValueError(f'URL is blocked for security reasons: Unsupported scheme: {parsed.scheme}')
-        if not parsed.hostname:
-            raise ValueError('URL is blocked for security reasons: Could not parse hostname from URL')
-        if allowed_media_domains and parsed.hostname not in allowed_media_domains:
-            raise ValueError('The URL must be from one of the allowed domains: '
-                             f'{allowed_media_domains}. Input URL domain: {parsed.hostname}')
+    with requests.Session() as client:
+        for _ in range(max_redirects + 1):
+            parsed = parse_url(url)
+            if parsed.scheme not in ('http', 'https'):
+                raise ValueError(f'URL is blocked for security reasons: Unsupported scheme: {parsed.scheme}')
+            if not parsed.hostname:
+                raise ValueError('URL is blocked for security reasons: Could not parse hostname from URL')
+            if allowed_media_domains and parsed.hostname not in allowed_media_domains:
+                raise ValueError('The URL must be from one of the allowed domains: '
+                                 f'{allowed_media_domains}. Input URL domain: {parsed.hostname}')
 
-        is_safe, reason = _is_safe_url(parsed.url)
-        if not is_safe:
-            raise ValueError(f'URL is blocked for security reasons: {reason}')
+            is_safe, reason = _is_safe_url(parsed.url)
+            if not is_safe:
+                raise ValueError(f'URL is blocked for security reasons: {reason}')
 
-        response = client.get(parsed.url, headers=headers, timeout=fetch_timeout, allow_redirects=False)
+            response = client.get(parsed.url, headers=request_headers, timeout=fetch_timeout,
+                                  allow_redirects=False, **request_options)
+            try:
+                if response.is_redirect:
+                    location = response.headers.get('Location')
+                    if not location:
+                        raise ValueError('Redirect response missing Location header')
+                    url = urljoin(parsed.url, location)
+                    continue
 
-        if response.is_redirect:
-            location = response.headers.get('Location')
-            if not location:
-                raise ValueError('Redirect response missing Location header')
-            url = urljoin(parsed.url, location)
-            continue
-
-        response.raise_for_status()
-        return media_io.load_bytes(response.content)
+                response.raise_for_status()
+                data = response.content if max_download_bytes is None else _read_http_body(response, max_download_bytes)
+                return media_io.load_bytes(data)
+            finally:
+                response.close()
 
     raise ValueError('Exceeded maximum media URL redirects')
 
@@ -131,12 +170,17 @@ def _load_file_url(url_spec: ParseResult, media_io: MediaIO[_M]) -> _M:
         raise MediaInputError(f'Failed to read media file {filepath}: {exc.strerror or exc}') from exc
 
 
-def load_from_url(url: str, media_io: MediaIO[_M], allowed_media_domains: list[str] | None = None) -> _M:
-    """Load media from a HTTP, data or file url."""
+def load_from_url(url: str, media_io: MediaIO[_M], allowed_media_domains: list[str] | None = None, *,
+                  max_download_bytes: int | None = None) -> _M:
+    """Load media from a HTTP, data or file url.
+
+    An optional HTTP byte budget stops oversized downloads before decoding and requires identity Content-Encoding. Other
+    callers retain unlimited downloads. Data and file URLs remain subject to the media IO's own limits.
+    """
     url_spec = urlparse(url)
 
     if url_spec.scheme and url_spec.scheme.startswith('http'):
-        return _load_http_url(url_spec, media_io, allowed_media_domains)
+        return _load_http_url(url_spec, media_io, allowed_media_domains, max_download_bytes=max_download_bytes)
 
     if url_spec.scheme == 'data':
         return _load_data_url(url_spec, media_io)

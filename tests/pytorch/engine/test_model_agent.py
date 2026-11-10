@@ -295,6 +295,18 @@ def test_input_compaction_accepts_empty_pre_boundary_chunk():
     assert agent._prev_chunk_last_logit is None
 
 
+def test_input_logprobs_append_requested_token_ids():
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.misc_config = SimpleNamespace(logprobs_mode=None)
+    inputs = _input_logprob_model_inputs([5, 1, 2, 3], [0, 1, 2])
+    logits = torch.arange(3 * 8, dtype=torch.float32).reshape(3, 8)
+    output = agent._get_outputs_with_logprobs(logits, inputs, 0, None, logprob_extra_token_ids=torch.tensor([4, 6]))
+    # columns: [target, *requested ids]
+    torch.testing.assert_close(output.logprobs.indices, torch.tensor([[1, 4, 6], [2, 4, 6], [3, 4, 6]],
+                                                                     dtype=torch.int32))
+    torch.testing.assert_close(output.logprobs.vals, logits.gather(-1, output.logprobs.indices.long()))
+
+
 def test_dp_dummy_skips_input_compaction_without_sampling_inputs():
     inputs = _input_logprob_model_inputs([0], None)
     inputs.is_dummy = True

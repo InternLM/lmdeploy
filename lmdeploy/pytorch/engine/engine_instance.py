@@ -197,6 +197,10 @@ class EngineInstance(EngineInstanceBase):
             yield EngineOutput(ResponseType.INPUT_LENGTH_ERROR, [])
             return
         gen_config = gen_config or GenerationConfig()
+        if gen_config.logprob_extra_token_ids:
+            vocab_size = self.engine.vocab_size
+            if any(not 0 <= token_id < vocab_size for token_id in gen_config.logprob_extra_token_ids):
+                raise ValueError(f'logprob_extra_token_ids must be in [0, {vocab_size})')
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         session_added = False
         try:
