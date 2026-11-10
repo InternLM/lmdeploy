@@ -89,3 +89,17 @@ curl http://{server_ip}:{server_port}/v1/messages/count_tokens \
     "messages": [{"role": "user", "content": "Count these tokens"}]
   }'
 ```
+
+## 增量返回 routed experts（LMDeploy 扩展）
+
+PyTorch 后端的 `/v1/messages` 支持顶层 JSON 字段 `return_routed_experts: true`
+和 `routed_experts_start_len`；服务端须用 `--enable-return-routed-experts` 开启采集。
+偏移必须是非负整数，默认 `0`（全量历史），不能超过预处理后的 prompt 长度。
+流式和非流式请求使用同一偏移，在最终路由输出处裁剪。
+
+这两个字段是 LMDeploy 扩展，不属于 Anthropic 标准。Anthropic SDK 可向
+`client.messages.create(...)` 传入 `extra_body={"return_routed_experts": True, "routed_experts_start_len": 4}`；SDK 会将字段合并到 HTTP 请求体顶层。
+本接口不支持字面上的嵌套 `extra_body` 对象。
+
+返回范围、续跑示例及客户端长度校验见[增量路由说明](./api_server.md#增量返回-routed-expertspytorch)。
+偏移只裁剪返回行，不限制 prefix-cache 匹配或内部路由存储；不支持 TurboMind。

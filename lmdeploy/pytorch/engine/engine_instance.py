@@ -137,7 +137,7 @@ class EngineInstance(EngineInstanceBase):
         """Destructor."""
         self.engine.req_manager.senders.pop(self.req_sender.sender_id)
 
-    def _get_extra_outputs(self, resp: Response, num_all_ids: int):
+    def _get_extra_outputs(self, resp: Response, num_all_ids: int, routed_experts_start_len: int = 0):
         """Get extra outputs."""
         outputs = dict(routed_experts=None)
         routed_experts = resp.data.get('routed_experts', None) if resp.data else None
@@ -150,10 +150,11 @@ class EngineInstance(EngineInstanceBase):
                     logger.warning(f'Expected number of routed_experts: {num_expected_experts}, '
                                    f'but got {routed_experts.shape[0]}')
                     routed_experts = routed_experts[:num_expected_experts]
+                routed_experts = routed_experts[routed_experts_start_len:]
                 key = ray.get(_SHARED_STORE.put.remote(routed_experts))
                 outputs['routed_experts'] = key
             else:
-                outputs['routed_experts'] = routed_experts
+                outputs['routed_experts'] = routed_experts[routed_experts_start_len:]
         return outputs
 
     async def _async_try_add_session(self, session_id: int):
@@ -201,6 +202,8 @@ class EngineInstance(EngineInstanceBase):
             vocab_size = self.engine.vocab_size
             if any(not 0 <= token_id < vocab_size for token_id in gen_config.logprob_extra_token_ids):
                 raise ValueError(f'logprob_extra_token_ids must be in [0, {vocab_size})')
+        if gen_config.routed_experts_start_len > len(input_ids):
+            raise ValueError('routed_experts_start_len must not exceed the prompt length')
         sampling_param = SamplingParam.from_gen_config(gen_config=gen_config)
         session_added = False
         try:
@@ -259,7 +262,8 @@ class EngineInstance(EngineInstanceBase):
 
                     num_ids = len(token_ids)
                     num_all_ids = prompt_ids_len + output_offset + num_ids
-                    extra_outputs = self._get_extra_outputs(resp, num_all_ids)
+                    extra_outputs = self._get_extra_outputs(
+                        resp, num_all_ids, gen_config.routed_experts_start_len)
                     routed_experts = extra_outputs.get('routed_experts', None)
 
                     logger.debug(f'session[{session_id}] finish: num_out_ids={num_ids}.')

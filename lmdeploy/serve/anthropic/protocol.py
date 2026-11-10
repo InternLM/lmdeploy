@@ -142,6 +142,10 @@ class MessagesRequest(BaseModel):
         default=False,
         description=('Whether to return MoE routed expert indices in the response.'),
     )
+    routed_experts_start_len: int = Field(
+        default=0, ge=0, strict=True,
+        description='Absolute start position of returned routing rows; does not limit prefix caching.',
+    )
     return_token_ids: bool | None = Field(
         default=False,
         description=('Whether to include output token IDs in the response.'),
