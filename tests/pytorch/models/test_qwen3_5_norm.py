@@ -1,10 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Check zero-centered Qwen3.5 norm loading and task-specific selection."""
+"""Check zero-centered norm loading and task-specific Qwen3.5 selection."""
 import importlib
 
 import pytest
 import torch
-from transformers import Qwen3_5Config, Qwen3_5TextConfig
+from transformers import Qwen3_5Config, Qwen3_5TextConfig, Qwen3NextConfig
 
 from lmdeploy.pytorch.config import DistConfig, ModelConfig, QuantizationConfig
 from lmdeploy.pytorch.model_inputs import BuildModelContext, StepContextManager
@@ -13,18 +13,19 @@ from lmdeploy.pytorch.models.patch import build_model_context, build_model_from_
 from lmdeploy.pytorch.models.qwen3_5 import Qwen3_5ForConditionalGeneration
 from lmdeploy.pytorch.nn import RMSNorm, RMSNormGated
 
+_TINY_TEXT = dict(
+    hidden_size=128, intermediate_size=256, vocab_size=128,
+    num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+    head_dim=64, linear_key_head_dim=32, linear_value_head_dim=32,
+    linear_num_key_heads=2, linear_num_value_heads=2,
+    layer_types=['linear_attention', 'full_attention'],
+    num_experts=2, num_experts_per_tok=1, moe_intermediate_size=64,
+    shared_expert_intermediate_size=64,
+)
+
 
 def _tiny_config():
-    text_config = Qwen3_5TextConfig(
-        hidden_size=128, intermediate_size=256, vocab_size=128,
-        num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
-        head_dim=64, linear_key_head_dim=32, linear_value_head_dim=32,
-        linear_num_key_heads=2, linear_num_value_heads=2,
-        layer_types=['linear_attention', 'full_attention'],
-        num_experts=2, num_experts_per_tok=1, moe_intermediate_size=64,
-        shared_expert_intermediate_size=64, num_meta_moe_blocks=1, num_blocks=1,
-        mtp_num_hidden_layers=1,
-    )
+    text_config = Qwen3_5TextConfig(**_TINY_TEXT, num_meta_moe_blocks=1, num_blocks=1, mtp_num_hidden_layers=1)
     return Qwen3_5Config(architectures=['Qwen3_5ForConditionalGeneration'], text_config=text_config.to_dict())
 
 
@@ -35,6 +36,7 @@ def _tiny_config():
     'meta_moe.MetaMoeForConditionalGeneration',
     'interns2_mobius.InternS2MobiusForConditionalGeneration',
     'qwen3_5_mtp.Qwen3_5MTPModel',
+    'qwen3_next.Qwen3NextForCausalLM',
 ])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16, torch.float32])
 @pytest.mark.parametrize('checkpoint_dtype', [torch.bfloat16, torch.float16, torch.float32])
@@ -42,7 +44,7 @@ def _tiny_config():
 def test_zero_centered_norm_loading(model_path, dtype, checkpoint_dtype):
     module_name, class_name = model_path.split('.')
     model_class = getattr(importlib.import_module(f'lmdeploy.pytorch.models.{module_name}'), class_name)
-    config = _tiny_config()
+    config = Qwen3NextConfig(**_TINY_TEXT) if module_name == 'qwen3_next' else _tiny_config()
     context = BuildModelContext(language_model_only=True)
     with build_model_context(context):
         model = model_class(config, StepContextManager(context), dtype=dtype, device='cpu')
@@ -52,7 +54,7 @@ def test_zero_centered_norm_loading(model_path, dtype, checkpoint_dtype):
     weights = []
     expected = {}
     for name, norm in norms.items():
-        # Zero-centered scales are stored in FP32 for every Qwen3.5-family model.
+        # Zero-centered scales are stored in FP32 regardless of the model dtype.
         assert norm.weight.dtype == torch.float32, name
         # This offset loses low bits when +1 is evaluated or stored in BF16/FP16.
         offset = torch.full(norm.weight.shape, 0.24609375, dtype=checkpoint_dtype)
