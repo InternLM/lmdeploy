@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
 from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+from lmdeploy.serve.openai.utils import filter_parallel_tool_calls
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
@@ -18,6 +19,7 @@ from ..adapter import (
     build_message_content_blocks,
     map_finish_reason,
     normalize_tool_choice,
+    parallel_tool_calls_from_tool_choice,
     to_openai_messages,
     to_openai_tools,
 )
@@ -71,6 +73,7 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             stop=request.stop_sequences,
             tools=to_openai_tools(request.tools),
             tool_choice=normalize_tool_choice(request.tool_choice),
+            parallel_tool_calls=parallel_tool_calls_from_tool_choice(request.tool_choice),
             return_logprob=bool(request.return_logprob),
             return_token_ids=bool(request.return_token_ids),
             return_routed_experts=bool(request.return_routed_experts),
@@ -118,7 +121,7 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
 
         content_blocks = build_message_content_blocks(
             res.text,
-            res.tool_calls,
+            filter_parallel_tool_calls(res.tool_calls, chat_request.parallel_tool_calls),
             res.reasoning_content,
         )
         if not content_blocks:
