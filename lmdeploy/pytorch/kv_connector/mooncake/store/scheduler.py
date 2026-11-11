@@ -8,6 +8,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch.kv_connector.base import (
     KVConnectorOutput,
     KVConnectorResult,
@@ -610,6 +611,11 @@ class MooncakeStoreScheduler:
             self._next_save_block[request.request_id] = request.start_block + len(request.block_ids)
             if seq is not None:
                 seq.prefix_cache.decode_store_save_pending = True
+            if PROFILE_PHASES:
+                trace_phase('store_save_scheduled', save_id=request.save_id, seq_id=request.request_id,
+                            decode=seq is not None, input_end=seq.input_end_pos if seq is not None else None,
+                            boundary=request.state.boundary_tokens, start_block=request.start_block,
+                            blocks=len(request.block_ids), state_hash=request.state.boundary_hash.hex())
         self._next_save_id += len(requests)
         return tuple(requests)
 
@@ -761,6 +767,11 @@ class MooncakeStoreScheduler:
             del self._inflight_saves[save_id]
             request = operation.decode_request
             current_turn = request is not None and request.input_end_pos == operation.input_end_pos
+            if PROFILE_PHASES:
+                trace_phase('store_save_finished', save_id=save_id, seq_id=save.request_id,
+                            decode=request is not None, input_end=operation.input_end_pos,
+                            boundary=save.state.boundary_tokens if save.state is not None else None,
+                            success=confirmed and not operation.failed)
             if current_turn:
                 request.prefix_cache.decode_store_save_pending = False
             # Ended requests still own I/O slots, but cannot recreate planning

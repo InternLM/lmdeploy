@@ -5,7 +5,9 @@ import json
 import socket
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from time import perf_counter
 
+from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
 from lmdeploy.pytorch.disagg.config import MigrationBackend, MooncakeEngineConfig
@@ -194,6 +196,7 @@ class MooncakeMigrationManagement:
                     continue
 
     def _migrate(self, assignment: MigrationAssignment) -> PDTransferResult:
+        begin = perf_counter()
         if not self.remote_url:
             raise RuntimeError(f'No connection established to remote engine {self.remote_engine_id}')
         local_addresses, remote_addresses, lengths = [], [], []
@@ -212,6 +215,7 @@ class MooncakeMigrationManagement:
         result = PDTransferResult(transfer_id=assignment.transfer_id, status='completed')
         if not lengths:
             return result
+        prepared = perf_counter()
         # This is the native exception boundary. Once submission may have
         # happened, an exception does not prove that DMA has stopped.
         try:
@@ -239,6 +243,10 @@ class MooncakeMigrationManagement:
         except Exception as error:
             result.status = 'completion_unknown'
             result.error = str(error)
+        if PROFILE_PHASES:
+            trace_phase('pd_native', transfer_id=assignment.transfer_id, rank=self.rank, segments=len(lengths),
+                        bytes=sum(lengths), address_ms=(prepared - begin) * 1000,
+                        native_ms=(perf_counter() - prepared) * 1000, status=result.status)
         return result
 
 

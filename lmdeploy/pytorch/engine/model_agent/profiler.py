@@ -1,9 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import time
+from collections import deque
 
 import torch
 from torch.profiler import ProfilerActivity, profile
 
+from lmdeploy.profiling import trace_phase
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.utils import get_logger
 
@@ -29,9 +32,37 @@ class AgentProfiler:
         self.use_gzip = envs.torch_profile_use_gzip
         self._task = None
         self._started = False
+        self._phase_events = deque()
+        self._phase_step = None
+        self._phase_index = 0
         if self.dp > 1 and self.duration < 0 and self.profiler is not None:
             logger.warning('Do not support duration<=0 for dp > 1.')
             self.profiler = None
+
+    def begin_step(self, inputs):
+        """Record stream time without adding a synchronization to inference."""
+        start = torch.cuda.Event(enable_timing=True)
+        start.record(self.stream)
+        self._phase_index += 1
+        self._phase_step = (start, time.perf_counter(), dict(
+            rank=self.rank, dp_rank=self.dp_rank, step=self._phase_index, started_at=time.time(),
+            prefill=not inputs.is_decoding, dummy=inputs.is_dummy,
+            batch=inputs.seq_length.numel(), tokens=inputs.input_ids.numel()))
+
+    def end_step(self):
+        """Keep events until their stream work completes; never wait here."""
+        if self._phase_step is not None:
+            start, submitted, fields = self._phase_step
+            end = torch.cuda.Event(enable_timing=True)
+            end.record(self.stream)
+            fields['submit_ms'] = (time.perf_counter() - submitted) * 1000
+            self._phase_events.append((start, end, fields))
+            self._phase_step = None
+        while self._phase_events and self._phase_events[0][1].query():
+            start, end, fields = self._phase_events.popleft()
+            # Stream elapsed time includes kernels, collectives and launch gaps;
+            # it is not a sum of kernel execution times.
+            trace_phase('worker_step', stream_ms=start.elapsed_time(end), **fields)
 
     def _build_profiler(self):
         from lmdeploy.pytorch import envs

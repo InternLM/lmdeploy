@@ -11,6 +11,7 @@ import torch
 from torch.profiler import record_function
 
 from lmdeploy.messages import RequestMetrics
+from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import PDControlRequest
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch, PDTransferResult
@@ -450,6 +451,12 @@ class EngineLoop:
                                          msg.engine_events,
                                          spec_info=spec_info,
                                          cached_tokens=msg.cached_tokens)
+            if PROFILE_PHASES and (model_inputs is not None or finish):
+                trace_phase('engine_output', role=self.config.role.name, session_id=session_id, seq_id=msg.seq_id,
+                            first=model_inputs is not None, finished=finish, token_timestamp=new_token_timestamp,
+                            input_tokens=msg.input_end_pos, output_tokens=len(token_ids),
+                            cached_tokens=msg.cached_tokens,
+                            events=[(event.type.name, event.timestamp) for event in msg.engine_events])
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
@@ -531,6 +538,9 @@ class EngineLoop:
         """Get outputs and prefetch."""
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
+        if PROFILE_PHASES:
+            step_begin = time.perf_counter()
+            step_sessions = [seq.session_id for seq in running]
         cache_inputs = forward_inputs['cache_inputs']
         ssm_state_access_id = cache_inputs.ssm_state_access_id if cache_inputs is not None else None
         has_compact_checkpoints = (
@@ -559,7 +569,14 @@ class EngineLoop:
         if has_compact_checkpoints:
             self.state_checkpoints.publish_forward(ssm_state_access_id)
         forward_inputs, next_running = await self._prefetch_next_inputs()
+        if PROFILE_PHASES:
+            prefetch_end = time.perf_counter()
         out = await self.executor.get_output_async()
+        if PROFILE_PHASES:
+            trace_phase('engine_step', role=self.config.role.name, sessions=step_sessions,
+                        prefill=model_inputs is not None and not model_inputs.is_decoding,
+                        prefetch_ms=(prefetch_end - step_begin) * 1000,
+                        output_wait_ms=(time.perf_counter() - prefetch_end) * 1000)
         completed_access_id = out.ssm_state_access_id if out is not None else None
         if completed_access_id != ssm_state_access_id:
             raise RuntimeError('Compact completion does not match the submitted forward access.')
@@ -725,6 +742,7 @@ class EngineLoop:
         self.has_runable_event.set()
 
     async def _receive_handoff(self, seq):
+        begin = claimed = transferred = time.perf_counter()
         owner = self.scheduler.pd_coordinator
         receive = owner.receives[seq.seq_id]
         request = receive.request
@@ -739,6 +757,7 @@ class EngineLoop:
             if not receive.cancelled and not owner.failed:
                 claim_attempted = True
                 await self.engine_conn.control(request.remote_engine_id, PDControlRequest(action='claim', **control))
+                claimed = time.perf_counter()
                 if not receive.cancelled:
                     if handoff.valid_token_count:
                         batch = MigrationExecutionBatch(protocol=seq.migration_request.protocol, receives=[request])
@@ -761,6 +780,7 @@ class EngineLoop:
             # dispatch, no worker can address these destinations.
             result = PDTransferResult(transfer_id=handoff.transfer_id,
                                        status='completion_unknown' if submitted else 'failed_drained', error=str(error))
+        transferred = time.perf_counter()
         if result.status != 'completion_unknown':
             try:
                 action = 'release' if claim_attempted else 'revoke'
@@ -768,6 +788,13 @@ class EngineLoop:
             except (ValueError, TimeoutError, KeyError) as error:
                 logger.warning('PD terminal acknowledgment failed for %s: %s', handoff.transfer_id, error)
         action = owner.finish_receive(seq, result)
+        if PROFILE_PHASES:
+            trace_phase('pd_receive', transfer_id=handoff.transfer_id, session_id=seq.session_id, seq_id=seq.seq_id,
+                        source_session_id=handoff.session_id, status=result.status,
+                        boundary=handoff.valid_token_count, blocks=len(request.block_pairs),
+                        queue_ms=(begin - seq.arrive_time) * 1000, claim_ms=(claimed - begin) * 1000,
+                        executor_ms=(transferred - claimed) * 1000,
+                        release_ms=(time.perf_counter() - transferred) * 1000)
         if action == 'ready':
             # Publish only completed immutable full blocks. The exact loaded
             # recurrent state is a one-shot input, never an invented checkpoint.

@@ -138,3 +138,170 @@ Router 独立仓库对应 T6 `91113ab`、T8 `80fd9a5`。所有提交均仅包含
 - 完整数值保留于 `benchmark/results/mooncake_pd_h200_20261111.json`；原始 evalscope 输出和日志在本地 `.git/pd_tmp/`，远端服务日志在容器 `/dev/shm/lmdeploy_pd_*.log`。
 - 已执行 `bash install.sh`。备用 pip 索引超时后，在本次 shell 中取消其 extra-index 环境变量，使用脚本原主索引完成安装，未修改用户的 install.sh。安装依赖将 NCCL 从改前的 2.32.3 调整到仓库要求的 2.29.7；同版本完整集对照使用相同依赖。
 - schema 校验配置与 cache 执行语义，不计算权重文件内容 hash。部署如需显式权重版本，可以用已有 `--hf-overrides '{"pd_weight_revision":"..."}'`，双方一致且进入 schema；仍应部署同一 checkpoint。
+
+## 追加：分阶段诊断与多轮性能对照（2026-11-11）
+
+### “逐 token 差异”的含义与已知范围
+
+它表示相同输入、temperature=0 时，PD 与直接推理的输出 token ID 序列不完全相同，既不是 TTFT 波动，也不是简单的文本后处理差异。测试使用重复 token 构造边界输入，专门覆盖 64-token block 的尾部、部分命中和长上下文。它们不代表真实业务问题的答案错误率，但确实是尚未全部解决的一致性问题。
+
+| 模型 / 输入                    | 第一个不同的生成 token（从 1 开始） | PD 输出开头            | 直接输出开头            |
+| ------------------------------ | ----------------------------------- | ---------------------- | ----------------------- |
+| GLM，MTP off，N=63，partial    | 2                                   | `[271,418,9970,47465]` | `[271,4418,803,271]`    |
+| GLM，MTP off，N=64，首次       | 2                                   | `[271,4418,4398,271]`  | `[271,40,2776,537]`     |
+| Qwen3-0.6B，N=32768，首次/重复 | 3                                   | `[100,17992,101,103]`  | `[100,17992,46580,102]` |
+| 随机 GDN，N=64，首次           | 1                                   | `[38843,67534,17946]`  | `[148939,55612,39009]`  |
+
+随机 GDN 的 N=64 / 65 用例，在直接推理的 63+1 / 64+1 分块路径中完整复现 PD 的 16-token 输出。因而这两例的分叉可以在无 RDMA 的条件下产生；其他差异仍需逐层 logits/state 对照定位。不能把所有差异统称为浮点误差，也不能由真实 DMA 字节校验或 GSM8K 97.57% 推导出逐 token 等价。
+
+### 本次增加的观测点
+
+启动 LMDeploy 与 router 时设置 `LMDEPLOY_PROFILE_PHASES=1`；LMDeploy 同时设置 `LMDEPLOY_LOG_PID=1`，保留多进程父子关系以关联 engine 与 HTTP session。
+
+| 记录                                                                         | 解释                                                                         |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| router `connect / prefill_http / decode_headers`                             | 连接检查、P 完整 HTTP 请求、D 响应头；响应头不等于首 token                   |
+| `http_prepared / http_first_token / http_complete`                           | 请求准备、流式首 token、非流式结束，关联同一 `X-Request-ID`                  |
+| `engine_output`                                                              | 首次/结束输出，QUEUED/SCHEDULED、实际完成时间、cached tokens                 |
+| `pd_receive`                                                                 | D 等待接收、claim、executor 往返、release、传输终态                          |
+| `pd_native`                                                                  | 地址准备、实际 native 读取、段数和字节数                                     |
+| `engine_step`                                                                | host prefetch 与等待 executor 的区间，可能和其他工作重叠                     |
+| `worker_step`                                                                | CUDA event 测量的 stream 区间，以及 prefill/decode、real/dummy、batch/tokens |
+| `store_save_scheduled / store_save_ready / store_save_finished / store_load` | 保存边界、lookup、已有 readiness event 等待、终态、加载边界与 state hash     |
+
+CUDA event 通过 query 回收，未增加 device synchronize；Store 的 readiness synchronize 原本就存在。stream 时间包含 kernels、collectives 和 launch gap，不是 kernel-only 时间；各 rank 并行，不能把这些数相加当成请求延迟。profiling 默认关闭；本节性能数据均开启观测，未单独测量观测开销。
+
+### 多轮工作负载与比较口径
+
+使用用户指定的本机 `run_glm53_shorttask_382_full_kvcache.sh`，wrapper 仅覆盖 URL 和输出目录。固定数据集 `glm53_flash_swe_smith_32k_4k_5turn_n8_seed1124.json`；8 个会话、并发 8、每会话 5 轮、首轮 32768、后续增量 4096、每轮输出 512、seed=1124、temperature=0、ignore_eos=true。每次测量为 40 个业务请求、20480 个生成 token。
+
+本机 evalscope 1.8.1 有定制：后续轮不追加 assistant 输出，只累积 user/tool 输入。因此它适合固定输入性能比较，但不能单独证明生成部分的 KV 被下一轮消费。`rate=8` 在这个实现中是各会话每轮的泊松等待参数，前一轮完成后才发下一轮，并非全局恒定 8 requests/s；本测试不是饱和吞吐曲线。
+
+统一使用 GLM-5.3-Flash 同一 FP8 checkpoint，MTP=5，DP4/EP4/attention TP1，max batch=16，prefill chunk=8192，GPU cache fraction=0.7，session_len=102400，prefix state budget=16。两端均启用 `--prefix-cache-decode-save-first --prefix-cache-decode-state-interval 1024`、64 对齐及 prefill-last-only。Store 使用用户现有配置（embedded、每 worker global segment 160 GiB / local buffer 4 GiB、RDMA），只改变独立 master 地址。
+
+主对照的总硬件相同：PD 为 4 卡 P + 4 卡 D；非 PD 为两组 4 卡 Hybrid（各 DP4/EP4），共 8 卡。两种模式均通过 router，并在均衡对照中采用 round-robin。P/Hybrid 的 Store 为 both，D 为 producer。首次测量前重建服务和 Store，清除该数据集的历史 cache；热测量复用同一服务及数据。这里的冷缓存指整次测试开始时为空，会话后续轮仍允许正常命中，并非每请求前清空。
+
+吞吐统一按数据库中 `sum(completion_tokens) / (max(completed_time)-min(start_time))` 计算，不使用含报表收尾的进程耗时。p99 采用样本内线性插值；单轮只有 40 个请求，尾延迟不能视为稳定的大样本估计。evalscope 的连接探测不在这 40 个请求中，Prometheus 差值另含一次探测。
+
+PD 的 D `cached_tokens` 包含从 P 迁入的全部 H=N−1，即使 P 刚刚冷算完也会显示接近 100%；它不能表示端到端避免了多少 prefill，更不能直接当作 Store 命中率。应观察 P/Hybrid 的 cached tokens 和 Store load 记录。
+
+上次 GSM8K 使用 round-robin、并发 16，直接对照只使用相同 D 的 4 卡；没有保存分阶段数据。本次长上下文多轮测量不能追溯分摊上次每一项开销，也不能把本次新发现的 cache-aware 倾斜归因到上次 round-robin 结果。
+
+### 均衡路由的实测结果
+
+所有行均为 40/40 成功；TPOT 是请求内 `(总耗时−TTFT)/(输出 token−1)`，不是原始 SSE chunk 间隔。
+
+| 配置               | TTFT mean / p50 / p99 / max (ms)     | TPOT mean / p50 / p99 / max (ms/token) | 全程输出 token/s |
+| ------------------ | ------------------------------------ | -------------------------------------- | ---------------- |
+| PD 8 卡，冷缓存    | 2429.33 / 899.98 / 9662.88 / 9780.59 | 7.80 / 7.77 / 10.09 / 10.33            | 566.81           |
+| PD 8 卡，热测 1    | 945.71 / 868.48 / 1373.72 / 1383.48  | 7.81 / 7.69 / 10.68 / 11.12            | 752.43           |
+| PD 8 卡，热测 2    | 872.46 / 850.60 / 1180.35 / 1196.81  | 7.80 / 7.73 / 10.18 / 10.75            | 766.45           |
+| 非 PD 8 卡，冷缓存 | 1493.58 / 596.87 / 5232.77 / 5288.89 | 7.13 / 6.91 / 9.31 / 9.33              | 722.79           |
+| 非 PD 8 卡，热测 1 | 444.17 / 443.32 / 684.92 / 703.67    | 6.27 / 6.26 / 7.94 / 8.07              | 1035.61          |
+| 非 PD 8 卡，热测 2 | 416.99 / 413.85 / 562.31 / 582.36    | 6.39 / 6.19 / 8.71 / 9.00              | 993.67           |
+
+同为 8 卡，本负载的非 PD 更快。PD 冷测首次连接检查均值 248.57 ms；热测 2 为 5.76 ms。两个模式冷测的有效 cached token 均值均为 31137.6（PD 看 P），热测均为 40972.8；热测尚需计算每请求约 39 个尾部 token，PD 还需在 D replay。
+
+### 热测 2 的 TTFT 阶段分布
+
+| 阶段                                        | PD mean / p50 / p99 / max (ms)      | 非 PD 8 卡 mean / p50 / p99 / max (ms) |
+| ------------------------------------------- | ----------------------------------- | -------------------------------------- |
+| 端到端 TTFT                                 | 872.46 / 850.60 / 1180.35 / 1196.81 | 416.99 / 413.85 / 562.31 / 582.36      |
+| P / Hybrid HTTP 准备                        | 84.91 / 84.53 / 113.43 / 115.32     | 91.90 / 92.71 / 137.29 / 139.11        |
+| P / Hybrid 调度等待                         | 133.11 / 58.85 / 455.24 / 489.14    | 97.69 / 94.93 / 267.83 / 299.36        |
+| P / Hybrid 从 scheduled 到首个 forward 完成 | 203.59 / 184.41 / 355.46 / 368.69   | 185.45 / 180.50 / 299.91 / 360.31      |
+| P 完整 HTTP / Hybrid 到首 token             | 460.80 / 426.73 / 722.16 / 744.79   | 412.28 / 409.30 / 557.82 / 578.08      |
+| D HTTP 准备                                 | 95.69 / 91.57 / 146.53 / 152.87     | —                                      |
+| D 等待开始迁移                              | 7.68 / 7.89 / 11.76 / 11.97         | —                                      |
+| claim                                       | 0.69 / 0.54 / 1.67 / 1.67           | —                                      |
+| 迁移 executor 往返                          | 42.00 / 18.71 / 128.89 / 130.61     | —                                      |
+| 其中 native read（已包含在上一行）          | 8.05 / 5.83 / 22.53 / 22.58         | —                                      |
+| release                                     | 0.65 / 0.61 / 1.55 / 1.92           | —                                      |
+| 迁移完成到 D 调度                           | 36.39 / 19.97 / 163.85 / 164.74     | —                                      |
+| D replay 到首个 forward 完成                | 178.24 / 171.34 / 272.12 / 314.63   | —                                      |
+| D HTTP 到首 token                           | 396.31 / 372.56 / 567.46 / 580.41   | —                                      |
+| 其他路由、传输与 client 开销                | 15.35 / 10.80 / 57.65 / 73.34       | 4.70 / 4.27 / 9.19 / 9.41              |
+
+总量按不重叠边界相加：PD **460.80 + 396.31 + 15.35 = 872.46 ms**，非 PD **412.28 + 4.70 = 416.99 ms**。表中子阶段与 HTTP 总量有包含关系，不能全表相加。P/Hybrid 的调度等待包括 admission、Store lookup/load 和排队，不等于纯 CPU 调度计算时间。
+
+PD 热测 2 的 native read 平均 8.05 ms，仅占端到端 TTFT 约 0.9%；executor 往返为 42.00 ms，包含计划、进程/线程调度和完成汇总。平均传输 205.32 MB；cache-aware 端口集中时复用 D 本地 KV 更多，传输为 148.52 MB，说明均衡与本地 cache 亲和存在权衡。
+
+### TPOT 的测量解释
+
+PD 热测 2 的 D 实际 decode worker stream 均值 32.23 ms；非 PD 两组为 26.41 / 27.22 ms。PD 热测 1 的真实 decode batch 均值 1.76，而非 PD 约 1.01–1.03：PD 将 8 个会话的 decode 集中在 4 个 D DP，非 PD 分配给 8 个 Hybrid DP。相同总卡数不等于相同 decode 计算资源，热命中时 P 侧难以抵消这部分资源成本。
+
+Prometheus 的迭代间隔均值为 PD 36.44 ms、非 PD 30.17 ms；draft token 接受率为 65.45% / 66.89%，平均接受长度（含 target token）为 4.27 / 4.34。接受率差异较小，主要观测差异是每次迭代用时；这些计数差值另含一次连接探测。新请求的 replay、DP/EP 全局 prefill phase、host 等待及保存检查均可能影响正在 decode 的请求，需结合阶段记录分析，不能把 TPOT 差额直接归因于一次性的 RDMA read。
+
+D 冷测有 40 次实际 Store native put：均值 16.67 ms、p50 4.79 ms、p99 42.60 ms、max 42.73 ms，共写 5.94 GB；热测 2 只有 4 次实际 put，均值 4.77 ms，其他保存命中已有 key。此工作负载的高 cache 命中不能代替 save-on/off 消融。
+
+### 绕过 P、直接访问相同 D4 的控制组
+
+P 服务保持空闲，D 仍为原配置的 Store producer。这对应上次直接访问 D 的路径，但不能作为 8 卡 Hybrid 的替代。该长上下文脚本反复运行后仍未完全热命中：producer 不从 Store 加载，实际复用取决于当前端口的本地 checkpoint；本次未逐项追踪本地 eviction 的原因。下列 cached 比例直接来自 engine 记录，并未假定每次复测都已全热。
+
+| D4 测量 | 有效 cached token 比例 | TTFT mean (ms) | TPOT mean (ms/token) | 输出 token/s |
+| ------- | ---------------------- | -------------- | -------------------- | ------------ |
+| 准备轮  | 34.72%                 | 3864.14        | 17.77                | 302.95       |
+| 复测 1  | 60.93%                 | 2339.08        | 14.67                | 397.04       |
+| 复测 2  | 87.15%                 | 971.63         | 10.36                | 603.19       |
+
+D4 复测 2 的 TPOT 为 10.36 ms，反而高于 PD 的 7.80 ms；其 decode worker stream 均值 41.86 ms，MTP 接受率 67.86% 比 PD 略高。结合仍需补算的长 prefix，可见 prefill 与 decode 混跑、cache 条件会改变 TPOT 结论，不能说 PD 的 decode 算法必然更慢。这也不是 PD 在相同总卡数下优于非 PD 的证据：前面的 8 卡 Hybrid 对照更快。若要精确定位上次 GSM8K 的 11.57 vs 9.46 ms，需要对同一 GSM8K 工作负载保留此次阶段记录，不能把本节的不同 cache/并发条件直接套过去。
+
+### 已确认的 cache_aware 路由倾斜
+
+初次配置 P、D 均为 `cache_aware`，每轮 40 个业务请求全部落到 D 的 19700 端口，其他 D DP 没有业务请求，但仍参与 EP。代码在 P 计算前选 D，直至向 D 发 HTTP 时才 increment load；收到 D 的响应头立即 decrement，流式生成仍未结束。cache-aware 在低命中且 load 相等时选择第一个 worker，前述计数窗口不能表示真实的 decode 并发，与本次反复选中同一端口的现象一致；cache 亲和及负载阈值也会影响分配，不能断言只修计数就足以完全消除倾斜。
+
+这是从实际端口分布与源码确认的路由问题，不能把其吞吐损失全部记作 PD/RDMA 开销。后续均衡对照通过配置 round-robin 绕开该问题；本次没有修改路由负载生命周期。进一步修复应将 D 的负载占用从选中时保持至完整响应结束/取消，且覆盖 P 失败与断连回收。
+
+cache-aware 热测四轮平均 TTFT 为 1.206 / 0.938 / 1.225 / 1.071 s，TPOT 为 9.71 / 9.43 / 9.55 / 9.75 ms，吞吐 601 / 672 / 619 / 631 token/s。最后一轮平均 TTFT 分解为 P HTTP 609.28 ms + D HTTP 到首 token 390.80 ms + 其余 70.87 ms；P 排队 168.79 ms，P 首次 forward 完成区间 311.60 ms，D replay forward 区间 192.55 ms。D executor 往返 37.41 ms 中 native 读取只有 6.10 ms。热命中后每次仍迁移 148520704 bytes（精确 recurrent/MTP/aux 等状态与尾部数据）；不能仅凭“只补算一个 token”认为交接和恢复没有固定成本。
+
+### replay 为什么比一个稳态 decode step 慢
+
+当前部署 `piecewise_cudagraph_max_tokens=None`。`graph_runner/runner.py` 只有 `global_is_decoding()` 为真才使用 full CUDA graph；未开启 piecewise 时，prefill 走 eager。D replay 虽然只有一个真实 token，仍走 prefill 路径，并重建本地 MTP proposals。某个 DP rank 的 replay 还会让该组的全局 phase 进入 prefill，影响同组的稳态 decode。
+
+这解释了源码上的固定开销来源，也与观测到的 replay worker stream 约 160 ms、稳态 decode stream 约 27–32 ms 相符。stream 记录未进一步分离 target、draft、kernel、通信与 launch gap，不能把这 160 ms 全部归因于某一个 kernel。后续优化应先评估短 replay 的图执行和 D 侧 batching，再决定是否改 kernel；不能直接把 `is_decoding` 标记改成 true，否则会改变状态恢复与 MTP 语义。
+
+### D 保存后由 P 读取的独立验证
+
+指定的 512-token 输出通常覆盖不到 1024 间隔，因此另外通过 PD router 发 8192-token prompt、生成 1088 token，再把**实际生成 IDs**连同少量新输入构造成 9288-token 后续请求。源请求也经过 P/D；P 从未计算过后续生成的 1024-token 前缀。
+
+- D 首次保存边界 8192：save_id=167，完成成功。
+- D 周期保存边界 9216：save_id=168，start_block=128、blocks=16，完成成功。
+- 周期保存的 `state_hash=43749d7e7565e92a7c0c45b6b77e4815572b222f223aa16af5880db22bf3c848`。
+- P 后续请求加载 boundary=9216，state hash 完全相同，success=true；native get 5.836 ms、161420032 bytes，随后完成后续请求。
+
+使用最终复现脚本及新 router binary 再次验证：不同 P DP 成功加载相同 9216 checkpoint（264515584 bytes、8.606 ms）；续接后的 16 个输出 IDs 与绕过 P 的直接推理 **16/16 相同**。两次读取字节数不同，源于后一次 P 没有前一次的本地 prefix，需要从 Store 读更多 KV。
+
+这覆盖了 save-first、周期保存和 D→Store→P 复用，而不只是观察到 save 调用。主多轮测试也记录了从例如 input_end=32805 保存到 boundary=32832 的成功回调，说明真实 workload 的 D 保存跨过了 prompt 末尾。
+
+Store native put 在独立线程执行，但异步接口不能证明 GPU/NIC 争用没有性能代价。热缓存的已有 key 会跳过 put；仅由热测吞吐不能得出 decode save 无回归。本次没有做 save-on/off 饱和消融，保留这个性能边界。
+
+### 复现与交付
+
+```bash
+export LMDEPLOY_PROFILE_PHASES=1 LMDEPLOY_LOG_PID=1
+# 每个后端服务使用独立 CUDA_VISIBLE_DEVICES、SERVER_PORT、DP master port。
+# P / D: bash benchmark/mooncake_pd_glm.sh Prefill / Decode
+# 非 PD: 两组 bash benchmark/mooncake_pd_glm.sh Hybrid
+# PD 均衡路由：ROUTER_POLICY=round_robin bash benchmark/mooncake_pd_router.sh
+# 非 PD：lmdeploy-pd-router --policy round_robin --worker-urls <全部 8 个实际 HTTP URL>
+
+BENCHMARK_SCRIPT=/mnt/shared-storage-user/ailab-sys/caikun/code/accuracy/multi_turn/run_glm53_shorttask_382_full_kvcache.sh \
+BENCH_URL=http://10.102.98.154:9200/v1 \
+BENCH_OUTPUT=/absolute/path/to/results \
+bash benchmark/mooncake_pd_multiturn.sh
+
+python benchmark/mooncake_pd_decode_save.py \
+  --pd-url http://10.102.98.154:9200 \
+  --model GLM-5.3-Flash-caikun-mmmu-pro
+```
+
+`mooncake_pd_decode_save.py` 负责构造真实输出续接请求；是否命中 Store 要核对 scheduled/finished/load 三类记录，不能只看脚本返回成功。原用户部署脚本、性能脚本和数据集均未修改。
+
+### 本次检查与保留事项
+
+- 所有 14 次多轮测量共 **560/560** 业务请求成功；每次 40 个请求、20480 个输出 token。数值与分阶段分布保存在 `benchmark/results/mooncake_pd_multiturn_h200_20261111.json`，包括配置、脚本/数据 SHA256、decode 保存证据和最终资源状态。
+- LMDeploy 针对 PD、Store、engine 与服务的组合 suite **1983 passed**；router **550 passed**，`cargo fmt --check`、release build 通过。只增加观测和复现脚本，没有为日志本身增加镜像式单测。
+- LMDeploy 改动已同步至指定容器并执行最终 `bash install.sh`；router commit **7f8f49f** 的 release binary 已安装并验证。所有提交均未 push。
+- 最终 8 个 endpoint 的 exports / grants / receives / pinned_blocks 全部为 0，quarantined=false；本次 GPU 服务、router、Store master 已停止，8 卡显存均归零。
+- 原始数据库、日志和分析脚本保留在本机 `.git/pd_tmp/`；远端日志在容器 `/dev/shm/lmdeploy_pd_phase/` 和 `/dev/shm/lmdeploy_pd_phase_rr/`。phase_pd 为最初 cache-aware 测量，phase_pd_rr 为均衡测量，phase_hybrid8 为 8 卡非 PD；phase_direct4 仅为绕过 P 的 producer-only 控制。
+- 仍未解决的是前述边界 token 差异；仍未证明的是 save-on/off 饱和性能，以及上一轮 GSM8K TPOT 差额的精确阶段归因。此次完成的是阶段观测、指定工作负载比较与 D 保存后实际读取验证。

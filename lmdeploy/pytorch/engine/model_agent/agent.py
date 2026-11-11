@@ -18,6 +18,7 @@ import torch.distributed as dist
 from torch.profiler import record_function
 from tqdm.auto import tqdm
 
+from lmdeploy.profiling import PROFILE_PHASES
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.graph_runner import prefill_preparation_scope
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
@@ -1116,6 +1117,8 @@ class BaseModelAgent:
             cache_swapping(self.memdecode_agent.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         # inference
+        if PROFILE_PHASES:
+            self.profiler.begin_step(inputs)
         logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)} '
@@ -1317,6 +1320,8 @@ class BaseModelAgent:
                     _record_forward_input_stream(forward_inputs, self.stream)
 
                 await self._async_step(**forward_inputs, )
+                if PROFILE_PHASES:
+                    self.profiler.end_step()
                 if forward_event is not None:
                     forward_event.set()
 

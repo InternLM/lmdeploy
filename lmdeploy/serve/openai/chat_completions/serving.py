@@ -9,6 +9,7 @@ from http import HTTPStatus
 import shortuuid
 from fastapi import APIRouter, Depends, Request
 
+from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.serve.core.chat_runner import (
     ChatRunner,
@@ -132,6 +133,7 @@ def register(router: APIRouter, server_context) -> None:
         - **presence_penalty** (replaced with repetition_penalty)
         - **frequency_penalty** (replaced with repetition_penalty)
         """
+        phase_start = time.perf_counter()
         json_request = await raw_request.json()
         error_check_ret = validate_request(
             request,
@@ -222,6 +224,11 @@ def register(router: APIRouter, server_context) -> None:
             )
         except RequestError as error:
             return create_request_error_response(error)
+        if PROFILE_PHASES:
+            trace_phase('http_prepared', request_id=raw_request.headers.get('x-request-id', request_id),
+                        response_id=request_id, session_id=chat_runner.session.session_id,
+                        pd_prefill=pd_prefill, migrating=migration_request is not None,
+                        elapsed_ms=(time.perf_counter() - phase_start) * 1000)
         # request is normalized and may be adjusted by the parser
         # (e.g. GPT-OSS clears response_format and injects the schema into messages)
         request = chat_runner.request
@@ -273,7 +280,13 @@ def register(router: APIRouter, server_context) -> None:
                 final_usage = None
                 prompt_text_sent = False
                 prompt_token_ids_sent = False
+                first_output = True
                 async for chunk in chat_runner.stream():
+                    if PROFILE_PHASES and first_output and chunk.generate_token_len:
+                        trace_phase('http_first_token', request_id=raw_request.headers.get('x-request-id', request_id),
+                                    response_id=request_id, session_id=chat_runner.session.session_id,
+                                    elapsed_ms=(time.perf_counter() - phase_start) * 1000)
+                        first_output = False
                     logprobs = None
                     output_token_logprobs = None
                     if request.logprobs and chunk.logprobs:
@@ -343,6 +356,10 @@ def register(router: APIRouter, server_context) -> None:
             res = await chat_runner.collect(raw_request)
         except RequestError as error:
             return create_request_error_response(error)
+        if PROFILE_PHASES:
+            trace_phase('http_complete', request_id=raw_request.headers.get('x-request-id', request_id),
+                        response_id=request_id, session_id=chat_runner.session.session_id,
+                        elapsed_ms=(time.perf_counter() - phase_start) * 1000)
         text = res.text
         tool_calls = res.tool_calls
         reasoning_content = res.reasoning_content
