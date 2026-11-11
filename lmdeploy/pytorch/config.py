@@ -675,6 +675,7 @@ class ModelConfig:
         model_config = cls.from_hf_config(
             hf_config,
             pretrained_model_name_or_path,
+            trust_remote_code=trust_remote_code,
             dtype=dtype,
             dist_config=dist_config,
             is_draft_model=is_draft_model,
@@ -711,6 +712,7 @@ class ModelConfig:
         spec_method: str = None,
         device_type: str = 'auto',
         num_spec_tokens: int = 0,
+        trust_remote_code: bool = False,
     ):
         """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
@@ -726,6 +728,7 @@ class ModelConfig:
             spec_method=spec_method,
             num_spec_tokens=num_spec_tokens,
             device_type=device_type,
+            trust_remote_code=trust_remote_code,
         )
 
         if model_config.k_head_dim is None:
