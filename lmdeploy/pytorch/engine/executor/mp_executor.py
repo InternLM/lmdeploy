@@ -403,13 +403,16 @@ class MPExecutor(ExecutorBase):
         self.collective_rpc('warmup')
 
     async def sleep(self, level: int = 1):
-        """Sleep, and only return once every worker finished sleeping.
+        """Dispatch sleep to every worker.
 
-        Worker-side commands run as concurrent tasks, so a fire-and-forget
-        sleep here would let a later write or wakeup overlap the storage
-        offload/discard that sleep performs.
+        Workers execute ``sleep`` inline in their command loop (see
+        ``ExecutorProc._main_loop_impl``), so any later dispatched command —
+        a weight write, a wakeup, or an output poll — is handled only after
+        that worker finished sleeping. Awaiting per-worker acknowledgement
+        here instead would race the output-prefetch reader on rank 0's
+        shared return buffer, so ordering is guaranteed worker-side.
         """
-        await self.collective_rpc_async('sleep', args=(level, ), return_mask=0xff)
+        await self.collective_rpc_async('sleep', args=(level, ), return_mask=0)
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
@@ -629,7 +632,13 @@ class ExecutorProc:
             call_async = asyncio.iscoroutinefunction(func)
 
             logger.debug(f'proc[{proc_id}] call method: <{method}>.')
-            if call_async:
+            if method == 'sleep':
+                # Model-state operation: run it inline so later commands
+                # (weight writes, wakeup, output polls) cannot overlap the
+                # storage offload/discard it performs. Every other async
+                # method keeps the concurrent-task dispatch.
+                await func(*args, **kwargs)
+            elif call_async:
                 event_loop.create_task(self._task_wrapper(func, args, kwargs, need_return, ret_buf))
             else:
                 ret = func(*args, **kwargs)
