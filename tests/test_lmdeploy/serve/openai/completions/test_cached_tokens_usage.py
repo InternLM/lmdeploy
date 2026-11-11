@@ -143,3 +143,31 @@ def test_batch_prompts_accumulate_cached_tokens():
         details = asyncio.run(_collect_prompt_tokens_details([[1, 2], [3, 4], [5, 6]], [128, 64, 0],
                                                              stream))
         assert details == {'cached_tokens': 192}
+
+
+async def _collect_stream_choice_indexes(prompts):
+    """Return the ``choices[*].index`` of every streamed chunk, in order."""
+    engine = _AsyncEngine([[1]] * len(prompts), [0] * len(prompts))
+    context = _ServerContext(engine)
+    router = APIRouter()
+    register(router, context)
+    endpoint = router.routes[0].endpoint
+    request = CompletionRequest(model='fake-model',
+                            prompt=prompts,
+                            max_tokens=8,
+                            stream=True,
+                            stream_options={'include_usage': True})
+    response = await endpoint(request, _RawRequest())
+    indexes = []
+    async for chunk in response.body_iterator:
+        if chunk.startswith('data: [DONE]'):
+            continue
+        payload = json.loads(chunk.removeprefix('data: '))
+        indexes.extend(choice['index'] for choice in payload.get('choices', []))
+    return indexes
+
+
+def test_stream_chunks_carry_per_prompt_choice_index():
+    # streamed chunks must keep the prompt index so multi-prompt streams
+    # can be reassembled per prompt, like the non-streaming choices array
+    assert asyncio.run(_collect_stream_choice_indexes(['a', 'b'])) == [0, 1]

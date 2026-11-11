@@ -360,7 +360,7 @@ def register(router: APIRouter, server_context) -> None:
                             final_usage.total_tokens += total_tokens
                             cached_tokens += final_res.cached_tokens
                         response_json = create_stream_response_json(
-                            index=0,
+                            index=gen_index,
                             text=res.response,
                             finish_reason=res.finish_reason,
                             logprobs=logprobs)
