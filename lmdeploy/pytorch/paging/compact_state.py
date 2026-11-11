@@ -514,6 +514,17 @@ class SSMStateManager:
         bank.pending_load = access
         return self._register_access(access)
 
+    def submit_export(self, bank: StateBank) -> StateAccess:
+        """Hold a completed request's bank, auxiliary slot and immutable input.
+
+        PD reads have their own lifetime and do not consume Store save credits. The scheduler freezes the request until
+        the granted reader terminates.
+        """
+        self._check_bank(bank)
+        if bank.accesses or bank.pending_checkpoint is not None:
+            raise ValueError('PD export requires completed model producers.')
+        return self._submit_banks((bank,), bank.stream, (), checkpoints=())
+
     def consume_loaded_inputs(self, access: StateAccess) -> None:
         """Commit one-shot loaded IDs after the CPU forward packet is bound.
 

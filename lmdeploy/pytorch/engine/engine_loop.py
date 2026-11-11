@@ -281,6 +281,7 @@ class EngineLoop:
                       data=dict(token_ids=out.token_ids,
                                 logits=out.logits,
                                 cache_block_ids=out.cache_block_ids,
+                                pd_handoff=out.pd_handoff,
                                 req_metrics=out.req_metrics,
                                 routed_experts=out.routed_experts,
                                 logprobs=logprobs,
@@ -577,6 +578,13 @@ class EngineLoop:
         elif has_model_work:
             self.state_checkpoints.unpin_saves(running)
         step_outputs = self._finish_forward_output(out, running, model_inputs, delta)
+        if step_outputs and out.pd_state_ids is not None:
+            for index, seq in enumerate(running):
+                response = step_outputs.get(seq.session_id)
+                if response is not None and response.finish and seq.pd_prompt_tokens is not None:
+                    ids = out.pd_state_ids[:, index].tolist() if out.pd_state_ids.numel() else []
+                    handoff = self.scheduler.pd_coordinator.publish(seq, self.engine_conn.cache_schema, ids)
+                    response.pd_handoff = handoff.model_dump()
         if cache_inputs is not None and cache_inputs.decode_save_id is not None:
             self.scheduler.decode_checkpoints.finish(
                 cache_inputs.decode_save_id, out.decode_checkpoint_mask if out is not None else None)

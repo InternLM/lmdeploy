@@ -56,6 +56,7 @@ class InferOutput:
     # send cache blocks back for migration in Disaggregated LLM Serving
     # when Prefill Engine is Done.
     cache_block_ids: list[int] = None
+    pd_handoff: dict | None = None
 
     # for logging
     req_metrics: RequestMetrics = None
@@ -420,7 +421,8 @@ class Engine(EngineBase):
             if session is not None:
                 msgs = list(session.sequences.values())
                 if len(msgs) > 0 and msgs[0].preserve_cache:
-                    msgs[0].finish()
+                    if not self.scheduler.pd_coordinator.holds(msgs[0]):
+                        msgs[0].finish()
                 else:
                     self.end_session(session_id)
                 resp_type = ResponseType.SUCCESS

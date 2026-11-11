@@ -676,6 +676,7 @@ class SchedulerSequence:
     migration_request: None | MigrationRequest = None
     resp_cache: bool = False
     preserve_cache: bool = False
+    pd_prompt_tokens: np.ndarray | None = None
 
     # For logging
     engine_events: list[EngineEvent] = field(default_factory=list)

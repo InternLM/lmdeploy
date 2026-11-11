@@ -3,6 +3,7 @@ import asyncio
 import os
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import zmq
 import zmq.asyncio
@@ -19,6 +20,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeInitRequest,
     DistServeInitResponse,
     DistServeKVTransferEndpointInfo,
+    PDControlRequest,
 )
 from lmdeploy.pytorch.engine.executor.dist_utils import find_available_port
 
@@ -35,6 +37,8 @@ class EngineP2PConnection:
         self.p2p_conn_ctx: dict[str, zmq.asyncio.Context] = {}
         self.p2p_sender: dict[str, zmq.asyncio.Socket] = {}
         self.p2p_receiver: dict[str, zmq.asyncio.Socket] = {}
+        self.cache_schema = ''
+        self._control_waiters: dict[str, asyncio.Future] = {}
 
         self.use_unique_kvtransfer_engine = os.environ.get('LMDEPLOY_USE_UNIQUE_KVTRANSFER_ENGINE', False)
 
@@ -53,6 +57,8 @@ class EngineP2PConnection:
 
         kvtransfer_endpoint_info: list[DistServeKVTransferEndpointInfo] = self.engine.executor.p2p_initialize(
             init_request)
+        if kvtransfer_endpoint_info[0].version == 2:
+            self.cache_schema = kvtransfer_endpoint_info[0].cache_schema
 
         return DistServeInitResponse(engine_endpoint_info=DistServeEngineEndpointInfo(zmq_address=zmq_address),
                                      kvtransfer_endpoint_info=kvtransfer_endpoint_info,
@@ -77,6 +83,24 @@ class EngineP2PConnection:
         # peer-supplied bytes (RCE risk), and send_pyobj() produces that pickle format.
         await self.p2p_sender[remote_engine_id].send_json(req.model_dump())
 
+    async def control(self, remote_engine_id: str, request: PDControlRequest):
+        """Await an owner acknowledgment; sending a grant is not acquiring
+        it."""
+        request_id = uuid4().hex
+        future = asyncio.get_running_loop().create_future()
+        self._control_waiters[request_id] = future
+        try:
+            await self.p2p_sender[remote_engine_id].send_json(
+                dict(kind='pd_control', request_id=request_id, control=request.model_dump()))
+            return await asyncio.wait_for(asyncio.shield(future), timeout=30)
+        finally:
+            self._control_waiters.pop(request_id, None)
+
+    def apply_control(self, request: PDControlRequest):
+        sequence = self.engine.scheduler.pd_coordinator.control(request)
+        if sequence is not None:
+            self.engine.scheduler.end_session(sequence.session_id)
+
     async def handle_zmq_recv(self, remote_engine_id: str):
         receiver = self.p2p_receiver[remote_engine_id]
         while True:
@@ -87,6 +111,23 @@ class EngineP2PConnection:
             # cannot tear down the receive loop.
             try:
                 raw = await receiver.recv_json()
+                if raw.get('kind') == 'pd_ack':
+                    future = self._control_waiters.get(raw['request_id'])
+                    if future is not None and not future.done():
+                        if raw['error']:
+                            future.set_exception(ValueError(raw['error']))
+                        else:
+                            future.set_result(None)
+                    continue
+                if raw.get('kind') == 'pd_control':
+                    error = ''
+                    try:
+                        self.apply_control(PDControlRequest.model_validate(raw['control']))
+                    except ValueError as exc:
+                        error = str(exc)
+                    await self.p2p_sender[remote_engine_id].send_json(
+                        dict(kind='pd_ack', request_id=raw['request_id'], error=error))
+                    continue
                 req = DistServeCacheFreeRequest.model_validate(raw)
             except (ValueError, ValidationError) as e:
                 logger.error(f'invalid zmq request from {remote_engine_id}: {e}')

@@ -610,7 +610,9 @@ class RayExecutor(ExecutorBase):
         ]
         cache_inputs = inputs.get('cache_inputs')
         access_id = cache_inputs.ssm_state_access_id if cache_inputs is not None else None
-        self._output_steps.append((inputs.get('kv_connector_metadata') is not None, access_id))
+        collect_ranks = inputs.get('kv_connector_metadata') is not None or (cache_inputs is not None
+                                                                            and cache_inputs.pd_export)
+        self._output_steps.append((collect_ranks, access_id))
 
     async def get_output_async(self):
         """Get output async."""
@@ -632,6 +634,8 @@ class RayExecutor(ExecutorBase):
         # owner identity only after every shard completes; dispatch RPCs and
         # leader-only D2H do not establish this condition.
         output = outputs[0]
+        if output.pd_state_ids is not None:
+            output.pd_state_ids = torch.cat([rank.pd_state_ids for rank in outputs], dim=0)
         if connector_step:
             output.kv_connector_output = self._kv_output_aggregator.aggregate([
                 rank_output.kv_connector_output for rank_output in outputs

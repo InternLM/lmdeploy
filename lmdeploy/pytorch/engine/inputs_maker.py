@@ -1633,6 +1633,10 @@ class InputsMakerAsync:
             return None, None
         next_running = forward_inputs.pop('running')
         inputs = forward_inputs['inputs']
+        if (inputs is not None and not inputs.is_dummy and (not inputs.is_chunk or inputs.is_last_chunk)
+                and any(seq.pd_prompt_tokens is not None for seq in next_running)):
+            carrier = forward_inputs['cache_inputs'] or CacheCheckpointInputs()
+            forward_inputs['cache_inputs'] = replace(carrier, pd_export=True)
         if logger.level <= logging.DEBUG and inputs is not None:
             logger.debug(f'Sending forward inputs: {inputs.log_info()}')
             session_ids = [seq.session_id for seq in next_running]

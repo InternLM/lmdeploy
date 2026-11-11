@@ -25,6 +25,7 @@ from .decode_checkpoint import DecodeCheckpointCoordinator
 from .eviction_helper import build_eviction_helper
 from .kv_load_coordinator import KVLoadCoordinator
 from .kv_save_coordinator import KVSaveCoordinator
+from .pd_coordinator import PDCoordinator
 from .prefill_scheduler import (
     _PrefillScheduler,
     _PrefillTurnPolicy,
@@ -182,6 +183,7 @@ class Scheduler:
             block_manager=self.block_manager, block_trie=self.block_trie, state_manager=self.state_manager,
             connector=kv_connector, save_coordinator=self.kv_save_coordinator)
 
+        self.pd_coordinator = PDCoordinator(self.block_manager, self.state_manager)
         self.scheduler_tick = 0
 
     def tick(self):
@@ -444,6 +446,8 @@ class Scheduler:
                 connector.cancel_lookup(seq.seq_id)
             # An active load may still write GPU memory. Defer the state change
             # until all ranks terminate instead of making its blocks evictable.
+            if self.pd_coordinator.defer_end(seq):
+                continue
             if self.kv_load_coordinator.defer_stop_if_loading(seq):
                 continue
             seq.state.stop()
@@ -464,6 +468,8 @@ class Scheduler:
                 connector.cancel_lookup(seq.seq_id)
             # Session removal also frees sequence blocks, so it must be deferred
             # while a worker may still address an in-flight load destination.
+            if self.pd_coordinator.defer_end(seq):
+                continue
             if self.kv_load_coordinator.defer_end_if_loading(seq):
                 continue
             # stop session so it won't get scheduled again
@@ -484,6 +490,7 @@ class Scheduler:
             or self.has_remote_loading()
             or self.has_migration_done()
             or self.kv_save_coordinator.has_pending()
+            or self.pd_coordinator.has_pending()
         )
 
     def build_connector_meta(

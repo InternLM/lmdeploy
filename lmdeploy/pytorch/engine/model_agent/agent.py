@@ -127,6 +127,7 @@ class BatchedOutputs:
     kv_connector_output: KVConnectorOutput | None = None
     decode_checkpoint_mask: torch.Tensor | None = None
     ssm_state_access_id: int | None = None
+    pd_state_ids: torch.Tensor | None = None
 
     @classmethod
     def connector_only(cls, output: KVConnectorOutput | None) -> 'BatchedOutputs':
@@ -1255,11 +1256,16 @@ class BaseModelAgent:
         # connector output together; other TP ranks emit a connector-only
         # envelope so the executor can wait for all-rank completion.
         connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
-        if batched_output is None and (connector_output is not None or ssm_state_access_id is not None):
+        pd_export = cache_inputs is not None and cache_inputs.pd_export
+        if batched_output is None and (connector_output is not None or ssm_state_access_id is not None or pd_export):
             batched_output = BatchedOutputs(next_token_ids=None, stopped=None)
         if batched_output is not None:
             batched_output.kv_connector_output = connector_output
             batched_output.ssm_state_access_id = ssm_state_access_id
+            if pd_export:
+                ids = (inputs.ssm_state_meta.output_state_ids[:, 0] if inputs.ssm_state_meta is not None
+                       else torch.empty(0, dtype=torch.long, device=self.device))
+                batched_output.pd_state_ids = ids.unsqueeze(0)
             if ssm_state_access_id is None:
                 self._push_output(batched_output)
 

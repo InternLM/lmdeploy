@@ -34,6 +34,7 @@ class CacheCheckpointInputs:
     # Host owner's access identity, echoed only after actual GPU completion.
     # Fresh on each dispatch, including delta-only decode; never persistent IDs.
     ssm_state_access_id: int | None = None
+    pd_export: bool = False
 
     def __post_init__(self):
         if self.ssm_checkpoint_steps is not None:
@@ -70,6 +71,7 @@ class CacheCheckpointInputs:
             decode_save_plan=decode_save_plan,
             decode_save_id=self.decode_save_id,
             ssm_state_access_id=self.ssm_state_access_id,
+            pd_export=self.pd_export,
         )
 
     def record_stream(self, stream: torch.cuda.Stream) -> None:
