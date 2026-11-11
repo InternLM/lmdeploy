@@ -305,3 +305,127 @@ python benchmark/mooncake_pd_decode_save.py \
 - 最终 8 个 endpoint 的 exports / grants / receives / pinned_blocks 全部为 0，quarantined=false；本次 GPU 服务、router、Store master 已停止，8 卡显存均归零。
 - 原始数据库、日志和分析脚本保留在本机 `.git/pd_tmp/`；远端日志在容器 `/dev/shm/lmdeploy_pd_phase/` 和 `/dev/shm/lmdeploy_pd_phase_rr/`。phase_pd 为最初 cache-aware 测量，phase_pd_rr 为均衡测量，phase_hybrid8 为 8 卡非 PD；phase_direct4 仅为绕过 P 的 producer-only 控制。
 - 仍未解决的是前述边界 token 差异；仍未证明的是 save-on/off 饱和性能，以及上一轮 GSM8K TPOT 差额的精确阶段归因。此次完成的是阶段观测、指定工作负载比较与 D 保存后实际读取验证。
+
+## 追加：充分预热后的 graph 与 PD 前端链路优化（2026-11-11）
+
+### 参考实现与本次取舍
+
+- [vLLM GLM-5.3 PD recipe](https://recipes.vllm.ai/zai-org/GLM-5.3.md?pd_router=smg&kv_offload=kv_store_distributed_mooncake&frontend=python&strategy=pd_cluster) 的 D 显式使用 `FULL_DECODE_ONLY`，P 使用默认 graph 策略。该页面当前生成的是 NIXL PD + Mooncake Store；不能把 Store 的选项理解成 PD 也使用 Mooncake。本任务仍保留 LMDeploy 的 Mooncake PD + Store 分层，不引入 MultiConnector。
+- [vLLM graph 设计](https://docs.vllm.ai/en/latest/design/cuda_graphs/) 区分 uniform decode 与 prefill/mixed：`FULL_DECODE_ONLY` 不为后者启用 graph。核对本机 vLLM `e740badc2e`，Mooncake 对 Mamba/hybrid 仍采用 N−1 交接及尾 token 恢复。LMDeploy 的常规 decode 在本次修改前已经使用 full graph；不能将已有 full graph 的收益计作新增优化。
+- [SGLang GLM-5.3-Flash recipe](https://github.com/sgl-project/sglang/blob/main/docs/cookbook/autoregressive/GLM/GLM-5.3-Flash.mdx) 的 NVIDIA prefill 可显式启用 `--cuda-graph-backend-prefill breakable`。本机 SGLang `a93e89fd4a` 的 graph 配置分别管理 decode/full 与 prefill/breakable。通用 PD metadata 可携带首 token、draft top-k 和 hidden states；但 Flash recipe 当前仍将 PD 标为 preview，并列出 PD+MTP 尚不能启动的限制，不能据此改掉 LMDeploy 已验证的恢复协议。
+- 用户链接是 GLM-5.3，实际测试权重是 hybrid attention 的 **GLM-5.3-Flash**。本次保留其 `piecewise_cuda_graph_token_padding=False`，避免为命中 graph 改变 GEMM 行数。
+
+### 已实现的两项优化
+
+**Graph 与观测（commit `70cbd513`）**：prefill graph 原先仅捕获 512 的倍数及上限，1-token D 恢复和 P 的部分 block 尾部无法命中。现在增加 1～64 的精确桶及 128/256 桶；仍受既有最大 token 数限制，只在启动时捕获，未准备的形状保持 eager。`worker_step` 增加实际 target graph 模式和 target、sampling/draft、finish 的 CUDA event 分段；`graph_capture` 标记真实冷捕获。没有新增同步，也没有变更 KV/state 的分配、引用或释放顺序。
+
+**复用 P 的分词结果**：router 仅对非空纯文本 chat 请求让 P 返回完整、未截断的 prompt IDs，并放入 D 的 `migration_request.prompt_token_ids`。D 保留 messages/tools 给 response parser，输入使用 P 的 IDs；HTTP 层消费后清空该 transport 字段，避免 generation config 深拷贝及 engine RPC 重复携带。原有 handoff 的 token 数、digest、schema 校验继续执行。多模态、需要 `prompt_text` 的请求以及已经提供原始 `input_ids` 的请求保持原路径。
+
+P 的响应还直接构造 `JSONResponse`：`model_dump` 已生成可 JSON 编码的数据，无需 FastAPI 再逐个遍历 prompt ID。本机 49,152 IDs、20 次循环的微测中，`jsonable_encoder + JSONResponse` 平均 42.82 ms，直接 `JSONResponse` 为 3.38 ms；这只是响应编码微测，端到端收益单独测量。
+
+### 配置探索与预热约束
+
+固定 8×H200、P4+D4、DP4/EP4/TP1、MTP=5、max batch=16、prefill chunk=8192、cache fraction=0.7、P Store both / D Store producer，以及原 decode save-first / interval=1024。
+
+| 设置                                       | 验证结果                                                                                     |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| P prefill graph cap=8192，D cap=16         | P 在第一个 8192 桶捕获时 OOM：申请 256 MiB 时仅余 107.56 MiB；没有完成启动，不能作为推荐配置 |
+| P cap=64，D cap=16                         | 成功启动；P 每 rank 捕获 64 个短桶，D 捕获 16 个短桶；保留原 KV 容量                         |
+| D full decode capture batches=`1 2 4 8 16` | target 和 MTP 均建立 full graph；这是对原默认设置的显式固定                                  |
+
+P 的 cap=64 面向本次多轮缓存命中场景：P 的剩余真实输入主要为 2～63 tokens，D 恢复为 1 token。它不把 8192-token 大 prefill 包含进 graph。更大的输入保留 eager，长 prompt 的 kernel/JIT 冷开销需要另外预热；本次没有用降低 KV cache 容量来换取大 graph。
+
+每次新部署先完成 16 组实际 P/D HTTP 端点的连接、真实 KV 传输和 64-token 生成，再用用户原脚本完整跑两轮预热。正式结果必须检查计时窗口内 `graph_capture=0`，不能只根据启动成功或“跑过一次”认定预热完成。另保留 graph-only 与 token 复用的中间测量，区分各项收益。
+
+使用原 `benchmark/mooncake_pd_multiturn.sh`、原数据和 seed=1124：每轮 8 个会话×5 turn、40 个请求、20,480 个输出 tokens。每项正式结果重复两轮；预热不计入正式统计。该脚本的 rate=8 是 worker 内 turn 间的到达间隔设置，结果不是饱和吞吐。分阶段 stream 时间含 kernel、collective 和 launch gap，不能与重叠的 host 时间相加。
+
+### PD 正式结果与 D 首 token 分解
+
+下表每行合并两轮、共 80 个请求；吞吐为总输出 tokens 除以两轮业务窗口时长之和。基线也使用本次分段观测并充分预热，常规 decode 的 full graph 在所有组中均开启。
+
+| 配置                                              | TTFT mean / p50 / p99 / max (ms)    | TPOT mean (ms) | 输出 token/s |
+| ------------------------------------------------- | ----------------------------------- | -------------- | ------------ |
+| 原 graph 策略、原 router                          | 919.34 / 859.36 / 1319.98 / 1332.16 | 7.71           | 769.33       |
+| 短 prefill graph + prompt IDs 复用 + 精简响应编码 | 681.29 / 680.81 / 974.36 / 1004.27  | 7.51           | 817.43       |
+
+本次 workload 的平均 TTFT 降低 **25.9%**，吞吐提高 **6.3%**；TPOT 仅降低约 **2.6%**。不能将 TTFT 的改善描述为同等幅度的稳态 decode 提速。最终两轮 TTFT 为 685.26 / 677.31 ms，TPOT 为 7.52 / 7.50 ms。
+
+| D 阶段                                   | 基线 mean (ms) | 优化后 mean (ms) | 优化后 p50 / p99 / max (ms)  |
+| ---------------------------------------- | -------------- | ---------------- | ---------------------------- |
+| 请求准备（handler 内）                   | 93.63          | 1.51             | 1.47 / 2.25 / 2.32           |
+| engine 排队，包含迁移等待                | 89.20          | 91.77            | 66.08 / 252.53 / 295.96      |
+| 首次调度至 engine 首次输出               | 179.91         | 149.89           | 144.19 / 265.71 / 266.86     |
+| 其余 handler 内耗时                      | 38.57          | 34.58            | 33.44 / 49.02 / 50.23        |
+| **D handler 到首个可见 token**           | **401.31**     | **277.75**       | **258.75 / 473.46 / 487.28** |
+| native KV 读取（包含在上面的迁移等待中） | 8.11           | 7.04             | 5.83 / 22.17 / 22.17         |
+
+这些结果回答了原来的“D 为什么需要约 396 ms”：本次等价热基线为 401 ms，其中约 94 ms 是重复请求准备，约 180 ms 是首次调度后的恢复和输出路径，约 89 ms 是排队及迁移等待。native KV 读取区间只占约 8 ms。优化后 D 首 token 降低 **30.8%**；剩余瓶颈仍是恢复计算与调度等待。
+
+“请求准备”和“D 到首 token”从 API handler 进入开始计时，不含此前 FastAPI 的 JSON/Pydantic 处理；P 阶段在 collect 完成处结束，也不含最后的响应编码。最终 TTFT 的加法分解为 **P 382.58 + D 277.75 + 其余 20.96 = 681.29 ms**。基线的其余部分为 11.85 ms；传递完整 prompt IDs 增加了 JSON/网络处理，该代价已计入端到端结果，没有藏进分词收益中。
+
+中间阶段也各测了两轮，避免把全部收益归给一个开关：
+
+| 实现阶段                                 | TTFT mean (ms) | D 到首 token (ms) | D 请求准备 (ms) | TTFT 中其余部分 (ms) |
+| ---------------------------------------- | -------------- | ----------------- | --------------- | -------------------- |
+| 原 graph / router                        | 919.34         | 401.31            | 93.63           | 11.85                |
+| 仅短 prefill graph                       | 755.56         | 355.57            | 90.18           | 13.76                |
+| 再复用 prompt IDs，尚未消除重复复制/编码 | 703.04         | 291.18            | 17.62           | 42.17                |
+| 最终实现                                 | 681.29         | 277.75            | 1.51            | 20.96                |
+
+中间版本虽省下分词，却因 IDs 在 generation config/RPC 重复复制，以及 P 响应再次经过 FastAPI 遍历而引入代价；最终实现消除了这两处重复工作。各阶段独立跑完整预热，排队和 batching 会变化，表中差额不是逐算子耗时的严格消融。
+
+worker 的 CUDA event 进一步显示，D 恢复的 target 区间由两轮的 141.73 / 141.01 ms 降到 113.18 / 110.61 ms，sampling/draft 仍约 9.4 ms；完整 stream 区间从约 151 ms 降到约 122 ms。它们是上述 forward 区间的内部观测，不能再次相加。两轮 80 次 D 恢复全部使用 piecewise，常规 D decode 约 97% worker steps 使用 full graph；少数混合步骤仍为 eager，不能宣称所有 mixed 形状均已图化。
+
+源码中的剩余限制是：短恢复仍采用 prefill/MTP 恢复语义，DeepEP 的部分 MoE 边界仍为 eager，低延迟路径又受全局 decode phase 约束。这是下一步定位方向；本次未对 kernel/collective/launch gap 做逐算子归因，不能把约 112 ms 的 target 时间全部归给 MoE 或 RDMA。直接将恢复请求标成 decode 会影响 recurrent state 和 MTP，不属于安全的配置调整。
+
+另一个明确的 graph 覆盖缺口在 `glm5_next.py`：MTP 开启时，prefill 的 `return_input_embeds=True`，decode 为 False；piecewise descriptor 将该常量包含在 key 中。启动 prefill warmup 只准备了 True 的 plan，所以增加 6/12-token 桶本身并不足以使 mixed step 中的本地 decode 命中它。若继续优化，需要为正确的调用契约准备 plan，并验证额外显存与 state 更新，不能通过忽略 descriptor 常量强行复用。
+
+### 相同 8 卡、相同短 prefill graph 的非 PD 对照
+
+非 PD 使用两组 Hybrid4（每组 DP4/EP4/TP1），全部 8 个 endpoint 参与 round-robin；每组启用 cap=64 的 piecewise 和相同 full decode 桶、MTP、Store、decode 保存参数。新部署完整跑两轮预热，随后正式重复两轮。第二轮预热及两轮正式窗口均为 **0 次 graph capture**；全部 80 次正式 prefill 使用 piecewise。
+
+| 同卡数配置             | TTFT mean / p99 (ms) | TPOT mean / p99 (ms) | 输出 token/s |
+| ---------------------- | -------------------- | -------------------- | ------------ |
+| 优化 PD：P4 + D4       | 681.29 / 974.36      | 7.51 / 9.57          | 817.43       |
+| 优化非 PD：2 × Hybrid4 | 410.41 / 557.76      | 6.17 / 7.71          | 1051.92      |
+
+非 PD 两轮 TTFT 为 414.81 / 406.00 ms。该热缓存、并发 8 的 workload 上，PD 仍比非 PD 高约 **66% TTFT**，吞吐低约 **22%**，不能得出“开启 graph 后 PD 已优于非 PD”的结论。
+
+原因有明确的工作负载和阶段证据：P 与 Hybrid 平均都已缓存 40972.8 个 tokens，剩余 prefill 很短，分离长 prefill 的收益有限；PD 仍需要 P 和 D 两次恢复/执行及交接。PD 的 8 卡中只有 4 卡承担持续 decode，非 PD 的 8 卡都能参与生成。实际 decode worker 的平均 batch 为 1.80 vs 1.02，stream 时间为 31.18 vs 26.00 ms；MTP 接受率为 65.82% vs 66.74%，并非完全一致，但不足以仅凭接受率解释全部阶段差额。是否在更长未命中 prefill、更高并发或不同 P:D 比例下受益，需要另设 workload，不能从本轮低并发热测外推饱和容量。
+
+### 正确性与保存复用复查
+
+- 长度 1/2/3/63/64/65/129/8192、每种重复两次、每次 32 个输出 IDs：graph-only 与最终版本分别和基线 **16/16 个案例、512/512 个 IDs 完全一致**。
+- 另用真实 32783 / 40983 / 49242-token prompt，对比旧 router 重新分词和新 router 复用 IDs：完整 prompt IDs **3/3 一致**，各自 32 个输出 IDs **3/3 一致**；messages/tools 保留给原 response parser。
+- decode save-first 在 boundary=8192 成功，周期 checkpoint 在 boundary=9216 成功（D pid=254327，save_id=47）；P 后续请求加载相同 `43749d7e...bf3c848` state hash，读取 264515584 bytes、native 8.452 ms，success=true。实际生成 1088 IDs 后续接，输出与直接推理 **16/16 IDs 一致**。
+- 并发性能脚本不能用作逐 token 一致性的 oracle：同一基线两次运行，40 个 512-token 响应仅 3 个完整输出相同；最终版本的两轮为 6/40。该基线已有的不稳定性尚未定位，不能据此断言所有差异只是舍入，也不能把上述串行通过推广为所有边界输入精度问题已解决。
+
+最后一条保留了原任务中的精度边界。本次没有通过放宽交接校验、改变 token padding 或提前释放 KV block 来获取性能。
+
+### 推荐部署参数与交付检查
+
+在本次相同模型、显存配额和多轮缓存场景下，在原部署参数上增加：
+
+```bash
+# Prefill：缓存命中后的短尾部使用 piecewise graph。
+--piecewise-cudagraph-max-tokens 64
+
+# Decode：1-token 恢复使用 piecewise；常规 target/MTP decode 使用 full graph。
+--piecewise-cudagraph-max-tokens 16 --cudagraph-capture-batch-sizes 1 2 4 8 16
+```
+
+保留 `--prefix-cache-decode-save-first --prefix-cache-decode-state-interval 1024`、原来的 MTP=5 和 KV cache 配额，不设置 `--eager-mode`。LMDeploy 的 full decode 由 graph runner 自动选择，没有需要照抄的 vLLM `--compilation-config`。本次仅新增了短 prefill 的 piecewise 覆盖，并将原 full decode batch 桶显式固定。
+
+复现脚本对应环境变量为：P `PIECEWISE_GRAPH_TOKENS=64`，D `PIECEWISE_GRAPH_TOKENS=16`；D/Hybrid 均可设 `DECODE_GRAPH_BATCHES='1 2 4 8 16'`。启动服务后先做实际连接和生成，再执行两轮原多轮脚本预热，最后检查正式计时窗口没有 `graph_capture`。例如 graph-only 的第二轮预热仍捕获了 4 个 MTP graph，但其后两轮正式测量均为 0；这说明不能仅以启动 warmup 完成为依据。
+
+- LMDeploy graph/观测提交：`70cbd513`；prompt IDs 复用与响应编码提交：`736aa7c0`。
+- router 提交：`5cc5202`。正式 PD workload 使用的 binary 与最终 binary 仅差一个空 messages 的排除条件；正式请求全部为非空文本 messages，不受该差异影响。最终 binary 的该分支已通过单测，并重新构建和安装。
+- 最终源码的 API/PD/ChatRunner 相关 CPU 测试 **239 passed**，capture bucket 测试 **13 passed**；GPU 组合检查先通过 59 项，修正旧 plan 数量断言后受影响案例单独 **1 passed**，共覆盖 60 个不同案例。GPU 检查包含跨 64/128 桶的输出、checkpoint 及未触碰 state 的一致性。
+- router 最终源码 **551 passed**，`cargo fmt --check` 与 release build 通过；LMDeploy pre-commit 通过。
+- 最终源码已同步至指定容器并执行 `bash install.sh`；7 个修改模块的源码/安装文件 SHA256 完全一致。router 安装文件与本机构建文件 SHA256 均为 `8f4118589f6d5ceda62bd5888960398d04a3acc9b0050abe135e81e733ebfb6b`。未 push。
+
+本轮 5 种配置各 2 次预热 + 2 次正式测量，共 **800/800 业务请求成功**；其中正式测量 400 个请求，所有窗口均无冷 graph capture。结果与 mean/p50/p99/max、逐 turn 分布、实际 graph 使用次数、MTP counter 增量、保存复用证据保存在 `benchmark/results/mooncake_pd_graph_h200_20261111.json`。
+
+原始数据库在本机 `.git/pd_tmp/graph_*`，分析脚本与日志快照在 `.git/pd_graph_tmp/`；远端日志在容器 `/dev/shm/lmdeploy_pd_graph_{baseline,piecewise,final,hybrid}/`。原用户部署脚本、性能脚本和数据未修改。
+
+收尾时 P/D 及 Hybrid 的全部 endpoint 均为 exports / grants / receives / pinned_blocks = 0，quarantined=false。本次启动的服务、router、Store master 均已停止，相关监听端口和存活进程为空，8 卡显存全部为 0 MiB。
