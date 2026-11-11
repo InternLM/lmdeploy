@@ -113,8 +113,10 @@ def aggregate_transfer_results(rank_results, transfer_ids):
     allocations."""
     merged = []
     for index, transfer_id in enumerate(transfer_ids):
-        results = [rank[index] for rank in rank_results if not isinstance(rank, BaseException)]
-        if len(results) != len(rank_results) or any(r.status == 'completion_unknown' for r in results):
+        results = [rank[index] for rank in rank_results
+                   if not isinstance(rank, BaseException) and len(rank) == len(transfer_ids)]
+        if (len(results) != len(rank_results)
+                or any(r.transfer_id != transfer_id or r.status == 'completion_unknown' for r in results)):
             status = 'completion_unknown'
         elif any(r.status == 'failed_drained' for r in results):
             status = 'failed_drained'

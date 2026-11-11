@@ -86,6 +86,7 @@ def _bare_model_agent():
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.pd_runtime = None
     agent.all_context = nullcontext
     agent.compact_state_plan = None
     agent.cache_config = _enabled_config()

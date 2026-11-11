@@ -194,6 +194,12 @@ class CacheConfig:
     def __post_init__(self):
         """Post init."""
         assert self.dcp >= 1, 'invalid dcp'
+        if self.migration_backend == MigrationBackend.Mooncake:
+            if self.dcp != 1 or self.num_cpu_blocks:
+                raise ValueError('Mooncake PD requires DCP=1 and GPU-only cache allocation.')
+            if (self.role == EngineRole.Decode and self.use_mooncake_store
+                    and self.kv_transfer_config.kv_role != 'kv_producer'):
+                raise ValueError('Mooncake PD decode Store must use kv_producer.')
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         assert self.prefill_save_alignment > 0, 'invalid prefill_save_alignment'

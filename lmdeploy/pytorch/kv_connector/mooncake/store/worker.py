@@ -505,6 +505,9 @@ class MooncakeStoreWorker:
 
     def get_finished(self) -> KVConnectorOutput:
         """Return rank-local terminal transfer progress since the last poll."""
+        for thread in (self.kv_recv_thread, self.kv_send_thread):
+            if thread is not None and thread.failure is not None:
+                raise thread.failure
         with self._completion_lock:
             completed_loads = set(self._completed_loads)
             failed_receiving = {request_id for request_id, success in self._completed_loads.items() if not success}
@@ -630,14 +633,14 @@ class MooncakeStoreWorker:
             lookup_server.close()
 
         receiver = self.kv_recv_thread
-        self.kv_recv_thread = None
         if receiver is not None:
             receiver.close()
+            self.kv_recv_thread = None
 
         sender = self.kv_send_thread
-        self.kv_send_thread = None
         if sender is not None:
             sender.close()
+            self.kv_send_thread = None
 
         store = self.store
         self.store = None

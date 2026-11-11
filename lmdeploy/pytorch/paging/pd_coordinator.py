@@ -2,7 +2,8 @@
 """Paging ownership of PD exports and receives; callbacks never own memory."""
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from time import monotonic
 from uuid import uuid4
 
 import numpy as np
@@ -29,6 +30,7 @@ class PDExport:
     state_access: StateAccess | None
     receiver_epoch: str = ''
     revoked: bool = False
+    created_at: float = field(default_factory=monotonic)
 
 
 @dataclass
@@ -195,6 +197,25 @@ class PDCoordinator:
 
     def has_pending(self) -> bool:
         return bool(self.exports or self.receives)
+
+    def expire_unclaimed(self, now: float, ttl: float = 300) -> list:
+        """Reclaim only prepared exports for which no reader was granted."""
+        return [self._release_export(export) for export in list(self.exports.values())
+                if not export.receiver_epoch and now - export.created_at >= ttl]
+
+    def require_drained(self):
+        if self.has_pending():
+            raise RuntimeError('PD cache is still owned by exports or receives; refusing cache release.')
+
+    def reset(self):
+        self.require_drained()
+        self.epoch = uuid4().hex
+        self.failed = False
+
+    def snapshot(self):
+        return dict(exports=len(self.exports), grants=sum(bool(x.receiver_epoch) for x in self.exports.values()),
+                    receives=len(self.receives), quarantined=self.failed,
+                    pinned_blocks=sum(len(x.logical_blocks) for x in (*self.exports.values(), *self.receives.values())))
 
     def _release_export(self, export):
         self.block_manager.release_logical_blocks(export.logical_blocks)

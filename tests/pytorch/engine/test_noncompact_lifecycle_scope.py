@@ -13,6 +13,7 @@ from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 def _agent(monkeypatch, *, output=True, compact=True):
     from lmdeploy.pytorch.engine.model_agent import agent as module
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.pd_runtime = None
     agent.rank = 0
     agent.need_output = output
     agent.ssm_state_cursor = object() if compact else None
@@ -47,6 +48,7 @@ def _agent(monkeypatch, *, output=True, compact=True):
 def test_stop_keeps_baseline_contract(dp, method, compact):
     async def run():
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.pd_runtime = None
         agent.cache_config = SimpleNamespace(compact_state_capacity=object() if compact else None)
         agent.dist_config = SimpleNamespace(dp=dp)
         agent.profiler = agent.guided_decoding_manager = None
@@ -101,6 +103,7 @@ def test_postprocess_retains_baseline_shield(monkeypatch, output, compact):
 
 def test_noncompact_release_needs_no_compact_stop_proof(monkeypatch):
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.pd_runtime = None
     agent.cache_config = SimpleNamespace(compact_state_capacity=None)
     agent._background_task = object()
     agent.kv_connector = agent.memdecode_agent = agent._checkpoint_engine_zmq_ctx = None
@@ -133,6 +136,7 @@ def test_engine_finally_keeps_baseline_release(monkeypatch, compact):
     from lmdeploy.pytorch.engine.engine import Engine
 
     engine = Engine.__new__(Engine)
+    engine.scheduler = SimpleNamespace(pd_coordinator=SimpleNamespace(has_pending=lambda: False))
     engine.cache_config = SimpleNamespace(compact_state_capacity=object() if compact else None,
                                          use_mooncake_store=False)
     events = []
@@ -150,6 +154,7 @@ def test_engine_finally_keeps_baseline_release(monkeypatch, compact):
 @pytest.mark.parametrize('started', [False, True])
 def test_release_clears_compact_resources_without_stop_registration(monkeypatch, started):
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.pd_runtime = None
     agent.ssm_state_cursor = object()
     agent.cache_config = SimpleNamespace(compact_state_capacity=object())
     agent._background_task = object() if started else None

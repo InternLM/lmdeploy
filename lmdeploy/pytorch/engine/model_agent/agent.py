@@ -1620,6 +1620,11 @@ class BaseModelAgent:
         self.kv_connector.shutdown()
         self.kv_connector = None
 
+    def _close_pd_runtime(self):
+        if self.pd_runtime is not None:
+            self.pd_runtime.close()
+            self.pd_runtime = None
+
     def _validate_mtp_parallel_config(self) -> None:
         """Validate target and draft shards used by Store and PD."""
         transfer_config = self.cache_config.kv_transfer_config
@@ -1697,6 +1702,7 @@ class BaseModelAgent:
         with self.all_context():
             self._validate_mtp_parallel_config()
             self._shutdown_kv_connector()
+            self._close_pd_runtime()
             dist_ctx = get_dist_manager().current_context()
             dist_cfg = self.dist_config
             tp = dist_cfg.attn_tp
@@ -2103,6 +2109,7 @@ class BaseModelAgent:
         # Stop producers of GPU work and wait for queued work before closing the
         # connector threads that still reference registered cache addresses.
         self.shutdown_kv_connector()
+        self._close_pd_runtime()
         self.cache_engine = None
         self.pd_runtime = None
         self.state_cache_engine = None
@@ -2174,6 +2181,7 @@ class BaseModelAgent:
     def release(self):
         """release."""
         self._shutdown_kv_connector()
+        self._close_pd_runtime()
         self.reset_graph_runner()
         if self._checkpoint_engine_zmq_ctx is not None:
             self._checkpoint_engine_zmq_ctx.destroy(linger=0)

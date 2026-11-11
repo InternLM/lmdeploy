@@ -36,6 +36,7 @@ class _FakeScheduler:
         self.sessions = {1: session}
         self.ended_sessions = []
         self.events = events
+        self.pd_coordinator = SimpleNamespace(require_drained=lambda: None)
 
     def end_session(self, session_id):
         self.ended_sessions.append(session_id)
@@ -116,6 +117,7 @@ def event_loop():
 
 def _build_sleeping_test_engine(event_loop):
     engine = Engine.__new__(Engine)
+    engine.engine_conn = SimpleNamespace(reset=lambda: None)
     engine.req_manager = RequestManager()
     resp = Response(type=ResponseType.INTERNAL_ENGINE_ERROR, sender_id=0, event=asyncio.Event())
     seq = _FakeSequence(resp)

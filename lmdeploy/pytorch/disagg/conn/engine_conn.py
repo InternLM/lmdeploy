@@ -164,3 +164,8 @@ class EngineP2PConnection:
         self._connected_addresses.pop(remote_engine_id, None)
         self._initializations = {key: value for key, value in self._initializations.items()
                                  if key[0] != remote_engine_id}
+
+    def reset(self):
+        for peer in list(self.p2p_conn_ctx):
+            self.zmq_disconnect(peer)
+        self.cache_schema = ''

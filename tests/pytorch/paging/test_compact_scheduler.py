@@ -180,6 +180,7 @@ def test_shutdown_order_is_compact_only(compact, failure):
             raise RuntimeError('still owns I/O')
     connector = SimpleNamespace(shutdown=shutdown)
     scheduler = SimpleNamespace(
+        pd_coordinator=SimpleNamespace(require_drained=lambda: None),
         cache_config=SimpleNamespace(compact_state_capacity=object() if compact else None),
         kv_connector=connector,
         sequence_lifecycle=SimpleNamespace(disable_connector=lambda: events.append('disable')),

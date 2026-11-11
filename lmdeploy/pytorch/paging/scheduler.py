@@ -196,6 +196,7 @@ class Scheduler:
         Engine shutdown normally drains worker queues first. Clearing scheduler ownership here makes repeated shutdown
         harmless and prevents any later scheduling path from starting new external work.
         """
+        self.pd_coordinator.require_drained()
         connector = self.kv_connector
         # Fail closed before dropping paging records if compact Store still
         # owns a destination. Shutdown is not itself a worker-drain proof.
@@ -497,7 +498,6 @@ class Scheduler:
             or self.has_remote_loading()
             or self.has_migration_done()
             or self.kv_save_coordinator.has_pending()
-            or self.pd_coordinator.has_pending()
         )
 
     def build_connector_meta(
@@ -610,6 +610,7 @@ class Scheduler:
         Ended external loads and save leases must release their references first. Remote Store objects are not
         invalidated; future requests may restore them through the normal lookup/load completion protocol.
         """
+        self.pd_coordinator.require_drained()
         self.finish_kv_transfers_after_worker_drain()
         if self.sessions:
             raise RuntimeError('Cannot reset cache before all sessions have ended.')
@@ -617,6 +618,7 @@ class Scheduler:
             self.block_trie.reset_compact_after_worker_drain()
         else:
             self.block_trie.clear()
+        self.pd_coordinator.reset()
 
     def get_block_tables(self, seqs: SeqList):
         """Get block tables for the sequences."""

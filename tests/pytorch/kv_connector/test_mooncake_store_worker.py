@@ -805,7 +805,7 @@ def test_registration_rejects_non_cuda_noncontiguous_and_empty_rows(tmp_path):
     worker.shutdown()
 
 
-def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path):
+def test_async_load_unknown_completion_retains_destination_and_registration(tmp_path):
     path = write_store_config(tmp_path)
     store = FakeStore(get_results=[0, -1])
     worker = MooncakeStoreWorker(
@@ -830,11 +830,8 @@ def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path
     worker.start_load_kv(MooncakeStoreConnectorMetadata(load_requests=(request, )))
     worker.kv_recv_thread.request_queue.join()
 
-    assert worker.get_finished() == KVConnectorOutput(
-        finished_receiving={19},
-        failed_receiving={19},
-    )
-    assert worker.get_finished() == KVConnectorOutput()
+    with pytest.raises(RuntimeError, match='drain is unknown'):
+        worker.get_finished()
     assert store.get_calls == [(
         [
             build_store_key(worker.key_metadata, 1, block_hash)
@@ -846,7 +843,10 @@ def test_async_load_writes_allocated_blocks_and_reports_partial_failure(tmp_path
         ],
         [[100, 200], [100, 200]],
     )]
-    worker.shutdown()
+    with pytest.raises(RuntimeError, match='drain is unknown'):
+        worker.shutdown()
+    assert worker.store is store and store.close_calls == 0
+    assert 19 in worker._inflight_loads
 
 
 def test_async_load_writes_target_and_mtp_cache_rows(tmp_path, monkeypatch):
@@ -985,8 +985,13 @@ def test_hybrid_sender_reads_frozen_snapshot_across_all_pool_rows(put_result):
     request = MooncakeStoreSaveRequest(0, 0, 0, (0,), (0,), (bytes(32),),
                                       state=MooncakeStoreStateSave(1, 3, 64))
     sender.add_request(request, event)
-    sender.close()
-    assert completed == [(0, put_result >= 0)]
+    if put_result < 0:
+        with pytest.raises(RuntimeError, match='unknown'):
+            sender.close()
+        assert completed == []
+    else:
+        sender.close()
+        assert completed == [(0, True)]
     assert observed == [(1, expected)]
     assert store.put_calls[0][2] == [[6, 5, 5]]
 
@@ -1055,7 +1060,7 @@ def test_async_save_waits_for_forward_and_writes_only_owned_missing_blocks(
 
 
 @pytest.mark.parametrize('failure_stage', ['lookup', 'put', 'partial_put'])
-def test_async_save_failure_is_a_terminal_completion(
+def test_async_save_only_pre_submission_failure_is_terminal(
     tmp_path,
     monkeypatch,
     failure_stage,
@@ -1093,8 +1098,16 @@ def test_async_save_failure_is_a_terminal_completion(
     assert event.record_calls == 1
     assert event.synchronize_calls == 1
     assert len(store.put_calls) == (0 if failure_stage == 'lookup' else 1)
-    assert worker.get_finished() == KVConnectorOutput(completed_save_ids={29}, failed_save_ids={29})
-    worker.shutdown()
+    if failure_stage == 'lookup':
+        assert worker.get_finished() == KVConnectorOutput(completed_save_ids={29}, failed_save_ids={29})
+        worker.shutdown()
+    else:
+        with pytest.raises(RuntimeError, match='unknown'):
+            worker.get_finished()
+        with pytest.raises(RuntimeError, match='unknown'):
+            worker.shutdown()
+        assert 29 in worker._inflight_save_ids
+        assert worker.store is store and store.close_calls == 0
 
 
 def test_shutdown_is_idempotent_and_propagates_close_error(tmp_path):
@@ -1337,7 +1350,15 @@ def test_hybrid_load_prepares_before_fence_and_reports_request_failure(tmp_path,
     finally:
         ready.set()
         worker.kv_recv_thread.request_queue.join()
-        worker.shutdown()
+    if results != [0, 0]:
+        with pytest.raises(RuntimeError, match='unknown'):
+            worker.get_finished()
+        with pytest.raises(RuntimeError, match='unknown'):
+            worker.shutdown()
+        assert len(store.get_calls) == 1
+        assert store.close_calls == 0
+        return
+    worker.shutdown()
     assert event.synchronize_calls == 2
     assert len(store.get_calls) == 2
     assert worker.get_finished() == KVConnectorOutput(

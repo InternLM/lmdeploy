@@ -262,9 +262,16 @@ def test_compact_load_rejects_short_oversize_or_failed_object(tmp_path, monkeypa
     worker.start_load_kv(MooncakeStoreConnectorMetadata(load_requests=(
         MooncakeStoreLoadRequest(9, (0,), (h,), 1, state_unit_id=2),)))
     worker.kv_recv_thread.request_queue.join()
-    output = worker.get_finished()
-    assert output.finished_receiving == output.failed_receiving == {9}
-    worker.shutdown()
+    if min(results) < 0:
+        with pytest.raises(RuntimeError, match='unknown'):
+            worker.get_finished()
+        with pytest.raises(RuntimeError, match='unknown'):
+            worker.shutdown()
+        assert worker.store is store
+    else:
+        output = worker.get_finished()
+        assert output.finished_receiving == output.failed_receiving == {9}
+        worker.shutdown()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires an allowed GPU')

@@ -19,6 +19,7 @@ from lmdeploy.pytorch.utils import cancel_async_tasks, wait_for_async_tasks
 from lmdeploy.utils import get_logger
 
 from .engine import InferOutput, ResponseType, response_reqs
+from .request import RequestType
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
@@ -169,6 +170,13 @@ class EngineLoop:
             await self.req_manager.step()
             self.scheduler.prefetch_kv_lookups()
             self.has_runable_event.set()
+
+    async def pd_maintenance_loop(self):
+        from time import monotonic
+        while not self.stop_event.is_set():
+            for sequence in self.scheduler.pd_coordinator.expire_unclaimed(monotonic()):
+                self.scheduler.end_session(sequence.session_id)
+            await asyncio.sleep(1)
 
     async def drain_for_sleep(self):
         """Pause scheduling after the current forward step drains."""
@@ -743,6 +751,8 @@ class EngineLoop:
                             except asyncio.CancelledError:
                                 # Shutdown must still observe the all-rank native
                                 # result before allowing paging cleanup.
+                                if job.cancelled():
+                                    raise
                                 continue
                     else:
                         result.status = 'completed'
@@ -768,6 +778,11 @@ class EngineLoop:
                       err_msg=result.error or f'PD receive {action}')
         if action == 'quarantined':
             logger.error('PD %s quarantined; source and destination allocations remain held.', handoff.transfer_id)
+            self.req_manager.block_request_types((RequestType.ADD_SESSION, RequestType.ADD_MESSAGE))
+            for pending in list(self.scheduler.migration_waiting):
+                response_reqs(self.req_manager, pending.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                              err_msg='PD receiver is quarantined; restart required.')
+                self.scheduler.end_session(pending.session_id)
             return
         if action == 'stop':
             seq.state.release_paging_resources()
@@ -810,6 +825,7 @@ class EngineLoop:
         if self.config.role != EngineRole.Hybrid:
             logger.info('Starting async task MigrationLoop.')
             self.tasks.add(event_loop.create_task(self.migration_loop(), name='MainLoopMigration'))
+            self.tasks.add(event_loop.create_task(self.pd_maintenance_loop(), name='PDExportExpiry'))
 
         for task in self.tasks:
             task.add_done_callback(self.tasks.discard)

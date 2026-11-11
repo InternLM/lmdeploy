@@ -33,16 +33,23 @@ def test_granted_export_survives_real_session_end_and_rejects_wrong_receiver():
     scheduler.end_session(seq.session_id)
     assert scheduler.get_session(1) is not None
     assert scheduler.block_manager.get_num_free_gpu_blocks() == free
+    for reset in (scheduler.shutdown, scheduler.reset_cache_after_worker_drain):
+        with pytest.raises(RuntimeError, match='PD cache is still owned'):
+            reset()
+    assert owner.expire_unclaimed(float('inf')) == []
     with pytest.raises(ValueError, match='granted receiver'):
         owner.control(PDControlRequest(action='release', **(request | dict(receiver_epoch='other'))))
     assert owner.control(PDControlRequest(action='release', **request)) is seq
     scheduler.end_session(1)
     assert scheduler.block_manager.get_num_free_gpu_blocks() == 4
     assert owner.control(PDControlRequest(action='release', **request)) is None
+    scheduler.reset_cache_after_worker_drain()
+    assert owner.epoch != handoff.engine_epoch
 
 
 def test_revoke_before_grant_prevents_late_reader():
     scheduler, seq, handoff = make_export()
+    assert scheduler.pd_coordinator.expire_unclaimed(float('inf')) == [seq]
     scheduler.end_session(seq.session_id)
     assert scheduler.block_manager.get_num_free_gpu_blocks() == 4
     with pytest.raises(ValueError, match='no longer available'):

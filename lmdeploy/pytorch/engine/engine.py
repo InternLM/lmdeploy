@@ -507,10 +507,11 @@ class Engine(EngineBase):
                                   preserve_cache=req.data.get('preserve_cache'))
                 msg = next(iter(sess.sequences.values()))
                 if req.data.get('pd_prefill'):
-                    if self.engine_config.role != EngineRole.Prefill or not msg.preserve_cache:
+                    if (self.engine_config.role != EngineRole.Prefill or not msg.preserve_cache
+                            or not self.engine_conn.cache_schema):
                         scheduler.end_session(session_id)
                         self._response(req.resp, ResponseType.INTERNAL_ENGINE_ERROR,
-                                       err_msg='pd_prefill requires a preserving Prefill engine request.')
+                                       err_msg='pd_prefill requires a preserving Prefill request and v2 handshake.')
                         continue
                     msg.prepare_pd_prefill()
                     if not msg.pd_prefix_length:
@@ -519,7 +520,8 @@ class Engine(EngineBase):
                         handoff = scheduler.pd_coordinator.publish(msg, self.engine_conn.cache_schema, [])
                         msg.state.stop()
                         self._response(req.resp, ResponseType.FINISH,
-                                       data=dict(token_ids=[], cache_block_ids=[], pd_handoff=handoff.model_dump()))
+                                       data=dict(token_ids=np.empty(0, dtype=np.int64), cache_block_ids=[],
+                                                 pd_handoff=handoff.model_dump()))
                         continue
                 if migration_request:
                     if migration_request.handoff is not None:
@@ -577,6 +579,7 @@ class Engine(EngineBase):
 
     def _loop_finally(self):
         """Finally process for dist."""
+        self.scheduler.pd_coordinator.require_drained()
         logger.info('Cleanup executor.')
         self.migration_event = None
         try:
@@ -672,8 +675,10 @@ class Engine(EngineBase):
             logger.info('PyTorch engine loop drained for sleep.')
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
+        self.scheduler.pd_coordinator.require_drained()
         await self.executor.sleep(level)
         self.scheduler.reset_cache_after_worker_drain()
+        self.engine_conn.reset()
         if self._engine_loop is not None:
             self._engine_loop.reset_runtime_state()
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
@@ -729,10 +734,12 @@ class Engine(EngineBase):
                 try:
                     if engine_loop is not None:
                         engine_loop.stop()
-                    if (self.cache_config.compact_state_capacity is not None
+                    if (self.scheduler.pd_coordinator.has_pending()
+                            or self.cache_config.compact_state_capacity is not None
                             and self.cache_config.use_mooncake_store):
                         self._block_new_inputs()
                         self._cancel_and_end_all_sessions()
+                        self.scheduler.pd_coordinator.require_drained()
                         await self.executor.drain_for_shutdown()
                         self.scheduler.finish_kv_transfers_after_worker_drain()
                 except BaseException:
@@ -856,4 +863,8 @@ class Engine(EngineBase):
 
     async def get_health_status(self) -> dict:
         """Get backend health status."""
-        return self.get_local_health_status()
+        status = self.get_local_health_status()
+        status['pd'] = self.scheduler.pd_coordinator.snapshot()
+        if self.scheduler.pd_coordinator.failed:
+            status.update(alive=False, message='PD receive completion is unknown; restart required.')
+        return status

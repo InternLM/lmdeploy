@@ -26,6 +26,11 @@ from .data import (
 logger = get_logger('lmdeploy')
 
 
+class StoreTransferUnknown(RuntimeError):
+    """Native I/O failed without proof that registered buffers are idle."""
+
+
+
 @dataclass(frozen=True)
 class _LoadTask:
     request: MooncakeStoreLoadRequest
@@ -158,6 +163,7 @@ class KVCacheStoreSendingThread(threading.Thread):
         self.request_queue: queue.Queue[_SaveTask | object] = queue.Queue()
         self._state_lock = threading.Lock()
         self._closed = False
+        self.failure: StoreTransferUnknown | None = None
 
     def add_request(
         self,
@@ -166,6 +172,8 @@ class KVCacheStoreSendingThread(threading.Thread):
     ) -> None:
         """Enqueue a save without synchronizing the model's compute stream."""
         with self._state_lock:
+            if self.failure is not None:
+                raise self.failure
             if self._closed:
                 raise RuntimeError('Mooncake KV-cache sender is closed')
             self.request_queue.put(
@@ -320,9 +328,9 @@ class KVCacheStoreSendingThread(threading.Thread):
             total_bytes,
         )
         start = time.perf_counter()
+        if self.replicate_config is None:
+            self.replicate_config = _new_replicate_config()
         try:
-            if self.replicate_config is None:
-                self.replicate_config = _new_replicate_config()
             results = list(
                 self.store.batch_put_from_multi_buffers(
                     missing_keys,
@@ -354,8 +362,10 @@ class KVCacheStoreSendingThread(threading.Thread):
                 error,
                 exc_info=True,
             )
-            raise
+            raise StoreTransferUnknown('Store put completion is unknown; restart required.') from error
         failed = [result for result in results if result < 0]
+        if failed:
+            raise StoreTransferUnknown(f'Store put returned {failed}; native drain is unknown.')
         log = logger.info if not failed else logger.error
         log(
             'Mooncake Store interaction after: operation=save_batch_put_from_multi_buffers '
@@ -400,6 +410,8 @@ class KVCacheStoreSendingThread(threading.Thread):
                 if item is self._STOP:
                     return
                 assert isinstance(item, _SaveTask)
+                if self.failure is not None:
+                    continue
                 request = item.request
                 logger.info(
                     'Mooncake KV save dequeued: global_rank=%d tp_rank=%d tp_size=%d '
@@ -414,6 +426,10 @@ class KVCacheStoreSendingThread(threading.Thread):
                 success = False
                 try:
                     success = self._save(item)
+                except StoreTransferUnknown as error:
+                    self.failure = error
+                    logger.exception('Store sender quarantined; source leases remain held.')
+                    continue
                 except Exception:
                     logger.exception(
                         'Mooncake KV save reached terminal failure: '
@@ -441,12 +457,16 @@ class KVCacheStoreSendingThread(threading.Thread):
         """Drain accepted saves and stop the sender exactly once."""
         with self._state_lock:
             if self._closed:
+                if self.failure is not None:
+                    raise self.failure
                 return
             self._closed = True
         self.request_queue.join()
         self.request_queue.put(self._STOP)
         self.request_queue.join()
         self.join()
+        if self.failure is not None:
+            raise self.failure
 
 
 class KVCacheStoreRecvingThread(threading.Thread):
@@ -491,10 +511,13 @@ class KVCacheStoreRecvingThread(threading.Thread):
         self.request_queue: queue.Queue[_LoadTask | object] = queue.Queue()
         self._state_lock = threading.Lock()
         self._closed = False
+        self.failure: StoreTransferUnknown | None = None
 
     def add_request(self, request: MooncakeStoreLoadRequest, ready_event: Any = None) -> None:
         """Enqueue a load without waiting for Store I/O."""
         with self._state_lock:
+            if self.failure is not None:
+                raise self.failure
             if self._closed:
                 raise RuntimeError('Mooncake KV-cache receiver is closed')
             self.request_queue.put(_LoadTask(request, time.perf_counter(), ready_event))
@@ -588,8 +611,10 @@ class KVCacheStoreRecvingThread(threading.Thread):
                 error,
                 exc_info=True,
             )
-            return False
+            raise StoreTransferUnknown('Store get completion is unknown; restart required.') from error
 
+        if any(result < 0 for result in results):
+            raise StoreTransferUnknown(f'Store get returned {results}; native drain is unknown.')
         failed = [result < 0 for result in results]
         if self.key_metadata.state_schema is not None:
             # Mooncake returns bytes read, not merely a success status. A short
@@ -623,6 +648,8 @@ class KVCacheStoreRecvingThread(threading.Thread):
                 if item is self._STOP:
                     return
                 assert isinstance(item, _LoadTask)
+                if self.failure is not None:
+                    continue
                 request = item.request
                 logger.info(
                     'Mooncake KV load dequeued: global_rank=%d tp_rank=%d tp_size=%d '
@@ -635,6 +662,10 @@ class KVCacheStoreRecvingThread(threading.Thread):
                 )
                 try:
                     success = self._load(request, item.ready_event)
+                except StoreTransferUnknown as error:
+                    self.failure = error
+                    logger.exception('Store receiver quarantined; destinations remain held.')
+                    continue
                 except Exception:
                     success = False
                     logger.exception(
@@ -661,9 +692,13 @@ class KVCacheStoreRecvingThread(threading.Thread):
         """Drain accepted loads and stop the receiver exactly once."""
         with self._state_lock:
             if self._closed:
+                if self.failure is not None:
+                    raise self.failure
                 return
             self._closed = True
         self.request_queue.join()
         self.request_queue.put(self._STOP)
         self.request_queue.join()
         self.join()
+        if self.failure is not None:
+            raise self.failure
