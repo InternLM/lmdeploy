@@ -180,6 +180,7 @@ def register(router: APIRouter, server_context) -> None:
         migration_request = json_request.pop('migration_request', None)
         with_cache = json_request.pop('with_cache', False)
         preserve_cache = json_request.pop('preserve_cache', False)
+        pd_prefill = json_request.pop('pd_prefill', False)
         if migration_request:
             migration_request = MigrationRequest.model_validate(
                 migration_request)
@@ -215,6 +216,7 @@ def register(router: APIRouter, server_context) -> None:
                         migration_request=migration_request,
                         with_cache=with_cache,
                         preserve_cache=preserve_cache,
+                        pd_prefill=pd_prefill,
                     ),
                 ),
             )
@@ -313,6 +315,7 @@ def register(router: APIRouter, server_context) -> None:
                     if chunk.cache_block_ids is not None and chunk.is_last_delta:
                         response_json['cache_block_ids'] = chunk.cache_block_ids
                         response_json['remote_token_ids'] = chunk.token_ids
+                        response_json['pd_handoff'] = chunk.pd_handoff
                     yield f'data: {json.dumps(response_json)}\n\n'
                 if final_usage is not None:
                     yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
@@ -374,7 +377,7 @@ def register(router: APIRouter, server_context) -> None:
 
         if with_cache:
             cache_block_ids = res.cache_block_ids[0]
-            remote_token_ids = [res.remote_token_ids[0][-1]]
+            remote_token_ids = res.remote_token_ids[-1][-1:] if res.remote_token_ids else []
 
         usage = UsageInfo.build(
             prompt_tokens=res.input_token_len,
@@ -397,5 +400,6 @@ def register(router: APIRouter, server_context) -> None:
         if with_cache:
             response['cache_block_ids'] = cache_block_ids
             response['remote_token_ids'] = remote_token_ids
+            response['pd_handoff'] = res.pd_handoff
 
         return response

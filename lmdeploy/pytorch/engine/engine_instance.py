@@ -232,6 +232,7 @@ class EngineInstance(EngineInstanceBase):
                 resp = await self.req_sender.async_recv(resp, wait_main=True)
 
                 cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
+                pd_handoff = resp.data.get('pd_handoff') if resp.data else None
                 req_metrics = resp.data.get('req_metrics', None) if resp.data else None
                 logprobs = resp.data.pop('logprobs', None) if resp.data else None
 
@@ -242,6 +243,7 @@ class EngineInstance(EngineInstanceBase):
                     yield EngineOutput(resp.type,
                                        token_ids[output_offset:].tolist(),
                                        cache_block_ids=cache_block_ids,
+                                       pd_handoff=pd_handoff,
                                        req_metrics=req_metrics,
                                        logprobs=logprobs)
                     output_offset = len(token_ids)
@@ -268,6 +270,7 @@ class EngineInstance(EngineInstanceBase):
                                        token_ids,
                                        logits=logits,
                                        cache_block_ids=cache_block_ids,
+                                       pd_handoff=pd_handoff,
                                        req_metrics=req_metrics,
                                        routed_experts=routed_experts,
                                        logprobs=logprobs,

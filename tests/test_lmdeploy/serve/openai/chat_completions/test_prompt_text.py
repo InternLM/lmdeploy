@@ -79,7 +79,7 @@ def test_staggered_choices_keep_prompt_on_each_first_chunk(
                 return SimpleNamespace(
                     response=content, token_ids=[count], input_token_len=4, generate_token_len=count,
                     finish_reason=finish_reason, logprobs=None, cached_tokens=0, routed_experts=None,
-                    cache_block_ids=None)
+                    cache_block_ids=None, pd_handoff=None)
 
             async def results():
                 if index == first_index:

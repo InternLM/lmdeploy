@@ -557,6 +557,18 @@ class Engine(EngineBase):
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.engine_conn.p2p_initialize(init_request)
 
+    def get_pd_engine_info(self):
+        from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, MigrationBackend
+        cache, dist = self.cache_config, self.dist_config
+        return DistServeEngineConfig(
+            tp_size=dist.attn_tp, dp_size=dist.dp, ep_size=dist.ep, pp_size=None, dp_rank=dist.dp_rank,
+            block_size=cache.block_size, num_cpu_blocks=cache.num_cpu_blocks, num_gpu_blocks=cache.num_gpu_blocks,
+            engine_epoch=self.scheduler.pd_coordinator.epoch,
+            protocol_version=2 if cache.migration_backend == MigrationBackend.Mooncake else 1).model_dump()
+
+    def pd_control(self, request):
+        return self.engine_conn.apply_control(request)
+
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         return self.engine_conn.p2p_connect(conn_request)
 

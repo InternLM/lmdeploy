@@ -128,7 +128,8 @@ class PDCoordinator:
         compact = isinstance(self.state_manager, SSMStateManager)
         auxiliary = seq.logical_state if compact and boundary else None
         legacy = seq.logical_state if not compact and seq.logical_state >= 0 and boundary else None
-        handoff = PDHandoff(transfer_id=uuid4().hex, engine_epoch=self.epoch, cache_schema=cache_schema,
+        handoff = PDHandoff(transfer_id=uuid4().hex, engine_epoch=self.epoch, session_id=seq.session_id,
+                            cache_schema=cache_schema,
                             prompt_digest=prompt_digest(seq, tokens), prompt_token_count=len(tokens),
                             valid_token_count=boundary, block_size=seq.block_size, block_ids=physical,
                             state_ids=state_ids if compact and boundary else [], auxiliary_id=auxiliary,

@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from types import SimpleNamespace
+
 import pytest
 
 from lmdeploy.pytorch.disagg.conn.protocol import (
@@ -37,3 +39,17 @@ def test_handoff_requires_exact_prefix_and_real_replay_tail():
     with pytest.raises(ValueError, match='exactly'):
         PDHandoff(**(fields | dict(block_ids=[3])))
     assert PDHandoff(**(fields | dict(block_ids=[]))).state_ids == [7, 11]
+
+
+def test_engine_info_uses_runtime_attention_tp():
+    from lmdeploy.pytorch.disagg.config import MigrationBackend
+    from lmdeploy.pytorch.engine.engine import Engine
+
+    engine = SimpleNamespace(
+        dist_config=SimpleNamespace(tp=8, attn_tp=2, dp=2, ep=4, dp_rank=1),
+        cache_config=SimpleNamespace(block_size=64, num_cpu_blocks=0, num_gpu_blocks=100,
+                                     migration_backend=MigrationBackend.Mooncake),
+        scheduler=SimpleNamespace(pd_coordinator=SimpleNamespace(epoch='incarnation')))
+    info = Engine.get_pd_engine_info(engine)
+    assert (info['tp_size'], info['dp_size'], info['ep_size'], info['dp_rank']) == (2, 2, 4, 1)
+    assert (info['engine_epoch'], info['protocol_version']) == ('incarnation', 2)

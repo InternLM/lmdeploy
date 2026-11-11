@@ -136,6 +136,7 @@ class _FakeEngine:
                 finish_reason=None,
                 cached_tokens=0,
                 cache_block_ids=None,
+                pd_handoff=None,
                 routed_experts=[[[1, 2, 3]]],
                 logprobs=[{101: -0.5, 102: -1.2}],
             )
@@ -147,6 +148,7 @@ class _FakeEngine:
                 finish_reason='stop',
                 cached_tokens=0,
                 cache_block_ids=None,
+                pd_handoff=None,
                 routed_experts=[[[1, 2, 3]]],
                 logprobs=[{102: -0.3, 103: -2.1}],
             )
@@ -1242,6 +1244,7 @@ def test_messages_raw_tokens_preserve_tool_parsing(stream, choice):
                 response=fragment, token_ids=[101 + index], input_token_len=3,
                 generate_token_len=index + 1, finish_reason='stop' if index == 2 else None,
                 cached_tokens=0, cache_block_ids=None, routed_experts=None, logprobs=None,
+                pd_handoff=None,
             )
 
     context.async_engine.generate = generate

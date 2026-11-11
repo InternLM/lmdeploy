@@ -106,6 +106,8 @@ class DistServeEngineConfig(BaseModel):
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
+    engine_epoch: str = ''
+    protocol_version: int = 1
 
 
 class MooncakeEngineConfig(DistServeEngineConfig):

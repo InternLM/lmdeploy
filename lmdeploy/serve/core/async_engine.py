@@ -54,6 +54,7 @@ class GenOut:
     logits: Any = None
     last_hidden_state: Any = None
     cache_block_ids: list[int] | None = None  # for disaggregation
+    pd_handoff: dict | None = None
     routed_experts: Any = None  # for RL router replay
     cached_tokens: int = 0
     # Token ids aligned 1:1 with input-scoring logprobs rows.
@@ -764,6 +765,7 @@ class AsyncEngine:
                                  logprob_token_ids=logprob_token_ids,
                                  routed_experts=outputs.routed_experts,
                                  cache_block_ids=outputs.cache_block_ids,
+                                 pd_handoff=outputs.pd_handoff,
                                  cached_tokens=cached_tokens)
                     if outputs.logprobs is not None:
                         out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
@@ -828,6 +830,7 @@ class AsyncEngine:
                                  last_hidden_state=last_hidden_state,
                                  routed_experts=routed_experts,
                                  cache_block_ids=outputs.cache_block_ids,
+                                 pd_handoff=outputs.pd_handoff,
                                  cached_tokens=cached_tokens,
                                  stop_sequence=stop_sequence)
                 else:

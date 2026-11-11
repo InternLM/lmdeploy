@@ -104,6 +104,7 @@ class PDHandoff(BaseModel):
     version: Literal[2] = 2
     transfer_id: str
     engine_epoch: str
+    session_id: int = 0
     cache_schema: str
     prompt_digest: str
     prompt_token_count: int = Field(gt=0)

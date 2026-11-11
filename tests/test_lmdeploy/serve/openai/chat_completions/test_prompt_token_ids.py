@@ -147,7 +147,7 @@ def test_prompt_ids_preserve_buffered_output_ids_and_logprobs(chat_endpoint, str
             yield SimpleNamespace(response=text, token_ids=ids, input_token_len=4,
                                   generate_token_len=3, finish_reason='stop' if not ids else None,
                                   logprobs=[{token_id: -0.1} for token_id in ids], cached_tokens=0,
-                                  routed_experts=None, cache_block_ids=None)
+                                  routed_experts=None, cache_block_ids=None, pd_handoff=None)
 
     engine.generate = generate
     payloads = _post(context, stream=stream, return_token_ids=True, return_logprob=True,
@@ -178,7 +178,8 @@ def test_prompt_ids_survive_empty_terminal_output(chat_endpoint, stream, n):
         # A stop token may be filtered before the first visible output.
         yield SimpleNamespace(response='', token_ids=[], input_token_len=4,
                               generate_token_len=0, finish_reason='stop',
-                              logprobs=None, cached_tokens=0, routed_experts=None, cache_block_ids=None)
+                              logprobs=None, cached_tokens=0, routed_experts=None,
+                              cache_block_ids=None, pd_handoff=None)
 
     context.async_engine.generate = generate
     payloads = _post(context, stream=stream, n=n, return_token_ids=True,

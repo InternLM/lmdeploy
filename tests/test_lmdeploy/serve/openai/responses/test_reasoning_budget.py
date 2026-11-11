@@ -63,6 +63,7 @@ def test_low_budget_responses(responses_endpoint, hf_media_template, sse_payload
                 logprobs=None,
                 routed_experts=None,
                 cache_block_ids=None,
+                pd_handoff=None,
             )
         return results()
 

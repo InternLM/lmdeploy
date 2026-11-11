@@ -57,7 +57,7 @@ def check_request(request: ChatCompletionRequest,
         if any(
                 json_request.get(key)
                 for key in ('migration_request', 'with_cache',
-                            'preserve_cache')):
+                            'preserve_cache', 'pd_prefill')):
             return 'n > 1 is not supported with cache migration.'
     if request.top_p is not None and not (0 < request.top_p <= 1):
         return f'The top_p {request.top_p!r} must be in (0, 1].'

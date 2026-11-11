@@ -185,6 +185,12 @@ class EngineWorkerBase:
         """Init rdma link."""
         return self.engine.p2p_initialize(conn_request)
 
+    def get_pd_engine_info(self):
+        return self.engine.get_pd_engine_info()
+
+    def pd_control(self, request):
+        return self.engine.pd_control(request)
+
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         """rdma_connect."""
         return self.engine.p2p_connect(conn_request)

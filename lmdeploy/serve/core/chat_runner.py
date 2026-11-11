@@ -41,6 +41,7 @@ class ChatStreamChunk:
     cached_tokens: int
     routed_experts: Any = None
     cache_block_ids: list[int] | None = None
+    pd_handoff: dict | None = None
     reasoning_tokens: int | None = None
     is_last_delta: bool = True
     stop_sequence: str | None = None
@@ -62,6 +63,7 @@ class ChatResult:
     routed_experts: Any = None
     cache_block_ids: list[Any] = field(default_factory=list)
     remote_token_ids: list[Any] = field(default_factory=list)
+    pd_handoff: dict | None = None
     reasoning_tokens: int | None = None
     stop_sequence: str | None = None
 
@@ -219,6 +221,7 @@ class ChatRunner:
                         cached_tokens=res.cached_tokens,
                         routed_experts=res.routed_experts if finish_reason is not None else None,
                         cache_block_ids=res.cache_block_ids,
+                        pd_handoff=res.pd_handoff,
                         reasoning_tokens=self.response_parser.reasoning_tokens,
                         is_last_delta=is_last_delta,
                         stop_sequence=getattr(res, 'stop_sequence', None) if is_last_delta else None,
@@ -282,6 +285,7 @@ class ChatRunner:
             routed_experts=final_res.routed_experts,
             cache_block_ids=cache_block_ids,
             remote_token_ids=remote_token_ids,
+            pd_handoff=final_res.pd_handoff,
             reasoning_tokens=self.response_parser.reasoning_tokens,
             stop_sequence=getattr(final_res, 'stop_sequence', None),
         )

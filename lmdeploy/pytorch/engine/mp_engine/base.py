@@ -111,6 +111,12 @@ class MPEngine(EngineBase):
         """Init rdma link."""
         return self._collective_rpc('p2p_initialize', conn_request)
 
+    def get_pd_engine_info(self):
+        return self._collective_rpc('get_pd_engine_info')
+
+    def pd_control(self, request):
+        return self._collective_rpc('pd_control', request)
+
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         """rdma_connect."""
         return self._collective_rpc('p2p_connect', conn_request)

@@ -1,15 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from lmdeploy.pytorch.disagg.config import DistServeEngineConfig
 from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeCacheFreeRequest,
     DistServeConnectionRequest,
     DistServeDropConnectionRequest,
     DistServeInitRequest,
+    PDControlRequest,
 )
 
 
@@ -18,19 +18,17 @@ def register(router: APIRouter, server_context) -> None:
 
     @router.get('/distserve/engine_info')
     async def engine_info():
-        engine_config = server_context.engine_config
+        if server_context.async_engine.backend != 'pytorch':
+            raise HTTPException(400, 'Version 2 PD requires the PyTorch backend.')
+        return server_context.async_engine.engine.get_pd_engine_info()
 
-        response = DistServeEngineConfig(
-            tp_size=engine_config.tp,
-            dp_size=engine_config.dp,
-            pp_size=None,
-            ep_size=engine_config.ep,
-            dp_rank=engine_config.dp_rank,
-            block_size=engine_config.block_size,
-            num_cpu_blocks=engine_config.num_cpu_blocks,
-            num_gpu_blocks=engine_config.num_gpu_blocks)
-
-        return response.model_dump_json()
+    @router.post('/distserve/pd_control')
+    async def pd_control(request: PDControlRequest):
+        try:
+            server_context.async_engine.engine.pd_control(request)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        return {'status': 'SUCCESS'}
 
     @router.post('/distserve/p2p_initialize')
     async def p2p_initialize(init_request: DistServeInitRequest):

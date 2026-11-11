@@ -39,10 +39,19 @@ class EngineP2PConnection:
         self.p2p_receiver: dict[str, zmq.asyncio.Socket] = {}
         self.cache_schema = ''
         self._control_waiters: dict[str, asyncio.Future] = {}
+        self._initializations = {}
+        self._receiver_tasks = {}
+        self._connected_addresses = {}
 
         self.use_unique_kvtransfer_engine = os.environ.get('LMDEPLOY_USE_UNIQUE_KVTRANSFER_ENGINE', False)
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
+        peer = init_request.remote_engine_id
+        identity = (peer, init_request.remote_engine_config.engine_epoch)
+        if identity in self._initializations:
+            return self._initializations[identity]
+        if peer in self.p2p_conn_ctx:
+            self.zmq_disconnect(peer)
         ctx = zmq.asyncio.Context(2)
         sender = ctx.socket(zmq.PUSH)
         sender_port = find_available_port()
@@ -60,16 +69,23 @@ class EngineP2PConnection:
         if kvtransfer_endpoint_info[0].version == 2:
             self.cache_schema = kvtransfer_endpoint_info[0].cache_schema
 
-        return DistServeInitResponse(engine_endpoint_info=DistServeEngineEndpointInfo(zmq_address=zmq_address),
-                                     kvtransfer_endpoint_info=kvtransfer_endpoint_info,
-                                     status=DistServeConnectionStatus.SUCCESS)
+        response = DistServeInitResponse(engine_endpoint_info=DistServeEngineEndpointInfo(zmq_address=zmq_address),
+                                          kvtransfer_endpoint_info=kvtransfer_endpoint_info,
+                                          status=DistServeConnectionStatus.SUCCESS)
+        self._initializations[identity] = response
+        return response
 
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
+        peer = conn_request.remote_engine_id
+        address = conn_request.remote_engine_endpoint_info.zmq_address
+        if self._connected_addresses.get(peer) == address:
+            return DistServeConnectionResponse(status=DistServeConnectionStatus.SUCCESS)
         self.p2p_receiver[conn_request.remote_engine_id].connect(conn_request.remote_engine_endpoint_info.zmq_address)
         self.engine.executor.p2p_connect(remote_engine_id=conn_request.remote_engine_id,
                                          conn_request=conn_request.remote_kvtransfer_endpoint_info)
         event_loop = asyncio.get_event_loop()
-        event_loop.create_task(self.handle_zmq_recv(conn_request.remote_engine_id))
+        self._receiver_tasks[peer] = event_loop.create_task(self.handle_zmq_recv(peer))
+        self._connected_addresses[peer] = address
         return DistServeConnectionResponse(status=DistServeConnectionStatus.SUCCESS)
 
     def p2p_drop_connect(self, drop_conn_request: DistServeDropConnectionRequest):
@@ -137,6 +153,14 @@ class EngineP2PConnection:
                 logger.error(f'invalid free, {remote_engine_id}, {session_id}')
 
     def zmq_disconnect(self, remote_engine_id: str):
-        self.p2p_receiver[remote_engine_id].close()
-        self.p2p_sender[remote_engine_id].close()
-        self.p2p_conn_ctx[remote_engine_id].term()
+        if remote_engine_id not in self.p2p_conn_ctx:
+            return
+        task = self._receiver_tasks.pop(remote_engine_id, None)
+        if task is not None:
+            task.cancel()
+        self.p2p_receiver.pop(remote_engine_id).close(linger=0)
+        self.p2p_sender.pop(remote_engine_id).close(linger=0)
+        self.p2p_conn_ctx.pop(remote_engine_id).term()
+        self._connected_addresses.pop(remote_engine_id, None)
+        self._initializations = {key: value for key, value in self._initializations.items()
+                                 if key[0] != remote_engine_id}

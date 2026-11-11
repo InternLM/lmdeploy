@@ -23,6 +23,12 @@ class EngineBase:
         """Init rdma link."""
         raise NotImplementedError('This method is not implemented.')
 
+    def get_pd_engine_info(self):
+        raise NotImplementedError('This method is not implemented.')
+
+    def pd_control(self, request):
+        raise NotImplementedError('This method is not implemented.')
+
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         """rdma_connect."""
         raise NotImplementedError('This method is not implemented.')
