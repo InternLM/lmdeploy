@@ -368,12 +368,15 @@ class _TentativePrefixMatch:
             self._state_snapshot = _PrefixMatchStateSnapshot.capture(self.seq)
         self._phase = _PrefixMatchPhase.TRACKING
 
-    def match(self) -> None:
+    def match(self, *, pd_boundary: int | None = None) -> None:
         """Apply one tentative match after capturing its rollback boundary."""
         assert not self.is_matched
         self.begin()
         assert self._phase is _PrefixMatchPhase.TRACKING
-        self.block_trie.match(self.seq)
+        if pd_boundary is None:
+            self.block_trie.match(self.seq)
+        else:
+            self.block_trie.match_pd_prefix(self.seq, pd_boundary)
         self._phase = _PrefixMatchPhase.MATCHED
 
     def pin_restore(self) -> bool:

@@ -12,7 +12,8 @@ from torch.profiler import record_function
 
 from lmdeploy.messages import RequestMetrics
 from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.disagg.conn.protocol import PDControlRequest
+from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch, PDTransferResult
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
 from lmdeploy.pytorch.utils import cancel_async_tasks, wait_for_async_tasks
 from lmdeploy.utils import get_logger
@@ -702,12 +703,77 @@ class EngineLoop:
 
     async def _migration_loop_process_ready(self, migration_ready: 'SeqList'):
         """Process migration ready."""
-        await self._migration_loop_migrate(migration_ready)
+        legacy = []
+        for seq in migration_ready:
+            if seq.migration_request.handoff is None:
+                legacy.append(seq)
+            else:
+                await self._receive_handoff(seq)
+        if legacy:
+            await self._migration_loop_migrate(legacy)
 
-        # generate output
-        with self.scheduler.seqs_migration_activation(migration_ready):
-            await self._migration_loop_get_outputs(migration_ready)
+            with self.scheduler.seqs_migration_activation(legacy):
+                await self._migration_loop_get_outputs(legacy)
         self.has_runable_event.set()
+
+    async def _receive_handoff(self, seq):
+        owner = self.scheduler.pd_coordinator
+        receive = owner.receives[seq.seq_id]
+        request = receive.request
+        handoff = request.handoff
+        control = dict(transfer_id=handoff.transfer_id, engine_epoch=handoff.engine_epoch,
+                       receiver_epoch=owner.epoch)
+        seq.state.activate()
+        result = PDTransferResult(transfer_id=handoff.transfer_id, status='failed_drained')
+        submitted = False
+        claim_attempted = False
+        try:
+            if not receive.cancelled and not owner.failed:
+                claim_attempted = True
+                await self.engine_conn.control(request.remote_engine_id, PDControlRequest(action='claim', **control))
+                if not receive.cancelled:
+                    if handoff.valid_token_count:
+                        batch = MigrationExecutionBatch(protocol=seq.migration_request.protocol, receives=[request])
+                        job = asyncio.create_task(self.executor.migrate(batch))
+                        submitted = True
+                        while True:
+                            try:
+                                result, = await asyncio.shield(job)
+                                break
+                            except asyncio.CancelledError:
+                                # Shutdown must still observe the all-rank native
+                                # result before allowing paging cleanup.
+                                continue
+                    else:
+                        result.status = 'completed'
+        except (Exception, asyncio.CancelledError) as error:
+            # RPC loss after dispatch has no physical completion proof. Before
+            # dispatch, no worker can address these destinations.
+            result = PDTransferResult(transfer_id=handoff.transfer_id,
+                                       status='completion_unknown' if submitted else 'failed_drained', error=str(error))
+        if result.status != 'completion_unknown':
+            try:
+                action = 'release' if claim_attempted else 'revoke'
+                await self.engine_conn.control(request.remote_engine_id, PDControlRequest(action=action, **control))
+            except (ValueError, TimeoutError, KeyError) as error:
+                logger.warning('PD terminal acknowledgment failed for %s: %s', handoff.transfer_id, error)
+        action = owner.finish_receive(seq, result)
+        if action == 'ready':
+            # Publish only completed immutable full blocks. The exact loaded
+            # recurrent state is a one-shot input, never an invented checkpoint.
+            self.scheduler.block_trie.allocate(seq, token_limit=handoff.valid_token_count)
+            seq.state.deactivate()
+            return
+        response_reqs(self.req_manager, seq.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                      err_msg=result.error or f'PD receive {action}')
+        if action == 'quarantined':
+            logger.error('PD %s quarantined; source and destination allocations remain held.', handoff.transfer_id)
+            return
+        if action == 'stop':
+            seq.state.release_paging_resources()
+            seq.state.stop()
+        else:
+            self.scheduler.end_session(seq.session_id)
 
     async def migration_loop(self):
         """Async loop migration."""

@@ -1,10 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import numpy as np
 import pytest
+import torch
 
-from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
-from lmdeploy.pytorch.disagg.conn.protocol import PDControlRequest
+from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig, SSMStateCapacity
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest, PDControlRequest, PDHandoff
+from lmdeploy.pytorch.disagg.messages import PDTransferResult
 from lmdeploy.pytorch.messages import SequenceMeta
+from lmdeploy.pytorch.paging.pd_coordinator import prompt_digest
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
 
@@ -45,3 +48,61 @@ def test_revoke_before_grant_prevents_late_reader():
         scheduler.pd_coordinator.control(PDControlRequest(
             action='claim', transfer_id=handoff.transfer_id, engine_epoch=handoff.engine_epoch,
             receiver_epoch='late'))
+
+
+@pytest.mark.parametrize('status', ['failed_drained', 'completion_unknown'])
+def test_receive_reuses_prefix_and_cancellation_retains_private_destination(status):
+    cache = CacheConfig(max_batches=2, block_size=4, num_gpu_blocks=8, num_cpu_blocks=0,
+                        enable_prefix_caching=True)
+    scheduler = Scheduler(SchedulerConfig(max_batches=2, max_session_len=32), cache,
+                          SequenceMeta(4, strategy=ARSequenceStrategy()))
+    original = scheduler.add_session(1).add_sequence(np.arange(10))
+    scheduler.block_manager.allocate(original)
+    scheduler.block_trie.allocate(original, token_limit=8)
+    prefix = scheduler.block_manager.get_block_table(original)[:2].copy()
+    scheduler.end_session(1)
+    migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill', remote_session_id=2)
+    seq = scheduler.add_session(2).add_sequence(np.arange(10), migration_request=migration)
+    migration.handoff = PDHandoff(transfer_id='read', engine_epoch='prefill-epoch', cache_schema='model',
+                                   prompt_digest=prompt_digest(seq, seq.valid_ids), prompt_token_count=10,
+                                   valid_token_count=9, block_size=4, block_ids=[0, 1, 2])
+    assert scheduler.schedule_migration() == [seq]
+    owner = scheduler.pd_coordinator
+    receive = owner.receives[seq.seq_id]
+    assert seq.num_history_ids == 8
+    assert np.array_equal(scheduler.block_manager.get_block_table(seq)[:2], prefix)
+    assert len(receive.request.block_pairs) == 1
+    free = scheduler.block_manager.get_num_free_gpu_blocks()
+    scheduler.end_session(2)
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == free
+    action = owner.finish_receive(seq, PDTransferResult(transfer_id='read', status=status))
+    if status == 'completion_unknown':
+        scheduler.end_session(2)
+        assert action == 'quarantined' and owner.failed
+        assert scheduler.block_manager.get_num_free_gpu_blocks() == free
+    else:
+        assert action == 'end'
+        scheduler.end_session(2)
+        assert scheduler.block_manager.get_num_free_gpu_blocks() == free + 1
+
+
+def test_compact_receive_installs_exact_private_state_before_prompt_replay():
+    cache = CacheConfig(max_batches=1, block_size=4, num_gpu_blocks=8, num_cpu_blocks=0,
+                        states_shapes=[((2,), torch.float32)], num_state_caches=2,
+                        compact_state_capacity=SSMStateCapacity(2, 4, 0))
+    scheduler = Scheduler(SchedulerConfig(max_batches=1, max_session_len=32), cache,
+                          SequenceMeta(4, strategy=ARSequenceStrategy()))
+    migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill', remote_session_id=2)
+    seq = scheduler.add_session(2).add_sequence(np.arange(10), migration_request=migration)
+    migration.handoff = PDHandoff(transfer_id='read', engine_epoch='source', cache_schema='model',
+                                   prompt_digest=prompt_digest(seq, seq.valid_ids), prompt_token_count=10,
+                                   valid_token_count=9, block_size=4, block_ids=[0, 1, 2], state_ids=[17],
+                                   auxiliary_id=4)
+    assert scheduler.schedule_migration() == [seq]
+    bank = scheduler.state_manager.bank_for(seq)
+    assert bank.pending_load is not None and bank.loaded_input is None
+    result = PDTransferResult(transfer_id='read', status='completed')
+    assert scheduler.pd_coordinator.finish_receive(seq, result) == 'ready'
+    assert bank.loaded_input == (bank.unit_ids[0], 9)
+    assert seq.num_history_ids == 9 and seq.token_ids.tolist() == [9]
+    assert seq.num_new_tokens == 0

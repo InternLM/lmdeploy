@@ -8,6 +8,7 @@ from uuid import uuid4
 import numpy as np
 
 from lmdeploy.pytorch.disagg.conn.protocol import PDControlRequest, PDHandoff
+from lmdeploy.pytorch.disagg.messages import PDReceiveRequest
 
 from .compact_state import SSMStateManager, StateAccess
 
@@ -30,6 +31,16 @@ class PDExport:
     revoked: bool = False
 
 
+@dataclass
+class PDReceive:
+    sequence: object
+    request: PDReceiveRequest
+    logical_blocks: np.ndarray
+    state_access: StateAccess | None
+    cancelled: str = ''
+    quarantined: bool = False
+
+
 class PDCoordinator:
     """Serialize grants/cancellation on the scheduler loop and pin allocations.
 
@@ -43,6 +54,67 @@ class PDCoordinator:
         self.epoch = uuid4().hex
         self.exports: dict[str, PDExport] = {}
         self._export_by_sequence = {}
+        self.receives: dict[int, PDReceive] = {}
+        self.failed = False
+
+    def validate_receive(self, seq, cache_schema):
+        handoff = seq.migration_request.handoff
+        if (handoff.cache_schema != cache_schema or handoff.block_size != seq.block_size
+                or handoff.prompt_token_count != seq.num_valid_ids
+                or handoff.prompt_digest != prompt_digest(seq, seq.valid_ids)):
+            raise ValueError('PD handoff does not match this prompt or execution schema.')
+        if self.failed:
+            raise RuntimeError('PD receiver is quarantined and requires restart.')
+
+    def prepare_receive(self, seq):
+        """Pin the matched prefix and private destinations before granting
+        I/O."""
+        migration = seq.migration_request
+        handoff = migration.handoff
+        matched = seq.num_history_ids // seq.block_size
+        local = self.block_manager.get_block_table(seq)
+        pairs = list(zip(handoff.block_ids[matched:], local[matched:len(handoff.block_ids)].tolist()))
+        if len(pairs) != len(handoff.block_ids) - matched and handoff.block_ids:
+            raise ValueError('PD receiver has insufficient private block destinations.')
+        access = None
+        state_id = auxiliary_id = legacy_id = None
+        if handoff.valid_token_count and seq.logical_state >= 0:
+            if isinstance(self.state_manager, SSMStateManager):
+                bank = self.state_manager.bank_for(seq)
+                access = self.state_manager.submit_load(bank, handoff.valid_token_count)
+                state_id, auxiliary_id = bank.unit_ids[0], bank.auxiliary_id
+            else:
+                legacy_id = seq.logical_state
+                self.state_manager.retain_state(legacy_id)
+        request = PDReceiveRequest(remote_engine_id=migration.remote_engine_id, handoff=handoff,
+                                    block_pairs=pairs, state_id=state_id, auxiliary_id=auxiliary_id,
+                                    legacy_state_id=legacy_id)
+        blocks = seq.logical_blocks.get_real_blocks().copy()
+        self.block_manager.pin_logical_blocks(blocks)
+        self.receives[seq.seq_id] = PDReceive(seq, request, blocks, access)
+
+    def finish_receive(self, seq, result) -> str:
+        """Commit only complete results; unknown native work keeps every
+        hold."""
+        receive = self.receives[seq.seq_id]
+        if result.transfer_id != receive.request.handoff.transfer_id:
+            raise ValueError('PD completion belongs to another receive operation.')
+        if result.status == 'completion_unknown':
+            receive.quarantined = self.failed = True
+            return 'quarantined'
+        success = result.status == 'completed' and not receive.cancelled
+        if receive.state_access is not None:
+            self.state_manager.complete(receive.state_access, success=success)
+        elif receive.request.legacy_state_id is not None:
+            self.state_manager.free_state(receive.request.legacy_state_id)
+        self.block_manager.release_logical_blocks(receive.logical_blocks)
+        del self.receives[seq.seq_id]
+        if success:
+            seq.set_step(receive.request.handoff.valid_token_count)
+            seq.migration_request = None
+            seq.kv_token_limit = None
+            return 'ready'
+        return receive.cancelled or 'error'
 
     def publish(self, seq, cache_schema, state_ids) -> PDHandoff:
         existing = self._export_by_sequence.get(seq.seq_id)
@@ -104,10 +176,15 @@ class PDCoordinator:
         return self._release_export(export)
 
     def holds(self, seq) -> bool:
-        return seq.seq_id in self._export_by_sequence
+        return seq.seq_id in self._export_by_sequence or seq.seq_id in self.receives
 
-    def defer_end(self, seq) -> bool:
+    def defer_end(self, seq, *, stop=False) -> bool:
         """Cancel a published request without making its memory evictable."""
+        receive = self.receives.get(seq.seq_id)
+        if receive is not None:
+            if receive.cancelled != 'end':
+                receive.cancelled = 'stop' if stop else 'end'
+            return True
         transfer_id = self._export_by_sequence.get(seq.seq_id)
         if transfer_id is None:
             return False
@@ -116,7 +193,7 @@ class PDCoordinator:
         return bool(export.receiver_epoch)
 
     def has_pending(self) -> bool:
-        return bool(self.exports)
+        return bool(self.exports or self.receives)
 
     def _release_export(self, export):
         self.block_manager.release_logical_blocks(export.logical_blocks)

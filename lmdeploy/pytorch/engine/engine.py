@@ -507,6 +507,13 @@ class Engine(EngineBase):
                                   preserve_cache=req.data.get('preserve_cache'))
                 msg = next(iter(sess.sequences.values()))
                 if migration_request:
+                    if migration_request.handoff is not None:
+                        try:
+                            scheduler.pd_coordinator.validate_receive(msg, self.engine_conn.cache_schema)
+                        except (ValueError, RuntimeError) as error:
+                            scheduler.end_session(session_id)
+                            self._response(req.resp, ResponseType.INTERNAL_ENGINE_ERROR, err_msg=str(error))
+                            continue
                     self.migration_event.set()
             else:
                 msg = next(iter(sess.sequences.values()))

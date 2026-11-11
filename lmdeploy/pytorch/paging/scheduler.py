@@ -306,6 +306,8 @@ class Scheduler:
     def schedule_migration(self):
         """Admit waiting migration sequences to paging resources."""
         migration_ready: SeqList = []
+        if self.pd_coordinator.failed:
+            return migration_ready
         migration_waiting = sorted(
             self.migration_waiting,
             key=lambda seq: seq.arrive_time,
@@ -314,6 +316,7 @@ class Scheduler:
         max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
         while migration_waiting and len(migration_ready) < max_batches:
             seq = migration_waiting.pop(0)
+            handoff = seq.migration_request.handoff
             prefix_match = None
             if self.block_trie.enabled:
                 prefix_match = _TentativePrefixMatch(
@@ -323,7 +326,7 @@ class Scheduler:
                     is_ssm=self.is_ssm,
                     preserve_existing_state=False,
                 )
-                prefix_match.match()
+                prefix_match.match(pd_boundary=handoff.valid_token_count if handoff is not None else None)
             evictable = list(
                 chain(
                     reversed(self.hanging),
@@ -340,6 +343,10 @@ class Scheduler:
 
             # allocate session memory
             self.block_manager.allocate(seq)
+            if self.is_ssm:
+                self.state_manager.allocate(seq)
+            if handoff is not None:
+                self.pd_coordinator.prepare_receive(seq)
             self.block_trie.finalize_match(seq)
             if prefix_match is not None:
                 prefix_match.commit()
@@ -446,7 +453,7 @@ class Scheduler:
                 connector.cancel_lookup(seq.seq_id)
             # An active load may still write GPU memory. Defer the state change
             # until all ranks terminate instead of making its blocks evictable.
-            if self.pd_coordinator.defer_end(seq):
+            if self.pd_coordinator.defer_end(seq, stop=True):
                 continue
             if self.kv_load_coordinator.defer_stop_if_loading(seq):
                 continue

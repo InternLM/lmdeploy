@@ -28,7 +28,7 @@ Mooncake 完成契约参考 [官方 Python API](https://github.com/kvcache-ai/Mo
 | T1   | 完成交接描述、资源分组、执行 schema 和控制消息                      | 2 tests：容量/语义/旧 peer/replay 边界                                                                   |
 | T2   | 完成完整 pool 注册、单 worker TE、批量 I/O、取消持有、all-rank 汇总 | 容器 26 passed；32k 连续 60 descriptors，p50 0.104 ms，p99 0.536 ms，max 0.696 ms；32k 碎片 p50 69.45 ms |
 | T3   | 完成源端 pin、精确 state 输出、all-rank 发布和 grant/revoke/release | 54 tests；真实 scheduler end-session 竞态与迟到 grant                                                    |
-| T4   | 待实现                                                              |                                                                                                          |
+| T4   | 完成 KV-only prefix、私有接收、精确 state load、取消和 unknown 隔离 | 119 tests；新增 compact 成功恢复测试；失败/未知完成的真实 allocator 复用检查                             |
 | T5   | 待实现                                                              |                                                                                                          |
 | T6   | 待实现                                                              |                                                                                                          |
 | T7   | 待实现                                                              |                                                                                                          |

@@ -469,7 +469,7 @@ class BlockTrie:
                      'max_step=%s published_steps=%s', seq.session_id, seq.seq_id, initial_step, overlap_end_step,
                      max_step, self._checkpoint_index.num_steps(seq.adapter_name))
 
-    def _match_block_prefix(self, seq: SchedulerSequence):
+    def _match_block_prefix(self, seq: SchedulerSequence, *, kv_only_limit: int | None = None):
         """Match the reusable text/VLM block path for one sequence."""
         block_size = self.block_size
         initial_cursor = seq.prefix_cache.trie_cursor
@@ -500,7 +500,7 @@ class BlockTrie:
         candidate_step = node.prefix_len
         if missing_routed_experts:
             candidate_step = self._find_deepest_block_match_step(seq, initial_cursor)
-        max_match_step = seq.get_prefix_cache_max_match_step()
+        max_match_step = (seq.get_prefix_cache_max_match_step() if kv_only_limit is None else kv_only_limit)
         clamped_step = seq.clamp_prefix_cache_match_step(min(candidate_step, max_match_step))
         accepted_step = max(initial_step, clamped_step)
         num_accepted_blocks = (accepted_step - initial_step) // block_size
@@ -550,6 +550,16 @@ class BlockTrie:
             return
 
         self._match_block_prefix(seq)
+
+    def match_pd_prefix(self, seq: SchedulerSequence, boundary: int):
+        """Reuse immutable full KV blocks; PD supplies the exact final
+        state."""
+        if not self.enabled:
+            return
+        seq.prefix_cache.recompute_overlap.clear_fresh_block_range()
+        seq.prefix_cache.match_start_step = seq.num_history_ids
+        seq.prefix_cache.restore.clear()
+        self._match_block_prefix(seq, kv_only_limit=boundary)
 
     @staticmethod
     def finalize_match(seq: SchedulerSequence) -> None:
