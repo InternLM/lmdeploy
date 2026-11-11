@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
@@ -70,10 +71,18 @@ class StandardDecoderPiecewiseGraphRuntime:
         self.token_stride = token_stride
 
     def get_capture_token_sizes(self) -> list[int]:
-        """Return fixed-stride token buckets, including the configured cap."""
+        """Cover short prefix-hit/PD tails before the regular prefill
+        buckets."""
         if self.max_capture_tokens == 0:
             return []
-        sizes = list(range(self.token_stride, self.max_capture_tokens, self.token_stride))
+        # Cover partial 64-token cache blocks without padding. This also
+        # covers 6/12-row MTP verification in mixed DP prefill steps.
+        sizes = list(range(1, min(65, self.token_stride, self.max_capture_tokens)))
+        size = 128
+        while size < min(self.token_stride, self.max_capture_tokens):
+            sizes.append(size)
+            size *= 2
+        sizes.extend(range(self.token_stride, self.max_capture_tokens, self.token_stride))
         sizes.append(self.max_capture_tokens)
         return sizes
 
@@ -199,8 +208,8 @@ class StandardDecoderPiecewiseGraphRuntime:
     def _round_up_token_bucket(self, raw_tokens: int) -> int | None:
         if not 0 < raw_tokens <= self.max_capture_tokens:
             return None
-        rounded = ((raw_tokens + self.token_stride - 1) // self.token_stride) * self.token_stride
-        return min(rounded, self.max_capture_tokens)
+        sizes = self.get_capture_token_sizes()
+        return sizes[bisect_left(sizes, raw_tokens)]
 
     @classmethod
     def _make_bucket_inputs(

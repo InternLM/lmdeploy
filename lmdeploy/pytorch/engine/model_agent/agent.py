@@ -925,6 +925,8 @@ class BaseModelAgent:
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
         extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
+        if PROFILE_PHASES:
+            self.profiler.mark_step('sampling_and_draft')
 
         if inputs.is_dummy:
             return inputs, extra_inputs, stopping_criteria, None, next_token_ids, None
@@ -980,6 +982,8 @@ class BaseModelAgent:
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
         extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
+        if PROFILE_PHASES:
+            self.profiler.mark_step('sampling_and_draft')
 
         if inputs.is_dummy:
             return inputs, next_token_ids, extra_inputs,  None
@@ -1139,6 +1143,8 @@ class BaseModelAgent:
             return_logits=return_logits or return_ce_loss,
             cache_inputs=cache_inputs,
         )
+        if PROFILE_PHASES:
+            self.profiler.mark_step('target')
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
@@ -1321,7 +1327,7 @@ class BaseModelAgent:
 
                 await self._async_step(**forward_inputs, )
                 if PROFILE_PHASES:
-                    self.profiler.end_step()
+                    self.profiler.end_step(self.patched_model.execution_mode)
                 if forward_event is not None:
                     forward_event.set()
 

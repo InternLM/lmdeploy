@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 from torch.profiler import record_function
 
+from lmdeploy.profiling import trace_phase
 from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.config import (
     BackendConfig,
@@ -242,6 +243,7 @@ class CUDAGraphRunner(GraphRunner):
 
     def _capture_full_graph(self, graph_key: tuple, kwargs: dict[str, Any]):
         """Capture and publish a full graph for one cache miss."""
+        trace_phase('graph_capture', model=type(self.model).__name__, mode='full', key=graph_key)
         runner = CUDASingleGraphRunner(
             self.model,
             model_forward=self._get_decode_model_forward(),
@@ -267,18 +269,24 @@ class CUDAGraphRunner(GraphRunner):
         _update_deepep_mode(step_context)
 
         if self._should_use_full_graph(step_context, kwargs):
+            self.execution_mode = 'full'
             return self._forward_full_graph(**kwargs)
 
         descriptor = self._get_piecewise_graph_descriptor(step_context, kwargs)
         if descriptor is not None:
             manager = self._piecewise_graph_manager
             if manager.has_plan(descriptor):
+                self.execution_mode = 'piecewise'
                 return manager.replay(descriptor, kwargs)
             if is_preparing_prefill():
+                self.execution_mode = 'piecewise'
+                trace_phase('graph_capture', model=type(self.model).__name__, mode='piecewise',
+                            tokens=descriptor.token_bucket)
                 return manager.prepare(descriptor, kwargs)
 
         # Serving never captures. If graph-runner warmup was skipped or this call is
         # unsupported, eager execution is selected before PCG can mutate state.
+        self.execution_mode = 'eager'
         return self._forward_eager(**kwargs)
 
     @record_function('prepare_inputs_for_generation')

@@ -331,11 +331,12 @@ def test_piecewise_manager_replays_live_prefill_checkpoint_ids(monkeypatch):
             return manager.replay(descriptor, kwargs)
 
     wrapper = Piecewise()
-    dummy = _warmup_agent(5)._make_prefill_warmup_inputs(1, 128)
     dummy_carrier = None
     original = model.conv.clone(), model.recurrent.clone()
     stream.wait_stream(torch.cuda.current_stream())
-    model_forward(wrapper, dummy, config, cache, state_cache, stream=stream, cache_inputs=dummy_carrier)
+    for tokens in (128, 64):
+        dummy = _warmup_agent(5)._make_prefill_warmup_inputs(1, tokens)
+        model_forward(wrapper, dummy, config, cache, state_cache, stream=stream, cache_inputs=dummy_carrier)
     stream.synchronize()
     for pool, initial in zip((model.conv, model.recurrent), original):
         torch.testing.assert_close(pool, initial, rtol=0, atol=0)
@@ -372,7 +373,7 @@ def test_piecewise_manager_replays_live_prefill_checkpoint_ids(monkeypatch):
         else:
             for pool, saved in zip((model.conv, model.recurrent), frozen):
                 torch.testing.assert_close(pool[100], saved, rtol=0, atol=0)
-    assert len(manager._plans) == 1
+    assert len(manager._plans) == 2
     from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import EagerStep, GraphStep
     steps = next(iter(manager._plans.values())).graph.steps
     assert sum(isinstance(step, EagerStep) for step in steps) == 3  # metadata, convolution, recurrence

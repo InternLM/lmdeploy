@@ -18,6 +18,13 @@ args=(--backend pytorch --server-name 0.0.0.0 --server-port "$port"
       --session-len "${SESSION_LEN:-102400}" --max-prefill-token-num "${PREFILL_TOKENS:-8192}"
       --reasoning-parser default --tool-call-parser glm47 --prefill-save-alignment 64 --prefix-cache-state-budget 16
       --prefill-save-last-only --log-level INFO)
+if [[ -n ${PIECEWISE_GRAPH_TOKENS:-} ]]; then
+    args+=(--piecewise-cudagraph-max-tokens "$PIECEWISE_GRAPH_TOKENS")
+fi
+if [[ -n ${DECODE_GRAPH_BATCHES:-} ]]; then
+    read -r -a capture_batches <<< "$DECODE_GRAPH_BATCHES"
+    args+=(--cudagraph-capture-batch-sizes "${capture_batches[@]}")
+fi
 if [[ ${DECODE_SAVE:-1} == 1 ]]; then
     args+=(--prefix-cache-decode-save-first --prefix-cache-decode-state-interval "${DECODE_SAVE_INTERVAL:-1024}")
 fi
