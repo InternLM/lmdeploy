@@ -313,7 +313,7 @@ def register(router: APIRouter, server_context) -> None:
                     if chunk.cache_block_ids is not None and chunk.is_last_delta:
                         response_json['cache_block_ids'] = chunk.cache_block_ids
                         response_json['remote_token_ids'] = chunk.token_ids
-                    yield f'data: {json.dumps(response_json)}\n\n'
+                    yield f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n'
                 if final_usage is not None:
                     yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
                 yield 'data: [DONE]\n\n'
@@ -325,7 +325,7 @@ def register(router: APIRouter, server_context) -> None:
                 async for chunk in _completion_stream_generator():
                     yield chunk
             except RequestError as error:
-                yield f'data: {json.dumps({"error": request_error_payload(error)})}\n\n'
+                yield f'data: {json.dumps({"error": request_error_payload(error)}, ensure_ascii=False)}\n\n'
                 yield 'data: [DONE]\n\n'
 
         # Streaming response
