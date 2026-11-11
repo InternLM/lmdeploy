@@ -19,6 +19,7 @@ add_subdirectory(kernels)
 add_subdirectory(comm)
 add_subdirectory(generation)
 add_subdirectory(models)
+add_subdirectory(lmcache)
 add_subdirectory(engine)
 
 if(BUILD_PY_FFI)

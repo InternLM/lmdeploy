@@ -41,13 +41,13 @@
 
 #include "src/turbomind/macro.h"
 
-#include "src/turbomind/kernels/attention/block.h"
 #include "src/turbomind/memory/object.h"
 #include "src/turbomind/models/attention_weight.h"
 #include "src/turbomind/models/llama/llama_kernels.h"
 #include "src/turbomind/models/llama/llama_rope.h"
 #include "src/turbomind/models/llama/llama_utils.h"
 #include "src/turbomind/models/llama/mla_utils.h"
+#include "src/turbomind/models/llama/object_cache_plan.h"
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 
 #include "src/turbomind/core/logger.h"
@@ -58,31 +58,6 @@
 // #include "dbg.h"
 
 namespace turbomind {
-
-namespace {
-// clang-format off
-struct BlockConfig {
-    int head_dim_;
-    int head_num_;
-    int block_len_;
-    int t_bits_;
-    int q_bits_;
-    bool share_kv_;
-    int t_bits() const { return t_bits_; }
-    int q_bits() const { return q_bits_; }
-    int head_dim() const { return head_dim_; }
-    int head_num() const { return head_num_; }
-    int block_len() const { return block_len_; }
-    bool is_share_kv() const { return share_kv_; }
-    auto as_tuple() const noexcept {
-        return std::tie(head_dim_, head_num_, block_len_, t_bits_, q_bits_, share_kv_);
-    }
-    friend bool operator==(const BlockConfig& a, const BlockConfig& b) {
-        return a.as_tuple() == b.as_tuple();
-    }
-};
-// clang-format on
-}  // namespace
 
 struct AttentionData {
     struct Stat {
@@ -131,6 +106,7 @@ UnifiedAttentionLayer::~UnifiedAttentionLayer()
 
 UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weights,
                                              CacheRegistry&                registry,
+                                             const AttentionCachePlan&     cache_plan,
                                              const EngineParam&            engine,
                                              const Context&                context,
                                              int                           phases):
@@ -145,30 +121,11 @@ UnifiedAttentionLayer::UnifiedAttentionLayer(std::vector<AttentionWeight*> weigh
 {
     TM_CHECK_GE(weights.size(), 1);
 
-    const auto dtype = engine.data_type;
-
-    const int dtype_bits = byte_size(dtype, 8);
-    const int qaunt_bits = quant_policy_ ? quant_policy_ : dtype_bits;
-
-    auto get_block_config = [&](const AttentionWeight& w) {
-        BlockConfig b{w.head_dim,
-                      w.kv_head_num / w.tp_size,
-                      engine.cache_block_seq_len,
-                      dtype_bits == qaunt_bits ? 0 : dtype_bits,
-                      qaunt_bits,
-                      w.head_dim == 576};
-        return b;
-    };
-
-    size_t offset = 0;  // byte size (quantization aware)
-    for (int i = 0; i < weights.size(); ++i) {
-        block::Layout layout{get_block_config(*weights[i])};
-        weights[i]->cache_block_offset = offset;
-        offset += layout.layer_size();
+    TM_CHECK_EQ(weights.size(), cache_plan.layer_offsets_bytes.size());
+    for (size_t i = 0; i < weights.size(); ++i) {
+        weights[i]->cache_block_offset = cache_plan.layer_offsets_bytes[i];
     }
-
-    const size_t cache_block_byte_size = offset;
-    prefix_cache_offset_               = registry.prefix().Register(cache_block_byte_size, /*alignment=*/1);
+    prefix_cache_offset_ = registry.prefix().Register(cache_plan.object_bytes, /*alignment=*/1);
 
     const auto max_block_num = engine.max_batch_size * cdiv(engine.session_len, engine.cache_block_seq_len);
 
