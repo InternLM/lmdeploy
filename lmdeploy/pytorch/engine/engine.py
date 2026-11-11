@@ -584,7 +584,7 @@ class Engine(EngineBase):
         if not guard.acquire(blocking=False):
             raise LifecycleValidationError('another weight update is in progress')
         try:
-            if model_write and self._weights_update_error is not None:
+            if model_write and getattr(self, '_weights_update_error', None) is not None:
                 raise LifecycleValidationError(
                     'weight update refused: a previous update failed on this engine; '
                     'rebuild the engine from a complete checkpoint')
@@ -646,7 +646,7 @@ class Engine(EngineBase):
         if not guard.acquire(blocking=False):
             raise LifecycleValidationError('weight completion refused: a model-state operation is in progress')
         try:
-            if self._weights_update_error is not None:
+            if getattr(self, '_weights_update_error', None) is not None:
                 raise LifecycleValidationError(
                     'weight completion refused: a previous update failed on this engine; '
                     'rebuild the engine from a complete checkpoint')
@@ -731,7 +731,7 @@ class Engine(EngineBase):
         if not guard.acquire(blocking=False):
             raise LifecycleValidationError('wakeup refused: a model-state operation is in progress')
         try:
-            if self._weights_update_error is not None:
+            if getattr(self, '_weights_update_error', None) is not None:
                 raise LifecycleValidationError(
                     'wakeup refused: a previous weight update failed on this engine; '
                     'rebuild the engine from a complete checkpoint')
