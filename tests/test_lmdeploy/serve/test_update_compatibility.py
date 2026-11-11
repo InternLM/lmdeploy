@@ -191,3 +191,49 @@ def test_turbomind_backend_keeps_upstream_update_semantics():
     assert response.status_code == 200 and json.loads(response.body) is None
     engine.engine.update_params.assert_called_once()
     assert engine.weight_state_visible() == 'ready'
+
+
+def test_admission_race_handle_acquired_after_check_is_caught():
+    async def scenario():
+        engine, _ = make_endpoint(tags=())
+        routes = _routes(engine)
+        reads = {'n': 0}
+
+        class Pool:
+            @property
+            def num_dispatched(self):
+                reads['n'] += 1
+                return 0 if reads['n'] == 1 else 1  # a handle appears right after the check
+
+        engine.session_mgr.request_handle_pool = Pool()
+        engine.engine.executor.update_params = Mock(return_value=None)
+        response = await routes[('/update_weights', 'POST')](legacy(True))
+        assert response.status_code == 409
+        engine.engine.executor.update_params.assert_not_called()
+        assert engine.engine.weight_state.value == 'ready'  # reservation abandoned
+    asyncio.run(scenario())
+
+
+def test_timeout_committed_write_allows_kv_wakeup_without_serve_mirror():
+    async def scenario():
+        import os
+        os.environ['LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS'] = '0.05'
+        engine, endpoint = make_endpoint(tags=('weights', 'kv_cache'))
+        entered, release = threading.Event(), threading.Event()
+
+        def slow_write(req):
+            entered.set()
+            release.wait(5)
+            return True, 'done'
+
+        engine.engine.executor.update_weights_from_distributed.side_effect = slow_write
+        response = await endpoint(bucket())
+        assert response.status_code == 504
+        release.set()
+        await asyncio.sleep(0.1)
+        assert engine.engine.weight_state.value == 'ready'
+        # Engine truth alone (no serve mirror call ever ran) must allow kv wakeup.
+        engine.wakeup(['kv_cache'])
+        assert not engine.serving_blocked()
+        os.environ.pop('LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS', None)
+    asyncio.run(scenario())

@@ -268,6 +268,7 @@ class Engine(EngineBase):
         self._weight_state = WeightState.READY
         self._open_txn_id: str | None = None
         self._seen_update_ids: set[str] = set()
+        self._txn_wrote = False
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
 
@@ -634,8 +635,10 @@ class Engine(EngineBase):
                         'committed; use a new id')
                 self._open_txn_id = txn_id
                 self._weight_state = WeightState.UPDATING
+                self._txn_wrote = False
             try:
                 result = func(*args)
+                self._txn_wrote = True
                 succeeded = result is None or (
                     isinstance(result, tuple) and len(result) == 2 and result[0] is True)
                 if not succeeded:
@@ -650,12 +653,69 @@ class Engine(EngineBase):
         finally:
             guard.release()
 
+    def reserve_weight_transaction(self, txn_id) -> bool:
+        """Synchronously move READY -> UPDATING for an admitted bucket.
+
+        Called on the service event loop before the transfer coroutine first
+        yields, so no inference request can pass the readiness gate between
+        the admission check and the state transition. Returns whether this
+        call created the transaction.
+        """
+        guard = self._get_model_state_lock()
+        if not guard.acquire(blocking=False):
+            raise LifecycleValidationError('another model-state operation is in progress')
+        try:
+            if self.weight_state is WeightState.POISONED:
+                raise LifecycleValidationError(
+                    'weight update refused: a previous update failed on this engine; '
+                    'rebuild the engine from a complete checkpoint')
+            if self.weight_state is WeightState.UPDATING:
+                if txn_id != self._open_txn_id:
+                    raise LifecycleValidationError(
+                        'weight update refused: another weight transaction is open '
+                        f'({self._open_txn_id!r}); finish it before starting {txn_id!r}')
+                return False
+            if txn_id is not None and txn_id in self._seen_update_ids:
+                raise LifecycleValidationError(
+                    f'weight update refused: update_id {txn_id!r} was already '
+                    'committed; use a new id')
+            self._open_txn_id = txn_id
+            self._weight_state = WeightState.UPDATING
+            self._txn_wrote = False
+            return True
+        finally:
+            guard.release()
+
+    def abandon_weight_reservation(self, txn_id) -> bool:
+        """Undo a reservation whose admission check failed, if nothing ran."""
+        guard = self._get_model_state_lock()
+        if not guard.acquire(blocking=False):
+            return False
+        try:
+            if (self.weight_state is WeightState.UPDATING
+                    and self._open_txn_id == txn_id and not self._txn_wrote):
+                self._weight_state = WeightState.READY
+                self._open_txn_id = None
+                return True
+            return False
+        finally:
+            guard.release()
+
+    @property
+    def sleeping_tags(self):
+        """Copy of the engine-side resource tags (weights / kv_cache down)."""
+        return set(self._sleeping_tags)
+
     def _commit_weight_transaction(self):
         """Finalize the open transaction: weights valid again."""
         self._weight_state = WeightState.READY
         if self._open_txn_id is not None:
             self._seen_update_ids.add(self._open_txn_id)
         self._open_txn_id = None
+        self._txn_wrote = False
+        # The committed weights are loaded: drop the engine-side weights
+        # sleep tag so a later kv-cache wakeup reopens input admission.
+        self._sleeping_tags.discard('weights')
 
     def _get_weights_update_lock(self):
         """Get the disaggregated weights-update lock."""
@@ -717,9 +777,18 @@ class Engine(EngineBase):
         finally:
             guard.release()
 
+    async def _run_aux_rpc(self, func, *args):
+        """Serialize a non-weight control RPC (locks only, no state machine)."""
+        lock = self._get_weights_update_lock()
+        await lock.acquire()
+        try:
+            return await asyncio.to_thread(func, *args)
+        finally:
+            lock.release()
+
     async def init_weights_update_group(self, request: Any):
         """Init disaggregated weights-update process group."""
-        return await self._run_weights_update(self.executor.init_weights_update_group, request)
+        return await self._run_aux_rpc(self.executor.init_weights_update_group, request)
 
     async def update_weights_from_distributed(self, request: Any):
         """Receive weights through the disaggregated process group."""
@@ -730,7 +799,7 @@ class Engine(EngineBase):
 
     async def destroy_weights_update_group(self, request: Any):
         """Tear down a previously initialized weights-update process group."""
-        return await self._run_weights_update(self.executor.destroy_weights_update_group, request)
+        return await self._run_aux_rpc(self.executor.destroy_weights_update_group, request)
 
     def _block_new_inputs(self):
         """Block new inference work from engine instances."""

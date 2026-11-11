@@ -212,3 +212,27 @@ def test_engine_state_machine_transaction_identity_and_replay():
     # A failed tuple result poisons even without an exception.
     py._execute_weights_update(lambda: (False, 'rank 2 failed'), final=True, txn_id='v10')
     assert py.weight_state is WeightState.POISONED
+
+
+def test_commit_clears_engine_weights_tag_and_reopens_admission():
+    engine, endpoint = make_endpoint(tags=('weights', 'kv_cache'))
+    py = engine.engine
+    assert asyncio.run(endpoint(bucket(False))).status_code == 200
+    assert asyncio.run(endpoint(bucket(True))).status_code == 200
+    assert py.weight_state is WeightState.READY
+    assert 'weights' not in py.sleeping_tags  # commit dropped the engine tag
+    engine.wakeup(['kv_cache'])
+    assert not py.sleeping_tags  # admission can reopen: no tags left
+
+
+def test_group_management_rpcs_never_open_a_weight_transaction():
+    engine, _ = make_endpoint()
+    py = engine.engine
+    asyncio.run(py.init_weights_update_group({'group': 'train'}))
+    py.executor.init_weights_update_group.assert_called_once()
+    assert py.weight_state is WeightState.READY  # not a transaction
+    asyncio.run(py.destroy_weights_update_group({'group': 'train'}))
+    assert py.weight_state is WeightState.READY
+    # And an explicit-id bucket still works right after group init.
+    engine2, endpoint2 = make_endpoint()
+    assert asyncio.run(endpoint2(bucket(False, update_id='v1'))).status_code == 200

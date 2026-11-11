@@ -25,7 +25,7 @@ from lmdeploy.serve.utils.server_utils import validate_json_request
 
 def register(router: APIRouter, server_context) -> None:
 
-    async def _apply_weights_update(transfer, *, final, require_sleep=True):
+    async def _apply_weights_update(transfer, *, final, txn_id=None, require_sleep=True):
         """Run one update bucket; the engine owns the transaction state.
 
         The engine serializes writes behind its model-state mutex and its
@@ -45,6 +45,15 @@ def register(router: APIRouter, server_context) -> None:
             timeout = float(os.environ.get('LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS', '180'))
             if not math.isfinite(timeout) or timeout <= 0:
                 raise ValueError('Weight update timeout must be positive and finite.')
+            # Close the admission gap synchronously: the state moves to UPDATING
+            # on this event loop turn, before the transfer coroutine can yield,
+            # so no inference request passes the readiness gate in between.
+            pytorch = getattr(engine, 'engine', None)
+            if getattr(pytorch, 'weight_state', None) is not None:
+                pytorch.reserve_weight_transaction(txn_id)
+                if not require_sleep and engine.session_mgr.request_handle_pool.num_dispatched:
+                    pytorch.abandon_weight_reservation(txn_id)
+                    raise RuntimeError('Finish or abort active requests before updating weights.')
         except (ValueError, RuntimeError) as exc:
             return create_error_response(HTTPStatus.CONFLICT, str(exc))
         try:
@@ -120,8 +129,9 @@ def register(router: APIRouter, server_context) -> None:
             await asyncio.to_thread(server_context.async_engine.engine.update_params, request)
             return True, 'Weights updated.'
 
-        result = await _apply_weights_update(transfer,
-                                             final=request.finished, require_sleep=False)
+        result = await _apply_weights_update(transfer, final=request.finished,
+                                             txn_id=getattr(request, 'update_id', None),
+                                             require_sleep=False)
         return JSONResponse(content=None) if result.status_code == HTTPStatus.OK else result
 
     def _check_pytorch_backend_for_disagg_weight_update():
@@ -198,7 +208,7 @@ def register(router: APIRouter, server_context) -> None:
 
         return await _apply_weights_update(
             lambda: async_engine.engine.update_weights_from_ipc(request, None),
-            final=True)
+            final=True, txn_id=None)
 
     @router.post('/init_weights_update_group',
                  dependencies=[Depends(validate_json_request)])
@@ -240,7 +250,7 @@ def register(router: APIRouter, server_context) -> None:
             return create_error_response(HTTPStatus.CONFLICT, 'A nonempty, aligned weight bucket is required.')
         return await _apply_weights_update(
             lambda: async_engine.engine.update_weights_from_distributed(request),
-            final=request.finished)
+            final=request.finished, txn_id=request.update_id)
 
     @router.post('/destroy_weights_update_group',
                  dependencies=[Depends(validate_json_request)])

@@ -383,10 +383,29 @@ class AsyncEngine:
         logger.info('stopped all sessions')
 
     def weight_state_visible(self) -> str:
-        """Project the engine's weight state ('ready' when unsupported)."""
+        """Project the engine's weight state ('ready' when unsupported).
+
+        Backends without the state machine (TurboMind, enable_mp_engine
+        proxies) keep their pre-existing update semantics in this PR.
+        """
         engine = getattr(self, 'engine', None)
         state = getattr(engine, 'weight_state', None)
         return state.value if state is not None else 'ready'
+
+    def _engine_weights_ready(self) -> bool | None:
+        """Engine-side weight truth, or None when the engine has none."""
+        engine = getattr(self, 'engine', None)
+        if getattr(engine, 'weight_state', None) is None:
+            return None
+        return (engine.weight_state.value == 'ready'
+                and 'weights' not in engine.sleeping_tags)
+
+    def serving_blocked(self) -> bool:
+        """True when inference must be refused (engine truth when available)."""
+        engine_ready = self._engine_weights_ready()
+        if engine_ready is None:
+            return bool(getattr(self, 'is_sleeping', False))
+        return not engine_ready or bool(getattr(self, 'engine', None).sleeping_tags)
 
     def _check_weights_ready_for_lifecycle(self, op: str):
         """Sleep/wakeup require a committed weight transaction."""
@@ -425,7 +444,9 @@ class AsyncEngine:
         """
         self._check_weights_ready_for_lifecycle('wakeup')
         tags = tags or list(self.sleeping_tags)
-        if 'kv_cache' in tags and not self.weights_content_ready:
+        engine_ready = self._engine_weights_ready()
+        if 'kv_cache' in tags and (engine_ready is False
+                                   or (engine_ready is None and not self.weights_content_ready)):
             raise RuntimeError('Weight content is not ready; allocating weights is not loading them.')
         if any(tag not in self.sleeping_tags for tag in tags):
             logger.warning(f'some tag in {tags} not in sleeping tags {self.sleeping_tags}')
@@ -480,7 +501,7 @@ class AsyncEngine:
         # HTTP admission may precede body processing or handle acquisition.
         # Recheck at the actual inference boundary; the acquired handle also
         # keeps an idle-only legacy update from starting after this check.
-        if getattr(self, 'is_sleeping', False) or self.weight_state_visible() != 'ready':
+        if self.serving_blocked():
             raise RequestError(ErrorCode.ENGINE_UNAVAILABLE,
                                'Engine weights are not ready for inference.')
         generator = handle.async_stream_infer(session.session_id, **kwargs)

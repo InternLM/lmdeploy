@@ -466,9 +466,9 @@ def serve(model_path: str,
 
     def is_engine_sleeping() -> bool:
         eng = server_context.async_engine
-        # Sleeping (resource dimension) or an open/failed weight transaction
-        # (engine state machine) both refuse inference at the middleware.
-        return eng is not None and (eng.is_sleeping or eng.weight_state_visible() != 'ready')
+        # Engine truth when available: an open/failed weight transaction or
+        # down resources both refuse inference at the middleware.
+        return eng is not None and eng.serving_blocked()
 
     app.add_middleware(EngineSleepingMiddleware,
                        is_sleeping=is_engine_sleeping)

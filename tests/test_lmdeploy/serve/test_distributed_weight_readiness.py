@@ -33,6 +33,8 @@ def make_endpoint(*, success=True, tags=('weights', 'kv_cache'), dispatched=0):
     py.scheduler = SimpleNamespace(reset_cache_after_worker_drain=lambda: None)
     py.executor = SimpleNamespace(
         update_params=Mock(return_value=None),
+        init_weights_update_group=Mock(return_value=(True, 'group ready')),
+        destroy_weights_update_group=Mock(return_value=(True, 'group gone')),
         update_weights_from_ipc=Mock(return_value=(success, 'done')),
         update_weights_from_distributed=Mock(return_value=(success, 'done')),
         get_checkpoint_engine_status=Mock(return_value=[dict(
