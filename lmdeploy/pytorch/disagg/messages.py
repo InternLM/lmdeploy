@@ -1,16 +1,36 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 from lmdeploy.pytorch.disagg.config import DistServeNVLinkConfig, DistServeRDMAConfig, DistServeTCPConfig
-from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, PDHandoff
+
+
+class PDReceiveRequest(BaseModel):
+    """Private destinations admitted by the receiver before any I/O."""
+
+    remote_engine_id: str
+    handoff: PDHandoff
+    block_pairs: list[tuple[int, int]]
+    state_id: int | None = None
+    auxiliary_id: int | None = None
+    legacy_state_id: int | None = None
+
+
+class PDTransferResult(BaseModel):
+    transfer_id: str
+    status: Literal['completed', 'failed_drained', 'completion_unknown']
+    error: str = ''
 
 
 class MigrationExecutionBatch(BaseModel):
     """Input of the Migration."""
 
     protocol: MigrationProtocol
-    requests: list[tuple[str, list[tuple[int, int]]]] = []
+    requests: list[tuple[str, list[tuple[int, int]]]] = Field(default_factory=list)
+    receives: list[PDReceiveRequest] = Field(default_factory=list)
 
 
 class AssignmentInstruct(BaseModel):

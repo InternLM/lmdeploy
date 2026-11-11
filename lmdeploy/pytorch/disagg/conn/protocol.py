@@ -1,7 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import enum
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from lmdeploy.pytorch.disagg.config import (
     DistServeEngineConfig,
@@ -60,12 +61,15 @@ class DistServeCachePoolInfo(BaseModel):
     dtype: str
     element_size: int
     entry_axis: int
+    group: Literal['target', 'draft', 'state', 'auxiliary', 'legacy_state'] = 'target'
 
 
 class DistServeKVTransferEndpointInfo(BaseModel):
     protocol: MigrationProtocol
     endpoint_info: str
     cache_pools: tuple[DistServeCachePoolInfo, ...] | None = None
+    version: int = 1
+    schema: str = ''
 
 
 class DistServeInitResponse(BaseModel):
@@ -90,13 +94,57 @@ class DistServeConnectionResponse(BaseModel):
     status: DistServeConnectionStatus
 
 
+class PDHandoff(BaseModel):
+    """One immutable export, valid only within its source engine incarnation.
+
+    Block IDs address target and draft pools. Compact state IDs are per attention rank; auxiliary and legacy slots
+    belong to the request, not the block table. The receiver owns the original prompt and computes its remaining tail.
+    """
+
+    version: Literal[2] = 2
+    transfer_id: str
+    engine_epoch: str
+    schema: str
+    prompt_digest: str
+    prompt_token_count: int = Field(gt=0)
+    valid_token_count: int = Field(ge=0)
+    block_size: int = Field(gt=0)
+    block_ids: list[int]
+    state_ids: list[int] = Field(default_factory=list)
+    auxiliary_id: int | None = None
+    legacy_state_id: int | None = None
+
+    @model_validator(mode='after')
+    def validate_boundary(self):
+        if self.valid_token_count >= self.prompt_token_count:
+            raise ValueError('PD requires a nonempty original prompt tail for decode replay.')
+        expected = (self.valid_token_count + self.block_size - 1) // self.block_size
+        if self.block_ids and len(self.block_ids) != expected:
+            raise ValueError('PD block table must describe exactly the exported prefix.')
+        ids = self.block_ids + self.state_ids
+        ids.extend(i for i in (self.auxiliary_id, self.legacy_state_id) if i is not None)
+        if any(i < 0 for i in ids):
+            raise ValueError('PD resource IDs must be nonnegative.')
+        return self
+
+
+class PDControlRequest(BaseModel):
+    """Grant and revoke are serialized by the source paging owner."""
+
+    action: Literal['claim', 'revoke', 'release']
+    transfer_id: str
+    engine_epoch: str
+    receiver_epoch: str = ''
+
+
 class MigrationRequest(BaseModel):
     protocol: MigrationProtocol
 
     remote_engine_id: str
     remote_session_id: int
-    remote_token_id: int
-    remote_block_ids: list[int]
+    remote_token_id: int = 0
+    remote_block_ids: list[int] = Field(default_factory=list)
+    handoff: PDHandoff | None = None
 
     is_dummy_prefill: bool = False
 
