@@ -49,7 +49,7 @@ def describe_pd_pools(groups: Mapping[str, Sequence['CachePool']]) -> tuple[Dist
 
 def validate_pd_peer(local: DistServeKVTransferEndpointInfo, remote: DistServeKVTransferEndpointInfo) -> None:
     """Reject incompatible peers before registering any receive operation."""
-    if remote.version != 2 or local.schema != remote.schema:
+    if remote.version != 2 or local.cache_schema != remote.cache_schema:
         raise ValueError('PD requires version 2 peers with matching model, MTP and attention TP schemas.')
     if remote.cache_pools is None or len(local.cache_pools) != len(remote.cache_pools):
         raise ValueError('PD peers must expose the same ordered cache groups.')

@@ -69,7 +69,7 @@ class DistServeKVTransferEndpointInfo(BaseModel):
     endpoint_info: str
     cache_pools: tuple[DistServeCachePoolInfo, ...] | None = None
     version: int = 1
-    schema: str = ''
+    cache_schema: str = ''
 
 
 class DistServeInitResponse(BaseModel):
@@ -104,7 +104,7 @@ class PDHandoff(BaseModel):
     version: Literal[2] = 2
     transfer_id: str
     engine_epoch: str
-    schema: str
+    cache_schema: str
     prompt_digest: str
     prompt_token_count: int = Field(gt=0)
     valid_token_count: int = Field(ge=0)

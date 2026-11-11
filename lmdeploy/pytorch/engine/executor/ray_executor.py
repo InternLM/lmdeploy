@@ -856,7 +856,14 @@ class RayExecutor(ExecutorBase):
         ))
 
     async def migrate(self, batch: MigrationExecutionBatch):
-        jobs = (worker.migrate.remote(batch) for worker in self.workers)
-        return await asyncio.gather(*jobs)
+        from lmdeploy.pytorch.disagg.runtime import aggregate_transfer_results
+        jobs = [worker.migrate.remote(batch) for worker in self.workers]
+        results = await asyncio.gather(*jobs, return_exceptions=True)
+        if batch.receives:
+            return aggregate_transfer_results(results, [r.handoff.transfer_id for r in batch.receives])
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+        return results
 
     """ PD Disaggregation API Begin """

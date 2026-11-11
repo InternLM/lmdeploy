@@ -46,6 +46,7 @@ class MigrationAssignment(BaseModel):
     protocol: MigrationProtocol
     remote_engine_id: str
     batch: list[AssignmentInstruct]
+    transfer_id: str = ''
 
 
 class PDConnectionMessage(BaseModel):

@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """PD cache-pool description and byte-transfer planning."""
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from math import prod
 
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeCachePoolInfo
@@ -65,18 +65,51 @@ def validate_cache_pool_layouts(local_pools: Sequence[DistServeCachePoolInfo],
 
 def build_cache_pool_assignments(
         local_pools: Sequence[DistServeCachePoolInfo], remote_pools: Sequence[DistServeCachePoolInfo],
-        block_pairs: Sequence[tuple[int, int]]) -> list[AssignmentInstruct]:
+        block_pairs: Sequence[tuple[int, int]], *,
+        group_pairs: Mapping[str, Sequence[tuple[int, int]]] | None = None) -> list[AssignmentInstruct]:
     """Map source and target block entries into contiguous byte assignments."""
     if len(local_pools) != len(remote_pools):
         raise RuntimeError('PD endpoints must expose the same number of cache pools.')
 
+    pairs_by_group = group_pairs if group_pairs is not None else dict(target=block_pairs)
+    runs_by_group = {group: _paired_runs(pairs) for group, pairs in pairs_by_group.items()}
     assignments = []
     for pool_id, (local, remote) in enumerate(zip(local_pools, remote_pools)):
-        for target_block, source_block in block_pairs:
-            source_segments = _entry_segments(local, source_block, pool_id, 'source')
-            target_segments = _entry_segments(remote, target_block, pool_id, 'target')
-            assignments.extend(_pair_segments(pool_id, source_segments, target_segments))
+        for remote_start, local_start, count in runs_by_group.get(local.group, ()):
+            if local.entry_axis != remote.entry_axis:
+                # Legacy layouts may split one entry differently on each side.
+                for offset in range(count):
+                    assignments.extend(_pair_segments(
+                        pool_id, _entry_segments(local, local_start + offset, pool_id, 'source'),
+                        _entry_segments(remote, remote_start + offset, pool_id, 'target')))
+                continue
+            local_count = local.shape[local.entry_axis]
+            remote_count = remote.shape[remote.entry_axis]
+            if (local_start < 0 or local_start + count > local_count
+                    or remote_start < 0 or remote_start + count > remote_count):
+                raise RuntimeError(f'PD entry run is outside cache pool {pool_id}.')
+            if _payload_shape(local) != _payload_shape(remote) or local.element_size != remote.element_size:
+                raise RuntimeError(f'PD cache pool {pool_id} payload sizes differ.')
+            entry_bytes = prod(local.shape[local.entry_axis + 1:]) * local.element_size
+            if not entry_bytes:
+                continue
+            for row in range(prod(local.shape[:local.entry_axis])):
+                assignments.append(AssignmentInstruct(
+                    mr_key=pool_id, source_offset=(row * local_count + local_start) * entry_bytes,
+                    target_offset=(row * remote_count + remote_start) * entry_bytes, length=count * entry_bytes))
     return assignments
+
+
+def _paired_runs(pairs: Sequence[tuple[int, int]]) -> list[tuple[int, int, int]]:
+    """Coalesce indices before expanding layers or allocating descriptors."""
+    runs = []
+    for remote, local in pairs:
+        if runs and remote == runs[-1][0] + runs[-1][2] and local == runs[-1][1] + runs[-1][2]:
+            start_remote, start_local, count = runs[-1]
+            runs[-1] = (start_remote, start_local, count + 1)
+        else:
+            runs.append((int(remote), int(local), 1))
+    return runs
 
 
 def _validate_cache_pool(pool: DistServeCachePoolInfo, num_blocks: int, pool_id: int, endpoint: str) -> None:

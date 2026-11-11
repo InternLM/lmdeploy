@@ -395,6 +395,7 @@ class BaseModelAgent:
 
         self.patched_model = None
         self.cache_engine = None
+        self.pd_runtime = None
         self.block_cache_plan = None
         self.compact_state_plan = None
         # Exact target/draft bytes used when cache capacity was calculated.
@@ -1717,6 +1718,12 @@ class BaseModelAgent:
                 self.step_inputs.ssm_state_cursor = self.ssm_state_cursor
                 self.make_dummy_meta.compact_bank_width = plan.capacity.bank_width
             self.spec_agent.build_cache_engine(self.cache_stream)
+            from lmdeploy.pytorch.disagg.config import MigrationBackend
+            if self.cache_config.migration_backend == MigrationBackend.Mooncake:
+                from lmdeploy.pytorch.disagg.runtime import PDWorkerRuntime
+                self.pd_runtime = PDWorkerRuntime(self.cache_engine, self.spec_agent.cache_engine,
+                                                  self.state_cache_engine, self.model_config, self.dist_config,
+                                                  self.spec_agent.specdecode_config)
             schema = self._get_compact_store_schema()
 
             self.kv_connector = build_kv_connector(
@@ -2091,6 +2098,7 @@ class BaseModelAgent:
         # connector threads that still reference registered cache addresses.
         self.shutdown_kv_connector()
         self.cache_engine = None
+        self.pd_runtime = None
         self.state_cache_engine = None
         self.reset_graph_runner()
         self.patched_model.get_model().to(device=device, non_blocking=True)
@@ -2168,6 +2176,7 @@ class BaseModelAgent:
             self.memdecode_agent.release()
         self.patched_model = None
         self.cache_engine = None
+        self.pd_runtime = None
         self.block_cache_plan = None
         self.state_cache_engine = None
         self.compact_state_plan = None

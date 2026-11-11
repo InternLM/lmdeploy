@@ -1,53 +1,53 @@
-"""Regression: Mooncake async migration must not hang on an unused Future
-(#4971)."""
-
-from __future__ import annotations
-
+# Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import Mock
 
 from lmdeploy.pytorch.disagg.backend.mooncake import MooncakeMigrationManagement
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol
+from lmdeploy.pytorch.disagg.messages import AssignmentInstruct, MigrationAssignment
+from lmdeploy.pytorch.disagg.runtime import aggregate_transfer_results
 
 
-def test_p2p_migrate_async_awaits_executor_not_orphan_future(monkeypatch):
-    """With LMDEPLOY_USE_ASYNC_MIGRATION, p2p_migrate must complete when
-    _migrate returns.
+def test_cancel_keeps_native_job_and_slot_until_completion():
+    started, finish = Event(), Event()
+    link = object.__new__(MooncakeMigrationManagement)
 
-    Previously an unresolved asyncio.Future was awaited after run_in_executor, so Decode hung forever even though the
-    RDMA transfer finished.
-    """
-    monkeypatch.setattr(
-        'lmdeploy.pytorch.disagg.backend.mooncake.LMDEPLOY_USE_ASYNC_MIGRATION',
-        True,
-    )
+    def migrate(_):
+        started.set()
+        assert finish.wait(3)
+        return 'completed'
 
-    backend = object.__new__(MooncakeMigrationManagement)
-    called = {'n': 0}
+    async def run():
+        link.slots = asyncio.Semaphore(1)
+        with ThreadPoolExecutor(max_workers=1) as link.executor:
+            link._migrate = migrate
+            task = asyncio.create_task(link.p2p_migrate(None))
+            await asyncio.to_thread(started.wait)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done() and link.slots.locked()
+            finish.set()
+            assert await task == 'completed'
+            assert not link.slots.locked()
 
-    def fake_migrate(_assignment):
-        called['n'] += 1
-
-    backend._migrate = fake_migrate  # type: ignore[method-assign]
-    assignment = SimpleNamespace(batch=[])
-
-    async def _run():
-        await asyncio.wait_for(backend.p2p_migrate(assignment), timeout=2.0)
-
-    asyncio.run(_run())
-    assert called['n'] == 1
+    asyncio.run(run())
 
 
-def test_p2p_migrate_sync_path_calls_migrate_directly(monkeypatch):
-    """Sync path should call _migrate directly without an orphan Future."""
-    monkeypatch.setattr(
-        'lmdeploy.pytorch.disagg.backend.mooncake.LMDEPLOY_USE_ASYNC_MIGRATION',
-        False,
-    )
-
-    backend = object.__new__(MooncakeMigrationManagement)
-    backend._migrate = MagicMock()
-    assignment = SimpleNamespace(batch=[])
-
-    asyncio.run(backend.p2p_migrate(assignment))
-    backend._migrate.assert_called_once_with(assignment)
+def test_batch_failure_and_rank_exception_do_not_claim_drain():
+    link = object.__new__(MooncakeMigrationManagement)
+    link.remote_url = 'peer:1234'
+    link.local_kv_table = {'0': dict(addr=1000, length=100)}
+    link.remote_kv_table = {'0': dict(addr=2000, length=100)}
+    link.has_drain_ticket = False
+    link.engine = SimpleNamespace(batch_transfer_sync_read=Mock(return_value=-1))
+    assignment = MigrationAssignment(
+        protocol=MigrationProtocol.RDMA, remote_engine_id='peer', transfer_id='op',
+        batch=[AssignmentInstruct(mr_key=0, source_offset=10, target_offset=20, length=30)])
+    result = link._migrate(assignment)
+    assert result.status == 'completion_unknown'
+    link.engine.batch_transfer_sync_read.assert_called_once_with('peer:1234', [1010], [2020], [30])
+    merged = aggregate_transfer_results([[result], RuntimeError('rank lost')], ['op'])
+    assert merged[0].status == 'completion_unknown'

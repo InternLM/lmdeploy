@@ -147,14 +147,14 @@ class UniExecutor(ExecutorBase):
 
         note: return list to be composible with multiprocess executor like ray.
         """
-        return [self.model_agent.cache_engine.p2p_initialize(init_request)]
+        return [(self.model_agent.pd_runtime or self.model_agent.cache_engine).p2p_initialize(init_request)]
 
     def p2p_connect(self, remote_engine_id: str, conn_request: list[DistServeKVTransferEndpointInfo]):
         """rdma_connect."""
-        self.model_agent.cache_engine.p2p_connect(remote_engine_id, conn_request)
+        (self.model_agent.pd_runtime or self.model_agent.cache_engine).p2p_connect(remote_engine_id, conn_request)
 
     async def migrate(self, batch: MigrationExecutionBatch):
         """KV Cache Migration."""
-        return await self.model_agent.cache_engine.migrate(batch)
+        return await (self.model_agent.pd_runtime or self.model_agent.cache_engine).migrate(batch)
 
     """ PD Disaggregation API End """

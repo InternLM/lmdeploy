@@ -213,12 +213,13 @@ class WorkerWrapperBase:
     """ PD Disaggregation API Begin """
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
-        return self.model_agent.cache_engine.p2p_initialize(init_request)
+        return (self.model_agent.pd_runtime or self.model_agent.cache_engine).p2p_initialize(init_request)
 
     def p2p_connect(self, remote_engine_id: str, conn_request: list[DistServeKVTransferEndpointInfo]):
-        return self.model_agent.cache_engine.p2p_connect(remote_engine_id, conn_request)
+        runtime = self.model_agent.pd_runtime or self.model_agent.cache_engine
+        return runtime.p2p_connect(remote_engine_id, conn_request)
 
     async def migrate(self, inputs: MigrationExecutionBatch):
-        return await self.model_agent.cache_engine.migrate(inputs)
+        return await (self.model_agent.pd_runtime or self.model_agent.cache_engine).migrate(inputs)
 
     """ PD Disaggregation API End """
