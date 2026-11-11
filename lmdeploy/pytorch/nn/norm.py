@@ -72,7 +72,14 @@ class RMSNormGated(nn.Module):
 
 
 class RMSNorm(nn.Module):
-    """RMS Norm with add residual."""
+    """RMS Norm with add residual.
+
+    Args:
+        zero_centered: The checkpoint stores ``scale - 1`` instead of ``scale``.
+            ``weight`` always holds the effective scale, so it is kept in FP32:
+            ``1 + offset`` rounded to a half-precision ``dtype`` would drop the
+            low bits of the offset before the FP32 norm arithmetic uses them.
+    """
 
     def __init__(
         self,
@@ -85,6 +92,7 @@ class RMSNorm(nn.Module):
         align: int = 1,
         prefix: str = '',
         all_reduce_group: str | None = None,
+        zero_centered: bool = False,
     ):
         super().__init__()
         backend = get_backend()
@@ -100,6 +108,8 @@ class RMSNorm(nn.Module):
             world_size, rank = get_tp_world_rank('attn')
             hidden_size = get_distribute_size(hidden_size, world_size, rank, align=align)
 
+        if zero_centered:
+            dtype = torch.float32
         self.register_parameter('weight', self.create_weight(hidden_size, dtype, device))
         if w8a8_flag:
             spec = RMSNormW8A8BuildSpec(hidden_size, eps, quant_dtype=quant_config.quant_dtype)
@@ -110,8 +120,10 @@ class RMSNorm(nn.Module):
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
-        if tp:
+        if tp or zero_centered:
             self.weight.weight_loader = self.weight_loader
+        self.tp = tp
+        self.zero_centered = zero_centered
         self.align = align
         self.eps = eps
         self._all_reduce_group = None
@@ -128,8 +140,11 @@ class RMSNorm(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
-        world_size, rank = get_tp_world_rank('attn')
-        loaded_weight = chunk_aligned(loaded_weight, world_size, 0, self.align)[rank]
+        if self.zero_centered:
+            loaded_weight = loaded_weight.float() + 1.0
+        if self.tp:
+            world_size, rank = get_tp_world_rank('attn')
+            loaded_weight = chunk_aligned(loaded_weight, world_size, 0, self.align)[rank]
         param.copy_(loaded_weight)
 
     @staticmethod

@@ -59,13 +59,14 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
         self.input_layernorm = RMSNorm(config.hidden_size,
                                        config.rms_norm_eps,
                                        quant_config=quantization_config,
-                                       dtype=dtype,
+                                       zero_centered=True,
                                        device=device,
                                        prefix=add_prefix('input_layernorm', prefix=prefix),
                                        )
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size, config.rms_norm_eps, zero_centered=True, device=device)
 
 
 class Qwen3_5MultiTokenPredictor(nn.Module):
@@ -94,9 +95,11 @@ class Qwen3_5MultiTokenPredictor(nn.Module):
             for idx in range(self.num_mtp_layers)
         })
 
-        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
-        self.pre_fc_norm_hidden = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
-        self.pre_fc_norm_embedding = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, device=device)
+        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, zero_centered=True, device=device)
+        self.pre_fc_norm_hidden = RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps, zero_centered=True, device=device)
+        self.pre_fc_norm_embedding = RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps, zero_centered=True, device=device)
 
         # shared with target model
         self.embed_tokens = None
@@ -379,10 +382,6 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
                 down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
                 expert_params_mapping += [gate_param, up_param, down_param]
 
-        rms_norm_keys = [
-            'model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm', 'mtp.norm',
-            '.pre_fc_norm_embedding', '.pre_fc_norm_hidden'
-        ]
         interns2_preview_names = ['.fc.weight', '.pre_fc_norm_embedding.weight',
                                   '.pre_fc_norm_hidden.weight', '.norm.weight']
 
@@ -417,9 +416,5 @@ class Qwen3_5MTPModel(nn.Module, CudaGraphMixin):
                         load_weight(param, k, shard_id='k')
                         load_weight(param, v, shard_id='v')
                     else:
-                        for rms_norm_key in rms_norm_keys:
-                            if rms_norm_key in name and 'weight' in name:
-                                loaded_weight = loaded_weight + 1
-                                break
                         param = params_dict[name]
                         load_weight(param, loaded_weight)

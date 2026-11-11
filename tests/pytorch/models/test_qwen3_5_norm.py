@@ -1,5 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Check task-specific and ordinary Qwen3.5 norm loading."""
+"""Check zero-centered Qwen3.5 norm loading and task-specific selection."""
 import importlib
 
 import pytest
@@ -37,10 +37,10 @@ def _tiny_config():
     'qwen3_5_mtp.Qwen3_5MTPModel',
 ])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16, torch.float32])
+@pytest.mark.parametrize('checkpoint_dtype', [torch.bfloat16, torch.float16, torch.float32])
 @torch.inference_mode()
-def test_zero_centered_norm_loading(model_path, dtype):
+def test_zero_centered_norm_loading(model_path, dtype, checkpoint_dtype):
     module_name, class_name = model_path.split('.')
-    is_decision = module_name == 'intern_decision'
     model_class = getattr(importlib.import_module(f'lmdeploy.pytorch.models.{module_name}'), class_name)
     config = _tiny_config()
     context = BuildModelContext(language_model_only=True)
@@ -52,12 +52,14 @@ def test_zero_centered_norm_loading(model_path, dtype):
     weights = []
     expected = {}
     for name, norm in norms.items():
-        assert norm.weight.dtype == (torch.float32 if is_decision else dtype), name
+        # Zero-centered scales are stored in FP32 for every Qwen3.5-family model.
+        assert norm.weight.dtype == torch.float32, name
         # This offset loses low bits when +1 is evaluated or stored in BF16/FP16.
-        offset = torch.full(norm.weight.shape, 0.24609375, dtype=dtype)
+        offset = torch.full(norm.weight.shape, 0.24609375, dtype=checkpoint_dtype)
         offset[0] = -1.0
+        offset[1] = 0.0001
         offset[-1] = 0.0
-        expected[name] = offset.float() + 1 if is_decision else offset + 1
+        expected[name] = offset.float() + 1
         checkpoint_name = f'{name}.weight'
         if module_name == 'qwen3_5_mtp':
             checkpoint_name = checkpoint_name.replace('model.', 'mtp.', 1)
@@ -124,7 +126,8 @@ def test_task_marker_survives_model_config_and_pickle(tmp_path, enabled):
                                  build_model_ctx=BuildModelContext(language_model_only=True))
     expected_class = InternDecisionForConditionalGeneration if enabled else Qwen3_5ForConditionalGeneration
     assert type(model) is expected_class
-    assert model.model.language_model.norm.weight.dtype == (torch.float32 if enabled else torch.bfloat16)
+    # Text norms stay FP32 either way; only the task marker decides the class.
+    assert model.model.language_model.norm.weight.dtype == torch.float32
     # A following ordinary build must not inherit a process-global mapping.
     ordinary = build_model_from_hf_config(config, dtype=torch.bfloat16, device=torch.device('cpu'),
                                           build_model_ctx=BuildModelContext(language_model_only=True))
