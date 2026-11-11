@@ -55,6 +55,11 @@ def _cache_config(role='kv_both'):
     )
 
 
+class _Request(SimpleNamespace):
+    cache_identity_ids = property(lambda self: self.all_ids)
+    cache_identity_token_count = property(lambda self: len(self.all_ids))
+
+
 def _request(
     token_ids,
     *,
@@ -63,7 +68,7 @@ def _request(
     multimodal=False,
     embeddings=False,
 ):
-    return SimpleNamespace(
+    return _Request(
         seq_id=seq_id,
         num_history_ids=0,
         adapter_name=adapter_name,
@@ -1212,3 +1217,16 @@ def test_scheduler_rejects_sliding_window_cache():
 
     with pytest.raises(ValueError, match='sliding-window'):
         MooncakeStoreScheduler(config)
+
+
+def test_pd_prefill_save_uses_known_withheld_successor():
+    cache = replace(_cache_config('kv_producer'), prefix_cache_token_lookahead=1)
+    paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache,
+                       seq_meta=SequenceMeta(4, strategy=ARSpecSequenceStrategy()))
+    store = MooncakeStoreScheduler(cache)
+    request = paging.add_session(0).add_sequence(range(9))
+    request.prepare_pd_prefill()
+    metadata = store.build_connector_meta(_connector_step((request,), (8,), ((0, 1),), ((10, 11),)))
+    assert metadata.save_requests[0].block_hashes == build_prefix_block_hashes(range(9), 4, token_lookahead=1)
+    assert request.num_valid_ids == 8
+    store.shutdown()

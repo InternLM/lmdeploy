@@ -172,7 +172,7 @@ class MooncakeStoreScheduler:
         token_len = request.get_prefix_cache_max_candidate_step()
         lookahead = self._cache_config.prefix_cache_token_lookahead
         if lookahead:
-            token_len = min(token_len, request.num_valid_ids - lookahead)
+            token_len = min(token_len, request.cache_identity_token_count - lookahead)
         token_len = request.clamp_prefix_cache_match_step(token_len)
         recompute_blocks = max(0, request.prefix_cache.recompute_overlap.recompute_blocks)
         recompute_tokens = recompute_blocks * block_size
@@ -298,7 +298,7 @@ class MooncakeStoreScheduler:
                     block_extras[block_index] = json.dumps(identity, separators=(',', ':')).encode('utf-8')
 
         tracker.block_hashes = build_prefix_block_hashes(
-            request.all_ids[:token_len + lookahead],
+            request.cache_identity_ids[:token_len + lookahead],
             block_size,
             extra_identity=adapter_identity,
             previous_hashes=tracker.block_hashes,
@@ -406,7 +406,7 @@ class MooncakeStoreScheduler:
                 # The final prefill's sampled successor is not known yet on
                 # the host. Never key its draft row with an absent or proposed
                 # token; a later save can extend this accepted prefix.
-                full_blocks = min(full_blocks, max(0, request.num_valid_ids - lookahead) // block_size)
+                full_blocks = min(full_blocks, max(0, request.cache_identity_token_count - lookahead) // block_size)
             first_block = self._next_save_block.get(request_id, 0)
             is_decode_save = step_input.is_decode_checkpoint or (
                 self._is_hybrid and self._cache_config.prefix_cache_decode_save_first
@@ -429,7 +429,7 @@ class MooncakeStoreScheduler:
                 if (token_len % alignment != 0
                         or not request.is_prefix_cache_boundary_safe(token_len)):
                     continue
-                if lookahead and token_len + lookahead > request.num_valid_ids:
+                if lookahead and token_len + lookahead > request.cache_identity_token_count:
                     continue
                 if step_input.connector_state_ids[index] <= 0:
                     raise ValueError('hybrid saves require an allocated runtime state slot')
@@ -561,7 +561,7 @@ class MooncakeStoreScheduler:
                     or seq.history_embeddings or not seq.is_prefix_cache_boundary_safe(boundary)):
                 raise ValueError('Compact Store save requires an exact, safe, ordered-readable producer.')
             lookahead = self._cache_config.prefix_cache_token_lookahead
-            full_blocks = min(int(end), seq.num_valid_ids - lookahead) // block_size
+            full_blocks = min(int(end), seq.cache_identity_token_count - lookahead) // block_size
             if boundary // block_size > full_blocks:
                 continue
             request_id = int(seq.seq_id)

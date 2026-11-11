@@ -1175,3 +1175,15 @@ def test_multimodal_mtp_chunks_match_full_prefill_kv_and_outputs(store_enabled, 
     assert torch.equal(logits.argmax(-1), expected_logits.argmax(-1))
     assert target.visual.encoded_tokens == sum(end - start for start, end in spans if start >= history)
     scheduler.shutdown()
+
+
+def test_pd_mtp_tail_uses_withheld_prompt_token_instead_of_prefill_sample():
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent.proposer = _DummyProposer()
+    inputs = _model_inputs([10, 11, 12])
+    inputs.prefill_next_token_ids = torch.tensor([13])
+    extra = _extra([[1, 2], [3, 4], [5, 6]])
+    extra.next_token_ids = torch.tensor([99])
+    draft, _ = agent._prepare_inputs_from_main(inputs, extra)
+    assert draft.input_ids.tolist() == [[11, 12, 13]]
+    assert extra.next_token_ids.tolist() == [99]

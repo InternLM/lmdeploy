@@ -216,6 +216,7 @@ class GenerationConfig:
     # for disaggregation
     with_cache: bool = False
     preserve_cache: bool = False
+    pd_prefill: bool = False
     migration_request: MigrationRequest | None = None
 
     # router replay

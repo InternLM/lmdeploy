@@ -506,6 +506,21 @@ class Engine(EngineBase):
                                   resp_cache=req.data.get('with_cache'),
                                   preserve_cache=req.data.get('preserve_cache'))
                 msg = next(iter(sess.sequences.values()))
+                if req.data.get('pd_prefill'):
+                    if self.engine_config.role != EngineRole.Prefill or not msg.preserve_cache:
+                        scheduler.end_session(session_id)
+                        self._response(req.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                                       err_msg='pd_prefill requires a preserving Prefill engine request.')
+                        continue
+                    msg.prepare_pd_prefill()
+                    if not msg.pd_prefix_length:
+                        # A one-token prompt (or a media-only tail) has no
+                        # exportable prefix. D performs its ordinary prefill.
+                        handoff = scheduler.pd_coordinator.publish(msg, self.engine_conn.cache_schema, [])
+                        msg.state.stop()
+                        self._response(req.resp, ResponseType.FINISH,
+                                       data=dict(token_ids=[], cache_block_ids=[], pd_handoff=handoff.model_dump()))
+                        continue
                 if migration_request:
                     if migration_request.handoff is not None:
                         try:

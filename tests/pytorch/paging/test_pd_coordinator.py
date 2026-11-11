@@ -18,6 +18,7 @@ def make_export():
                           SequenceMeta(4, strategy=ARSequenceStrategy()))
     seq = scheduler.add_session(1).add_sequence(np.arange(8), preserve_cache=True)
     seq.pd_prompt_tokens = np.arange(9)
+    seq.pd_prefix_length = 8
     scheduler.block_manager.allocate(seq)
     handoff = scheduler.pd_coordinator.publish(seq, 'schema', [])
     return scheduler, seq, handoff

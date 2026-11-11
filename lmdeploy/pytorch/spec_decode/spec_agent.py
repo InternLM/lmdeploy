@@ -237,12 +237,12 @@ class SpecModelAgent(BaseSpecModelAgent):
     def _prepare_inputs_from_main(self, model_inputs: ModelInputs, extra_inputs: ExtraInputs):
         """Update inputs from main model inputs."""
         next_token_ids = extra_inputs.next_token_ids
-        if model_inputs.is_chunk and not model_inputs.is_last_chunk:
+        if model_inputs.prefill_next_token_ids is not None and model_inputs.prefill_next_token_ids.numel():
             # Complete the MTP row at the target boundary using the next known
             # prompt token. The chunk planner keeps multimodal spans with their
             # preceding row, so this lookahead has an ordinary token embedding.
-            assert model_inputs.prefill_next_token_ids is not None
-            next_token_ids = model_inputs.prefill_next_token_ids
+            known = model_inputs.prefill_next_token_ids
+            next_token_ids = torch.where(known >= 0, known, next_token_ids)
         last_token_indices = extra_inputs.last_token_indices
         replacement_indices = last_token_indices if model_inputs.is_decoding else None
         input_ids = self._shift_packed_prefill_inputs(

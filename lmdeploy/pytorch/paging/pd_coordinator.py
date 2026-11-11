@@ -121,7 +121,7 @@ class PDCoordinator:
         if existing is not None:
             return self.exports[existing].handoff
         tokens = seq.pd_prompt_tokens
-        boundary = len(tokens) - 1
+        boundary = seq.pd_prefix_length
         count = (boundary + seq.block_size - 1) // seq.block_size
         blocks = seq.logical_blocks.get_real_blocks()[:count].copy()
         physical = self.block_manager.resolve_gpu_block_offsets(blocks).tolist()

@@ -1621,11 +1621,11 @@ class BaseModelAgent:
         self.kv_connector = None
 
     def _validate_mtp_parallel_config(self) -> None:
-        """Validate the target and MTP topology used by Mooncake Store."""
+        """Validate target and draft shards used by Store and PD."""
         transfer_config = self.cache_config.kv_transfer_config
-        if (transfer_config is None
+        if (self.cache_config.role == EngineRole.Hybrid and (transfer_config is None
                 or transfer_config.kv_connector != 'MooncakeStoreConnector'
-                or not transfer_config.is_kv_transfer_instance):
+                or not transfer_config.is_kv_transfer_instance)):
             return
 
         specdecode_config = self.spec_agent.specdecode_config
@@ -1648,7 +1648,7 @@ class BaseModelAgent:
         )
         if target_parallel != mtp_parallel:
             raise ValueError(
-                'Mooncake Store requires target and MTP parallel configs to match: '
+                'Mooncake cache transfer requires target and MTP parallel configs to match: '
                 f'target=(attn_tp={target_parallel[0]}, dp={target_parallel[1]}, '
                 f'ep={target_parallel[2]}, world_size={target_parallel[3]}), '
                 f'mtp=(attn_tp={mtp_parallel[0]}, dp={mtp_parallel[1]}, '

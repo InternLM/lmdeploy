@@ -704,6 +704,8 @@ class BlockTrie:
             # Decode publication supplies a verified boundary after acceptance;
             # ordinary allocation must not attach speculative proposal KV.
             identity_end = seq.input_end_pos if token_limit is None else seq.num_valid_ids
+            if seq.pd_prompt_tokens is not None:
+                identity_end = seq.cache_identity_token_count
             num_valid_ids = min(num_valid_ids, identity_end - seq._seq_meta.prefix_cache_token_lookahead)
         if token_limit is not None:
             num_valid_ids = min(num_valid_ids, token_limit)

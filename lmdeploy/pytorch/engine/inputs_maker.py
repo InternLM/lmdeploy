@@ -1637,6 +1637,10 @@ class InputsMakerAsync:
                 and any(seq.pd_prompt_tokens is not None for seq in next_running)):
             carrier = forward_inputs['cache_inputs'] or CacheCheckpointInputs()
             forward_inputs['cache_inputs'] = replace(carrier, pd_export=True)
+            inputs.prefill_next_token_ids = torch.tensor([
+                int(seq.pd_prompt_tokens[seq.pd_prefix_length]) if seq.pd_prompt_tokens is not None else -1
+                for seq in next_running
+            ], dtype=torch.long)
         if logger.level <= logging.DEBUG and inputs is not None:
             logger.debug(f'Sending forward inputs: {inputs.log_info()}')
             session_ids = [seq.session_id for seq in next_running]
