@@ -4,6 +4,7 @@ import ctypes
 import gc
 import os
 import sys
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -89,6 +90,10 @@ def response_reqs(req_manager: RequestManager,
     resp.data = data
     resp.err_msg = err_msg
     req_manager.response(resp)
+
+
+class LifecycleValidationError(RuntimeError):
+    """A model-state or update request violates its precondition."""
 
 
 class Engine(EngineBase):
@@ -239,6 +244,10 @@ class Engine(EngineBase):
         if self._sleeping_tags:
             self._block_new_inputs()
         self._weights_update_lock: asyncio.Lock | None = None
+        # Model-state mutex owned by the executor call thread, plus the
+        # latched failure state of the most recent weight write.
+        self._model_state_lock = threading.Lock()
+        self._weights_update_error: str | None = None
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
 
@@ -556,7 +565,38 @@ class Engine(EngineBase):
 
     def update_params(self, request: Any):
         """Update params."""
-        self.executor.update_params(request)
+        self._execute_weights_update(self.executor.update_params, request, model_write=True)
+
+    def _get_model_state_lock(self):
+        """Exclude concurrent model-state changes while a synchronous executor call runs.
+
+        Normally initialized by the constructor; lazy initialization also
+        supports engine shells used by embedders before the loop starts.
+        """
+        if not hasattr(self, '_model_state_lock'):
+            self._model_state_lock = threading.Lock()
+        return self._model_state_lock
+
+    def _execute_weights_update(self, func, *args, model_write=False):
+        # The thread performing the actual call owns this guard, not its
+        # asyncio waiter. Cancelling a waiter cannot release it early.
+        guard = self._get_model_state_lock()
+        if not guard.acquire(blocking=False):
+            raise LifecycleValidationError('another weight update is in progress')
+        try:
+            try:
+                result = func(*args)
+                if model_write and result is not None and not (
+                        isinstance(result, tuple) and len(result) == 2 and result[0] is True):
+                    self._weights_update_error = 'worker weight update failed'
+                return result
+            except BaseException as exc:
+                # A later successful bucket cannot prove a previous partial
+                # write repaired the whole model. Keep refusing readiness.
+                self._weights_update_error = type(exc).__name__
+                raise
+        finally:
+            guard.release()
 
     def _get_weights_update_lock(self):
         """Get the disaggregated weights-update lock."""
@@ -564,10 +604,28 @@ class Engine(EngineBase):
             self._weights_update_lock = asyncio.Lock()
         return self._weights_update_lock
 
-    async def _run_weights_update(self, func, *args):
-        """Run one serialized disaggregated weights-update operation."""
-        async with self._get_weights_update_lock():
-            return await asyncio.to_thread(func, *args)
+    async def _run_weights_update(self, func, *args, model_write=False):
+        """Serialize executor calls until their real threads finish."""
+        lock = self._get_weights_update_lock()
+        await lock.acquire()
+
+        async def execute():
+            try:
+                return await asyncio.to_thread(self._execute_weights_update, func, *args,
+                                               model_write=model_write)
+            finally:
+                lock.release()
+
+        coroutine = execute()
+        try:
+            task = asyncio.create_task(coroutine)
+        except BaseException:
+            coroutine.close()
+            lock.release()
+            raise
+        # Observe background errors even if the original waiter disappears.
+        task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        return await asyncio.shield(task)
 
     async def get_checkpoint_engine_status(self):
         """Get checkpoint-engine readiness from all local model workers."""
@@ -576,7 +634,7 @@ class Engine(EngineBase):
     async def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
         """Receive weights through checkpoint-engine CUDA IPC."""
         return await self._run_weights_update(self.executor.update_weights_from_ipc,
-                                              request, reject_reason)
+                                              request, reject_reason, model_write=True)
 
     def complete_weights_update(self):
         """Record successful initialization/update without waking KV cache."""
@@ -588,7 +646,8 @@ class Engine(EngineBase):
 
     async def update_weights_from_distributed(self, request: Any):
         """Receive weights through the disaggregated process group."""
-        return await self._run_weights_update(self.executor.update_weights_from_distributed, request)
+        return await self._run_weights_update(self.executor.update_weights_from_distributed, request,
+                                              model_write=True)
 
     async def destroy_weights_update_group(self, request: Any):
         """Tear down a previously initialized weights-update process group."""
@@ -643,7 +702,17 @@ class Engine(EngineBase):
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
 
     def wakeup(self, tags: list[str] | None = None):
-        """Wakeup."""
+        """Restore worker resources while excluding concurrent model-state writes."""
+        guard = self._get_model_state_lock()
+        if not guard.acquire(blocking=False):
+            raise LifecycleValidationError('wakeup refused: a model-state operation is in progress')
+        try:
+            self._wakeup_resources(tags)
+        finally:
+            guard.release()
+
+    def _wakeup_resources(self, tags: list[str] | None):
+        """Restore worker resources and then reopen request admission."""
         wakeup_tags = tags
         logger.info('PyTorch engine wakeup requested: tags=%s, sleeping_tags=%s.',
                     wakeup_tags, sorted(self._sleeping_tags))

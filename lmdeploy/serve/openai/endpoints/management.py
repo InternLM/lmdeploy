@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
+import asyncio
+import math
 import os
 from http import HTTPStatus
 
@@ -23,9 +25,62 @@ from lmdeploy.serve.utils.server_utils import validate_json_request
 
 def register(router: APIRouter, server_context) -> None:
 
+    # These are deployment constraints, not an inference-framework profile.
+    # Ordinary LMDeploy keeps every existing update transport available.
+    protocols = frozenset(os.environ.get(
+        'LMDEPLOY_WEIGHT_UPDATE_PROTOCOLS', 'legacy,ipc,distributed').split(','))
+    if not protocols or not protocols <= {'legacy', 'ipc', 'distributed'}:
+        raise ValueError('Invalid LMDEPLOY_WEIGHT_UPDATE_PROTOCOLS')
+    require_id = os.environ.get('LMDEPLOY_REQUIRE_UPDATE_ID', '0')
+    if require_id not in ('0', '1'):
+        raise ValueError('LMDEPLOY_REQUIRE_UPDATE_ID must be 0 or 1')
+    require_id = require_id == '1'
+
+    def _check_update_protocol(protocol):
+        if protocol not in protocols:
+            return create_error_response(
+                HTTPStatus.NOT_IMPLEMENTED,
+                f'{protocol} weight updates are disabled by server configuration.')
+        return None
+
+    async def _apply_weights_update(owner, transfer, *, finished, require_sleep=True):
+        """Serialize all transports through the same service-owned lifecycle.
+
+        A timeout/cancellation cannot cancel copies already running on a worker.
+        Keep the model unusable after any uncertain or partial write.
+        """
+        engine = server_context.async_engine
+        try:
+            timeout = float(os.environ.get('LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS', '180'))
+            if not math.isfinite(timeout) or timeout <= 0:
+                raise ValueError('Weight update timeout must be positive and finite.')
+            operation = engine.begin_weights_update(owner, require_sleep=require_sleep)
+        except (ValueError, RuntimeError) as exc:
+            return create_error_response(HTTPStatus.CONFLICT, str(exc))
+        try:
+            success, message = await asyncio.wait_for(transfer(), timeout=timeout)
+            if not success:
+                engine.fail_weights_update(message)
+            elif finished:
+                engine.complete_weights_update(owner, operation)
+        except asyncio.TimeoutError:
+            engine.fail_weights_update(f'Worker transfer exceeded {timeout} seconds')
+            return create_error_response(HTTPStatus.GATEWAY_TIMEOUT, engine.weights_update_error)
+        except BaseException as exc:
+            engine.fail_weights_update(f'{type(exc).__name__}: {exc}')
+            raise
+        finally:
+            engine.end_weights_update_operation(operation)
+        return JSONResponse(content={'success': success, 'message': message},
+                            status_code=HTTPStatus.OK if success else HTTPStatus.BAD_REQUEST)
+
     @router.get('/health')
     async def health() -> JSONResponse:
         """Health check."""
+        error = getattr(server_context.async_engine, 'weights_update_error', None)
+        if error is not None:
+            return JSONResponse(dict(status='unhealthy', message=error),
+                                status_code=HTTPStatus.SERVICE_UNAVAILABLE)
         monitor = server_context.health_monitor
         if monitor is None:
             data = dict(status='unhealthy',
@@ -54,11 +109,19 @@ def register(router: APIRouter, server_context) -> None:
 
     @router.post('/update_weights',
                  dependencies=[Depends(validate_json_request)])
-    def update_params(request: UpdateParamsRequest,
-                      raw_request: Request = None):
-        """Update weights for the model."""
-        server_context.async_engine.engine.update_params(request)
-        return JSONResponse(content=None)
+    async def update_params(request: UpdateParamsRequest, raw_request: Request = None):
+        """Load legacy serialized tensors, preserving the JSON-null response."""
+        err = _check_update_protocol('legacy')
+        if err is not None:
+            return err
+
+        async def transfer():
+            await asyncio.to_thread(server_context.async_engine.engine.update_params, request)
+            return True, 'Weights updated.'
+
+        result = await _apply_weights_update((('legacy',), None), transfer,
+                                             finished=request.finished, require_sleep=False)
+        return JSONResponse(content=None) if result.status_code == HTTPStatus.OK else result
 
     def _check_pytorch_backend_for_disagg_weight_update():
         """Disaggregated weight-update endpoints are PyTorch-backend only for
@@ -76,6 +139,12 @@ def register(router: APIRouter, server_context) -> None:
         """Check whether checkpoint-engine can safely start an IPC update."""
         async_engine = server_context.async_engine
         backend = getattr(async_engine, 'backend', None)
+        err = _check_update_protocol('ipc')
+        if err is not None:
+            return UpdateWeightsFromIPCStatus(
+                ready=False, message='IPC updates are disabled by server configuration.',
+                backend=backend, is_sleeping=async_engine.is_sleeping,
+                sleeping_tags=sorted(async_engine.sleeping_tags))
         backend_config = getattr(async_engine, 'backend_config', None)
         device_type = getattr(backend_config, 'device_type', None)
         if backend != 'pytorch' or device_type != 'cuda':
@@ -91,6 +160,9 @@ def register(router: APIRouter, server_context) -> None:
         worker_statuses = await async_engine.engine.get_checkpoint_engine_status()
         worker_ready = bool(worker_statuses) and all(item['ready'] for item in worker_statuses)
         lifecycle_ready = async_engine.is_sleeping and 'kv_cache' in async_engine.sleeping_tags
+        lifecycle_ready = lifecycle_ready and not (
+            async_engine.weights_update_busy or async_engine.weights_update_pending
+            or async_engine.weights_update_error is not None)
         ready = worker_ready and lifecycle_ready
         if not worker_ready:
             message = next((item['message'] for item in worker_statuses if not item['ready']),
@@ -120,7 +192,7 @@ def register(router: APIRouter, server_context) -> None:
     async def update_weights_from_ipc(request: UpdateWeightsFromIPCRequest,
                                       raw_request: Request = None):
         """Receive weights from checkpoint-engine through CUDA IPC."""
-        err = _check_pytorch_backend_for_disagg_weight_update()
+        err = _check_update_protocol('ipc') or _check_pytorch_backend_for_disagg_weight_update()
         if err is not None:
             return err
         async_engine = server_context.async_engine
@@ -130,16 +202,9 @@ def register(router: APIRouter, server_context) -> None:
                 HTTPStatus.NOT_IMPLEMENTED,
                 f'checkpoint-engine IPC updates require device_type="cuda", got {device_type!r}.')
 
-        reject_reason = None
-        if not async_engine.is_sleeping or 'kv_cache' not in async_engine.sleeping_tags:
-            reject_reason = ('Engine is not prepared for a checkpoint-engine update. Call POST /sleep and '
-                             'POST /wakeup?tags=weights before updating online.')
-        success, message = await async_engine.engine.update_weights_from_ipc(request, reject_reason)
-        if success:
-            async_engine.complete_weights_update()
-        return JSONResponse(
-            content={'success': success, 'message': message},
-            status_code=HTTPStatus.OK if success else HTTPStatus.BAD_REQUEST)
+        return await _apply_weights_update(
+            (('ipc',), None), lambda: async_engine.engine.update_weights_from_ipc(request, None),
+            finished=True)
 
     @router.post('/init_weights_update_group',
                  dependencies=[Depends(validate_json_request)])
@@ -171,15 +236,24 @@ def register(router: APIRouter, server_context) -> None:
         if err is not None:
             return err
         async_engine = server_context.async_engine
-        success, message = await async_engine.engine.update_weights_from_distributed(request)
-        if success and request.finished:
-            # Receiving every bucket initializes weights but must not wake KV cache.
-            # Keep the same lifecycle contract as checkpoint-engine IPC updates.
-            async_engine.complete_weights_update()
-        content = {'success': success, 'message': message}
-        return JSONResponse(
-            content=content,
-            status_code=200 if success else HTTPStatus.BAD_REQUEST)
+        err = _check_update_protocol('distributed')
+        if err is not None:
+            return err
+        if require_id and not request.update_id:
+            return create_error_response(HTTPStatus.CONFLICT, 'This server requires an explicit update_id.')
+        owner = (request.group_name, request.update_id)
+        aligned = len(request.names) == len(request.dtypes) == len(request.shapes)
+        # Older senders may finalize with an empty bucket. Permit that only for
+        # their already-open implicit transaction, never to initialize a model
+        # or claim a new explicit transaction completed without any tensors.
+        empty_finish = (request.update_id is None and request.finished
+                        and async_engine.weights_update_pending
+                        and async_engine.weights_update_owner == owner)
+        if not aligned or (not request.names and not empty_finish):
+            return create_error_response(HTTPStatus.CONFLICT, 'A nonempty, aligned weight bucket is required.')
+        return await _apply_weights_update(
+            owner, lambda: async_engine.engine.update_weights_from_distributed(request),
+            finished=request.finished)
 
     @router.post('/destroy_weights_update_group',
                  dependencies=[Depends(validate_json_request)])
@@ -211,20 +285,30 @@ def register(router: APIRouter, server_context) -> None:
                 HTTPStatus.BAD_REQUEST,
                 'The "level" query parameter must be 1 or 2.')
         async_engine = server_context.async_engine
-        await async_engine.sleep(level)
+        try:
+            await async_engine.sleep(level)
+        except RuntimeError as exc:
+            return create_error_response(HTTPStatus.CONFLICT, str(exc))
         return Response(status_code=200)
 
     @router.post('/wakeup', dependencies=[Depends(validate_json_request)])
     async def wakeup(raw_request: Request = None):
         tags = raw_request.query_params.getlist('tags')
         tags = tags or None
-        server_context.async_engine.wakeup(tags)
+        try:
+            server_context.async_engine.wakeup(tags)
+        except RuntimeError as exc:
+            return create_error_response(HTTPStatus.CONFLICT, str(exc))
         return Response(status_code=200)
 
     @router.get('/is_sleeping')
     async def is_sleeping():
-        is_sleeping = server_context.async_engine.is_sleeping
-        return JSONResponse(content={'is_sleeping': is_sleeping})
+        engine = server_context.async_engine
+        return JSONResponse(content={'is_sleeping': engine.is_sleeping,
+                                     'weights_update_pending': engine.weights_update_pending,
+                                     'weights_content_ready': engine.weights_content_ready,
+                                     'weights_update_owner': engine.weights_update_owner,
+                                     'weights_update_error': engine.weights_update_error})
 
     @router.post('/abort_request')
     async def abort_request(request: AbortRequest,

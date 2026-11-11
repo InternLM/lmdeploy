@@ -412,6 +412,10 @@ class RayExecutor(ExecutorBase):
 
     def _reduce_worker_status(self, results: list[tuple[bool, str]], op_name: str) -> tuple[bool, str]:
         """Reduce worker status results."""
+        if (not isinstance(results, (list, tuple)) or len(results) != len(self.workers) or not results
+                or any(not isinstance(item, (list, tuple)) or len(item) != 2
+                       or type(item[0]) is not bool or not isinstance(item[1], str) for item in results)):
+            raise RuntimeError(f'{op_name}: missing or malformed worker result')
         successes, messages = zip(*results)
         if all(successes):
             return True, messages[0]

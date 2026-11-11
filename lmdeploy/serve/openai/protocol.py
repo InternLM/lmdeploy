@@ -5,7 +5,7 @@ import time
 from typing import Any, Literal
 
 import shortuuid
-from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 
 class ErrorResponse(BaseModel):
@@ -592,10 +592,13 @@ class UpdateWeightsFromDistributedRequest(BaseModel):
     load them into the running model."""
     names: list[str]
     dtypes: list[str]
-    shapes: list[list[int]]
+    shapes: list[list[StrictInt]]
     group_name: str
+    # Optional for legacy serialized callers. Explicit IDs enable replay and
+    # cross-transaction checks; deployments may require them at the server.
+    update_id: str | None = None
     load_format: str | None = None  # 'flattened_bucket' or None
-    finished: bool = False  # trigger mod.update_weights() finalization when True
+    finished: StrictBool = False  # trigger mod.update_weights() finalization when True
 
 
 class DestroyWeightsUpdateGroupRequest(BaseModel):

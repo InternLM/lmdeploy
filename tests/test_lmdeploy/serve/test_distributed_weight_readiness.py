@@ -15,8 +15,11 @@ from lmdeploy.serve.openai.protocol import UpdateWeightsFromDistributedRequest
 def make_endpoint(*, success=True, tags=('weights', 'kv_cache')):
     engine = AsyncEngine.__new__(AsyncEngine)
     engine.backend = 'pytorch'
+    engine.backend_config = SimpleNamespace(device_type='cuda')
+    engine.session_mgr = SimpleNamespace(request_handle_pool=SimpleNamespace(num_dispatched=0))
     engine.sleeping_tags = set(tags)
     engine.is_sleeping = bool(tags)
+    engine.init_weights_update_state(ready=not bool(tags))
     engine.engine = SimpleNamespace(
         update_weights_from_distributed=AsyncMock(return_value=(success, 'done')),
         complete_weights_update=Mock(),
@@ -32,7 +35,9 @@ def make_endpoint(*, success=True, tags=('weights', 'kv_cache')):
 @pytest.mark.parametrize('tags', [('weights', 'kv_cache'), ('kv_cache',)])
 def test_only_successful_final_bucket_completes_weights(finished, success, tags):
     engine, endpoint = make_endpoint(success=success, tags=tags)
-    request = UpdateWeightsFromDistributedRequest(names=[], dtypes=[], shapes=[], group_name='train', finished=finished)
+    request = UpdateWeightsFromDistributedRequest(
+        names=['test.weight'], dtypes=['bfloat16'], shapes=[[1]],
+        group_name='train', update_id='test-v1', finished=finished)
     response = asyncio.run(endpoint(request))
     assert response.status_code == (200 if success else 400)
     engine.engine.update_weights_from_distributed.assert_awaited_once_with(request)
@@ -48,7 +53,9 @@ def test_only_successful_final_bucket_completes_weights(finished, success, tags)
 
 def test_empty_init_ready_after_finalization_and_kv_wakeup():
     engine, endpoint = make_endpoint()
-    request = UpdateWeightsFromDistributedRequest(names=[], dtypes=[], shapes=[], group_name='train', finished=True)
+    request = UpdateWeightsFromDistributedRequest(
+        names=['test.weight'], dtypes=['bfloat16'], shapes=[[1]],
+        group_name='train', update_id='test-v1', finished=True)
     asyncio.run(endpoint(request))
     engine.wakeup(['kv_cache'])
     assert not engine.is_sleeping
@@ -59,7 +66,9 @@ def test_empty_init_ready_after_finalization_and_kv_wakeup():
 def test_transfer_exception_does_not_complete_weights():
     engine, endpoint = make_endpoint()
     engine.engine.update_weights_from_distributed.side_effect = RuntimeError('transfer failed')
-    request = UpdateWeightsFromDistributedRequest(names=[], dtypes=[], shapes=[], group_name='train', finished=True)
+    request = UpdateWeightsFromDistributedRequest(
+        names=['test.weight'], dtypes=['bfloat16'], shapes=[[1]],
+        group_name='train', update_id='test-v1', finished=True)
     with pytest.raises(RuntimeError, match='transfer failed'):
         asyncio.run(endpoint(request))
     engine.engine.complete_weights_update.assert_not_called()

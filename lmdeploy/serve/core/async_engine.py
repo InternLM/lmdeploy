@@ -185,6 +185,9 @@ class AsyncEngine:
         self.speculative_config = speculative_config
         self.is_sleeping = backend_config.empty_init
         self.sleeping_tags: set[str] = set() if not backend_config.empty_init else {'weights', 'kv_cache'}
+        # A failed in-place transfer may have replaced only part of the model.
+        # Only constructing a new engine from a complete checkpoint clears it.
+        self.init_weights_update_state(ready=not backend_config.empty_init)
         logger.info(f'updated backend_config={self.backend_config}')
 
         # parameters for member functions
@@ -385,10 +388,22 @@ class AsyncEngine:
                 weights and discard the kv cache. Level 2 sleep will
                 discard both the model weights and the kv cache.
         """
+        self.check_weights_update_available()
+        if self.weights_update_pending:
+            raise RuntimeError('Weight update is incomplete; sleep is forbidden.')
+        self.weights_update_busy = True
+        if level == 2:
+            self.weights_content_ready = False
         self.is_sleeping = True
         self.sleeping_tags = {'weights', 'kv_cache'}
-        await self.stop_all_session()
-        await self.engine.sleep(level)
+        try:
+            await self.stop_all_session()
+            await self.engine.sleep(level)
+        except BaseException as exc:
+            self.fail_weights_update(f'Sleep failed: {type(exc).__name__}: {exc}')
+            raise
+        finally:
+            self.weights_update_busy = False
 
     def wakeup(self, tags: list[str] | None = None):
         """Wake up the model.
@@ -400,26 +415,104 @@ class AsyncEngine:
                 wake_up should be called with all tags (or None) before the
                 engine is used again.
         """
+        self.check_weights_update_available()
         tags = tags or list(self.sleeping_tags)
+        if self.weights_update_pending:
+            raise RuntimeError('Weight update is incomplete; wakeup is forbidden.')
+        if 'kv_cache' in tags and not self.weights_content_ready:
+            raise RuntimeError('Weight content is not ready; allocating weights is not loading them.')
         if any(tag not in self.sleeping_tags for tag in tags):
             logger.warning(f'some tag in {tags} not in sleeping tags {self.sleeping_tags}')
             return
-        self.engine.wakeup(tags)
+        try:
+            self.engine.wakeup(tags)
+        except BaseException as exc:
+            self.fail_weights_update(f'Wakeup failed: {type(exc).__name__}: {exc}')
+            raise
         # for TM backend, sleep/wakeup will reset gateway, therefore we need to rebuild instances
         if self.backend == 'turbomind' and 'kv_cache' in tags:
             self.session_mgr.build_request_handle_pool(self.engine, self.backend_config.max_batch_size)
         self.sleeping_tags = self.sleeping_tags - set(tags)
         self.is_sleeping = bool(self.sleeping_tags)
 
-    def complete_weights_update(self):
+    def complete_weights_update(self, owner=None, operation=None):
         """Record that externally supplied weights are ready.
 
         This does not wake the KV cache or enable inference. The caller must
         explicitly wake ``kv_cache`` after the weight update succeeds.
         """
-        self.engine.complete_weights_update()
+        if self.weights_update_error is not None:
+            raise RuntimeError(self.weights_update_error)
+        if (owner is None or owner != self.weights_update_owner
+                or operation is not self.weights_update_operation or not self.weights_update_busy):
+            raise RuntimeError('Weight completion does not own the active transaction/operation.')
+        if self.backend == 'pytorch':
+            self.engine.complete_weights_update()
+        if owner[1] is not None:
+            self.completed_weights_update_ids.add(owner[1])
+        self.weights_content_ready = True
+        self.weights_update_pending = False
+        self.weights_update_owner = None
         self.sleeping_tags.discard('weights')
         self.is_sleeping = bool(self.sleeping_tags)
+
+    def check_weights_update_available(self):
+        """Reject lifecycle operations that could expose a partial model."""
+        if self.weights_update_error is not None:
+            raise RuntimeError(self.weights_update_error)
+        if self.weights_update_busy:
+            raise RuntimeError('A weight transfer is already in progress.')
+
+    def init_weights_update_state(self, ready: bool):
+        self.weights_update_error: str | None = None
+        self.weights_update_pending = False
+        self.weights_update_busy = False
+        self.weights_content_ready = ready
+        self.weights_update_owner = None
+        self.weights_update_operation = None
+        self.completed_weights_update_ids: set[str] = set()
+
+    def begin_weights_update(self, owner, *, require_sleep=True):
+        """Reserve one update operation on the service event loop.
+
+        Legacy callers have no transaction ID: their consecutive buckets share
+        one protocol/group owner until finalization. They cannot join an
+        explicitly identified transaction. A lost response has no legacy retry
+        guarantee; callers needing that guarantee must supply an update_id.
+        """
+        self.check_weights_update_available()
+        if owner[1] is not None and (not owner[1] or owner[1] in self.completed_weights_update_ids):
+            raise RuntimeError('A new nonempty update_id is required; committed IDs cannot be reused.')
+        if self.weights_update_owner is not None and owner != self.weights_update_owner:
+            raise RuntimeError('Another group/update_id owns the unfinished weight transaction.')
+        if require_sleep and (not self.is_sleeping or 'kv_cache' not in self.sleeping_tags):
+            raise RuntimeError('Sleep the engine and keep KV cache unavailable before updating weights.')
+        if not require_sleep and self.session_mgr.request_handle_pool.num_dispatched:
+            raise RuntimeError('Finish or abort active requests before updating weights.')
+        self.weights_update_owner = owner
+        self.weights_update_operation = object()
+        self.weights_content_ready = False
+        self.weights_update_pending = True
+        self.weights_update_busy = True
+        # Also covers the legacy endpoint, which can initialize an idle engine
+        # without a sleep/wakeup cycle. No new inference sees partial buckets.
+        self.is_sleeping = True
+        return self.weights_update_operation
+
+    def end_weights_update_operation(self, operation):
+        if operation is self.weights_update_operation:
+            self.weights_update_busy = False
+            self.weights_update_operation = None
+
+    def fail_weights_update(self, message: str):
+        """Latch failure even on cancellation or a worker/finalization exception."""
+        self.weights_update_error = (
+            f'Weight update failed: {message}. Restart the engine from a complete checkpoint; '
+            'sleep, wakeup and further in-place updates cannot recover this engine.')
+        self.weights_update_pending = True
+        self.weights_content_ready = False
+        self.is_sleeping = True
+        self.sleeping_tags.add('kv_cache')
 
     def _determine_gen_config(self, input_ids, gen_config: GenerationConfig | None = None) -> GenerationConfig:
         """Determine the generation configuration."""
@@ -444,6 +537,14 @@ class AsyncEngine:
 
     @asynccontextmanager
     async def safe_run(self, handle, session, **kwargs):
+        # HTTP admission may precede body processing or handle acquisition.
+        # Recheck at the actual inference boundary; the acquired handle also
+        # keeps an idle-only legacy update from starting after this check.
+        if (getattr(self, 'is_sleeping', False)
+                or getattr(self, 'weights_update_pending', False)
+                or getattr(self, 'weights_update_error', None) is not None):
+            raise RequestError(ErrorCode.ENGINE_UNAVAILABLE,
+                               'Engine weights are not ready for inference.')
         generator = handle.async_stream_infer(session.session_id, **kwargs)
         # async_stream_infer captured its own kwargs; do not retain large multimodal data here.
         kwargs.pop('multimodal', None)
