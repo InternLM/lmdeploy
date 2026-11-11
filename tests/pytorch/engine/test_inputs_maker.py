@@ -1687,6 +1687,17 @@ def test_normal_prefill_can_update_running_while_long_chunker_is_active():
     assert maker.long_context_chunker.next_step == 0
 
 
+def test_pd_prefill_advances_long_chunks_without_entering_decode():
+    seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
+    maker = _make_policy_maker(seq)
+    maker.config.role = EngineRole.Prefill
+    maker.update_running_seqs([seq], SimpleNamespace(is_chunk=True, max_q_seqlen=512))
+    assert seq.num_history_ids == 512
+    assert maker.running_seqs == []
+    maker.update_running_seqs([seq], _fake_model_inputs())
+    assert maker.running_seqs == []
+
+
 def test_scoring_prefill_never_enters_decode_running_set():
     seq = _DummySeq(history_ids=0,
                     token_ids=16,

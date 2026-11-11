@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import multiprocessing as mp
 from contextlib import suppress
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,22 @@ def test_engine_worker_health_status_is_synchronous():
 
     assert not inspect.iscoroutinefunction(worker.get_health_status)
     assert worker.get_health_status() is status
+
+    from lmdeploy.pytorch.engine.engine import Engine
+    from lmdeploy.pytorch.paging.pd_coordinator import PDCoordinator
+    worker.engine = Engine.__new__(Engine)
+    owner = PDCoordinator(None, None)
+    owner.failed = True
+    worker.engine.scheduler = SimpleNamespace(pd_coordinator=owner)
+    status = worker.get_health_status()
+    assert not status['alive'] and status['pd']['quarantined']
+
+    from lmdeploy.pytorch.disagg.conn.protocol import PDControlRequest
+    worker.engine.engine_conn = SimpleNamespace(apply_control=owner.control)
+    request = PDControlRequest(action='release', transfer_id='expired', engine_epoch='old')
+    assert worker.pd_control(request)['status'] == 'CONFLICT'
+    request.engine_epoch = owner.epoch
+    assert worker.pd_control(request) == {'status': 'SUCCESS'}
 
 
 def _sleep_then_exit():

@@ -4,6 +4,7 @@ import ctypes
 import gc
 import os
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -521,7 +522,8 @@ class Engine(EngineBase):
                         msg.state.stop()
                         self._response(req.resp, ResponseType.FINISH,
                                        data=dict(token_ids=np.empty(0, dtype=np.int64), cache_block_ids=[],
-                                                 pd_handoff=handoff.model_dump()))
+                                                 pd_handoff=handoff.model_dump(),
+                                                 req_metrics=RequestMetrics(time.time(), msg.engine_events)))
                         continue
                 if migration_request:
                     if migration_request.handoff is not None:
@@ -569,7 +571,13 @@ class Engine(EngineBase):
             protocol_version=2 if cache.migration_backend == MigrationBackend.Mooncake else 1).model_dump()
 
     def pd_control(self, request):
-        return self.engine_conn.apply_control(request)
+        # Expected control conflicts must survive MP RPC, which otherwise
+        # flattens remote exceptions and loses their HTTP status mapping.
+        try:
+            self.engine_conn.apply_control(request)
+        except ValueError as error:
+            return dict(status='CONFLICT', error=str(error))
+        return dict(status='SUCCESS')
 
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         return self.engine_conn.p2p_connect(conn_request)
@@ -839,6 +847,10 @@ class Engine(EngineBase):
         Scheduler metrics alone can still be readable after runtime failure, so this also checks Engine-owned loop tasks
         before returning metrics.
         """
+        pd = self.scheduler.pd_coordinator.snapshot()
+        if pd['quarantined']:
+            return dict(alive=False, message='PD receive completion is unknown; restart required.',
+                        schedule_metrics=None, pd=pd)
         if not self.req_manager.is_loop_alive():
             return dict(alive=False,
                         message='PyTorch engine request loop is not alive.',
@@ -859,12 +871,8 @@ class Engine(EngineBase):
 
         return dict(alive=True,
                     message='PyTorch engine is healthy.',
-                    schedule_metrics=self.get_schedule_metrics())
+                    schedule_metrics=self.get_schedule_metrics(), pd=pd)
 
     async def get_health_status(self) -> dict:
         """Get backend health status."""
-        status = self.get_local_health_status()
-        status['pd'] = self.scheduler.pd_coordinator.snapshot()
-        if self.scheduler.pd_coordinator.failed:
-            status.update(alive=False, message='PD receive completion is unknown; restart required.')
-        return status
+        return self.get_local_health_status()

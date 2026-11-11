@@ -15,6 +15,7 @@ from lmdeploy.utils import get_logger
 
 from ..backends import get_backend
 from ..config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
+from ..disagg.config import EngineRole
 from ..distributed import DistContext, get_dist_manager
 from ..engine.cache_engine import CacheEngine
 from ..engine.cache_engine.collector import collect_block_cache_requests
@@ -503,9 +504,10 @@ class SpecModelAgent(BaseSpecModelAgent):
             return inputs
 
         outputs = self._forward_impl(inputs)
-        if inputs.dp_meta is None and inputs.is_chunk and not inputs.is_last_chunk:
-            # DP=1 non-last chunks do not consume draft tokens, so skip the
-            # remaining speculative forwards.
+        if (self.cache_config.role == EngineRole.Prefill
+                or inputs.dp_meta is None and inputs.is_chunk and not inputs.is_last_chunk):
+            # P materializes the draft prefix but never consumes proposals.
+            # All its DP ranks skip the same extra forwards, including dummies.
             output_draft_ids = inputs.input_ids.new_zeros(inputs.seq_length.size(0), self.num_spec_tokens)
         else:
             # Fork guided processors for draft model.

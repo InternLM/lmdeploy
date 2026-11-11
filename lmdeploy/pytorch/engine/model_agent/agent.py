@@ -510,11 +510,6 @@ class BaseModelAgent:
         inputs = self.inputs_strategy.make_dummy(batch_size, is_decoding=False, device='cuda',
                                                  vocab_size=self.model_config.vocab_size,
                                                  max_q_seqlen=max_q_seqlen, meta=self.make_dummy_meta)
-        if inputs.ssm_state_meta is not None:
-            from lmdeploy.pytorch.compact_state import SSMPrefillMetadata
-            # Dummy lengths are host-known; never read device lengths back.
-            prefill = SSMPrefillMetadata.from_lengths([max_q_seqlen] * batch_size, [0] * batch_size)
-            inputs.ssm_prefill_meta = prefill.to_device(inputs.input_ids.device)
         return inputs
 
     def _warmup_prefill(self) -> None:

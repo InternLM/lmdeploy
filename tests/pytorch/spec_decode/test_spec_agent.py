@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
 from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
@@ -521,13 +522,19 @@ def test_non_qwen35_mtp_builds_draft_dist_context(monkeypatch):
     assert build_calls == [(dist_ctx.rank, draft_dist_config)]
 
 
-def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
+@pytest.mark.parametrize('pd_prefill', [False, True])
+def test_prefill_materialization_skips_unused_speculative_forwards(pd_prefill):
     """DP=1 non-last chunks should keep the local shortcut."""
     from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
 
     inputs, extra_inputs = _make_non_last_chunk_inputs()
 
     agent = object.__new__(SpecModelAgent)
+    agent.cache_config = SimpleNamespace(role=EngineRole.Hybrid)
+    if pd_prefill:
+        agent.cache_config.role = EngineRole.Prefill
+        inputs.dp_meta = DPMeta(dp_batches=[2, 2])
+        inputs.is_last_chunk = True
     agent.num_spec_tokens = 3
     agent.rank = 0
     agent.proposer = _DummyProposer()
@@ -564,7 +571,7 @@ def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
     agent.rank = 0
     agent.proposer = _DummyProposer()
     agent.guided_helper = GuidedSpecHelper()
-    agent.cache_config = SimpleNamespace(kernel_block_size=1, num_reserved_gpu_blocks=1)
+    agent.cache_config = SimpleNamespace(kernel_block_size=1, num_reserved_gpu_blocks=1, role=EngineRole.Hybrid)
     forward_calls = 0
     forwarded_inputs = []
 
@@ -615,6 +622,7 @@ def test_async_model_forward_transitions_dp_global_phase_in_draft_loop(
     inputs.is_dummy = is_dummy
     inputs.is_decoding = local_decode
     agent = object.__new__(SpecModelAgent)
+    agent.cache_config = SimpleNamespace(role=EngineRole.Hybrid)
     agent.num_spec_tokens = num_spec_tokens
     agent.rank = 0
     agent.proposer = _DummyProposer()

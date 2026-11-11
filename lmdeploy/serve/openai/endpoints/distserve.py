@@ -22,13 +22,21 @@ def register(router: APIRouter, server_context) -> None:
             raise HTTPException(400, 'Version 2 PD requires the PyTorch backend.')
         return server_context.async_engine.engine.get_pd_engine_info()
 
+    @router.get('/distserve/pd_status')
+    async def pd_status():
+        if server_context.async_engine.backend != 'pytorch':
+            raise HTTPException(400, 'Version 2 PD requires the PyTorch backend.')
+        status = await server_context.async_engine.engine.get_health_status()
+        if 'pd' not in status:
+            raise HTTPException(503, status['message'])
+        return status['pd']
+
     @router.post('/distserve/pd_control')
     async def pd_control(request: PDControlRequest):
-        try:
-            server_context.async_engine.engine.pd_control(request)
-        except ValueError as error:
-            raise HTTPException(409, str(error)) from error
-        return {'status': 'SUCCESS'}
+        result = server_context.async_engine.engine.pd_control(request)
+        if result['status'] != 'SUCCESS':
+            raise HTTPException(409, result['error'])
+        return result
 
     @router.post('/distserve/p2p_initialize')
     async def p2p_initialize(init_request: DistServeInitRequest):

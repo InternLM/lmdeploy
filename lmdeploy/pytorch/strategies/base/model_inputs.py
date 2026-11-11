@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 from torch.profiler import record_function
 
-from lmdeploy.pytorch.compact_state import SSMStateMetadata
+from lmdeploy.pytorch.compact_state import SSMPrefillMetadata, SSMStateMetadata
 from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.model_inputs import ModelInputs
 
@@ -49,6 +49,7 @@ def make_dummy_inputs(batch_size: int,
         state_offsets = torch.full((batch_size, ), -1, dtype=torch.long, device=device)
 
     compact = None
+    prefill = None
     if meta.compact_bank_width:
         if not meta.use_ssm:
             raise ValueError('Compact dummy metadata requires a stateful model.')
@@ -57,6 +58,8 @@ def make_dummy_inputs(batch_size: int,
             torch.full((batch_size, meta.compact_bank_width), -1, dtype=torch.int64, device=device),
             torch.full((batch_size,), -1, dtype=torch.int64, device=device),
             torch.full((batch_size, width), -1, dtype=torch.int64, device=device))
+        if not is_decoding:
+            prefill = SSMPrefillMetadata.from_lengths([max_q_seqlen] * batch_size, [0] * batch_size).to_device(device)
 
     mrope_pos_ids = None
     if meta.use_mrope:
@@ -76,6 +79,7 @@ def make_dummy_inputs(batch_size: int,
         is_dummy=True,
         state_offsets=state_offsets,
         ssm_state_meta=compact,
+        ssm_prefill_meta=prefill,
         mrope_pos_ids=mrope_pos_ids,
     )
 

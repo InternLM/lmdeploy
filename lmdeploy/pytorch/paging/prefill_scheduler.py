@@ -666,11 +666,11 @@ class _PrefillAdmissionAttempt:
 
         A block beyond ``history // block_size`` occupies the logical range
         that another shared match would append, misaligning table positions.
-        Block-granular external load must instead reuse that private boundary
-        block as its first destination.
+        This includes PD receivers, even when Store lookup is disabled. Their
+        exact imported state must survive admission of the withheld prompt tail.
+        Block-granular external load reuses the boundary block as its first
+        destination.
         """
-        if not self.load_coordinator.lookup_enabled:
-            return False
         seq = self.seq
         return seq.num_blocks > int(seq.num_history_ids) // seq.block_size
 

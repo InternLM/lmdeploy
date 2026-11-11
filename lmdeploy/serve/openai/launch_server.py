@@ -56,7 +56,7 @@ def get_host_ip():
         return ip
 
 
-def _run_server(gpu_ids: list[int], model_path: str, **kwargs):
+def _run_server(gpu_ids: list[int | str], model_path: str, **kwargs):
     """Launch a server process."""
     cuda_visible_devices = ','.join([str(_) for _ in gpu_ids])
     os.setpgrp()
@@ -133,6 +133,10 @@ def launch_server(num_nodes: int,
     num_devices = max(dp, tp, ep)
     dp_per_node = dp // num_nodes
     tp_per_dp = num_devices // dp
+    visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES')
+    device_ids = visible_devices.split(',') if visible_devices else list(range(dp_per_node * tp_per_dp))
+    if len(device_ids) < dp_per_node * tp_per_dp:
+        raise ValueError('CUDA_VISIBLE_DEVICES has fewer GPUs than the local DP workers require.')
     http_or_https = 'https' if kwargs.get('ssl', False) else 'http'
     model_name = kwargs.get('model_name', None)
     if model_name is None:
@@ -154,7 +158,7 @@ def launch_server(num_nodes: int,
     for idx in range(dp_per_node):
         backend_config_dp = copy.deepcopy(backend_config)
         dp_rank = node_rank * dp_per_node + idx
-        gpu_ids_per_dp = [gid for gid in range(idx * tp_per_dp, (idx + 1) * tp_per_dp)]
+        gpu_ids_per_dp = device_ids[idx * tp_per_dp:(idx + 1) * tp_per_dp]
         backend_config_dp.dp_rank = dp_rank
         server_port = server_port_li[idx]
 

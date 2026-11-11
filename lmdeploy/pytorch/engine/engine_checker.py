@@ -7,7 +7,7 @@ from ..check_env.dist import DistChecker
 from ..check_env.model import ModelChecker
 from ..check_env.torch import TorchChecker
 from ..check_env.transformers import TransformersChecker
-from ..disagg.config import EngineRole
+from ..disagg.config import EngineRole, MigrationBackend
 
 
 class EngineChecker(BaseChecker):
@@ -99,6 +99,7 @@ class EngineChecker(BaseChecker):
                               'determine the number of GPU blocks based on the model size and device memory.')
 
         if (engine_config.role != EngineRole.Hybrid
+                and engine_config.migration_backend != MigrationBackend.Mooncake
                 and engine_config.block_size != engine_config.kernel_block_size):
             self.log_and_exit(mod_name='Engine',
                               message='PD migration does not support block_size != kernel_block_size, '

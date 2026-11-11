@@ -94,10 +94,12 @@ def test_receive_reuses_prefix_and_cancellation_retains_private_destination(stat
         assert scheduler.block_manager.get_num_free_gpu_blocks() == free + 1
 
 
-def test_compact_receive_installs_exact_private_state_before_prompt_replay():
+@pytest.mark.parametrize('compact', [False, True])
+def test_receive_preserves_exact_private_state_through_prompt_replay(compact, monkeypatch):
     cache = CacheConfig(max_batches=1, block_size=4, num_gpu_blocks=8, num_cpu_blocks=0,
                         states_shapes=[((2,), torch.float32)], num_state_caches=2,
-                        compact_state_capacity=SSMStateCapacity(2, 4, 0))
+                        enable_prefix_caching=True,
+                        compact_state_capacity=SSMStateCapacity(2, 4, 0) if compact else None)
     scheduler = Scheduler(SchedulerConfig(max_batches=1, max_session_len=32), cache,
                           SequenceMeta(4, strategy=ARSequenceStrategy()))
     migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill', remote_session_id=2)
@@ -105,12 +107,26 @@ def test_compact_receive_installs_exact_private_state_before_prompt_replay():
     migration.handoff = PDHandoff(transfer_id='read', engine_epoch='source', cache_schema='model',
                                    prompt_digest=prompt_digest(seq, seq.valid_ids), prompt_token_count=10,
                                    valid_token_count=9, block_size=4, block_ids=[0, 1, 2], state_ids=[17],
-                                   auxiliary_id=4)
+                                   auxiliary_id=4, legacy_state_id=None if compact else 4)
     assert scheduler.schedule_migration() == [seq]
-    bank = scheduler.state_manager.bank_for(seq)
-    assert bank.pending_load is not None and bank.loaded_input is None
+    seq.state.activate()
+    state_id = seq.logical_state
+    if compact:
+        bank = scheduler.state_manager.bank_for(seq)
+        assert bank.pending_load is not None and bank.loaded_input is None
     result = PDTransferResult(transfer_id='read', status='completed')
     assert scheduler.pd_coordinator.finish_receive(seq, result) == 'ready'
-    assert bank.loaded_input == (bank.unit_ids[0], 9)
+    scheduler.block_trie.allocate(seq, token_limit=9)
+    seq.state.deactivate()
+    scheduler.resume_completed_migrations()
+
+    def unexpected_match(seq):
+        pytest.fail('PD replay must retain its imported state without another prefix match.')
+
+    monkeypatch.setattr(scheduler.block_trie, 'match', unexpected_match)
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert seq.logical_state == state_id
+    if compact:
+        assert bank.loaded_input == (bank.unit_ids[0], 9)
     assert seq.num_history_ids == 9 and seq.token_ids.tolist() == [9]
     assert seq.num_new_tokens == 0
