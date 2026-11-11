@@ -387,6 +387,10 @@ class StateCheckpointLifecycle:
         self.evict(1)
         return state_manager.get_num_free_runtime() > 0
 
+    def make_load_state_available(self, seq: SchedulerSequence) -> bool:
+        """Admit a Store destination; legacy loads write the runtime slot."""
+        return self._state_manager.is_allocated(seq) or self.make_runtime_state_available()
+
     def evict(self, max_num_checkpoints: int):
         """Evict published checkpoints without removing trie nodes."""
         return self._evict_checkpoints(self._index.unique_nodes(), max_num_checkpoints)

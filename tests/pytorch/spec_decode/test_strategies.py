@@ -8,11 +8,13 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 import torch
 
 from lmdeploy.pytorch.messages import (
     SamplingParam,
     SequenceMeta,
+    UpdateTokenMode,
 )
 from lmdeploy.pytorch.strategies.ar.sampling import ARSamplingStrategy
 from lmdeploy.pytorch.strategies.ar_spec.model_agent import (
@@ -761,7 +763,7 @@ class TestMultiTurnUpdateInputs:
         seq._update_token_ids_inputs(np.array([1, 2, 3], dtype=np.int64))
         seq._update_token_ids_inputs(np.array([4, 5], dtype=np.int64))
         assert seq._num_valid_ids == 5
-        assert seq._num_token_ids == 2
+        assert seq._num_token_ids == 5
         assert seq.output_start_pos == 5
         assert seq.num_new_tokens == 0
 
@@ -774,7 +776,7 @@ class TestMultiTurnUpdateInputs:
 
         seq._update_token_ids_inputs(np.array([100, 101], dtype=np.int64))
         assert seq.num_new_tokens == 0
-        assert seq._num_token_ids == 2
+        assert seq._num_token_ids == 3  # Last retained output plus the two new inputs.
 
     def test_inputs_after_decode_updates_valid_ids_and_start_pos(self):
         """Inputs on turn 2 grows num_valid_ids by exactly len(new_tokens)."""
@@ -802,3 +804,59 @@ class TestMultiTurnUpdateInputs:
         self._do_turn(seq, prompt=[10])
         seq._update_token_ids_inputs(np.array([100, 101], dtype=np.int64))
         assert len(seq.generated_ids) == 0
+
+
+@pytest.mark.parametrize('image_start', [1, 2, 3])
+@pytest.mark.parametrize('trailing_text', [0, 2])
+@pytest.mark.parametrize('stop_pos', [0, -1], ids=['stop', 'cancel_with_drafts'])
+def test_multiturn_mrope_matches_fresh(image_start, trailing_text, stop_pos):
+    """New images may overlap old draft positions; compare values, not just
+    length."""
+    from copy import deepcopy
+
+    from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+
+    def image(start):
+        return {'image': [MultiModalData(
+            data=torch.zeros(4, 2), start=start, end=start + 4,
+            mrope_pos_ids=np.array([[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1]]))]}
+
+    def make():
+        seq = _make_seq()
+        seq._seq_meta.use_mrope = True
+        return seq
+
+    seq = make()
+    seq.update_token_ids(torch.arange(16))
+    seq.update_token_ids(torch.tensor([17]), draft_token_ids=torch.tensor([18, 19, 20]),
+                         mode=UpdateTokenMode.PREFILL)
+    seq.update_token_ids(torch.tensor([18, -1, -1, -1]), draft_token_ids=torch.tensor([22, 23, 24]),
+                         mode=UpdateTokenMode.DECODE, stop_pos=stop_pos)
+    # Include a new image, text after an old image, then another image.
+    for multimodals in [image(image_start), None, image(image_start)]:
+        retained = seq.valid_ids.copy()
+        history = seq.num_history_ids
+        tokens = torch.arange(30, 30 + image_start + 4 + trailing_text)
+        seq.update_token_ids(tokens, multimodals=multimodals)
+        expected_ids = np.concatenate([retained, tokens.numpy()])
+        np.testing.assert_array_equal(seq.all_ids, expected_ids)
+        np.testing.assert_array_equal(seq.token_ids, expected_ids[history:])
+        assert len(seq.history_cache) == seq.num_valid_ids
+        assert seq.num_history_ids + seq.num_token_ids == seq.num_valid_ids
+        assert seq.input_start_pos == len(retained)
+
+        fresh = make()
+        fresh.update_token_ids(torch.from_numpy(expected_ids),
+                               multimodals=deepcopy(seq.history_multimodals.multimodals))
+        np.testing.assert_array_equal(seq.history_mrope_pos_ids.get_real(),
+                                      fresh.history_mrope_pos_ids.get_real())
+        np.testing.assert_array_equal(seq.mrope_pos_ids, fresh.mrope_pos_ids[history:])
+        # Prefix restore / eviction change the input slice, not absolute positions.
+        for step in [16, 0, history]:
+            seq.set_step(step)
+            np.testing.assert_array_equal(seq.token_ids, expected_ids[step:])
+            np.testing.assert_array_equal(seq.mrope_pos_ids, fresh.mrope_pos_ids[step:])
+        seq.update_token_ids(torch.tensor([40]), draft_token_ids=torch.tensor([41, 42, 43]),
+                             mode=UpdateTokenMode.PREFILL)
+        seq.update_token_ids(torch.tensor([41, -1, -1, -1]), draft_token_ids=torch.tensor([44, 45, 46]),
+                             mode=UpdateTokenMode.DECODE, stop_pos=stop_pos)

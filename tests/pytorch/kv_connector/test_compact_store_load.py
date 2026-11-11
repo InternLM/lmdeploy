@@ -23,15 +23,22 @@ from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
 def setup_load():
     schedulers = []
 
-    def create(*, apc=False, width=1, requests=1, checkpoint_budget=None):
+    def create(*, apc=False, width=1, requests=1, checkpoint_budget=None, auxiliary=False, role='kv_consumer'):
+        store_budget = 2 if role == 'kv_both' else 0
         capacity = SSMStateCapacity(requests + 1, width,
-                                        (2 if apc else 0) if checkpoint_budget is None else checkpoint_budget)
+                                        (2 if apc else 0) if checkpoint_budget is None else checkpoint_budget,
+                                        store_budget)
         config = CacheConfig(
             max_batches=requests, block_size=16, num_cpu_blocks=0, num_gpu_blocks=64,
-            states_shapes=[((2,), torch.float32)], num_state_caches=requests + 1 + capacity.checkpoint_budget,
+            states_shapes=[((2,), torch.float32)],
+            num_state_caches=requests + 1 + capacity.checkpoint_budget + store_budget,
+            mooncake_state_save_slots=2,
             prefix_cache_state_budget=capacity.checkpoint_budget, enable_prefix_caching=apc,
             prefill_save_alignment=64, compact_state_capacity=capacity)
-        config.kv_transfer_config = KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_consumer')
+        config.kv_transfer_config = KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role=role)
+        config.enable_replayssm = auxiliary
+        config.compact_state_capacity = SSMStateCapacity.from_cache_config(
+            config, width, runtime_is_auxiliary=auxiliary)
         connector = MooncakeStoreConnector(KVConnectorRole.SCHEDULER, config)
         paging = Scheduler(SchedulerConfig(max_batches=requests, max_session_len=4096), config,
                            SequenceMeta(16, strategy=ARSequenceStrategy()), kv_connector=connector)
@@ -98,8 +105,10 @@ def test_all_rank_ready_binds_existing_private_unit_not_runtime_slot(setup_load,
 
 @pytest.mark.parametrize('action', ['failure', 'stop', 'end'])
 @pytest.mark.parametrize('apc', [False, True])
-def test_failure_or_cancellation_waits_for_all_rank_terminal(setup_load, action, apc):
-    paging, store = setup_load(apc=apc)
+@pytest.mark.parametrize('auxiliary', [False, True])
+@pytest.mark.parametrize('role', ['kv_consumer', 'kv_both'])
+def test_failure_or_cancellation_waits_for_all_rank_terminal(setup_load, action, apc, auxiliary, role):
+    paging, store = setup_load(apc=apc, auxiliary=auxiliary, role=role)
     seq = _start(paging)
     load = paging.build_connector_meta([]).load_requests[0]
     owner, aggregator = paging.state_manager, KVConnectorOutputAggregator(2)
@@ -194,3 +203,183 @@ def test_compact_producer_never_constructs_legacy_snapshot_allocator(role):
         connector.build_connector_meta(KVConnectorStepInput(running=[], connector_token_lens=(64,)))
     assert not store._inflight_saves and not owner._units
     connector.shutdown()
+
+
+@pytest.mark.parametrize('width', [1, 6])
+@pytest.mark.parametrize('apc', [False, True])
+def test_auxiliary_replay_store_load_uses_shared_unit_and_all_rank_completion(setup_load, width, apc):
+    paging, store = setup_load(apc=apc, width=width, auxiliary=True)
+    owner = paging.state_manager
+    assert owner.capacity.bank_width == 0 and owner.capacity.load_budget == 1
+    seq = _start(paging)
+    bank = owner.bank_for(seq)
+    load = paging.build_connector_meta([]).load_requests[0]
+    assert load.state_unit_id > 0 and load.state_slot is None and bank.unit_ids == ()
+    aggregator = KVConnectorOutputAggregator(2)
+    paging.update_connector_output(aggregator.aggregate([
+        KVConnectorOutput(finished_receiving={seq.seq_id}), None]))
+    assert bank.loaded_input is None and bank.pending_load is not None
+    paging.update_connector_output(aggregator.aggregate([
+        None, KVConnectorOutput(finished_receiving={seq.seq_id})]))
+    assert bank.loaded_input == (load.state_unit_id, 64)
+    assert bank.input_ref.unit_id == load.state_unit_id
+    assert paging.schedule(is_prefill=True).running == [seq]
+    access = owner.submit_prefill((bank,))
+    owner.consume_loaded_inputs(access)
+    owner.acknowledge(access.access_id, consumed_inputs=(True,))
+    assert bank.input_ref is None and load.state_unit_id not in owner._units
+
+
+def _fill_prefix_checkpoints(paging):
+    """Publish through the real trie until Replay can borrow no more units."""
+    owner = paging.state_manager
+    trie = paging.block_trie
+    lifecycle = trie.state_checkpoints
+    produced = []
+    for i in range(owner.capacity.num_units - 1):
+        seq = paging.add_session(100 + i).add_sequence(torch.arange(73) + 100 * (i + 1))
+        assert lifecycle.make_runtime_state_available()
+        owner.allocate(seq)
+        paging.block_manager.allocate(seq)
+        trie.allocate(seq)
+        assert lifecycle.reserve_save(seq, step=64) > 0
+        node = seq.prefix_cache.pending_save.node
+        reference = node.state_checkpoint.state_reference
+        access = owner.submit_prefill((owner.bank_for(seq),), checkpoints=(reference,))
+        assert lifecycle.publish_save(seq)
+        owner.acknowledge(access.access_id)
+        paging.end_session(100 + i)
+        produced.append((seq, node))
+    if owner.capacity.runtime_is_auxiliary:
+        assert owner.get_num_free_optional() == 0 and not owner._accesses
+    return [(seq, node) for seq, node in produced if node.state_checkpoint is not None]
+
+
+@pytest.mark.parametrize('auxiliary', [False, True])
+@pytest.mark.parametrize('role', ['kv_consumer', 'kv_both'])
+@pytest.mark.parametrize('width', [1, 6])
+def test_remote_load_reclaims_checkpoint_pressure(setup_load, auxiliary, role, width):
+    paging, store = setup_load(apc=True, checkpoint_budget=1, auxiliary=auxiliary, role=role, width=width)
+    nodes = _fill_prefix_checkpoints(paging)
+    seq = _start(paging)
+    owner = paging.state_manager
+    bank = owner.bank_for(seq)
+    load = paging.build_connector_meta([]).load_requests[0]
+    assert bank.pending_load is not None and load.state_unit_id in owner._units
+    if auxiliary:
+        assert sum(node.state_checkpoint is not None for _, node in nodes) == len(nodes) - 1
+    paging.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+    assert seq.num_history_ids == 64 and bank.loaded_input == (load.state_unit_id, 64)
+    assert paging.schedule(is_prefill=True).running == [seq]
+    assert store.client.lookup.call_count == 1
+
+
+@pytest.mark.parametrize('hold', ['restore_pin', 'reader_reference'])
+@pytest.mark.parametrize('role', ['kv_consumer', 'kv_both'])
+def test_load_waits_without_leaks_and_retries_after_holds_release(setup_load, hold, role):
+    paging, store = setup_load(apc=True, checkpoint_budget=1, auxiliary=True, role=role)
+    owner, lifecycle = paging.state_manager, paging.block_trie.state_checkpoints
+    nodes = _fill_prefix_checkpoints(paging)
+    readers = []
+    for seq, node in nodes:
+        if hold == 'restore_pin':
+            # Detached sequence handles exercise real restore pin/unpin, without
+            # adding unrelated readers to this scheduling queue.
+            seq.prefix_cache.restore.select(node.state_checkpoint.slot, node)
+            assert lifecycle.pin_restore(seq)
+        else:
+            readers.append(owner.retain(node.state_checkpoint.state_reference, 'request'))
+    seq = paging.add_session(0).add_sequence(torch.arange(73))
+    seq.kv_token_limit = 48
+    blocks = paging.block_manager.get_num_free_gpu_blocks()
+    try:
+        for _ in range(2):
+            assert paging.schedule(is_prefill=True).running == []
+            assert seq.status == MessageStatus.WAITING and seq.logical_state == -1
+            assert seq.num_blocks == 0 and seq.num_history_ids == 0
+            assert seq.kv_token_limit == 48
+            assert paging.block_manager.get_num_free_gpu_blocks() == blocks
+            assert not owner._banks and not owner._accesses
+            assert seq.seq_id in store._lookup_plans
+            assert not store._pending_loads and not store._compact_loads
+            assert not paging.kv_load_coordinator._loads and not paging.kv_load_coordinator._prefill_targets
+            assert paging.kv_load_coordinator.prefix_cache_stats.num_hit_tokens == 0
+        if hold == 'restore_pin':
+            assert all(node.state_checkpoint is not None for _, node in nodes)
+        else:
+            # Logical eviction is insufficient while another reader holds bytes.
+            assert all(node.state_checkpoint is None for _, node in nodes)
+        # A cold local request needs no shared load destination: don't block it.
+        store.client.lookup.return_value = 0
+        local = paging.add_session(1).add_sequence(torch.arange(73) + 5000)
+        assert paging.schedule(is_prefill=True).running == [local]
+        paging.end_session(1)
+    finally:
+        if hold == 'restore_pin':
+            for reader, _ in nodes:
+                lifecycle.unpin_restore(reader)
+        else:
+            for reference in readers:
+                owner.release_reference(reference)
+    assert paging.schedule(is_prefill=True).running == []
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert store.client.lookup.call_count == 2  # One original lookup plus local miss, no remote retry.
+
+
+@pytest.mark.parametrize('role', ['kv_consumer', 'kv_both'])
+def test_load_binding_error_rolls_back_destinations_without_hiding_error(setup_load, monkeypatch, role):
+    paging, store = setup_load(apc=True, checkpoint_budget=1, auxiliary=True, role=role)
+    _fill_prefix_checkpoints(paging)
+    owner = paging.state_manager
+    seq = paging.add_session(0).add_sequence(torch.arange(73))
+    blocks = paging.block_manager.get_num_free_gpu_blocks()
+    original = paging.kv_connector.update_state_after_alloc
+
+    def invalid_binding(request, block_ids, num_external_tokens):
+        # Actual connector validation fails before it leases shared storage.
+        return original(request, (), num_external_tokens)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(paging.kv_connector, 'update_state_after_alloc', invalid_binding)
+        with pytest.raises(ValueError, match='allocated load blocks'):
+            paging.schedule(is_prefill=True)
+    assert seq.logical_state == -1 and seq.num_blocks == 0 and seq.num_history_ids == 0
+    assert paging.block_manager.get_num_free_gpu_blocks() == blocks
+    assert not owner._banks and not owner._accesses
+    assert not store._pending_loads and not store._compact_loads
+    assert seq.seq_id in store._lookup_plans
+    assert paging.schedule(is_prefill=True).running == []
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+
+
+@pytest.mark.parametrize('role', ['kv_consumer', 'kv_both'])
+@pytest.mark.parametrize('action', ['failure', 'stop', 'end'])
+def test_pressure_load_failure_or_cancel_keeps_lease_until_all_ranks(setup_load, role, action):
+    paging, store = setup_load(apc=True, width=6, checkpoint_budget=1, auxiliary=True, role=role)
+    _fill_prefix_checkpoints(paging)
+    owner = paging.state_manager
+    seq = _start(paging)
+    bank = owner.bank_for(seq)
+    load = paging.build_connector_meta([]).load_requests[0]
+    if action == 'stop':
+        paging.stop_session(0)
+    elif action == 'end':
+        paging.end_session(0)
+    aggregator = KVConnectorOutputAggregator(2)
+    first = KVConnectorOutput(finished_receiving={seq.seq_id},
+                              failed_receiving={seq.seq_id} if action == 'failure' else set())
+    paging.update_connector_output(aggregator.aggregate([first, None]))
+    assert bank.pending_load is not None and load.state_unit_id in owner._units
+    assert owner.get_num_free_runtime_slots() == 0 and owner.get_num_free() == 0
+    assert seq.logical_state > 0 and seq.num_blocks > 0
+    paging.update_connector_output(aggregator.aggregate([None, KVConnectorOutput(finished_receiving={seq.seq_id})]))
+    assert load.state_unit_id not in owner._units and not owner._banks and not owner._accesses
+    assert owner.get_num_free() == 1 and not store._compact_loads
+    assert seq.logical_state == -1 and seq.num_history_ids == 0
+    if action == 'end':
+        assert not paging.sessions
+    elif action == 'stop':
+        assert seq.status == MessageStatus.STOPPED
+    else:
+        assert paging.schedule(is_prefill=True).running == [seq]
+        assert store.client.lookup.call_count == 1

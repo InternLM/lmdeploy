@@ -343,3 +343,39 @@ def test_prefill_units_feed_indexed_decode_without_payload_conversion(steps):
     for tensor, idx, ref in ((conv, 2, final_conv), (conv, 3, checkpoint_conv),
                              (state, 2, final_state), (state, 3, checkpoint_state)):
         torch.testing.assert_close(tensor[idx], ref, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('state_v_first', [False, True])
+@pytest.mark.parametrize('gate_kind', ['g', 'gk'])
+@pytest.mark.parametrize('offset', [64, 72])
+def test_replay_auxiliary_runtime_exports_shared_checkpoint(state_v_first, gate_kind, offset):
+    """Equal numeric IDs in distinct pools are not aliases; c=e exports too."""
+    torch.manual_seed(530)
+    b, t, heads, dim = 2, 72, 2, 128
+    k, w, u = [torch.randn(b, t, heads, dim, device='cuda', dtype=torch.bfloat16) / 32 for _ in range(3)]
+    runtime_backing = torch.randn(4, 2, heads, dim, dim, device='cuda') / 16
+    runtime = runtime_backing[:, 1]
+    shared_backing = torch.full((9, 3, heads, dim, dim), -123., device='cuda')
+    shared = shared_backing[:, 2]
+    runtime_before, shared_before = runtime_backing.clone(), shared_backing.clone()
+    ids = torch.tensor([1, 2], device='cuda')
+    cp = torch.tensor([1, 8], device='cuda')
+    offsets = torch.full((b,), offset, device='cuda', dtype=torch.int64)
+    g = -((torch.arange(t, device='cuda') % 64 + 1).float() / 100)[None, :, None].expand(b, t, heads).contiguous()
+    gates = {'g': g} if gate_kind == 'g' else {'gk': g[..., None].expand(b, t, heads, dim).contiguous()}
+    initial = runtime[ids].contiguous()
+    expected_h, expected_v, expected_final = chunk_gated_delta_rule_fwd_h(
+        k, w, u, initial_state=initial, output_final_state=True, state_v_first=state_v_first, **gates)
+    short_gates = {name: gate[:, :offset].contiguous() for name, gate in gates.items()}
+    _, _, expected_checkpoint = chunk_gated_delta_rule_fwd_h(
+        k[:, :offset].contiguous(), w[:, :offset].contiguous(), u[:, :offset].contiguous(),
+        initial_state=initial, output_final_state=True, state_v_first=state_v_first, **short_gates)
+    h, v = indexed_chunk_state_fwd(k, w, u, runtime, ids, ids, state_v_first=state_v_first,
+                                  checkpoint_ids=cp, checkpoint_offsets=offsets, checkpoint_pool=shared, **gates)
+    for actual, expected in ((h, expected_h), (v, expected_v), (runtime[ids], expected_final),
+                             (shared[cp], expected_checkpoint)):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    runtime_before[ids, 1] = expected_final
+    shared_before[cp, 2] = expected_checkpoint
+    torch.testing.assert_close(runtime_backing, runtime_before, rtol=0, atol=0)
+    torch.testing.assert_close(shared_backing, shared_before, rtol=0, atol=0)

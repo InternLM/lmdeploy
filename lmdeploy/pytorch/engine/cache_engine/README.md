@@ -497,3 +497,28 @@ python -m pytest -q \
   tests/pytorch/engine/test_executor_base.py \
   tests/pytorch/engine/test_model_agent.py
 ```
+
+### Indexed Replay runtime
+
+Replay uses the same compact scheduler, owner, checkpoint publication and
+prefill metadata as Native. `max_update_tokens` remains the real verification
+width, but `runtime_is_auxiliary=True` gives it a zero-width full-state bank.
+An empty bank still holds its auxiliary request slot until every submitted
+forward completes; it does not mean no work was submitted.
+
+`gdn_replay_shared_state` and `gdn_replay_shared_conv` are exact-boundary unit
+payloads. The latter contains W-1 chronological raw inputs. The base matrix,
+transition rings, tentative conv ring and cursor are private auxiliary state,
+not copied into prefix/Store checkpoints. Prefill exports c directly while
+continuing to e using the common indexed chunk recurrence. GDN/KDA/conv dispatch
+by runtime representation, not by a separate scheduling policy. Decode keeps
+Replay's FP32/acceptance/cursor protocol; AR exports force-materialize before
+publishing an exact checkpoint. Fresh/restore resets discard the previous
+slot occupant; retained continuation folds its committed history.
+
+Without Store, shared storage is `1+B` units (no T-fold runtime matrices).
+Store producers add their existing S budget; consumers reserve R load units
+because auxiliary runtime cannot itself be a shared-format transfer target.
+Loads pin those units through I/O and consuming prefill. The named payload and
+schema differ from the legacy Replay whole-slot format, so old Store records
+must not be interpreted as these checkpoints.

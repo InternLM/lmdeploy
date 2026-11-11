@@ -16,6 +16,19 @@ from lmdeploy.utils import get_logger, is_bf16_supported
 logger = get_logger('lmdeploy')
 
 
+def validate_replayssm_config(buffer_len: int, num_spec_tokens: int) -> None:
+    """Validate history capacity against the configured verification window."""
+    if buffer_len not in (8, 16, 32):
+        raise ValueError('replayssm_buffer_len must be one of 8, 16, or 32.')
+    if num_spec_tokens < 0:
+        raise ValueError('num_spec_tokens must be nonnegative.')
+    tmax = num_spec_tokens + 1
+    if num_spec_tokens > 0 and buffer_len < 2 * tmax:
+        raise ValueError('MTP ReplaySSM requires replayssm_buffer_len >= '
+                         '2 * (num_speculative_tokens + 1), got '
+                         f'L={buffer_len}, Tmax={tmax}.')
+
+
 def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
     """Parse the pre-packed W4A16 metadata needed by the inference backend."""
     if quant_config.get('format') != 'pack-quantized':
@@ -181,6 +194,9 @@ class CacheConfig:
     # Model-owned checkpoint validity constraint, independent of prefill chunking.
     prefix_cache_block_aligned: bool = False
     prefix_cache_token_lookahead: int = 0
+    # Requested feature flag; validated before allocating model/cache resources.
+    enable_replayssm: bool = False
+    replayssm_buffer_len: int = 16
     states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.
@@ -472,10 +488,19 @@ class SSMStateCapacity:
     max_update_tokens: int
     checkpoint_budget: int = 0
     store_budget: int = 0
+    runtime_is_auxiliary: bool = False
+    # Store consumers need shared load destinations even when runtime has no unit bank.
+    load_budget: int = 0
 
     def __post_init__(self):
         values = (self.request_slots, self.max_update_tokens,
-                  self.checkpoint_budget, self.store_budget)
+                  self.checkpoint_budget, self.store_budget, self.load_budget)
+        if self.load_budget and not self.runtime_is_auxiliary:
+            raise ValueError('Separate Store load capacity is only needed for auxiliary runtime.')
+        if type(self.runtime_is_auxiliary) is not bool:
+            raise ValueError('runtime_is_auxiliary must be a bool.')
+        if self.request_slots == 0 and self.runtime_is_auxiliary:
+            raise ValueError('Stateless models cannot have auxiliary runtime.')
         if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
             raise ValueError('Compact state capacities must be non-negative integers.')
         if self.request_slots == 0:
@@ -485,7 +510,8 @@ class SSMStateCapacity:
             raise ValueError('Stateful models need at least one update token.')
 
     @classmethod
-    def from_cache_config(cls, cache: CacheConfig, max_update_tokens: int) -> 'SSMStateCapacity':
+    def from_cache_config(cls, cache: CacheConfig, max_update_tokens: int, *,
+                          runtime_is_auxiliary: bool = False) -> 'SSMStateCapacity':
         """Normalize default state slots and derive capacity for a stateful
         target."""
         # CacheConfig.states_shapes is populated later than executor selection.
@@ -493,19 +519,24 @@ class SSMStateCapacity:
                         if cache.use_mooncake_store and cache.kv_transfer_config.is_kv_producer else 0)
         if cache.num_state_caches is None:
             cache.num_state_caches = cache.max_batches + 2 + cache.prefix_cache_state_budget + store_budget
+        load_budget = (cache.num_state_caches - cache.prefix_cache_state_budget - store_budget - 1
+                       if runtime_is_auxiliary and cache.use_mooncake_store
+                       and cache.kv_transfer_config.is_kv_consumer else 0)
         return cls.from_state_slots(cache.num_state_caches, cache.prefix_cache_state_budget,
-                                    store_budget, max_update_tokens)
+                                    store_budget, max_update_tokens, runtime_is_auxiliary=runtime_is_auxiliary,
+                                    load_budget=load_budget)
 
     @classmethod
     def from_state_slots(cls, num_state_caches: int | None, checkpoint_budget: int,
-                    store_budget: int, max_update_tokens: int) -> 'SSMStateCapacity':
+                    store_budget: int, max_update_tokens: int, *,
+                         runtime_is_auxiliary: bool = False, load_budget: int = 0) -> 'SSMStateCapacity':
         """Preserve A=M-B-S, R=A-1; absence of state allocates nothing."""
         if num_state_caches is None:
             return cls(0, 0)
         request_slots = num_state_caches - checkpoint_budget - store_budget
         if request_slots < 1:
             raise ValueError('State capacity must include reserved request slot zero.')
-        return cls(request_slots, max_update_tokens, checkpoint_budget, store_budget)
+        return cls(request_slots, max_update_tokens, checkpoint_budget, store_budget, runtime_is_auxiliary, load_budget)
 
     @property
     def request_capacity(self) -> int:
@@ -513,14 +544,16 @@ class SSMStateCapacity:
 
     @property
     def bank_width(self) -> int:
-        """One private destination per verified token (AR=1, MTPk=1+k)."""
-        return self.max_update_tokens if self.request_slots else 0
+        """Native uses one destination per token; auxiliary Replay uses
+        none."""
+        return self.max_update_tokens if self.request_slots and not self.runtime_is_auxiliary else 0
 
     @property
     def num_units(self) -> int:
         if not self.request_slots:
             return 0
-        return 1 + self.request_capacity * self.bank_width + self.checkpoint_budget + self.store_budget
+        return (1 + self.request_capacity * self.bank_width
+                + self.checkpoint_budget + self.store_budget + self.load_budget)
 
 
 @dataclass
@@ -580,6 +613,9 @@ class ModelConfig:
     # flag to indicate that the model uses gated delta rule layers
     # and requires prepare_chunk_indices during prefill
     is_gated_delta: bool = False
+    # Effective flag: a supported target builder has installed the Replay schema.
+    enable_replayssm: bool = False
+    replayssm_buffer_len: int = 16
 
     # Named state-cache specs for models that need layered sequence state.
     state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
@@ -645,6 +681,8 @@ class ModelConfig:
         is_draft_model: bool = False,
         spec_method: str = None,
         num_spec_tokens: int = 0,
+        enable_replayssm: bool = False,
+        replayssm_buffer_len: int = 16,
         model_format: str = None,
         device_type: str = 'auto',
         block_size: int = 64,
@@ -680,6 +718,8 @@ class ModelConfig:
             is_draft_model=is_draft_model,
             spec_method=spec_method,
             num_spec_tokens=num_spec_tokens,
+            enable_replayssm=enable_replayssm,
+            replayssm_buffer_len=replayssm_buffer_len,
             device_type=device_type,
         )
         fp32_lm_head = False
@@ -711,6 +751,8 @@ class ModelConfig:
         spec_method: str = None,
         device_type: str = 'auto',
         num_spec_tokens: int = 0,
+        enable_replayssm: bool = False,
+        replayssm_buffer_len: int = 16,
     ):
         """From huggingface config."""
         from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
@@ -725,6 +767,8 @@ class ModelConfig:
             is_draft_model=is_draft_model,
             spec_method=spec_method,
             num_spec_tokens=num_spec_tokens,
+            enable_replayssm=enable_replayssm,
+            replayssm_buffer_len=replayssm_buffer_len,
             device_type=device_type,
         )
 
@@ -755,6 +799,22 @@ class ModelConfig:
 
         if spec_method == 'dflash':
             model_config.model_paradigm = 'ar_spec'
+
+        if model_config.enable_replayssm:
+            from lmdeploy.pytorch.consts import (
+                GDN_REPLAY_BETA_CACHE_NAME,
+                GDN_REPLAY_CURSOR_CACHE_NAME,
+                GDN_REPLAY_RAW_K_CACHE_NAME,
+                GDN_REPLAY_RAW_V_CACHE_NAME,
+            )
+            speculative = num_spec_tokens > 0
+            if is_draft_model or num_spec_tokens < 0 or speculative != (model_config.model_paradigm == 'ar_spec'):
+                raise ValueError('ReplaySSM target schema must match num_spec_tokens and model_paradigm.')
+            names = {spec.name for spec in model_config.state_cache_specs}
+            raw_names = {GDN_REPLAY_RAW_K_CACHE_NAME, GDN_REPLAY_RAW_V_CACHE_NAME, GDN_REPLAY_BETA_CACHE_NAME}
+            if (GDN_REPLAY_CURSOR_CACHE_NAME not in names
+                    or names & raw_names != (raw_names if speculative else set())):
+                raise ValueError('ReplaySSM raw-history schema must match the configured speculative protocol.')
 
         # update eos_token_id to list
         if isinstance(model_config.eos_token_id, int):

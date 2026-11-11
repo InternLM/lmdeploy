@@ -249,6 +249,7 @@ class MooncakeStoreKeyMetadata:
     block_size: int
     kv_head_replica_num: int = 1
     state_schema: str | None = None
+    layout_fingerprint: str = ''
 
     def __post_init__(self) -> None:
         validate_kv_head_replica_num(self.kv_head_replica_num, self.tp_size)
@@ -274,10 +275,11 @@ def build_store_key(
         raise ValueError(f'block_hash must contain {MOONCAKE_BLOCK_HASH_BYTES} bytes')
 
     prefix = f'{metadata.cache_prefix}@' if metadata.cache_prefix else ''
+    layout = f'@layout:{metadata.layout_fingerprint}' if metadata.layout_fingerprint else ''
     # Compact recovery is one KV+state contract. Legacy keys remain unchanged.
     state_schema = f'@state:{metadata.state_schema}' if metadata.state_schema else ''
     return (
-        f'{prefix}{metadata.model_name}'
+        f'{prefix}{metadata.model_name}{layout}'
         f'@tp_rank:{kv_head_rank}'
         f'@group:{group_id}{state_schema}'
         f'@{block_hash.hex()}'

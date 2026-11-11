@@ -424,6 +424,19 @@ class SSMStateCheckpointLifecycle(StateCheckpointLifecycle):
                 return False
         return True
 
+    def make_load_state_available(self, seq):
+        """Reclaim the shared destination that auxiliary runtime cannot
+        supply."""
+        if not super().make_load_state_available(seq):
+            return False
+        owner = self._state_manager
+        if owner.capacity.runtime_is_auxiliary:
+            while owner.get_num_free_optional() == 0:
+                # Dropping a trie reference need not release a reader-held unit.
+                if self.evict(1) == 0:
+                    return False
+        return True
+
     def prepare_restore_batch(self, seqs):
         raise NotImplementedError('Compact restore binds physical references; it cannot produce state-copy plans.')
 

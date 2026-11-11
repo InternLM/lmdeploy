@@ -144,9 +144,13 @@ class TestRecurrentGatedDeltaRule:
         torch.testing.assert_close(out, gt_o, atol=1e-3, rtol=1e-4)
         torch.testing.assert_close(out_h, gt_h, atol=1e-2, rtol=1e-3)
 
+    @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
     def test_fused_gated_delta_rule_transposed_state(self, q, k, v, g, beta, initial_state,
-                                                     use_qk_l2norm_in_kernel, gt):
+                                                     use_qk_l2norm_in_kernel, dtype):
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
+        q, k, v, g, beta, initial_state = [x.to(dtype) for x in (q, k, v, g, beta, initial_state)]
+        gt = naive_recurrent_gdr(q, k, v, beta, g, initial_state=initial_state,
+                                output_final_state=True, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel)
         state_copy = initial_state.transpose(-1, -2).contiguous()
         out, out_h = fused_recurrent_gated_delta_rule(
             q=q,
@@ -160,7 +164,11 @@ class TestRecurrentGatedDeltaRule:
             transpose_state_layout=True,
         )
         gt_o, gt_h = gt
-        torch.testing.assert_close(out, gt_o, atol=1e-3, rtol=1e-4)
+        # FP32 reductions may straddle a BF16 rounding boundary. Allow one
+        # BF16 ULP, while the FP32 case retains a tight arithmetic check.
+        atol = 1e-3 if out.dtype == torch.bfloat16 else 1e-5
+        rtol = max(1e-4, torch.finfo(out.dtype).eps)
+        torch.testing.assert_close(out, gt_o, atol=atol, rtol=rtol)
         torch.testing.assert_close(out_h.transpose(-1, -2), gt_h, atol=1e-2, rtol=1e-3)
 
     @pytest.mark.parametrize('state_dtype', [torch.bfloat16, torch.float32])
@@ -195,7 +203,8 @@ class TestRecurrentGatedDeltaRule:
             transpose_state_layout=True,
         )
 
-        torch.testing.assert_close(out, gt_o, atol=1e-3, rtol=1e-4)
+        # Use the BF16 output precision, not a sub-ULP relative tolerance.
+        torch.testing.assert_close(out, gt_o, atol=1e-3, rtol=torch.finfo(out.dtype).eps)
         torch.testing.assert_close(out_state[state_indices].transpose(-1, -2).float(),
                                    gt_h.float(),
                                    atol=1e-2,
