@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 import numpy as np
@@ -94,6 +95,22 @@ def response_reqs(req_manager: RequestManager,
 
 class LifecycleValidationError(RuntimeError):
     """A model-state or update request violates its precondition."""
+
+
+class WeightState(Enum):
+    """The one owner of weight readiness.
+
+    READY: the loaded weights are valid and inference may run.
+    UPDATING: a weight transaction is open (mid-bucket or between buckets);
+        inference, sleep and wakeup are refused.
+    POISONED: a write failed or was cancelled with unknown effect. Terminal:
+        every model-state operation is refused until the engine is rebuilt.
+    """
+
+    READY = 'ready'
+    UPDATING = 'updating'
+    POISONED = 'poisoned'
+
 
 
 class Engine(EngineBase):
@@ -244,10 +261,13 @@ class Engine(EngineBase):
         if self._sleeping_tags:
             self._block_new_inputs()
         self._weights_update_lock: asyncio.Lock | None = None
-        # Model-state mutex owned by the executor call thread, plus the
-        # latched failure state of the most recent weight write.
+        # One model-state mutex plus one weight-state machine. The mutex is
+        # owned by whichever thread performs the actual executor call, so a
+        # cancelled waiter can neither hold nor release it early.
         self._model_state_lock = threading.Lock()
-        self._weights_update_error: str | None = None
+        self._weight_state = WeightState.READY
+        self._open_txn_id: str | None = None
+        self._seen_update_ids: set[str] = set()
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
 
@@ -564,8 +584,11 @@ class Engine(EngineBase):
             self.executor.release()
 
     def update_params(self, request: Any):
-        """Update params."""
-        self._execute_weights_update(self.executor.update_params, request, model_write=True)
+        """Update params (one legacy-serialized bucket)."""
+        final = getattr(request, 'finished', False) is True
+        txn_id = getattr(request, 'update_id', None)
+        self._execute_weights_update(self.executor.update_params, request,
+                                     final=final, txn_id=txn_id)
 
     def _get_model_state_lock(self):
         """Exclude concurrent model-state changes while a synchronous executor call runs.
@@ -577,30 +600,62 @@ class Engine(EngineBase):
             self._model_state_lock = threading.Lock()
         return self._model_state_lock
 
-    def _execute_weights_update(self, func, *args, model_write=False):
-        # The thread performing the actual call owns this guard, not its
-        # asyncio waiter. Cancelling a waiter cannot release it early.
+    @property
+    def weight_state(self) -> WeightState:
+        """Current weight readiness (single-attribute read, safe cross-thread)."""
+        return getattr(self, '_weight_state', WeightState.READY)
+
+    def _execute_weights_update(self, func, *args, final=False, txn_id=None):
+        """Run one weight bucket under the state machine.
+
+        Exactly one transaction may be open. Its identity is the ``update_id``
+        of the first bucket (or ``None`` for implicit legacy transactions);
+        a bucket carrying a different identity is refused. A failed or
+        cancelled write poisons the engine permanently: a later successful
+        bucket cannot prove which parameters a partial write left behind.
+        """
         guard = self._get_model_state_lock()
         if not guard.acquire(blocking=False):
-            raise LifecycleValidationError('another weight update is in progress')
+            raise LifecycleValidationError('another model-state operation is in progress')
         try:
-            if model_write and getattr(self, '_weights_update_error', None) is not None:
+            if self.weight_state is WeightState.POISONED:
                 raise LifecycleValidationError(
                     'weight update refused: a previous update failed on this engine; '
                     'rebuild the engine from a complete checkpoint')
+            if self.weight_state is WeightState.UPDATING:
+                if txn_id != self._open_txn_id:
+                    raise LifecycleValidationError(
+                        'weight update refused: another weight transaction is open '
+                        f'({self._open_txn_id!r}); finish it before starting {txn_id!r}')
+            else:
+                if txn_id is not None and txn_id in self._seen_update_ids:
+                    raise LifecycleValidationError(
+                        f'weight update refused: update_id {txn_id!r} was already '
+                        'committed; use a new id')
+                self._open_txn_id = txn_id
+                self._weight_state = WeightState.UPDATING
             try:
                 result = func(*args)
-                if model_write and result is not None and not (
-                        isinstance(result, tuple) and len(result) == 2 and result[0] is True):
-                    self._weights_update_error = 'worker weight update failed'
+                succeeded = result is None or (
+                    isinstance(result, tuple) and len(result) == 2 and result[0] is True)
+                if not succeeded:
+                    self._weight_state = WeightState.POISONED
+                elif final:
+                    self._commit_weight_transaction()
                 return result
-            except BaseException as exc:
-                # A later successful bucket cannot prove a previous partial
-                # write repaired the whole model. Keep refusing readiness.
-                self._weights_update_error = type(exc).__name__
+            except BaseException:
+                # Unknown how much of the model the write touched.
+                self._weight_state = WeightState.POISONED
                 raise
         finally:
             guard.release()
+
+    def _commit_weight_transaction(self):
+        """Finalize the open transaction: weights valid again."""
+        self._weight_state = WeightState.READY
+        if self._open_txn_id is not None:
+            self._seen_update_ids.add(self._open_txn_id)
+        self._open_txn_id = None
 
     def _get_weights_update_lock(self):
         """Get the disaggregated weights-update lock."""
@@ -608,7 +663,7 @@ class Engine(EngineBase):
             self._weights_update_lock = asyncio.Lock()
         return self._weights_update_lock
 
-    async def _run_weights_update(self, func, *args, model_write=False):
+    async def _run_weights_update(self, func, *args, final=False, txn_id=None):
         """Serialize executor calls until their real threads finish."""
         lock = self._get_weights_update_lock()
         await lock.acquire()
@@ -616,7 +671,7 @@ class Engine(EngineBase):
         async def execute():
             try:
                 return await asyncio.to_thread(self._execute_weights_update, func, *args,
-                                               model_write=model_write)
+                                               final=final, txn_id=txn_id)
             finally:
                 lock.release()
 
@@ -638,18 +693,26 @@ class Engine(EngineBase):
     async def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
         """Receive weights through checkpoint-engine CUDA IPC."""
         return await self._run_weights_update(self.executor.update_weights_from_ipc,
-                                              request, reject_reason, model_write=True)
+                                              request, reject_reason, final=True)
 
     def complete_weights_update(self):
-        """Record successful initialization/update without waking KV cache."""
+        """Legacy assertion: finalize the open weight transaction, if any.
+
+        Kept for programmatic callers of the pre-transaction API: it commits
+        an open transaction (the caller asserts the weights it sent are
+        complete) and otherwise just drops the weights sleep tag. While a
+        transfer thread is still running, the model-state mutex refuses it.
+        """
         guard = self._get_model_state_lock()
         if not guard.acquire(blocking=False):
             raise LifecycleValidationError('weight completion refused: a model-state operation is in progress')
         try:
-            if getattr(self, '_weights_update_error', None) is not None:
+            if self.weight_state is WeightState.POISONED:
                 raise LifecycleValidationError(
                     'weight completion refused: a previous update failed on this engine; '
                     'rebuild the engine from a complete checkpoint')
+            if self.weight_state is WeightState.UPDATING:
+                self._commit_weight_transaction()
             self._sleeping_tags.discard('weights')
         finally:
             guard.release()
@@ -660,8 +723,10 @@ class Engine(EngineBase):
 
     async def update_weights_from_distributed(self, request: Any):
         """Receive weights through the disaggregated process group."""
-        return await self._run_weights_update(self.executor.update_weights_from_distributed, request,
-                                              model_write=True)
+        return await self._run_weights_update(
+            self.executor.update_weights_from_distributed, request,
+            final=getattr(request, 'finished', False) is True,
+            txn_id=getattr(request, 'update_id', None))
 
     async def destroy_weights_update_group(self, request: Any):
         """Tear down a previously initialized weights-update process group."""
@@ -700,6 +765,10 @@ class Engine(EngineBase):
     async def sleep(self, level: int = 1):
         """Sleep."""
         logger.info('PyTorch engine sleep requested: level=%s.', level)
+        if self.weight_state is not WeightState.READY:
+            raise LifecycleValidationError(
+                'sleep refused: a weight transaction is open or the engine is '
+                'poisoned; finish or rebuild first')
         # Model-state mutex, held for the whole sleep lifecycle: refuse to
         # discard/offload storage while a weight write still owns the model,
         # and keep writers out until worker sleep has actually finished.
@@ -726,10 +795,10 @@ class Engine(EngineBase):
                     self._engine_loop.reset_runtime_state()
                 logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.',
                             level, sorted(self._sleeping_tags))
-            except BaseException as exc:
+            except BaseException:
                 # Storage/session state is unknown; no further model-state
                 # operation may run on this engine without a rebuild.
-                self._weights_update_error = f'sleep failed: {type(exc).__name__}'
+                self._weight_state = WeightState.POISONED
                 raise
             finally:
                 guard.release()
@@ -744,10 +813,14 @@ class Engine(EngineBase):
         if not guard.acquire(blocking=False):
             raise LifecycleValidationError('wakeup refused: a model-state operation is in progress')
         try:
-            if getattr(self, '_weights_update_error', None) is not None:
+            if self.weight_state is WeightState.POISONED:
                 raise LifecycleValidationError(
                     'wakeup refused: a previous weight update failed on this engine; '
                     'rebuild the engine from a complete checkpoint')
+            if self.weight_state is WeightState.UPDATING:
+                raise LifecycleValidationError(
+                    'wakeup refused: a weight transaction is still open (missing '
+                    'final bucket or completion)')
             self._wakeup_resources(tags)
         finally:
             guard.release()

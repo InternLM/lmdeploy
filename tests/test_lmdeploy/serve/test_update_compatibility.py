@@ -1,5 +1,4 @@
-"""Default update API compatibility and opt-in deployment constraints (CPU)."""
-
+"""Default update API compatibility through the real engine state machine."""
 import asyncio
 import json
 import threading
@@ -7,171 +6,151 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from test_distributed_weight_readiness import make_endpoint
-from test_weight_update_failure_guard import bucket, route
+from test_distributed_weight_readiness import bucket, make_endpoint
+from test_weight_update_failure_guard import _routes, legacy
 
+from lmdeploy.pytorch.engine.engine import LifecycleValidationError
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.managers import SessionManager
-from lmdeploy.serve.openai.protocol import UpdateParamsRequest, UpdateWeightsFromIPCRequest
+from lmdeploy.serve.openai.protocol import UpdateWeightsFromIPCRequest
 
 
-def legacy(finished=True):
-    return UpdateParamsRequest(serialized_named_tensors={}, finished=finished)
-
-
-@pytest.mark.parametrize('backend', ['pytorch', 'turbomind'])
-def test_default_legacy_update_keeps_null_response_and_finalization(backend):
+def test_default_legacy_update_keeps_null_response_and_finalization():
     engine, _ = make_endpoint(tags=())
-    engine.backend = backend
-    engine.engine.update_params = Mock()
-    endpoint = route(engine, '/update_weights')
-    request = legacy(False)
-    response = asyncio.run(endpoint(request))
-    assert response.status_code == 200 and json.loads(response.body) is None
-    engine.engine.update_params.assert_called_once_with(request)
-    assert engine.weights_update_pending and engine.is_sleeping
-    assert asyncio.run(endpoint(legacy())).status_code == 200
-    assert not engine.is_sleeping and engine.weights_content_ready
-    assert not engine.weights_update_pending
-    assert engine.engine.complete_weights_update.call_count == (backend == 'pytorch')
-    # A new legacy transaction has no permanent synthetic ID to collide with.
-    assert asyncio.run(endpoint(legacy())).status_code == 200
+    routes = _routes(engine)
+    engine.engine.executor.update_params = Mock(return_value=None)
+    assert asyncio.run(routes[('/update_weights', 'POST')](legacy(False))).status_code == 200
+    body = asyncio.run(routes[('/update_weights', 'POST')](legacy(False)))
+    assert body.status_code == 200 and json.loads(body.body) is None
+    assert engine.engine.weight_state.value == 'updating'  # transaction open
+    assert asyncio.run(routes[('/update_weights', 'POST')](legacy(True))).status_code == 200
+    assert engine.engine.weight_state.value == 'ready'
+    assert engine.weights_content_ready
+    # A new legacy transaction can start again after commit.
+    assert asyncio.run(routes[('/update_weights', 'POST')](legacy(True))).status_code == 200
 
 
 def test_legacy_update_refuses_active_generation_before_worker():
-    engine, _ = make_endpoint(tags=())
-    engine.session_mgr.request_handle_pool.num_dispatched = 1
-    engine.engine.update_params = Mock()
-    assert asyncio.run(route(engine, '/update_weights')(legacy())).status_code == 409
-    assert not engine.is_sleeping and engine.weights_content_ready
-    engine.engine.update_params.assert_not_called()
+    engine, _ = make_endpoint(tags=(), dispatched=1)
+    routes = _routes(engine)
+    engine.engine.executor.update_params = Mock()
+    assert asyncio.run(routes[('/update_weights', 'POST')](legacy())).status_code == 409
+    engine.engine.executor.update_params.assert_not_called()
+    assert engine.engine.weight_state.value == 'ready'
 
 
 def test_default_ipc_readiness_and_update():
     engine, _ = make_endpoint(tags=('kv_cache',))
-    engine.engine.get_checkpoint_engine_status = AsyncMock(return_value=[dict(
-        ready=True, message='ready', checkpoint_engine_version='test', device_uuid='GPU-test', rank=0)])
-    engine.engine.update_weights_from_ipc = AsyncMock(return_value=(True, 'done'))
-    status = asyncio.run(route(engine, '/update_weights_from_ipc', 'GET')())
+    routes = _routes(engine)
+    status = asyncio.run(routes[('/update_weights_from_ipc', 'GET')]())
     assert status.ready and status.device_uuids == ['GPU-test'] and status.worker_ranks == [0]
-    request = UpdateWeightsFromIPCRequest(zmq_handles={'GPU-test': 'handle'})
-    result = asyncio.run(route(engine, '/update_weights_from_ipc')(request))
+    result = asyncio.run(routes[('/update_weights_from_ipc', 'POST')](
+        UpdateWeightsFromIPCRequest(zmq_handles={'GPU-test': 'handle'})))
     assert result.status_code == 200 and json.loads(result.body)['success']
-    engine.engine.update_weights_from_ipc.assert_awaited_once_with(request, None)
-    assert engine.weights_content_ready and engine.is_sleeping
+    assert engine.engine.weight_state.value == 'ready'  # ipc is single-shot final
     engine.wakeup(['kv_cache'])
     assert not engine.is_sleeping
 
 
-@pytest.mark.parametrize('explicit_first', [False, True])
-def test_implicit_and_explicit_distributed_transactions_cannot_mix(explicit_first):
+def test_implicit_and_explicit_transactions_cannot_mix():
     engine, endpoint = make_endpoint()
-    first = bucket(False).model_copy(update={'update_id': 'v1' if explicit_first else None})
+    first = bucket(False, update_id='v1')
     assert asyncio.run(endpoint(first)).status_code == 200
-    other = first.model_copy(update={'update_id': None if explicit_first else 'v1'})
-    assert asyncio.run(endpoint(other)).status_code == 409
-    assert engine.engine.update_weights_from_distributed.await_count == 1
-    assert asyncio.run(endpoint(first.model_copy(update={'finished': True}))).status_code == 200
+    assert asyncio.run(endpoint(bucket(False, update_id=None))).status_code == 409
+    engine.engine.executor.update_weights_from_distributed.assert_called_once()
+    assert asyncio.run(endpoint(bucket(True, update_id='v1'))).status_code == 200
+    assert engine.engine.weight_state.value == 'ready'
 
 
-def test_legacy_distributed_empty_finalize_only_for_an_open_transaction():
+def test_timeout_leaves_the_write_running_and_state_self_resolves():
+    async def scenario(monkeypatch):
+        monkeypatch.setenv('LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS', '0.05')
+        engine, endpoint = make_endpoint()
+        entered, release = threading.Event(), threading.Event()
+        engine.engine.executor.update_weights_from_distributed.side_effect = \
+            lambda req: (entered.set(), release.wait(5), (True, 'done'))[2]
+        response = await endpoint(bucket())
+        assert response.status_code == 504
+        assert 'still running' in json.loads(response.body)['message']
+        assert engine.engine.weight_state.value == 'updating'  # in flight
+        release.set()
+        await asyncio.sleep(0.1)
+        assert engine.engine.weight_state.value == 'ready'  # resolved: committed
+    asyncio.run(scenario(pytest.MonkeyPatch()))
+
+
+def test_invalid_timeout_is_refused_before_any_write(monkeypatch):
     engine, endpoint = make_endpoint()
-    first = bucket(False).model_copy(update={'update_id': None})
-    final = first.model_copy(update={'names': [], 'dtypes': [], 'shapes': [], 'finished': True})
-    assert asyncio.run(endpoint(final)).status_code == 409
-    assert asyncio.run(endpoint(first)).status_code == 200
-    assert asyncio.run(endpoint(final)).status_code == 200
+    for value in ['nan', '0', 'not-a-number']:
+        monkeypatch.setenv('LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS', value)
+        assert asyncio.run(endpoint(bucket())).status_code == 409
+        engine.engine.executor.update_weights_from_distributed.assert_not_called()
+        assert engine.engine.weight_state.value == 'ready'
+
+
+def test_no_argument_completion_finalizes_open_legacy_transaction():
+    engine, _ = make_endpoint(tags=())
+    routes = _routes(engine)
+    engine.engine.executor.update_params = Mock(return_value=None)
+    assert asyncio.run(routes[('/update_weights', 'POST')](legacy(False))).status_code == 200
+    engine.complete_weights_update()  # legacy no-argument form still works
+    assert engine.engine.weight_state.value == 'ready'
     assert engine.weights_content_ready
-    # Missing ID is a supported legacy schema, not silently rewritten per bucket.
-    assert engine.engine.update_weights_from_distributed.call_args.args[0].update_id is None
-    assert asyncio.run(endpoint(final)).status_code == 409
 
 
-@pytest.mark.parametrize('transport', ['legacy', 'ipc'])
-@pytest.mark.parametrize('error', [RuntimeError('partial write')])
-def test_all_transports_latch_unknown_or_failed_writes(transport, error):
-    engine, _ = make_endpoint(tags=('kv_cache',))
-    engine.engine.update_params = Mock(side_effect=error)
-    engine.engine.update_weights_from_ipc = AsyncMock(side_effect=error)
-    path = '/update_weights' if transport == 'legacy' else '/update_weights_from_ipc'
-    request = legacy() if transport == 'legacy' else UpdateWeightsFromIPCRequest(zmq_handles={})
-    with pytest.raises(type(error)):
-        asyncio.run(route(engine, path)(request))
-    assert engine.weights_update_error and engine.is_sleeping and not engine.weights_content_ready
-    with pytest.raises(RuntimeError, match='Restart'):
-        engine.wakeup()
-
-
-def test_ipc_and_distributed_cannot_overlap():
+def test_no_argument_completion_refused_while_transfer_in_flight():
     async def scenario():
-        engine, endpoint = make_endpoint(tags=('kv_cache',))
-        entered, release = asyncio.Event(), asyncio.Event()
-
-        async def receive(*args):
-            entered.set()
-            await release.wait()
-            return True, 'done'
-
-        engine.engine.update_weights_from_ipc = AsyncMock(side_effect=receive)
-        task = asyncio.create_task(route(engine, '/update_weights_from_ipc')(
-            UpdateWeightsFromIPCRequest(zmq_handles={})))
-        await asyncio.wait_for(entered.wait(), 1)
-        assert (await endpoint(bucket())).status_code == 409
-        engine.engine.update_weights_from_distributed.assert_not_awaited()
+        engine, _ = make_endpoint(tags=())
+        routes = _routes(engine)
+        entered, release = threading.Event(), threading.Event()
+        engine.engine.executor.update_params = Mock(
+            side_effect=lambda req: (entered.set(), release.wait(5), None)[2])
+        task = asyncio.create_task(routes[('/update_weights', 'POST')](legacy(False)))
+        await asyncio.wait_for(asyncio.to_thread(entered.wait), 5)
+        with pytest.raises(LifecycleValidationError, match='in progress'):
+            engine.complete_weights_update()
         release.set()
         assert (await task).status_code == 200
+        engine.complete_weights_update()  # valid after the transfer ended
     asyncio.run(scenario())
 
 
-def test_restricted_server_requires_explicit_id(monkeypatch):
-    monkeypatch.setenv('LMDEPLOY_REQUIRE_UPDATE_ID', '1')
-    engine, endpoint = make_endpoint()
-    assert asyncio.run(endpoint(bucket().model_copy(update={'update_id': None}))).status_code == 409
-    engine.engine.update_weights_from_distributed.assert_not_awaited()
-    assert asyncio.run(endpoint(bucket())).status_code == 200
+def test_ipc_and_distributed_serialize_through_one_state_machine():
+    async def scenario():
+        engine, endpoint = make_endpoint(tags=('kv_cache',))
+        routes = _routes(engine)
+        entered, release = threading.Event(), threading.Event()
+        engine.engine.executor.update_weights_from_ipc = Mock(
+            side_effect=lambda req, reason: (entered.set(), release.wait(5), (True, 'done'))[2])
+        ipc = asyncio.create_task(routes[('/update_weights_from_ipc', 'POST')](
+            UpdateWeightsFromIPCRequest(zmq_handles={})))
+        await asyncio.wait_for(asyncio.to_thread(entered.wait), 5)
+        # While the ipc write is in flight the engine is mid-transaction.
+        assert engine.engine.weight_state.value == 'updating'
+        release.set()
+        assert (await ipc).status_code == 200
+        assert engine.engine.weight_state.value == 'ready'
+        assert (await endpoint(bucket())).status_code == 200  # next txn may start
+    asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('value', ['nan', '0', 'not-a-number'])
-def test_invalid_timeout_is_refused_before_any_write(monkeypatch, value):
-    monkeypatch.setenv('LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS', value)
-    engine, endpoint = make_endpoint()
-    assert asyncio.run(endpoint(bucket())).status_code == 409
-    assert not engine.weights_update_pending and engine.weights_update_error is None
-    engine.engine.update_weights_from_distributed.assert_not_awaited()
-
-
-@pytest.mark.parametrize('name,value', [('LMDEPLOY_WEIGHT_UPDATE_PROTOCOLS', 'unknown'),
-                                        ('LMDEPLOY_WEIGHT_UPDATE_PROTOCOLS', ''),
-                                        ('LMDEPLOY_REQUIRE_UPDATE_ID', 'maybe')])
-def test_bad_deployment_policy_fails_at_registration(monkeypatch, name, value):
-    monkeypatch.setenv(name, value)
-    with pytest.raises(ValueError):
-        make_endpoint()
-
-
-@pytest.mark.parametrize('state', ['sleeping', 'partial', 'failed'])
-def test_late_inference_rechecks_readiness_and_releases_acquired_handle(state):
+def test_late_inference_rechecks_readiness_and_releases_acquired_handle():
     async def scenario():
         engine, _ = make_endpoint(tags=())
+        routes = _routes(engine)
+        engine.engine.executor.update_params = Mock(return_value=None)
+        assert (await routes[('/update_weights', 'POST')](legacy(False))).status_code == 200
         manager = SessionManager()
-        handle = SimpleNamespace(async_stream_infer=Mock(), async_end=AsyncMock(), async_cancel=AsyncMock())
+        handle = SimpleNamespace(async_stream_infer=Mock(), async_end=AsyncMock(),
+                                  async_cancel=AsyncMock())
         manager.build_request_handle_pool(SimpleNamespace(create_instance=lambda: handle), 1)
         engine.session_mgr = manager
-        engine.engine.update_params = Mock()
-        if state == 'sleeping':
-            engine.is_sleeping = True
-        else:
-            # A request already admitted by HTTP can still be waiting before
-            # it acquires a real handle. Open a partial update in that window.
-            assert (await route(engine, '/update_weights')(legacy(False))).status_code == 200
-            if state == 'failed':
-                engine.fail_weights_update('unknown worker outcome')
         session = manager.get(71)
         session._remove_on_request_exit = True
         with pytest.raises(RequestError) as error:
             async with session.request_handle() as acquired:
                 async with engine.safe_run(acquired, session):
-                    pytest.fail('unready engine must not start inference')
+                    pytest.fail('an open transaction must not start inference')
         assert error.value.code == ErrorCode.ENGINE_UNAVAILABLE
         handle.async_stream_infer.assert_not_called()
         assert manager.request_handle_pool.num_dispatched == 0
@@ -179,36 +158,36 @@ def test_late_inference_rechecks_readiness_and_releases_acquired_handle(state):
     asyncio.run(scenario())
 
 
-def test_no_argument_completion_completes_open_legacy_transaction():
-    engine, _ = make_endpoint(tags=())
-    engine.engine.update_params = Mock()
-    assert asyncio.run(route(engine, '/update_weights')(legacy(False))).status_code == 200
-    engine.complete_weights_update()  # legacy no-argument form still completes
-    assert engine.weights_content_ready and not engine.weights_update_pending
-    with pytest.raises(RuntimeError, match='does not own'):
-        engine.complete_weights_update()  # nothing is open any more
-    explicit, endpoint = make_endpoint()
-    assert asyncio.run(endpoint(bucket(False))).status_code == 200  # update_id transaction
-    with pytest.raises(RuntimeError, match='does not own'):
-        explicit.complete_weights_update()  # legacy form cannot steal an explicit one
-
-
-def test_no_argument_completion_refused_while_transfer_in_flight():
+def test_timeout_resolution_to_poisoned_when_background_write_fails():
     async def scenario():
-        engine, _ = make_endpoint(tags=())
-        entered, release = asyncio.Event(), threading.Event()
+        import os
+        os.environ['LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS'] = '0.05'
+        engine, endpoint = make_endpoint()
+        entered, release = threading.Event(), threading.Event()
 
-        def slow_update(request):
+        def slow_failing_write(req):
             entered.set()
             release.wait(5)
+            raise RuntimeError('rank 3 died mid-write')
 
-        engine.engine.update_params = Mock(side_effect=slow_update)
-        task = asyncio.create_task(route(engine, '/update_weights')(legacy(False)))
-        await asyncio.wait_for(entered.wait(), 5)
-        with pytest.raises(RuntimeError, match='does not own'):
-            engine.complete_weights_update()  # transfer still running
+        engine.engine.executor.update_weights_from_distributed.side_effect = slow_failing_write
+        response = await endpoint(bucket())
+        assert response.status_code == 504  # in flight, outcome not yet known
         release.set()
-        assert (await task).status_code == 200
-        engine.complete_weights_update()  # valid now: transfer done, transaction open
-        assert engine.weights_content_ready
+        await asyncio.sleep(0.1)
+        assert engine.engine.weight_state.value == 'poisoned'
+        os.environ.pop('LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS', None)
     asyncio.run(scenario())
+
+
+def test_turbomind_backend_keeps_upstream_update_semantics():
+    """Backends without the weight-state machine keep their existing flow."""
+    engine, endpoint = make_endpoint(tags=())
+    engine.backend = 'turbomind'
+    engine.engine = SimpleNamespace(  # a turbomind engine has no weight_state
+        update_params=Mock(return_value=None))
+    routes = _routes(engine)
+    response = asyncio.run(routes[('/update_weights', 'POST')](legacy(True)))
+    assert response.status_code == 200 and json.loads(response.body) is None
+    engine.engine.update_params.assert_called_once()
+    assert engine.weight_state_visible() == 'ready'

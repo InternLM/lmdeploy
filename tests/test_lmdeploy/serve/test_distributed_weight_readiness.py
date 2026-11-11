@@ -1,76 +1,111 @@
-"""Distributed weight completion must unblock empty-init inference after KV
-wakeup."""
+"""Distributed weight transactions through the real engine state machine.
+
+The fixture builds a real ``Engine`` shell (no ``__init__``) whose executor
+is mocked, so every assertion below exercises the actual weight-state
+machine plus the actual serve projection, not a stubbed lifecycle.
+"""
 import asyncio
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import APIRouter
 
+from lmdeploy.pytorch.engine.engine import Engine, LifecycleValidationError, WeightState
 from lmdeploy.serve.core.async_engine import AsyncEngine
 from lmdeploy.serve.openai.endpoints.management import register
 from lmdeploy.serve.openai.protocol import UpdateWeightsFromDistributedRequest
 
 
-def make_endpoint(*, success=True, tags=('weights', 'kv_cache')):
+def make_endpoint(*, success=True, tags=('weights', 'kv_cache'), dispatched=0):
+    py = Engine.__new__(Engine)
+    py._model_state_lock = threading.Lock()
+    py._weight_state = WeightState.READY
+    py._open_txn_id = None
+    py._seen_update_ids = set()
+    py._weights_update_lock = None
+    py._sleeping_tags = set(tags)
+    py._engine_loop = None
+    py.req_manager = SimpleNamespace(block_request_types=lambda *_: None,
+                                     unblock_request_types=lambda *_: None)
+    py._cancel_and_end_all_sessions = lambda: None
+    py.scheduler = SimpleNamespace(reset_cache_after_worker_drain=lambda: None)
+    py.executor = SimpleNamespace(
+        update_params=Mock(return_value=None),
+        update_weights_from_ipc=Mock(return_value=(success, 'done')),
+        update_weights_from_distributed=Mock(return_value=(success, 'done')),
+        get_checkpoint_engine_status=Mock(return_value=[dict(
+            ready=True, message='ready', checkpoint_engine_version='test',
+            device_uuid='GPU-test', rank=0)]),
+        sleep=AsyncMock(),
+        wakeup=Mock(),
+    )
     engine = AsyncEngine.__new__(AsyncEngine)
     engine.backend = 'pytorch'
     engine.backend_config = SimpleNamespace(device_type='cuda')
-    engine.session_mgr = SimpleNamespace(request_handle_pool=SimpleNamespace(num_dispatched=0))
+    engine.engine = py
+    engine.session_mgr = SimpleNamespace(
+        request_handle_pool=SimpleNamespace(num_dispatched=dispatched))
+    engine.stop_all_session = AsyncMock()
     engine.sleeping_tags = set(tags)
     engine.is_sleeping = bool(tags)
-    engine.init_weights_update_state(ready=not bool(tags))
-    engine.engine = SimpleNamespace(
-        update_weights_from_distributed=AsyncMock(return_value=(success, 'done')),
-        complete_weights_update=Mock(),
-        wakeup=Mock(),
-    )
+    engine.weights_content_ready = True
     router = APIRouter()
     register(router, SimpleNamespace(async_engine=engine))
-    endpoint = next(route.endpoint for route in router.routes if route.path == '/update_weights_from_distributed')
+    endpoint = next(r.endpoint for r in router.routes if r.path == '/update_weights_from_distributed')
     return engine, endpoint
 
 
-@pytest.mark.parametrize('finished,success', [(False, True), (True, True), (True, False)])
+def bucket(finished=True, update_id='test-v1'):
+    return UpdateWeightsFromDistributedRequest(
+        names=['test.weight'], dtypes=['bfloat16'], shapes=[[1]],
+        group_name='train', update_id=update_id, finished=finished)
+
+
+@pytest.mark.parametrize('finished', [False, True])
+@pytest.mark.parametrize('success', [False, True])
 @pytest.mark.parametrize('tags', [('weights', 'kv_cache'), ('kv_cache',)])
-def test_only_successful_final_bucket_completes_weights(finished, success, tags):
+def test_only_the_final_successful_bucket_makes_weights_ready(finished, success, tags):
     engine, endpoint = make_endpoint(success=success, tags=tags)
-    request = UpdateWeightsFromDistributedRequest(
-        names=['test.weight'], dtypes=['bfloat16'], shapes=[[1]],
-        group_name='train', update_id='test-v1', finished=finished)
-    response = asyncio.run(endpoint(request))
-    assert response.status_code == (200 if success else 400)
-    engine.engine.update_weights_from_distributed.assert_awaited_once_with(request)
-    if success and finished:
-        engine.engine.complete_weights_update.assert_called_once_with()
-        assert engine.sleeping_tags == {'kv_cache'}
+    assert asyncio.run(endpoint(bucket(finished))).status_code == (200 if success else 400)
+    py = engine.engine
+    py.executor.update_weights_from_distributed.assert_called_once()
+    if not success:
+        assert py.weight_state is WeightState.POISONED
+        assert engine.weight_state_visible() == 'poisoned'
+    elif finished:
+        assert py.weight_state is WeightState.READY
+        assert engine.weights_content_ready
+        engine.wakeup(['kv_cache'])
+        assert not engine.is_sleeping
     else:
-        engine.engine.complete_weights_update.assert_not_called()
-        assert engine.sleeping_tags == set(tags)
-    assert engine.is_sleeping  # Finalization never runs inference/warmup on its own.
-    engine.engine.wakeup.assert_not_called()
+        # Transaction still open: no wakeup, no inference, no sleep.
+        assert py.weight_state is WeightState.UPDATING
+        with pytest.raises(RuntimeError, match='weight state is updating'):
+            engine.wakeup(['kv_cache'])
+        with pytest.raises(LifecycleValidationError, match='transaction is open'):
+            asyncio.run(py.sleep(1))
 
 
-def test_empty_init_ready_after_finalization_and_kv_wakeup():
+def test_empty_finalize_only_completes_an_open_implicit_transaction():
     engine, endpoint = make_endpoint()
-    request = UpdateWeightsFromDistributedRequest(
-        names=['test.weight'], dtypes=['bfloat16'], shapes=[[1]],
-        group_name='train', update_id='test-v1', finished=True)
-    asyncio.run(endpoint(request))
-    engine.wakeup(['kv_cache'])
-    assert not engine.is_sleeping
-    assert not engine.sleeping_tags
-    engine.engine.wakeup.assert_called_once_with(['kv_cache'])
+    final = bucket(finished=True, update_id=None).model_copy(
+        update={'names': [], 'dtypes': [], 'shapes': []})
+    assert asyncio.run(endpoint(final)).status_code == 409  # nothing open
+    assert asyncio.run(endpoint(bucket(False, update_id=None))).status_code == 200
+    assert asyncio.run(endpoint(final)).status_code == 200
+    assert engine.engine.weight_state is WeightState.READY
+    py = engine.engine
+    assert py.executor.update_weights_from_distributed.call_args.args[0].update_id is None
+    assert asyncio.run(endpoint(final)).status_code == 409  # transaction already closed
 
 
-def test_transfer_exception_does_not_complete_weights():
+def test_transfer_exception_poisons_instead_of_completing():
     engine, endpoint = make_endpoint()
-    engine.engine.update_weights_from_distributed.side_effect = RuntimeError('transfer failed')
-    request = UpdateWeightsFromDistributedRequest(
-        names=['test.weight'], dtypes=['bfloat16'], shapes=[[1]],
-        group_name='train', update_id='test-v1', finished=True)
-    with pytest.raises(RuntimeError, match='transfer failed'):
-        asyncio.run(endpoint(request))
-    engine.engine.complete_weights_update.assert_not_called()
-    assert engine.sleeping_tags == {'weights', 'kv_cache'}
-    assert engine.is_sleeping
+    engine.engine.executor.update_weights_from_distributed.side_effect = RuntimeError('transfer failed')
+    response = asyncio.run(endpoint(bucket()))
+    assert response.status_code == 503
+    assert engine.engine.weight_state is WeightState.POISONED
+    with pytest.raises(RuntimeError, match='poisoned'):
+        engine.wakeup()

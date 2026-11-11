@@ -85,14 +85,16 @@ assert response.status_code == 200, response.status_code
 While an update is in flight the model must never silently become
 inference-ready with partial weights. LMDeploy enforces:
 
-- **One transaction at a time.** A transfer racing another transfer, or a
-  sleep/wakeup, is refused with HTTP 409 before any worker write. The
-  executor-side guard is owned by the thread performing the actual call;
-  cancelling the awaiting caller does not release it early.
-- **Failures latch.** A failed, partially written or timed-out update makes
-  the engine unavailable (`/wakeup`, further updates and inference routes
-  are refused) until the engine is rebuilt. A later successful bucket
-  cannot prove an earlier partial write repaired the whole model.
+- **One transaction at a time.** The engine keeps a single weight-state
+  machine (`ready` / `updating` / `poisoned`); concurrent update requests
+  serialize behind it and a bucket of a different transaction is refused
+  with HTTP 409. The executor-side guard is owned by the thread performing
+  the actual write; cancelling the awaiting caller does not release it.
+- **Failures latch (`poisoned`, terminal).** A failed, partially written or
+  cancelled update makes the engine unavailable (`/wakeup`, further updates
+  and inference routes are refused) until the engine is rebuilt from a
+  complete checkpoint. A later successful bucket cannot prove which
+  parameters a partial write left behind.
 - **Finalization gates readiness.** Without the final bucket
   (`finished=true`) the engine stays sleeping; neither sleep nor a
   weights-only wakeup can bypass the missing finalization.
@@ -110,15 +112,15 @@ IDs enable replay and cross-transaction checks for callers that want them.
 
 ## Deployment settings
 
-These settings are registered once, at startup:
+`LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS` (default `180`, positive and finite,
+checked before each transfer) bounds how long an HTTP update request waits for
+its bucket transfer. Exceeding it does not fail the engine: the shielded
+background write keeps running and the weight state resolves by itself, so the
+response reports the transfer as still in flight and `/health` shows the
+resolved state (`ready` or `poisoned`) once the write finishes.
 
-| Setting | Default | Meaning |
-|---|---|---|
-| `LMDEPLOY_WEIGHT_UPDATE_PROTOCOLS` | `legacy,ipc,distributed` | Allowed update transports; unknown or empty entries are invalid. |
-| `LMDEPLOY_REQUIRE_UPDATE_ID` | `0` | Require an explicit ID on distributed updates when set to `1`. |
-| `LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS` | `180` | Positive finite transfer timeout, checked before each transfer. |
-
-Restricting protocols or requiring IDs is a deployment choice; the defaults
-keep every transport and optional IDs. IPC updates still require their
-existing CUDA/checkpoint-engine dependencies; enabling a transport does not
-install them.
+Distributed updates may carry an optional `update_id`: consecutive buckets
+sharing one id form a single transaction, a committed id can never be reused
+(protecting against lost-response retries re-committing a lone final bucket),
+and implicit no-id callers keep their legacy multi-bucket semantics. IPC
+updates still require their existing CUDA/checkpoint-engine dependencies.
