@@ -443,8 +443,19 @@ class AsyncEngine:
         """
         if self.weights_update_error is not None:
             raise RuntimeError(self.weights_update_error)
-        if (owner is None or owner != self.weights_update_owner
-                or operation is not self.weights_update_operation or not self.weights_update_busy):
+        explicit = owner is not None
+        if owner is None:
+            # Legacy no-argument form: complete the single open implicit
+            # (no update_id) transaction, preserving the pre-existing API.
+            # ``weights_update_pending`` (not ``busy``) marks a transaction
+            # still awaiting its final bucket; its transfer already ended.
+            current = self.weights_update_owner
+            if (not self.weights_update_pending or current is None or current[1] is not None):
+                raise RuntimeError('Weight completion does not own the active transaction/operation.')
+            owner, operation = current, self.weights_update_operation
+        if (owner != self.weights_update_owner
+                or operation is not self.weights_update_operation
+                or (explicit and not self.weights_update_busy)):
             raise RuntimeError('Weight completion does not own the active transaction/operation.')
         if self.backend == 'pytorch':
             self.engine.complete_weights_update()

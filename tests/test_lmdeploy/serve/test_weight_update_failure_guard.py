@@ -1,5 +1,6 @@
 """A partial distributed update must never become an inference-ready model."""
 import asyncio
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,6 +10,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 from test_distributed_weight_readiness import make_endpoint
 
+from lmdeploy.pytorch.engine.engine import Engine, LifecycleValidationError
 from lmdeploy.serve.openai.endpoints.management import register
 from lmdeploy.serve.openai.protocol import (
     UpdateParamsRequest,
@@ -200,3 +202,55 @@ def test_worker_wakeup_failure_latches_isolation():
     assert asyncio.run(endpoint(bucket())).status_code == 409
     with pytest.raises(RuntimeError, match='Restart the engine'):
         engine.wakeup(['kv_cache'])
+
+
+def _engine_shell():
+    """Minimal real-Engine shell for direct engine-level guard checks."""
+    engine = Engine.__new__(Engine)
+    engine._model_state_lock = threading.Lock()
+    engine._weights_update_error = None
+    engine._sleeping_tags = set()
+    engine._engine_loop = None
+    engine.req_manager = SimpleNamespace(
+        block_request_types=lambda *_: None, unblock_request_types=lambda *_: None)
+    engine._cancel_and_end_all_sessions = lambda: None
+    engine.scheduler = SimpleNamespace(reset_cache_after_worker_drain=lambda: None)
+    engine.executor = SimpleNamespace(sleep=AsyncMock())
+    return engine
+
+
+def test_engine_level_latch_blocks_direct_write_completion_and_wakeup():
+    engine = _engine_shell()
+    engine._weights_update_error = 'RuntimeError'
+    with pytest.raises(LifecycleValidationError, match='rebuild the engine'):
+        engine.wakeup()
+    with pytest.raises(LifecycleValidationError, match='rebuild the engine'):
+        engine.complete_weights_update()
+    with pytest.raises(LifecycleValidationError, match='rebuild the engine'):
+        engine._execute_weights_update(lambda: None, model_write=True)
+
+
+def test_engine_sleep_excludes_concurrent_model_state_writes():
+    async def scenario():
+        engine = _engine_shell()
+        held = engine._get_model_state_lock()
+        assert held.acquire(blocking=False)
+        with pytest.raises(LifecycleValidationError, match='in progress'):
+            await engine.sleep(1)
+        held.release()
+
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_worker_sleep(level):
+            started.set()
+            await release.wait()
+
+        engine.executor.sleep = slow_worker_sleep
+        task = asyncio.create_task(engine.sleep(1))
+        await asyncio.wait_for(started.wait(), 5)
+        # While worker sleep is still running, a direct writer is refused.
+        with pytest.raises(LifecycleValidationError, match='in progress'):
+            engine._execute_weights_update(lambda: None, model_write=True)
+        release.set()
+        await task
+    asyncio.run(scenario())

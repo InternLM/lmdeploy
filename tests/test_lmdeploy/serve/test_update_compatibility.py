@@ -176,3 +176,17 @@ def test_late_inference_rechecks_readiness_and_releases_acquired_handle(state):
         assert manager.request_handle_pool.num_dispatched == 0
         assert not manager.sessions
     asyncio.run(scenario())
+
+
+def test_no_argument_completion_completes_open_legacy_transaction():
+    engine, _ = make_endpoint(tags=())
+    engine.engine.update_params = Mock()
+    assert asyncio.run(route(engine, '/update_weights')(legacy(False))).status_code == 200
+    engine.complete_weights_update()  # legacy no-argument form still completes
+    assert engine.weights_content_ready and not engine.weights_update_pending
+    with pytest.raises(RuntimeError, match='does not own'):
+        engine.complete_weights_update()  # nothing is open any more
+    explicit, endpoint = make_endpoint()
+    assert asyncio.run(endpoint(bucket(False))).status_code == 200  # update_id transaction
+    with pytest.raises(RuntimeError, match='does not own'):
+        explicit.complete_weights_update()  # legacy form cannot steal an explicit one

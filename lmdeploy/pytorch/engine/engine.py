@@ -584,6 +584,10 @@ class Engine(EngineBase):
         if not guard.acquire(blocking=False):
             raise LifecycleValidationError('another weight update is in progress')
         try:
+            if model_write and self._weights_update_error is not None:
+                raise LifecycleValidationError(
+                    'weight update refused: a previous update failed on this engine; '
+                    'rebuild the engine from a complete checkpoint')
             try:
                 result = func(*args)
                 if model_write and result is not None and not (
@@ -638,7 +642,17 @@ class Engine(EngineBase):
 
     def complete_weights_update(self):
         """Record successful initialization/update without waking KV cache."""
-        self._sleeping_tags.discard('weights')
+        guard = self._get_model_state_lock()
+        if not guard.acquire(blocking=False):
+            raise LifecycleValidationError('weight completion refused: a model-state operation is in progress')
+        try:
+            if self._weights_update_error is not None:
+                raise LifecycleValidationError(
+                    'weight completion refused: a previous update failed on this engine; '
+                    'rebuild the engine from a complete checkpoint')
+            self._sleeping_tags.discard('weights')
+        finally:
+            guard.release()
 
     async def init_weights_update_group(self, request: Any):
         """Init disaggregated weights-update process group."""
@@ -686,20 +700,30 @@ class Engine(EngineBase):
     async def sleep(self, level: int = 1):
         """Sleep."""
         logger.info('PyTorch engine sleep requested: level=%s.', level)
-        # log sleep tags so we can resume at the right condition in wakeup.
-        self._sleeping_tags = _SLEEPING_TAGS.copy()
-        # block ADD_MESSAGE and ADD_SESSION
-        self._block_new_inputs()
-        if self._engine_loop is not None:
-            await self._engine_loop.drain_for_sleep()
-            logger.info('PyTorch engine loop drained for sleep.')
-        # cancel all remain sessions
-        self._cancel_and_end_all_sessions()
-        await self.executor.sleep(level)
-        self.scheduler.reset_cache_after_worker_drain()
-        if self._engine_loop is not None:
-            self._engine_loop.reset_runtime_state()
-        logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
+        # Model-state mutex, held for the whole sleep lifecycle: refuse to
+        # discard/offload storage while a weight write still owns the model,
+        # and keep writers out until worker sleep has actually finished.
+        guard = self._get_model_state_lock()
+        if not guard.acquire(blocking=False):
+            raise LifecycleValidationError('sleep refused: a model-state operation is in progress')
+        try:
+            # log sleep tags so we can resume at the right condition in wakeup.
+            self._sleeping_tags = _SLEEPING_TAGS.copy()
+            # block ADD_MESSAGE and ADD_SESSION
+            self._block_new_inputs()
+            if self._engine_loop is not None:
+                await self._engine_loop.drain_for_sleep()
+                logger.info('PyTorch engine loop drained for sleep.')
+            # cancel all remain sessions
+            self._cancel_and_end_all_sessions()
+            await self.executor.sleep(level)
+            self.scheduler.reset_cache_after_worker_drain()
+            if self._engine_loop is not None:
+                self._engine_loop.reset_runtime_state()
+            logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.',
+                        level, sorted(self._sleeping_tags))
+        finally:
+            guard.release()
 
     def wakeup(self, tags: list[str] | None = None):
         """Restore worker resources while excluding concurrent model-state writes."""
@@ -707,6 +731,10 @@ class Engine(EngineBase):
         if not guard.acquire(blocking=False):
             raise LifecycleValidationError('wakeup refused: a model-state operation is in progress')
         try:
+            if self._weights_update_error is not None:
+                raise LifecycleValidationError(
+                    'wakeup refused: a previous weight update failed on this engine; '
+                    'rebuild the engine from a complete checkpoint')
             self._wakeup_resources(tags)
         finally:
             guard.release()
