@@ -14,6 +14,58 @@ import torch
 from lmdeploy.pytorch.nn.kpool import kpool_packed_cache_views
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+def test_bf16_pooling_retains_fp32_intermediates() -> None:
+    from lmdeploy.pytorch.backends.cuda.kpool import kpool_compress_quantize_cuda
+
+    torch.manual_seed(136)
+    keys = torch.randn(37, 4, 128, device='cuda', dtype=torch.bfloat16)
+    scores = torch.randn_like(keys)
+    ape = torch.randn(4, 128, device='cuda')
+    values, scales = kpool_compress_quantize_cuda(keys,
+                                                  scores,
+                                                  ape,
+                                                  mode='decode',
+                                                  round_scale=True,
+                                                  out_dtype=torch.bfloat16)
+    expected = (keys.double() *
+                (scores.double() + ape.double()).softmax(dim=1)).sum(dim=1)
+    rounded_probabilities = (scores.float() + ape).softmax(dim=1).to(
+        keys.dtype)
+    rounded_products = (keys * rounded_probabilities).sum(dim=1)
+    # Rounding probabilities/products to BF16 before reduction changes Top-K.
+    assert (
+        values.double() -
+        expected).norm() < 0.7 * (rounded_products.double() - expected).norm()
+    assert torch.equal(scales, torch.ones_like(scales))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+def test_bf16_selection_keeps_head_projection_in_fp32() -> None:
+    from lmdeploy.pytorch.nn.kpool import KPoolIndexer
+
+    torch.manual_seed(137)
+    indexer = KPoolIndexer(4096,
+                           32,
+                           128,
+                           2048,
+                           1536,
+                           4,
+                           device='cuda',
+                           dtype=torch.bfloat16)
+    hidden = torch.randn(1, 32, 4096, device='cuda', dtype=torch.bfloat16)
+    weight = indexer.weights_proj.weight
+    assert weight.dtype == torch.float32
+    weight.data.normal_(std=0.02)
+    expected = torch.nn.functional.linear(hidden.float(), weight) * 32**-0.5
+    actual = indexer.project_head_gate(hidden)
+    assert actual.dtype == torch.float32
+    assert torch.equal(actual, expected)
+    rounded = torch.nn.functional.linear(hidden,
+                                         weight.bfloat16()).float() * 32**-0.5
+    assert not torch.equal(actual, rounded)
+
+
 @pytest.mark.parametrize('setting', [None, '0', '1'])
 def test_startup_precision_selects_real_cache_request(setting: str | None) -> None:
     script = '''

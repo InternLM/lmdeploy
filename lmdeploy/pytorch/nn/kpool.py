@@ -94,6 +94,8 @@ class KPoolIndexer(nn.Module):
     Set ``LMDEPLOY_GLM53_KPOOL_BF16=1`` before starting workers to store
     unrotated BF16 pools. The default is rotated FP8. This changes the packed
     cache layout and requires rebuilding the engine to switch precision.
+    BF16 storage still uses FP32 pooling intermediates and head projection;
+    casting a BF16 head projection to FP32 afterwards is not equivalent.
     """
 
     def __init__(
