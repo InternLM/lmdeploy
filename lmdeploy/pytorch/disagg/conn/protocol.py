@@ -146,6 +146,8 @@ class MigrationRequest(BaseModel):
     remote_token_id: int = 0
     remote_block_ids: list[int] = Field(default_factory=list)
     handoff: PDHandoff | None = None
+    # P's complete, untruncated text prompt. D validates it against the handoff.
+    prompt_token_ids: list[int] | None = None
 
     is_dummy_prefill: bool = False
 

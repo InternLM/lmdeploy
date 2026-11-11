@@ -8,6 +8,7 @@ from http import HTTPStatus
 
 import shortuuid
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 
 from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
@@ -186,6 +187,13 @@ def register(router: APIRouter, server_context) -> None:
         if migration_request:
             migration_request = MigrationRequest.model_validate(
                 migration_request)
+            if migration_request.handoff is not None and migration_request.prompt_token_ids is not None:
+                # Keep messages/tools for response parsing, but reuse P's exact
+                # tokenization. The engine verifies the handoff prompt digest.
+                resolved_input_ids = migration_request.prompt_token_ids
+                # IDs now belong to the input; do not copy them again with the
+                # generation config or send a duplicate through engine RPC.
+                migration_request.prompt_token_ids = None
 
         model_name = request.model
         adapter_name = None
@@ -419,4 +427,8 @@ def register(router: APIRouter, server_context) -> None:
             response['remote_token_ids'] = remote_token_ids
             response['pd_handoff'] = res.pd_handoff
 
+        if pd_prefill:
+            # model_dump already produced JSON-compatible values. Avoid
+            # FastAPI walking every prompt token again in jsonable_encoder.
+            return JSONResponse(response)
         return response

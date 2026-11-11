@@ -116,6 +116,36 @@ def test_raw_input_ids_have_ids_without_rendered_prompt(chat_endpoint, stream, n
     assert context.session_manager.sessions == {}
 
 
+@pytest.mark.parametrize('migrating', [False, True])
+def test_pd_reuses_prompt_ids_and_preserves_parser_messages(chat_endpoint, migrating):
+    _, context = chat_endpoint
+    ids = [91, 92, 93, 94]
+    original_preprocess = context.async_engine.preprocess
+
+    class Parser(context.response_parser_cls):
+        def __init__(self, request):
+            assert request.messages == [{'role': 'user', 'content': 'Hello'}]
+            super().__init__(request)
+
+    async def preprocess(messages, session, **kwargs):
+        assert (messages is None) is migrating
+        assert kwargs['input_ids'] == (ids if migrating else None)
+        assert kwargs['do_preprocess'] is not migrating
+        if migrating:
+            assert kwargs['gen_config'].migration_request.prompt_token_ids is None
+        return await original_preprocess(messages, session, **kwargs)
+
+    context.response_parser_cls = Parser
+    context.async_engine.preprocess = preprocess
+    migration = dict(protocol=2, remote_engine_id='prefill', remote_session_id=1, prompt_token_ids=ids,
+                     handoff=dict(transfer_id='transfer', engine_epoch='epoch', cache_schema='schema',
+                                  prompt_digest='digest', prompt_token_count=4, valid_token_count=3,
+                                  block_size=64, block_ids=[1]))
+    payloads = _post(context, return_token_ids=True,
+                     **({'migration_request': migration} if migrating else {}))
+    assert payloads[0]['prompt_token_ids'] == (ids if migrating else [101, 102, 103, 104])
+
+
 @pytest.mark.parametrize('stream', [False, True])
 def test_prompt_ids_preserve_buffered_output_ids_and_logprobs(chat_endpoint, stream, monkeypatch):
     _, context = chat_endpoint
