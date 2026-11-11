@@ -254,3 +254,41 @@ def test_engine_sleep_excludes_concurrent_model_state_writes():
         release.set()
         await task
     asyncio.run(scenario())
+
+
+def test_cancelled_sleep_caller_keeps_guard_until_workers_finish():
+    async def scenario():
+        engine = _engine_shell()
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_worker_sleep(level):
+            started.set()
+            await release.wait()
+
+        engine.executor.sleep = slow_worker_sleep
+        task = asyncio.create_task(engine.sleep(1))
+        await asyncio.wait_for(started.wait(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # The cancelled caller must not release the guard: writers stay out
+        # while the worker sleep still runs in the background.
+        with pytest.raises(LifecycleValidationError, match='in progress'):
+            engine._execute_weights_update(lambda: None, model_write=True)
+        release.set()
+        await asyncio.sleep(0.05)
+        engine._execute_weights_update(lambda: None, model_write=True)  # guard free again
+        assert engine._weights_update_error is None
+    asyncio.run(scenario())
+
+
+def test_failed_sleep_latches_engine_state():
+    async def scenario():
+        engine = _engine_shell()
+        engine.executor.sleep = AsyncMock(side_effect=RuntimeError('worker gone'))
+        with pytest.raises(RuntimeError, match='worker gone'):
+            await engine.sleep(1)
+        assert engine._weights_update_error == 'sleep failed: RuntimeError'
+        with pytest.raises(LifecycleValidationError, match='rebuild the engine'):
+            engine.wakeup()
+    asyncio.run(scenario())

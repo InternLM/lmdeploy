@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -190,3 +191,24 @@ def test_no_argument_completion_completes_open_legacy_transaction():
     assert asyncio.run(endpoint(bucket(False))).status_code == 200  # update_id transaction
     with pytest.raises(RuntimeError, match='does not own'):
         explicit.complete_weights_update()  # legacy form cannot steal an explicit one
+
+
+def test_no_argument_completion_refused_while_transfer_in_flight():
+    async def scenario():
+        engine, _ = make_endpoint(tags=())
+        entered, release = asyncio.Event(), threading.Event()
+
+        def slow_update(request):
+            entered.set()
+            release.wait(5)
+
+        engine.engine.update_params = Mock(side_effect=slow_update)
+        task = asyncio.create_task(route(engine, '/update_weights')(legacy(False)))
+        await asyncio.wait_for(entered.wait(), 5)
+        with pytest.raises(RuntimeError, match='does not own'):
+            engine.complete_weights_update()  # transfer still running
+        release.set()
+        assert (await task).status_code == 200
+        engine.complete_weights_update()  # valid now: transfer done, transaction open
+        assert engine.weights_content_ready
+    asyncio.run(scenario())

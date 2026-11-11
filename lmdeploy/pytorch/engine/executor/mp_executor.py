@@ -403,8 +403,13 @@ class MPExecutor(ExecutorBase):
         self.collective_rpc('warmup')
 
     async def sleep(self, level: int = 1):
-        """Sleep."""
-        await self.collective_rpc_async('sleep', args=(level, ), return_mask=0)
+        """Sleep, and only return once every worker finished sleeping.
+
+        Worker-side commands run as concurrent tasks, so a fire-and-forget
+        sleep here would let a later write or wakeup overlap the storage
+        offload/discard that sleep performs.
+        """
+        await self.collective_rpc_async('sleep', args=(level, ), return_mask=0xff)
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""

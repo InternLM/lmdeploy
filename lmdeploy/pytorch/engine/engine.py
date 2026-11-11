@@ -703,27 +703,40 @@ class Engine(EngineBase):
         # Model-state mutex, held for the whole sleep lifecycle: refuse to
         # discard/offload storage while a weight write still owns the model,
         # and keep writers out until worker sleep has actually finished.
+        # The lifecycle runs as an owned background task: cancelling the
+        # caller neither aborts the worker sleep nor releases the guard.
         guard = self._get_model_state_lock()
         if not guard.acquire(blocking=False):
             raise LifecycleValidationError('sleep refused: a model-state operation is in progress')
-        try:
-            # log sleep tags so we can resume at the right condition in wakeup.
-            self._sleeping_tags = _SLEEPING_TAGS.copy()
-            # block ADD_MESSAGE and ADD_SESSION
-            self._block_new_inputs()
-            if self._engine_loop is not None:
-                await self._engine_loop.drain_for_sleep()
-                logger.info('PyTorch engine loop drained for sleep.')
-            # cancel all remain sessions
-            self._cancel_and_end_all_sessions()
-            await self.executor.sleep(level)
-            self.scheduler.reset_cache_after_worker_drain()
-            if self._engine_loop is not None:
-                self._engine_loop.reset_runtime_state()
-            logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.',
-                        level, sorted(self._sleeping_tags))
-        finally:
-            guard.release()
+
+        async def run_sleep():
+            try:
+                # log sleep tags so we can resume at the right condition in wakeup.
+                self._sleeping_tags = _SLEEPING_TAGS.copy()
+                # block ADD_MESSAGE and ADD_SESSION
+                self._block_new_inputs()
+                if self._engine_loop is not None:
+                    await self._engine_loop.drain_for_sleep()
+                    logger.info('PyTorch engine loop drained for sleep.')
+                # cancel all remain sessions
+                self._cancel_and_end_all_sessions()
+                await self.executor.sleep(level)
+                self.scheduler.reset_cache_after_worker_drain()
+                if self._engine_loop is not None:
+                    self._engine_loop.reset_runtime_state()
+                logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.',
+                            level, sorted(self._sleeping_tags))
+            except BaseException as exc:
+                # Storage/session state is unknown; no further model-state
+                # operation may run on this engine without a rebuild.
+                self._weights_update_error = f'sleep failed: {type(exc).__name__}'
+                raise
+            finally:
+                guard.release()
+
+        task = asyncio.create_task(run_sleep())
+        task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        await asyncio.shield(task)
 
     def wakeup(self, tags: list[str] | None = None):
         """Restore worker resources while excluding concurrent model-state writes."""

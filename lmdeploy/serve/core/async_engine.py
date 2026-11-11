@@ -450,7 +450,8 @@ class AsyncEngine:
             # ``weights_update_pending`` (not ``busy``) marks a transaction
             # still awaiting its final bucket; its transfer already ended.
             current = self.weights_update_owner
-            if (not self.weights_update_pending or current is None or current[1] is not None):
+            if (self.weights_update_busy or not self.weights_update_pending
+                    or current is None or current[1] is not None):
                 raise RuntimeError('Weight completion does not own the active transaction/operation.')
             owner, operation = current, self.weights_update_operation
         if (owner != self.weights_update_owner
