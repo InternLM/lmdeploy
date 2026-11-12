@@ -23,6 +23,7 @@ def _silu_and_mul_kernel(
     BLOCK_SIZE_N: tl.constexpr,
     SWIGLU_LIMIT: tl.constexpr,
     PRECISE_MUL: tl.constexpr,
+    ROUND_SILU: tl.constexpr,
 ):
     """Silu and mul kernel."""
     n_block_id = tl.program_id(0)
@@ -55,7 +56,7 @@ def _silu_and_mul_kernel(
         else:
             exp_neg_gate = fast_expf(-gate)
         gate = gate / (1 + exp_neg_gate)
-        if not PRECISE_MUL:
+        if not PRECISE_MUL or ROUND_SILU:
             gate = gate.to(gateup_ptr.dtype.element_ty)
         out = gate * up
 
@@ -69,8 +70,11 @@ def _silu_and_mul_kernel(
 def silu_and_mul(gate_up: torch.Tensor,
                  out: torch.Tensor = None,
                  swiglu_limit: float | None = None,
-                 precise_mul: bool = False):
-    """Silu and mul."""
+                 precise_mul: bool = False, round_silu: bool = False):
+    """Silu and mul.
+
+    ``round_silu`` retains input-dtype SiLU rounding even with FP32 precise multiplication.
+    """
     assert gate_up.dim() == 2
 
     M = gate_up.size(0)
@@ -101,7 +105,7 @@ def silu_and_mul(gate_up: torch.Tensor,
                                stride_on=out.stride(1),
                                BLOCK_SIZE_N=BLOCK_SIZE_N,
                                SWIGLU_LIMIT=swiglu_limit,
-                               PRECISE_MUL=precise_mul,
+                               PRECISE_MUL=precise_mul, ROUND_SILU=round_silu,
                                num_warps=num_warps,
                                num_stages=num_stages)
 
@@ -126,6 +130,8 @@ def _silu_and_mul_moe_ep_kernel(
     BLOCK_SIZE_N: tl.constexpr,
     SWIGLU_LIMIT: tl.constexpr,
     PRECISE_MUL: tl.constexpr,
+    ROUND_SILU: tl.constexpr,
+    TRAINING_CONTRACT: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
     ROUND_SCALE: tl.constexpr,
     FP8_MIN: tl.constexpr,
@@ -165,7 +171,7 @@ def _silu_and_mul_moe_ep_kernel(
         else:
             exp_neg_gate = fast_expf(-gate)
         gate = gate / (1 + exp_neg_gate)
-        if not PRECISE_MUL:
+        if not PRECISE_MUL or TRAINING_CONTRACT or ROUND_SILU:
             gate = gate.to(gateup_ptr.dtype.element_ty)
         out = gate * up
 
@@ -174,15 +180,21 @@ def _silu_and_mul_moe_ep_kernel(
             out = out.to(gateup_ptr.dtype.element_ty)
             groups: tl.constexpr = BLOCK_SIZE_N // GROUP_SIZE
             values = out.reshape(groups, GROUP_SIZE)
-            amax = tl.max(tl.abs(values), axis=1)
-            amax = tl.maximum(amax, 1e-6).to(tl.float32)
-            if ROUND_SCALE:
-                scale = fast_round_scale(amax, 1 / FP8_MAX)
-                rscale = 1 / scale
+            if TRAINING_CONTRACT:
+                # Match materialized BF16 SwiGLU followed by XTuner per-tile quantization.
+                amax = tl.max(tl.abs(values.to(tl.float32)), axis=1)
+                scale = tl.clamp(amax * (1 / FP8_MAX), 1e-12, 3e38)
+                out = values.to(tl.float32) / scale[:, None]
             else:
-                scale = amax * (1 / FP8_MAX)
-                rscale = FP8_MAX / amax
-            out = values.to(tl.float32) * rscale[:, None]
+                amax = tl.max(tl.abs(values), axis=1)
+                amax = tl.maximum(amax, 1e-6).to(tl.float32)
+                if ROUND_SCALE:
+                    scale = fast_round_scale(amax, 1 / FP8_MAX)
+                    rscale = 1 / scale
+                else:
+                    scale = amax * (1 / FP8_MAX)
+                    rscale = FP8_MAX / amax
+                out = values.to(tl.float32) * rscale[:, None]
             out = tl.clamp(out, FP8_MIN, FP8_MAX).reshape(BLOCK_SIZE_N)
             group_offsets = n_block_id * groups + tl.arange(0, groups)
             scale_offsets = (e_id * M + m_id) * (N // GROUP_SIZE) + group_offsets
@@ -198,7 +210,8 @@ def _silu_and_mul_moe_ep_kernel(
 def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.Tensor = None,
                         swiglu_limit: float | None = None, precise_mul: bool = False,
                         output_scale: torch.Tensor = None, quant_group_size: int = 128,
-                        scale_fmt: str | None = None):
+                        scale_fmt: str | None = None, training_contract: bool = False,
+                                       round_silu: bool = False):
     """Silu and mul for moe with expert parallelism."""
     # gate_up: [num_experts, batch_size, 2*hidden_size]
     assert gate_up.dim() == 3
@@ -211,6 +224,11 @@ def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.
     E = gate_up.size(0)
     M = gate_up.size(1)
     N = gate_up.size(-1) // 2
+    if training_contract and (output_scale is None or out is None or not precise_mul or swiglu_limit != 10.0
+                              or scale_fmt is not None or quant_group_size != 128 or N != 2048
+                              or gate_up.dtype != torch.bfloat16 or out.dtype != torch.float8_e4m3fn
+                              or output_scale.dtype != torch.float32):
+        raise ValueError('Training W2 contract requires GLM BF16/clamp10/E4M3/tile128 without rounded scales.')
     if out is None:
         out_shape = (E, M, N)
         out = gate_up.new_empty(out_shape)
@@ -250,7 +268,8 @@ def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.
                                       stride_m=mask_m.stride(0),
                                       BLOCK_SIZE_N=BLOCK_SIZE_N,
                                       SWIGLU_LIMIT=swiglu_limit,
-                                      PRECISE_MUL=precise_mul,
+                                      PRECISE_MUL=precise_mul, ROUND_SILU=round_silu,
+                                      TRAINING_CONTRACT=training_contract,
                                       GROUP_SIZE=quant_group_size,
                                       ROUND_SCALE=scale_fmt == 'ue8m0',
                                       FP8_MIN=finfo.min if output_scale is not None else 0,
@@ -264,10 +283,13 @@ def silu_and_mul_moe_ep(gate_up: torch.Tensor, mask_m: torch.Tensor, out: torch.
 def silu_and_mul_masked_post_quant_fwd(input: torch.Tensor, output: torch.Tensor, output_scale: torch.Tensor,
                                        quant_group_size: int, masked_m: torch.Tensor, act_func=None, *,
                                        swiglu_limit: float | None = None, precise_mul: bool = False,
-                                       scale_fmt: str | None = None):
+                                       scale_fmt: str | None = None, training_contract: bool = False,
+                                       round_silu: bool = False):
     """Fuse activation and FP8 quantization for valid expert rows only.
 
     Invalid rows are left untouched; the following masked GEMM must ignore them.
+    ``training_contract`` opts into GLM BF16/clamp10/group128/E4M3/FP32-scale rounding
+    and rejects incompatible configurations. Both precision options default to off.
     """
     assert input.is_contiguous()
     assert output.is_contiguous()
@@ -276,6 +298,8 @@ def silu_and_mul_masked_post_quant_fwd(input: torch.Tensor, output: torch.Tensor
     assert input.shape[-1] % 2 == 0
     size_n = input.shape[-1] // 2
     assert size_n % quant_group_size == 0
+    if training_contract and act_func is not None:
+        raise ValueError('Training W2 contract requires the native fused activation.')
     if act_func is not None:
         activated = act_func(input, masked_m=masked_m)
         from .blocked_gemm_fp8 import _quant_fp8_launcher
@@ -285,4 +309,5 @@ def silu_and_mul_masked_post_quant_fwd(input: torch.Tensor, output: torch.Tensor
         return
     silu_and_mul_moe_ep(input, masked_m, output, swiglu_limit=swiglu_limit,
                         precise_mul=precise_mul, output_scale=output_scale,
-                        quant_group_size=quant_group_size, scale_fmt=scale_fmt)
+                        quant_group_size=quant_group_size, scale_fmt=scale_fmt,
+                        training_contract=training_contract, round_silu=round_silu)
