@@ -156,13 +156,13 @@ def test_sleep_must_finish_before_update_or_wakeup():
             await release.wait()
 
         engine.engine.executor.sleep = slow_worker_sleep
-        task = asyncio.create_task(engine.sleep(2))
+        task = asyncio.create_task(engine.sleep(1))  # level 1 keeps valid content
         await asyncio.wait_for(started.wait(), 5)
         with pytest.raises((RuntimeError, LifecycleValidationError)):
             engine.wakeup()
         release.set()
         await task
-        engine.wakeup(['weights'])
+        engine.wakeup(['weights'])  # valid: level-1 offload preserved content
         assert engine.engine.weight_state is WeightState.READY
     asyncio.run(scenario())
 
@@ -236,3 +236,45 @@ def test_group_management_rpcs_never_open_a_weight_transaction():
     # And an explicit-id bucket still works right after group init.
     engine2, endpoint2 = make_endpoint()
     assert asyncio.run(endpoint2(bucket(False, update_id='v1'))).status_code == 200
+
+
+def test_discarded_weights_block_serving_until_reloaded():
+    engine, _ = make_endpoint(tags=('weights', 'kv_cache'))
+    py = engine.engine
+    asyncio.run(py.sleep(2))  # level 2 discards weight content
+    py.wakeup(['weights'])  # resource cycle is legal (upstream semantics)...
+    assert 'weights' not in py.sleeping_tags
+    assert not py.weights_ready  # ...but the content is gone: serving stays refused
+    assert engine.serving_blocked()
+    with pytest.raises(RuntimeError, match='not ready'):
+        engine.wakeup(['kv_cache'])  # and KV wakeup cannot enable inference
+    # A committed update reloads content and re-enables serving.
+    assert asyncio.run(_distributed_endpoint(engine)(bucket(True))).status_code == 200
+    assert py.weights_ready
+
+
+def _distributed_endpoint(engine):
+    router = APIRouter()
+    register(router, SimpleNamespace(async_engine=engine))
+    return next(r.endpoint for r in router.routes
+                if r.path == '/update_weights_from_distributed')
+
+
+def test_same_transaction_second_bucket_queues_instead_of_409():
+    async def scenario():
+        engine, endpoint = make_endpoint()
+        entered, release = threading.Event(), threading.Event()
+        engine.engine.executor.update_weights_from_distributed.side_effect = \
+            lambda req: (entered.set(), release.wait(5), (True, 'done'))[2]
+        first = asyncio.create_task(endpoint(bucket(False)))
+        await asyncio.wait_for(asyncio.to_thread(entered.wait), 5)
+        # While bucket 1 is still transferring, the same transaction's next
+        # bucket must queue and join, not be refused at the reservation.
+        second = asyncio.create_task(endpoint(bucket(False)))
+        await asyncio.sleep(0.05)
+        assert not second.done(), second.exception() if second.done() else ''
+        release.set()
+        assert (await first).status_code == 200
+        assert (await second).status_code == 200
+        assert engine.engine.executor.update_weights_from_distributed.call_count == 2
+    asyncio.run(scenario())

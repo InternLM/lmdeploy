@@ -126,7 +126,12 @@ def register(router: APIRouter, server_context) -> None:
     async def update_params(request: UpdateParamsRequest, raw_request: Request = None):
         """Load legacy serialized tensors, preserving the JSON-null response."""
         async def transfer():
-            await asyncio.to_thread(server_context.async_engine.engine.update_params, request)
+            engine_obj = server_context.async_engine.engine
+            if hasattr(engine_obj, 'update_weights_from_serialized'):
+                result = await engine_obj.update_weights_from_serialized(request)
+                return (True, 'Weights updated.') if result is None else result
+            # Backends without the state machine keep the plain legacy path.
+            await asyncio.to_thread(engine_obj.update_params, request)
             return True, 'Weights updated.'
 
         result = await _apply_weights_update(transfer, final=request.finished,

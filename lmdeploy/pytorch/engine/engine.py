@@ -269,6 +269,11 @@ class Engine(EngineBase):
         self._open_txn_id: str | None = None
         self._seen_update_ids: set[str] = set()
         self._txn_wrote = False
+        # Content validity is separate from allocation: level-1 sleep keeps a
+        # valid CPU copy (tags say down, content stays valid), while level-2
+        # sleep / empty init discard content (a weights-only wakeup must NOT
+        # be treated as loading it).
+        self._weights_content_valid = not self.misc_config.empty_init
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
 
@@ -591,6 +596,18 @@ class Engine(EngineBase):
         self._execute_weights_update(self.executor.update_params, request,
                                      final=final, txn_id=txn_id)
 
+    async def update_weights_from_serialized(self, request: Any):
+        """Shielded async form of the legacy serialized-bucket update.
+
+        Cancellation of the awaiting request cannot remove the queued
+        executor job: the shielded background write runs to completion and
+        the weight state resolves by itself, like every other transport.
+        """
+        return await self._run_weights_update(
+            self.executor.update_params, request,
+            final=getattr(request, 'finished', False) is True,
+            txn_id=getattr(request, 'update_id', None))
+
     def _get_model_state_lock(self):
         """Exclude concurrent model-state changes while a synchronous executor call runs.
 
@@ -660,7 +677,15 @@ class Engine(EngineBase):
         yields, so no inference request can pass the readiness gate between
         the admission check and the state transition. Returns whether this
         call created the transaction.
+
+        Fast path: an already-open matching transaction needs no transition,
+        so a second bucket of the same transaction is admitted even while an
+        earlier bucket's transfer holds the model-state mutex (it then queues
+        on the async update lock like before).
         """
+        if (self._weight_state is WeightState.UPDATING
+                and self._open_txn_id == txn_id):
+            return False
         guard = self._get_model_state_lock()
         if not guard.acquire(blocking=False):
             raise LifecycleValidationError('another model-state operation is in progress')
@@ -706,6 +731,12 @@ class Engine(EngineBase):
         """Copy of the engine-side resource tags (weights / kv_cache down)."""
         return set(self._sleeping_tags)
 
+    @property
+    def weights_ready(self) -> bool:
+        """Weights are committed AND loaded: valid content, fully awake."""
+        return (self.weight_state is WeightState.READY
+                and getattr(self, '_weights_content_valid', True))
+
     def _commit_weight_transaction(self):
         """Finalize the open transaction: weights valid again."""
         self._weight_state = WeightState.READY
@@ -713,8 +744,9 @@ class Engine(EngineBase):
             self._seen_update_ids.add(self._open_txn_id)
         self._open_txn_id = None
         self._txn_wrote = False
-        # The committed weights are loaded: drop the engine-side weights
-        # sleep tag so a later kv-cache wakeup reopens input admission.
+        # The committed weights are loaded: mark content valid and drop the
+        # engine-side weights sleep tag so a kv-cache wakeup reopens admission.
+        self._weights_content_valid = True
         self._sleeping_tags.discard('weights')
 
     def _get_weights_update_lock(self):
@@ -773,6 +805,10 @@ class Engine(EngineBase):
                     'rebuild the engine from a complete checkpoint')
             if self.weight_state is WeightState.UPDATING:
                 self._commit_weight_transaction()
+            else:
+                # Legacy assertion form on a closed engine: the caller states
+                # the weights it sent are loaded and valid.
+                self._weights_content_valid = True
             self._sleeping_tags.discard('weights')
         finally:
             guard.release()
@@ -870,6 +906,10 @@ class Engine(EngineBase):
                 self._weight_state = WeightState.POISONED
                 raise
             finally:
+                if level >= 2:
+                    # Level 2 discards the weights; only a real load (update
+                    # transaction or completion) makes content valid again.
+                    self._weights_content_valid = False
                 guard.release()
 
         task = asyncio.create_task(run_sleep())
@@ -890,6 +930,9 @@ class Engine(EngineBase):
                 raise LifecycleValidationError(
                     'wakeup refused: a weight transaction is still open (missing '
                     'final bucket or completion)')
+            # Content validity (level-2 discard, empty init, committed reload)
+            # gates SERVING readiness via ``weights_ready`` — the sleep/wakeup
+            # resource cycle itself stays available with upstream semantics.
             self._wakeup_resources(tags)
         finally:
             guard.release()

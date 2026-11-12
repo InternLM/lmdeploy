@@ -25,6 +25,7 @@ def make_endpoint(*, success=True, tags=('weights', 'kv_cache'), dispatched=0):
     py._open_txn_id = None
     py._seen_update_ids = set()
     py._weights_update_lock = None
+    py._weights_content_valid = True
     py._sleeping_tags = set(tags)
     py._engine_loop = None
     py.req_manager = SimpleNamespace(block_request_types=lambda *_: None,

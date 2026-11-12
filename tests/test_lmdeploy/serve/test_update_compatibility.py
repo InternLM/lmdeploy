@@ -237,3 +237,23 @@ def test_timeout_committed_write_allows_kv_wakeup_without_serve_mirror():
         assert not engine.serving_blocked()
         os.environ.pop('LMDEPLOY_WEIGHT_UPDATE_TIMEOUT_SECONDS', None)
     asyncio.run(scenario())
+
+
+def test_legacy_waiter_cancellation_still_resolves_state():
+    async def scenario():
+        engine, _ = make_endpoint(tags=())
+        routes = _routes(engine)
+        entered, release = threading.Event(), threading.Event()
+        engine.engine.executor.update_params = Mock(
+            side_effect=lambda req: (entered.set(), release.wait(5), None)[2])
+        task = asyncio.create_task(routes[('/update_weights', 'POST')](legacy(True)))
+        await asyncio.wait_for(asyncio.to_thread(entered.wait), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert engine.engine.weight_state.value == 'updating'
+        release.set()
+        await asyncio.sleep(0.1)
+        # The shielded legacy write resolved the state by itself.
+        assert engine.engine.weight_state.value == 'ready'
+    asyncio.run(scenario())

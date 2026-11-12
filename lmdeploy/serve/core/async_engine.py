@@ -397,8 +397,7 @@ class AsyncEngine:
         engine = getattr(self, 'engine', None)
         if getattr(engine, 'weight_state', None) is None:
             return None
-        return (engine.weight_state.value == 'ready'
-                and 'weights' not in engine.sleeping_tags)
+        return (engine.weights_ready and 'weights' not in engine.sleeping_tags)
 
     def serving_blocked(self) -> bool:
         """True when inference must be refused (engine truth when available)."""
