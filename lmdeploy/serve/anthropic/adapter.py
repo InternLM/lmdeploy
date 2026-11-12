@@ -9,6 +9,7 @@ from typing import Any, TypeVar
 import shortuuid
 
 from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
+from lmdeploy.serve.parsers.tool_parser.tool_parser import dump_tool_schemas
 
 from .protocol import (
     ContentBlockParam,
@@ -405,7 +406,8 @@ def count_input_tokens(async_engine,
 
     # Tool schemas are rendered into the prompt by the chat template, so a
     # count that leaves them out is not the count the same request produces.
-    prompt = async_engine.chat_template.messages2prompt(messages, tools=tools)
+    # Templates are fed the same dumped schemas the generation path renders.
+    prompt = async_engine.chat_template.messages2prompt(messages, tools=dump_tool_schemas(tools))
     token_ids = async_engine.tokenizer.encode(prompt, add_bos=True)
     return len(token_ids)
 
