@@ -730,7 +730,7 @@ def _make_minimal_build_agent(target_layer_ids, mask_token_id=99):
     )
     agent.need_output = False
     agent.strategy_factory = None
-    agent.cache_config = SimpleNamespace(max_batches=4)
+    agent.cache_config = SimpleNamespace(max_batches=4, kv_transfer_config=None)
     agent.spec_agent = spec_agent
     return agent
 
@@ -838,6 +838,7 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
             return {'hidden_states': torch.tensor([0])}
 
     class _CacheEngine:
+        routed_experts_cache = None
         cache_config = SimpleNamespace(quant_policy=0)
         gpu_cache = object()
         block_caches = {}

@@ -641,14 +641,12 @@ def test_remote_r3_publishes_only_after_all_ranks_and_returns_full_history(make_
     routes = np.arange(16 * 2 * 3, dtype=np.uint16).reshape(16, 2, 3)
     seq = scheduler.add_session(1).add_sequence(
         torch.arange(21), sampling_param=SamplingParam(return_routed_experts=True))
-    connector.client._routed_results[seq.seq_id] = routes
     output = scheduler.schedule(is_prefill=True)
     assert output.running == []
     connector.build_connector_meta(output)
-    if outcome == 'missing-r3':
-        connector._load_routes.pop(seq.seq_id, None)
     aggregator = KVConnectorOutputAggregator(world_size=2)
     first = KVConnectorOutput(finished_receiving={seq.seq_id},
+                              routed_experts={} if outcome == 'missing-r3' else {seq.seq_id: routes},
                               failed_receiving={seq.seq_id} if outcome == 'worker-failure' else set())
     scheduler.update_connector_output(aggregator.aggregate([first, None]))
     assert len(seq.all_routed_experts) == 0
@@ -697,41 +695,33 @@ def fa_r3_scheduler():
         scheduler.shutdown()
 
 
-def test_r3_fa_multimodal_clamp_restores_exact_safe_prefix_and_advances(fa_r3_scheduler):
+@pytest.mark.parametrize('local_step', [0, 6])
+def test_r3_fa_multimodal_clamp_restores_exact_safe_prefix_and_advances(fa_r3_scheduler, local_step):
     import numpy as np
     scheduler, connector, seq = fa_r3_scheduler
     routes = np.arange(16 * 2 * 3, dtype=np.uint16).reshape(16, 2, 3)
-    connector.client._routed_results[seq.seq_id] = routes
+    if local_step:
+        seq.append_routed_experts(routes[:local_step])
+        seq.kv_token_limit = local_step
+        scheduler.block_manager.allocate(seq)
+        scheduler.block_trie.allocate(seq)
+        seq.set_step(local_step)
+        seq.kv_token_limit = None
     assert scheduler.schedule(is_prefill=True).running == []
     metadata = connector.build_connector_meta(KVConnectorStepInput())
     assert metadata.load_requests[0].remote_block_count == 2
-    scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+    scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id},
+                                                        routed_experts={seq.seq_id: routes[local_step // 4 * 4:8]}))
     assert seq.num_history_ids == 8
     np.testing.assert_array_equal(seq.all_routed_experts.get_real(), routes[:8])
     assert scheduler.schedule(is_prefill=True).running == [seq]
 
 
-@pytest.mark.parametrize('rows', [None, 8, 15, 20])
-def test_r3_fa_clamp_checks_original_coverage_before_slicing(fa_r3_scheduler, rows):
-    import numpy as np
-    scheduler, connector, seq = fa_r3_scheduler
-    if rows is not None:
-        connector.client._routed_results[seq.seq_id] = np.zeros((rows, 2, 3), np.uint16)
-    assert connector.get_num_new_matched_tokens(seq, 0) == (0, False)
-    assert connector.get_num_new_matched_tokens(seq, 0) == (0, False)
-    assert connector.client.lookup.call_count == 1
-    assert scheduler.schedule(is_prefill=True).running == [seq]
-    assert len(seq.all_routed_experts) == 0
-
-
 def test_r3_paging_rejection_marks_load_failed_and_recomputes(fa_r3_scheduler):
-    import numpy as np
     scheduler, connector, seq = fa_r3_scheduler
-    connector.client._routed_results[seq.seq_id] = np.zeros((16, 2, 3), np.uint16)
     assert scheduler.schedule(is_prefill=True).running == []
     connector.build_connector_meta(KVConnectorStepInput())
     # Simulate a corrupt/missing result after a valid plan and successful worker I/O.
-    connector._load_routes.pop(seq.seq_id)
     scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
     assert seq.num_history_ids == len(seq.all_routed_experts) == 0
     assert connector._next_save_block.get(seq.seq_id, 0) == 0

@@ -281,6 +281,15 @@ def model_forward(
             output = model(**input_dict)
             if not isinstance(output, dict):
                 output = dict(hidden_states=output)
+            routed_cache = cache_engine.routed_experts_cache
+            if routed_cache is not None and not inputs.is_dummy:
+                from lmdeploy.pytorch.kernels.cuda.routed_experts import scatter_routed_experts
+                # Like KV, speculative rows remain private until acceptance.
+                # Checkpoint copies and Store fences must follow this write.
+                scatter_routed_experts(output['all_routed_experts'], routed_cache,
+                                      context.q_start_loc, context.q_seqlens, inputs.history_lengths,
+                                      inputs.block_offsets, inputs.max_q_seqlen,
+                                      cache_engine.cache_config.kernel_block_size)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
             if getattr(context, 'is_model_meta_updated', False):
                 model_metas = context.model_metas
@@ -1507,7 +1516,10 @@ class BaseModelAgent:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
         # for router replay
-        enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
+        transfer = self.cache_config.kv_transfer_config
+        store_routes = transfer is not None and transfer.kv_connector_extra_config.get('store_routed_experts', False)
+        enable_return_routed_experts = ((self.misc_config.enable_return_routed_experts or store_routes)
+                                       and self.need_output)
 
         spec_model_ctx = self.spec_agent.build_model_context()
 
@@ -1562,11 +1574,16 @@ class BaseModelAgent:
             if not isinstance(cache_request_model, torch.nn.Module):
                 cache_request_model = cache_request_model.get_model()
             request_collector = partial(collect_block_cache_requests, cache_request_model)
+            transfer = cache_config.kv_transfer_config
+            store_routes = (transfer is not None
+                            and transfer.kv_connector_extra_config.get('store_routed_experts', False))
+            routed_shape = cache_request_model.routed_experts_shape if store_routes and self.need_output else None
             self.block_cache_plan = build_block_cache_plan(
                 self.model_config,
                 cache_config,
                 tp,
                 request_collector=request_collector,
+                routed_experts_shape=routed_shape,
             )
             target_nbytes = self.block_cache_plan.logical_block_nbytes
             spec_nbytes = self.spec_agent.build_cache_plan(spec_cache_config)
@@ -1746,6 +1763,8 @@ class BaseModelAgent:
                     self._get_connector_kv_caches(),
                     state_cache_pools=self.state_cache_engine.connector_state_cache_pools,
                     **({'state_cache_schema': schema} if schema is not None else {}),
+                    **({'routed_experts_cache': self.cache_engine.routed_experts_cache}
+                       if self.cache_engine.routed_experts_cache is not None else {}),
                 )
 
             if self.memdecode_agent is not None:

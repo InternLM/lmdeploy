@@ -106,6 +106,8 @@ class KVConnectorOutput:
     finished_receiving: set[RequestId] | None = None
     failed_receiving: set[RequestId] = field(default_factory=set)
     failed_save_ids: set[KVOperationId] = field(default_factory=set)
+    # Independent CPU copies of only the suffix loaded by the output rank.
+    routed_experts: dict[RequestId, 'np.ndarray'] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -168,6 +170,7 @@ class KVConnectorOutputAggregator:
         # Load request ID -> executor worker slots that finished receiving it.
         # Load success is carried separately by ``failed_receiving``.
         self._receiving_ranks: dict[RequestId, set[int]] = {}
+        self._routed_experts: dict[RequestId, np.ndarray] = {}
 
     def _aggregate_completions(
         self,
@@ -218,23 +221,25 @@ class KVConnectorOutputAggregator:
             receiving_by_rank.append(output.finished_receiving)
             failed_receiving.update(output.failed_receiving)
             failed_save_ids.update(output.failed_save_ids)
+            self._routed_experts.update(output.routed_experts)
+        finished_receiving = self._aggregate_completions(receiving_by_rank, self._receiving_ranks)
         return KVConnectorOutput(
             completed_save_ids=self._aggregate_completions(
                 saving_by_rank,
                 self._saving_ranks,
             ),
-            finished_receiving=self._aggregate_completions(
-                receiving_by_rank,
-                self._receiving_ranks,
-            ),
+            finished_receiving=finished_receiving,
             failed_receiving=failed_receiving,
             failed_save_ids=failed_save_ids,
+            routed_experts={request_id: self._routed_experts.pop(request_id)
+                            for request_id in finished_receiving or () if request_id in self._routed_experts},
         )
 
     def clear(self) -> None:
         """Discard partial completions when pending executor work is reset."""
         self._saving_ranks.clear()
         self._receiving_ranks.clear()
+        self._routed_experts.clear()
 
 
 class KVConnectorBase(ABC):
@@ -268,6 +273,7 @@ class KVConnectorBase(ABC):
         *,
         state_cache_pools: Sequence[KVCachePool] = (),
         state_cache_schema: str | None = None,
+        routed_experts_cache: torch.Tensor | None = None,
     ) -> None:
         """Register GPU KV-cache tensors with the external store.
 
@@ -392,14 +398,6 @@ class KVConnectorBase(ABC):
 
     def finish_transfers_after_worker_drain(self) -> None:
         """Drop scheduler-side transfer state after workers have drained."""
-        return None
-
-    def cache_routed_experts(self, requests: Sequence['SchedulerSequence']) -> None:
-        """Persist newly available CPU route history, when supported."""
-        return None
-
-    def drain_routed_experts(self) -> None:
-        """Complete CPU sidecar writes before worker Store shutdown."""
         return None
 
     def request_finished(

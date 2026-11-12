@@ -150,6 +150,14 @@ class CacheEngine:
         return self._block_caches
 
     @property
+    def routed_experts_cache(self) -> torch.Tensor | None:
+        """R3 storage sharing the scheduler's logical KV block indices."""
+        if 'routed_experts' not in self._block_caches:
+            return None
+        cache = self._block_caches['routed_experts']
+        return cache.view(self.cache_config.num_gpu_blocks, self.cache_config.block_size, *cache.shape[-2:])
+
+    @property
     def connector_kv_caches(self) -> Mapping[str, torch.Tensor]:
         """Return physical cache-pool rows for an external KV connector.
 

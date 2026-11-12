@@ -57,7 +57,6 @@ class _LookupPlan:
 
     remote_token_len: int
     block_hashes: tuple[bytes, ...]
-    routed_experts: object = None
 
 
 @dataclass
@@ -122,10 +121,11 @@ class MooncakeStoreScheduler:
         # chunk. Failure rewinds it; decode also covers unfinished earlier saves.
         self._next_save_block: dict[RequestId, int] = {}
         self._inflight_saves: dict[int, _SaveOperation] = {}
+        # Bound pinned blocks while Store is slower than inference. A skipped
+        # wave leaves the frontier retryable by the next accepted checkpoint.
+        self._max_pending_saves = 2 * cache_config.max_batches
         self._ready_decode_saves: list[MooncakeStoreSaveRequest] = []
         self._store_routes = kv_transfer_config.kv_connector_extra_config.get('store_routed_experts', False)
-        self._route_save_frontier: dict[int, int] = {}
-        self._load_routes: dict[int, object] = {}
 
     def bind_compact_state_manager(self, owner: SSMStateManager) -> None:
         """Inject paging's single unit owner before any compact Store
@@ -161,8 +161,7 @@ class MooncakeStoreScheduler:
             if token_len == 0:
                 continue
             hashes = self._get_request_block_hashes(request, req_id, token_len, self._cache_config.block_size)
-            client.submit(req_id, token_len, hashes, recompute_blocks=recompute_blocks,
-                          **({'require_routes': True} if request.return_routed_experts else {}))
+            client.submit(req_id, token_len, hashes, recompute_blocks=recompute_blocks)
 
     def _lookup_range(self, request: SchedulerSequence, num_computed_tokens: int) -> tuple[int, int]:
         """Return the safe query boundary and recompute margin, or zeros."""
@@ -239,19 +238,11 @@ class MooncakeStoreScheduler:
             block_hashes,
             non_block=True,
             recompute_blocks=recompute_blocks,
-            **({'require_routes': True} if request.return_routed_experts else {}),
         )
         # ``None`` means the asynchronous RPC is still running; zero is a
         # completed lookup with no remotely reusable suffix.
         if remote_token_len is None:
             return None, False
-
-        routes = self.client.take_routed_experts(req_id)
-        if request.return_routed_experts and remote_token_len:
-            # Validate the original remote coverage before any media-safe crop.
-            if routes is None or routes.ndim != 3 or len(routes) != remote_token_len:
-                self.reject_load_result(req_id)
-                return 0, False
 
         if self._is_hybrid:
             # Save excludes boundaries inside multimodal spans, whose full
@@ -279,7 +270,6 @@ class MooncakeStoreScheduler:
         self._lookup_plans[req_id] = _LookupPlan(
             remote_token_len=int(remote_token_len),
             block_hashes=block_hashes,
-            routed_experts=routes[:int(remote_token_len)] if routes is not None else None,
         )
         return num_external_tokens, True
 
@@ -372,14 +362,13 @@ class MooncakeStoreScheduler:
             remote_block_count=remote_block,
             state_slot=state_slot,
             state_unit_id=state_unit_id,
+            return_routed_experts=request.return_routed_experts,
         )
         if state_unit_id is not None:
             load_access = self._compact_owner.submit_load(bank, remote_token_len)
         # Commit only after every destination has been validated. A failed
         # binding leaves the lookup available for a later allocation attempt.
         self._lookup_plans.pop(req_id)
-        if plan.routed_experts is not None:
-            self._load_routes[req_id] = plan.routed_experts
         self._pending_loads[req_id] = load_request
         if load_access is not None:
             self._compact_loads[req_id] = load_access
@@ -415,6 +404,8 @@ class MooncakeStoreScheduler:
         save_requests = []
         for index, (request, token_len, request_blocks, request_logical_blocks) in enumerate(zip(
                 running, token_lens, block_ids, logical_block_ids, strict=True)):
+            if len(self._inflight_saves) >= self._max_pending_saves:
+                break
             if len(request.history_embeddings) > 0:
                 continue
 
@@ -526,7 +517,7 @@ class MooncakeStoreScheduler:
             raise RuntimeError('Compact Store saves require the paging state owner.')
         if not (len(running) == len(token_lens) == len(checkpoint_steps)):
             raise ValueError('Compact Store save plans must match model rows.')
-        credits = owner.get_num_free_store_saves()
+        credits = min(owner.get_num_free_store_saves(), self._max_pending_saves - len(self._inflight_saves))
         steps = []
         block_size = self._cache_config.block_size
         for seq, end, boundary in zip(running, token_lens, checkpoint_steps):
@@ -569,6 +560,8 @@ class MooncakeStoreScheduler:
         block_size = self._cache_config.block_size
         requests, sources, producers = [], [], []
         for seq, end, reference, ids, logical_ids in zip(running, ends, references, blocks, logical):
+            if len(self._inflight_saves) + len(requests) >= self._max_pending_saves:
+                break
             if reference is None:
                 continue
             boundary = reference.boundary
@@ -732,38 +725,13 @@ class MooncakeStoreScheduler:
                 self._failed_load_requests.discard(req_id)
                 if self._kv_transfer_config.is_kv_producer:
                     self._next_save_block[req_id] = request.remote_block_count
-            routes = self._load_routes.pop(req_id, None)
+            routes = connector_output.routed_experts.get(req_id)
             results.append(KVLoadResult(request_id=req_id, success=not failed,
                                         routed_experts=routes if not failed else None))
         return KVConnectorResult(
             load_results=tuple(results),
             completed_save_ids=completed_save_ids,
         )
-
-    def cache_routed_experts(self, requests: Sequence[SchedulerSequence]) -> None:
-        """Save immutable full blocks from the existing CPU route history."""
-        if not self._store_routes or not self._kv_transfer_config.is_kv_producer:
-            return
-        if self.client is None:
-            raise RuntimeError('R3 Store persistence requires kv_both')
-        block_size = self._cache_config.block_size
-        for request in requests:
-            if not request.return_routed_experts:
-                continue
-            req_id = int(request.seq_id)
-            end = min(len(request.all_routed_experts), request.num_history_ids) // block_size
-            start = self._route_save_frontier.get(req_id, 0)
-            if end <= start:
-                continue
-            hashes = self._get_request_block_hashes(request, req_id, end * block_size, block_size)
-            routes = request.all_routed_experts.get_real()[start * block_size:end * block_size]
-            if self.client.try_save_routed_experts(hashes[start:end], routes):
-                # Submitted is not confirmed; a failed sidecar only loses a cache opportunity.
-                self._route_save_frontier[req_id] = end
-
-    def drain_routed_experts(self) -> None:
-        if self.client is not None:
-            self.client.drain_routed_experts()
 
     def request_finished(
         self,
@@ -775,8 +743,6 @@ class MooncakeStoreScheduler:
             self.client.discard(req_id)
         self._request_hash_trackers.pop(req_id, None)
         self._lookup_plans.pop(req_id, None)
-        self._load_routes.pop(req_id, None)
-        self._route_save_frontier.pop(req_id, None)
         self._pending_loads.pop(req_id, None)
         if req_id in self._compact_loads:
             # Pending metadata has never been dispatched. An in-flight direct
@@ -796,8 +762,6 @@ class MooncakeStoreScheduler:
         for access in self._compact_loads.values():
             self._compact_owner.complete(access, success=False)
         self._compact_loads.clear()
-        self._load_routes.clear()
-        self._route_save_frontier.clear()
         self._lookup_plans.clear()
         if self.client is not None:
             self.client.discard_all()

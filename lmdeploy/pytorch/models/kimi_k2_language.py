@@ -969,6 +969,7 @@ class KimiK2ForCausalLM(nn.Module, CudaGraphMixin):
                                             device=device,
                                             prefix=add_prefix('lm_head', prefix))
         self._load_buffers = dict()
+        self.routed_experts_shape = (config.num_hidden_layers, config.num_experts_per_tok)
         self.enable_return_routed_experts = (
             get_build_model_context().enable_return_routed_experts)
 

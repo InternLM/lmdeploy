@@ -110,9 +110,13 @@ For PyTorch RL workloads, configure `KVTransferConfig` with
   weight generation. Supply a unique nonempty bootstrap `weight_version` before
   creating the connector.
 - `store_routed_experts=True`: save and restore complete uint16 routed-expert
-  histories alongside KV/state when routed-expert collection is enabled. Missing
-  or invalid sidecars fall back to computation; routes are published only after
-  the corresponding worker loads succeed.
+  blocks alongside KV/state on models that support routed-expert collection.
+  The output rank owns a fixed GPU pool indexed by the same logical blocks as
+  KV. Its memory is included in cache capacity planning, at
+  `block_size * num_layers * topk * 2` bytes per block on that rank.
+  Registration lasts for the pool's lifetime; transfers use the existing Store
+  sender/receiver and block leases. Missing or short R3 values fall back to
+  computation. The new group-2 format does not reuse legacy CPU sidecars.
 - `rl_share_across_engines=True` (default: `False`): require a successful weight
   commit after sleep before waking the KV cache. The trainer must coordinate the
   same version across replicas to enable sharing.
@@ -132,3 +136,13 @@ cold-miss without global Store deletion. Non-RL keys are unchanged. Shared
 versions have been validated with coordinated full colocated IPC updates, not
 partial recovery or every weight transport. This feature does not require or
 implement incremental routed-expert response offsets.
+
+Saving R3 adds a GPU scatter after forward, with no additional D2H or host wait
+on the inference path. Lookup only checks keys. When an API response needs
+routed experts, the receiver copies the loaded suffix to independent pinned
+CPU storage on its own CUDA stream and waits for that copy before reporting
+load completion. All ranks must finish before paging publishes the prefix or
+releases a cancelled load. Local block copies include R3, and sleep/shutdown
+drain model and Store work before releasing cache ownership. Pending save
+operations are bounded to twice `max_batches`; saturation skips a save wave
+without advancing its retry frontier.

@@ -47,10 +47,6 @@ class _FakeScheduler:
     def get_sessions(self):
         return list(self.sessions.values())
 
-    def drain_routed_experts(self):
-        assert self.events[-1] == 'drain'
-        self.events.append('r3-drain')
-
     def reset_cache_after_worker_drain(self):
         assert self.events[-1] == 'sleep'
         self.events.append('reset_cache')
@@ -145,7 +141,7 @@ def test_engine_sleep_blocks_inputs_cancels_sessions_then_sleeps(event_loop):
     assert resp.event.is_set()
     assert engine.scheduler.ended_sessions == [1]
     assert engine.executor.sleep_calls == [1]
-    assert engine.events == ['drain', 'r3-drain', 'sleep', 'reset_cache', 'reset_engine_loop']
+    assert engine.events == ['drain', 'sleep', 'reset_cache', 'reset_engine_loop']
 
 
 def test_engine_wakeup_reenables_inputs_only_after_all_tags(event_loop):

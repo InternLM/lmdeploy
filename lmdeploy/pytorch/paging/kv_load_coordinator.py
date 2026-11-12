@@ -457,15 +457,16 @@ class KVLoadCoordinator:
             else:
                 if record.seq.return_routed_experts:
                     routes = result.routed_experts
-                    start = len(record.seq.all_routed_experts)
-                    if (routes is None or routes.ndim != 3 or len(routes) != record.remote_step
-                            or start > record.remote_step):
+                    start = record.load_start_step
+                    if (routes is None or routes.ndim != 3 or len(routes) != record.remote_step - start
+                            or len(record.seq.all_routed_experts) < start):
                         if self.connector is not None:
                             self.connector.reject_load_result(result.request_id)
                         self._rollback(record)
                         self._finish_cancelled_or_failed(record)
                         continue
-                    record.seq.append_routed_experts(routes[start:])
+                    record.seq.all_routed_experts.resize(start)
+                    record.seq.append_routed_experts(routes)
                 self._publish(record)
 
     def _publish(self, record: _LoadRecord) -> None:

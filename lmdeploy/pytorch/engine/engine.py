@@ -634,7 +634,6 @@ class Engine(EngineBase):
         if self._engine_loop is not None:
             await self._engine_loop.drain_for_sleep()
             logger.info('PyTorch engine loop drained for sleep.')
-        await asyncio.to_thread(self.scheduler.drain_routed_experts)
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
         await self.executor.sleep(level)
@@ -694,19 +693,18 @@ class Engine(EngineBase):
                 try:
                     if engine_loop is not None:
                         engine_loop.stop()
-                    if (self.cache_config.compact_state_capacity is not None
-                            and self.cache_config.use_mooncake_store):
+                    if self.cache_config.use_mooncake_store:
                         self._block_new_inputs()
                         self._cancel_and_end_all_sessions()
-                        await asyncio.to_thread(self.scheduler.drain_routed_experts)
                         await self.executor.drain_for_shutdown()
                         self.scheduler.finish_kv_transfers_after_worker_drain()
                 except BaseException:
-                    # Do not turn a failed drain into a terminal ownership proof.
+                    # A failed drain is not proof that scheduler leases can
+                    # be released. Leave them intact while stopping workers.
                     try:
-                        self._loop_finally()
+                        self.executor.release()
                     except BaseException:
-                        logger.exception('Additional cleanup failure after shutdown drain failed.')
+                        logger.exception('Executor release also failed after shutdown drain failed.')
                     raise
                 else:
                     self._loop_finally()

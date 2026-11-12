@@ -106,8 +106,8 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
     target_rows = {'kv': object(), 'index': object()}
     mtp_rows = {'kv': object(), 'index': object()}
     state_pools = (object(), )
-    cache_engine = SimpleNamespace(connector_kv_caches=target_rows)
-    mtp_cache_engine = SimpleNamespace(connector_kv_caches=mtp_rows)
+    cache_engine = SimpleNamespace(routed_experts_cache=None, connector_kv_caches=target_rows)
+    mtp_cache_engine = SimpleNamespace(routed_experts_cache=None, connector_kv_caches=mtp_rows)
     state_cache_engine = SimpleNamespace(compact_plan=None, connector_state_cache_pools=state_pools)
 
     class _OldConnector:
@@ -193,7 +193,7 @@ def test_build_cache_engine_registers_state_pools_with_connector(monkeypatch):
     events = []
     row_mapping = {'kv': object()}
     state_pools = (object(), )
-    cache_engine = SimpleNamespace(connector_kv_caches=row_mapping)
+    cache_engine = SimpleNamespace(routed_experts_cache=None, connector_kv_caches=row_mapping)
     state_cache_engine = SimpleNamespace(compact_plan=None, connector_state_cache_pools=state_pools)
 
     class _Connector:
@@ -250,7 +250,7 @@ def test_build_cache_engine_propagates_registration_error(monkeypatch):
         specdecode_config=None,
         build_cache_engine=lambda stream: events.append('spec'),
     )
-    cache_engine = SimpleNamespace(connector_kv_caches={'kv': object()})
+    cache_engine = SimpleNamespace(routed_experts_cache=None, connector_kv_caches={'kv': object()})
     dist_ctx = SimpleNamespace(attn_tp_group=SimpleNamespace(rank=3))
     monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: cache_engine)
     monkeypatch.setattr(agent_module, 'StateCacheEngine',
@@ -283,7 +283,7 @@ def test_build_cache_engine_propagates_later_initialization_error(monkeypatch):
         specdecode_config=None,
         build_cache_engine=fail_spec_cache_build,
     )
-    cache_engine = SimpleNamespace(connector_kv_caches={'kv': object()})
+    cache_engine = SimpleNamespace(routed_experts_cache=None, connector_kv_caches={'kv': object()})
     dist_ctx = SimpleNamespace(attn_tp_group=SimpleNamespace(rank=3))
     monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: cache_engine)
     monkeypatch.setattr(agent_module, 'StateCacheEngine', lambda *args, **kwargs: SimpleNamespace(compact_plan=None))

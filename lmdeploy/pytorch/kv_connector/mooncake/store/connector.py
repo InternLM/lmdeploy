@@ -22,6 +22,8 @@ from .scheduler import MooncakeStoreScheduler
 from .worker import MooncakeStoreWorker
 
 if TYPE_CHECKING:
+    import torch
+
     from lmdeploy.pytorch.config import CacheConfig
     from lmdeploy.pytorch.messages import SchedulerSequence
     from lmdeploy.pytorch.paging.compact_state import SSMStateManager
@@ -145,12 +147,6 @@ class MooncakeStoreConnector(KVConnectorBase):
     def finish_transfers_after_worker_drain(self) -> None:
         return self._require_scheduler().finish_transfers_after_worker_drain()
 
-    def cache_routed_experts(self, requests: Sequence[SchedulerSequence]) -> None:
-        self._require_scheduler().cache_routed_experts(requests)
-
-    def drain_routed_experts(self) -> None:
-        self._require_scheduler().drain_routed_experts()
-
     def request_finished(
         self,
         request: SchedulerSequence,
@@ -165,11 +161,13 @@ class MooncakeStoreConnector(KVConnectorBase):
         *,
         state_cache_pools: Sequence[KVCachePool] = (),
         state_cache_schema: str | None = None,
+        routed_experts_cache: torch.Tensor | None = None,
     ) -> None:
         return self._require_worker().register_kv_caches(
             kv_caches,
             state_cache_pools=state_cache_pools,
             **({'state_cache_schema': state_cache_schema} if state_cache_schema is not None else {}),
+            **({'routed_experts_cache': routed_experts_cache} if routed_experts_cache is not None else {}),
         )
 
     def start_load_kv(self) -> None:

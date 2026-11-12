@@ -616,13 +616,6 @@ class Scheduler:
     def cache_routed_experts(self, seqs: SeqList) -> None:
         """Publish routed-expert history to reusable prefix nodes."""
         self.block_trie.cache_routed_experts(seqs)
-        if self.kv_connector is not None:
-            self.kv_connector.cache_routed_experts(seqs)
-
-    def drain_routed_experts(self) -> None:
-        """Retire sidecar RPCs while their worker endpoint is still alive."""
-        if self.kv_connector is not None:
-            self.kv_connector.drain_routed_experts()
 
     def resolve_gpu_block_offsets(self, logical_block_ids):
         """Resolve paging-owned logical ids for a forward cache-copy plan."""
