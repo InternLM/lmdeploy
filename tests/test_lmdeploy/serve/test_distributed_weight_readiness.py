@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi import APIRouter
 
-from lmdeploy.pytorch.engine.engine import Engine, LifecycleValidationError, WeightState
+from lmdeploy.pytorch.engine.engine import (
+    Engine, LifecycleValidationError, WeightState, WeightTransactionTracker)
 from lmdeploy.serve.core.async_engine import AsyncEngine
 from lmdeploy.serve.openai.endpoints.management import register
 from lmdeploy.serve.openai.protocol import UpdateWeightsFromDistributedRequest
@@ -21,11 +22,8 @@ from lmdeploy.serve.openai.protocol import UpdateWeightsFromDistributedRequest
 def make_endpoint(*, success=True, tags=('weights', 'kv_cache'), dispatched=0):
     py = Engine.__new__(Engine)
     py._model_state_lock = threading.Lock()
-    py._weight_state = WeightState.READY
-    py._open_txn_id = None
-    py._seen_update_ids = set()
+    py.__dict__['_weight_txn_store'] = WeightTransactionTracker(content_valid=True)
     py._weights_update_lock = None
-    py._weights_content_valid = True
     py._sleeping_tags = set(tags)
     py._engine_loop = None
     py.req_manager = SimpleNamespace(block_request_types=lambda *_: None,

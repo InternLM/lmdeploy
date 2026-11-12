@@ -113,6 +113,98 @@ class WeightState(Enum):
 
 
 
+class WeightTransactionTracker:
+    """Single implementation of the weight transaction state machine.
+
+    One instance per engine owner (a local ``Engine``, or an MP-engine proxy
+    aggregating its workers). The owner serializes calls with its own lock;
+    this class only owns the state and its transitions.
+    """
+
+    def __init__(self, content_valid: bool = True):
+        self.state = WeightState.READY
+        self.open_txn_id: str | None = None
+        self.seen_update_ids: set[str] = set()
+        self.txn_wrote = False
+        self.content_valid = content_valid
+
+    # -- admission -----------------------------------------------------
+    def check_admission(self, txn_id) -> bool:
+        """Validate a bucket against open/committed transactions.
+
+        Returns whether this call OPENS the transaction (READY -> UPDATING);
+        raises on poison, identity mismatch or replayed ids.
+        """
+        if self.state is WeightState.POISONED:
+            raise LifecycleValidationError(
+                'weight update refused: a previous update failed on this engine; '
+                'rebuild the engine from a complete checkpoint')
+        if self.state is WeightState.UPDATING:
+            if txn_id != self.open_txn_id:
+                raise LifecycleValidationError(
+                    'weight update refused: another weight transaction is open '
+                    f'({self.open_txn_id!r}); finish it before starting {txn_id!r}')
+            return False
+        if txn_id is not None and txn_id in self.seen_update_ids:
+            raise LifecycleValidationError(
+                f'weight update refused: update_id {txn_id!r} was already '
+                'committed; use a new id')
+        self.open_txn_id = txn_id
+        self.state = WeightState.UPDATING
+        self.txn_wrote = False
+        return True
+
+    def matches_open(self, txn_id) -> bool:
+        """Lock-free same-identity check (racy read is always re-checked)."""
+        return self.state is WeightState.UPDATING and self.open_txn_id == txn_id
+
+    # -- write outcome ---------------------------------------------------
+    def record_write_result(self, result, final: bool) -> bool:
+        """Resolve a finished executor write; True when it committed."""
+        self.txn_wrote = True
+        succeeded = result is None or (
+            isinstance(result, tuple) and len(result) == 2 and result[0] is True)
+        if not succeeded:
+            self.poison()
+            return False
+        if final:
+            self.commit()
+            return True
+        return False
+
+    def record_write_failure(self):
+        self.txn_wrote = True
+        self.poison()
+
+    def poison(self):
+        self.state = WeightState.POISONED
+
+    def commit(self):
+        self.state = WeightState.READY
+        if self.open_txn_id is not None:
+            self.seen_update_ids.add(self.open_txn_id)
+        self.open_txn_id = None
+        self.txn_wrote = False
+        self.content_valid = True
+
+    # -- resource lifecycle ---------------------------------------------
+    def discard_content(self):
+        self.content_valid = False
+
+    # -- queries ----------------------------------------------------------
+    @property
+    def weights_ready(self) -> bool:
+        return self.state is WeightState.READY and self.content_valid
+
+    def abandon_if_clean(self, txn_id) -> bool:
+        if (self.state is WeightState.UPDATING
+                and self.open_txn_id == txn_id and not self.txn_wrote):
+            self.state = WeightState.READY
+            self.open_txn_id = None
+            return True
+        return False
+
+
 class Engine(EngineBase):
     """The inference engine of lmdeploy pytorch.
 
@@ -265,15 +357,22 @@ class Engine(EngineBase):
         # owned by whichever thread performs the actual executor call, so a
         # cancelled waiter can neither hold nor release it early.
         self._model_state_lock = threading.Lock()
-        self._weight_state = WeightState.READY
-        self._open_txn_id: str | None = None
-        self._seen_update_ids: set[str] = set()
-        self._txn_wrote = False
+        # The single weight transaction machine; see WeightTransactionTracker
+        # and the lazy ``_weight_txn`` property below.
         # Content validity is separate from allocation: level-1 sleep keeps a
         # valid CPU copy (tags say down, content stays valid), while level-2
         # sleep / empty init discard content (a weights-only wakeup must NOT
         # be treated as loading it).
-        self._weights_content_valid = not self.misc_config.empty_init
+        self.__dict__['_weight_txn_store'] = WeightTransactionTracker(
+            content_valid=not self.misc_config.empty_init)
+
+    @property
+    def _weight_txn(self) -> WeightTransactionTracker:
+        """The weight transaction machine (lazily built for engine shells)."""
+        txn = self.__dict__.get('_weight_txn_store')
+        if txn is None:
+            txn = self.__dict__['_weight_txn_store'] = WeightTransactionTracker()
+        return txn
         self._multimodal_session_trim_count = max(0, _envs.multimodal_session_trim_count)
         self._multimodal_session_end_count = 0
 
@@ -621,7 +720,7 @@ class Engine(EngineBase):
     @property
     def weight_state(self) -> WeightState:
         """Current weight readiness (single-attribute read, safe cross-thread)."""
-        return getattr(self, '_weight_state', WeightState.READY)
+        return getattr(getattr(self, '_weight_txn', None), 'state', WeightState.READY)
 
     def _execute_weights_update(self, func, *args, final=False, txn_id=None):
         """Run one weight bucket under the state machine.
@@ -636,36 +735,17 @@ class Engine(EngineBase):
         if not guard.acquire(blocking=False):
             raise LifecycleValidationError('another model-state operation is in progress')
         try:
-            if self.weight_state is WeightState.POISONED:
-                raise LifecycleValidationError(
-                    'weight update refused: a previous update failed on this engine; '
-                    'rebuild the engine from a complete checkpoint')
-            if self.weight_state is WeightState.UPDATING:
-                if txn_id != self._open_txn_id:
-                    raise LifecycleValidationError(
-                        'weight update refused: another weight transaction is open '
-                        f'({self._open_txn_id!r}); finish it before starting {txn_id!r}')
-            else:
-                if txn_id is not None and txn_id in self._seen_update_ids:
-                    raise LifecycleValidationError(
-                        f'weight update refused: update_id {txn_id!r} was already '
-                        'committed; use a new id')
-                self._open_txn_id = txn_id
-                self._weight_state = WeightState.UPDATING
-                self._txn_wrote = False
+            self._weight_txn.check_admission(txn_id)
             try:
                 result = func(*args)
-                self._txn_wrote = True
-                succeeded = result is None or (
-                    isinstance(result, tuple) and len(result) == 2 and result[0] is True)
-                if not succeeded:
-                    self._weight_state = WeightState.POISONED
-                elif final:
-                    self._commit_weight_transaction()
+                if self._weight_txn.record_write_result(result, final):
+                    # Committed weights are loaded: drop the engine-side
+                    # weights sleep tag so a kv-cache wakeup reopens admission.
+                    self._sleeping_tags.discard('weights')
                 return result
             except BaseException:
                 # Unknown how much of the model the write touched.
-                self._weight_state = WeightState.POISONED
+                self._weight_txn.record_write_failure()
                 raise
         finally:
             guard.release()
@@ -683,31 +763,13 @@ class Engine(EngineBase):
         earlier bucket's transfer holds the model-state mutex (it then queues
         on the async update lock like before).
         """
-        if (self._weight_state is WeightState.UPDATING
-                and self._open_txn_id == txn_id):
+        if self._weight_txn.matches_open(txn_id):
             return False
         guard = self._get_model_state_lock()
         if not guard.acquire(blocking=False):
             raise LifecycleValidationError('another model-state operation is in progress')
         try:
-            if self.weight_state is WeightState.POISONED:
-                raise LifecycleValidationError(
-                    'weight update refused: a previous update failed on this engine; '
-                    'rebuild the engine from a complete checkpoint')
-            if self.weight_state is WeightState.UPDATING:
-                if txn_id != self._open_txn_id:
-                    raise LifecycleValidationError(
-                        'weight update refused: another weight transaction is open '
-                        f'({self._open_txn_id!r}); finish it before starting {txn_id!r}')
-                return False
-            if txn_id is not None and txn_id in self._seen_update_ids:
-                raise LifecycleValidationError(
-                    f'weight update refused: update_id {txn_id!r} was already '
-                    'committed; use a new id')
-            self._open_txn_id = txn_id
-            self._weight_state = WeightState.UPDATING
-            self._txn_wrote = False
-            return True
+            return self._weight_txn.check_admission(txn_id)
         finally:
             guard.release()
 
@@ -717,12 +779,7 @@ class Engine(EngineBase):
         if not guard.acquire(blocking=False):
             return False
         try:
-            if (self.weight_state is WeightState.UPDATING
-                    and self._open_txn_id == txn_id and not self._txn_wrote):
-                self._weight_state = WeightState.READY
-                self._open_txn_id = None
-                return True
-            return False
+            return self._weight_txn.abandon_if_clean(txn_id)
         finally:
             guard.release()
 
@@ -734,19 +791,13 @@ class Engine(EngineBase):
     @property
     def weights_ready(self) -> bool:
         """Weights are committed AND loaded: valid content, fully awake."""
-        return (self.weight_state is WeightState.READY
-                and getattr(self, '_weights_content_valid', True))
+        return bool(getattr(getattr(self, '_weight_txn', None), 'weights_ready', True))
 
     def _commit_weight_transaction(self):
         """Finalize the open transaction: weights valid again."""
-        self._weight_state = WeightState.READY
-        if self._open_txn_id is not None:
-            self._seen_update_ids.add(self._open_txn_id)
-        self._open_txn_id = None
-        self._txn_wrote = False
-        # The committed weights are loaded: mark content valid and drop the
-        # engine-side weights sleep tag so a kv-cache wakeup reopens admission.
-        self._weights_content_valid = True
+        self._weight_txn.commit()
+        # The committed weights are loaded: drop the engine-side weights
+        # sleep tag so a kv-cache wakeup reopens input admission.
         self._sleeping_tags.discard('weights')
 
     def _get_weights_update_lock(self):
@@ -803,12 +854,12 @@ class Engine(EngineBase):
                 raise LifecycleValidationError(
                     'weight completion refused: a previous update failed on this engine; '
                     'rebuild the engine from a complete checkpoint')
-            if self.weight_state is WeightState.UPDATING:
+            if self._weight_txn.state is WeightState.UPDATING:
                 self._commit_weight_transaction()
             else:
                 # Legacy assertion form on a closed engine: the caller states
                 # the weights it sent are loaded and valid.
-                self._weights_content_valid = True
+                self._weight_txn.content_valid = True
             self._sleeping_tags.discard('weights')
         finally:
             guard.release()
@@ -903,13 +954,13 @@ class Engine(EngineBase):
             except BaseException:
                 # Storage/session state is unknown; no further model-state
                 # operation may run on this engine without a rebuild.
-                self._weight_state = WeightState.POISONED
+                self._weight_txn.poison()
                 raise
             finally:
                 if level >= 2:
                     # Level 2 discards the weights; only a real load (update
                     # transaction or completion) makes content valid again.
-                    self._weights_content_valid = False
+                    self._weight_txn.discard_content()
                 guard.release()
 
         task = asyncio.create_task(run_sleep())

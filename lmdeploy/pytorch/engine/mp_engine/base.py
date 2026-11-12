@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -14,6 +15,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
 from lmdeploy.utils import get_logger
 
 from ..base import EngineBase, EngineInstanceBase
+from ..engine import WeightState, WeightTransactionTracker
 
 logger = get_logger('lmdeploy')
 
@@ -27,12 +29,56 @@ class SessionState:
 
 
 class MPEngine(EngineBase):
+    """Driver-side proxy over worker engines.
+
+    The workers each run the real weight state machine and enforce it. The
+    proxy additionally mirrors the aggregate state through the SAME
+    WeightTransactionTracker implementation, driven by the collective call
+    outcomes, so the serve layer's readiness gates see MP updates too.
+    """
 
     def __init__(self) -> None:
         """Initialize mp engine."""
         self.session_states = defaultdict(SessionState)
         self.engine_config = self._collective_rpc('get_engine_config')
         self.pending_cancel_sessions = set()
+        # Aggregate mirror of the worker-side weight machines, driven by the
+        # outcomes of the collective calls below. Workers enforce; the mirror
+        # feeds the serve readiness gates.
+        self._weight_txn = WeightTransactionTracker()
+        self._weight_lock = threading.Lock()
+        self._mp_sleeping_tags: set[str] = set()
+
+    # -- weight readiness mirror (serve gates read these) ----------------
+    @property
+    def weight_state(self) -> WeightState:
+        return self._weight_txn.state
+
+    @property
+    def weights_ready(self) -> bool:
+        return self._weight_txn.weights_ready
+
+    @property
+    def sleeping_tags(self):
+        return set(self._mp_sleeping_tags)
+
+    async def _txn_run(self, method: str, request, *args) -> Any:
+        """Run one weight bucket RPC under the mirrored transaction machine."""
+        final = getattr(request, 'finished', False) is True or method == 'update_weights_from_ipc'
+        with self._weight_lock:
+            self._weight_txn.check_admission(getattr(request, 'update_id', None))
+        try:
+            result = await self._collective_rpc_async(method, request, *args)
+        except BaseException:
+            # The workers poison on real write failures; an exception here is
+            # one of those (identity mismatches were refused above, locally).
+            with self._weight_lock:
+                self._weight_txn.record_write_failure()
+            raise
+        with self._weight_lock:
+            if self._weight_txn.record_write_result(result, final):
+                self._mp_sleeping_tags.discard('weights')
+        return result
 
     @cached_property
     def vocab_size(self) -> int:
@@ -65,15 +111,29 @@ class MPEngine(EngineBase):
 
     async def sleep(self, level: int):
         """sleep."""
-        return await self._collective_rpc_async('sleep', level)
+        try:
+            result = await self._collective_rpc_async('sleep', level)
+        except BaseException:
+            with self._weight_lock:
+                self._weight_txn.poison()
+            raise
+        with self._weight_lock:
+            if level >= 2:
+                self._weight_txn.discard_content()
+            self._mp_sleeping_tags = {'weights', 'kv_cache'}
+        return result
 
     def wakeup(self, tags: list[str] | None = None):
         """Wakeup."""
-        return self._collective_rpc('wakeup', tags)
+        result = self._collective_rpc('wakeup', tags)
+        with self._weight_lock:
+            for tag in (tags if tags is not None else ('weights', 'kv_cache')):
+                self._mp_sleeping_tags.discard(tag)
+        return result
 
-    def update_params(self, request: Any):
-        """Update params."""
-        return self._collective_rpc('update_params', request)
+    async def update_weights_from_serialized(self, request: Any):
+        """Legacy serialized bucket through the mirrored transaction machine."""
+        return await self._txn_run('update_params', request)
 
     async def get_checkpoint_engine_status(self):
         """Get checkpoint-engine readiness."""
@@ -81,7 +141,7 @@ class MPEngine(EngineBase):
 
     async def update_weights_from_ipc(self, request: Any, reject_reason: str | None = None):
         """Receive weights through checkpoint-engine CUDA IPC."""
-        return await self._collective_rpc_async('update_weights_from_ipc', request, reject_reason)
+        return await self._txn_run('update_weights_from_ipc', request, reject_reason)
 
     def complete_weights_update(self):
         """Record a successful external weights update."""
@@ -93,7 +153,7 @@ class MPEngine(EngineBase):
 
     async def update_weights_from_distributed(self, request: Any):
         """Receive weights through the disaggregated process group."""
-        return await self._collective_rpc_async('update_weights_from_distributed', request)
+        return await self._txn_run('update_weights_from_distributed', request)
 
     async def destroy_weights_update_group(self, request: Any):
         """Tear down a previously initialized weights-update process group."""

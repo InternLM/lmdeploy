@@ -129,7 +129,7 @@ def test_open_transaction_and_poison_report_through_health():
     health = _routes(engine)[('/health', 'GET')]
     assert asyncio.run(endpoint(bucket(False))).status_code == 200
     assert asyncio.run(health()).status_code == 503  # updating
-    engine.engine._weight_state = WeightState.POISONED
+    engine.engine._weight_txn.poison()
     body = asyncio.run(health())
     assert body.status_code == 503 and 'Rebuild' in body.body.decode()
 

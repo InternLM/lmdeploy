@@ -393,11 +393,28 @@ class AsyncEngine:
         return state.value if state is not None else 'ready'
 
     def _engine_weights_ready(self) -> bool | None:
-        """Engine-side weight truth, or None when the engine has none."""
+        """Engine-side weight truth, or None when the engine has none.
+
+        False while a weight transaction is open, the engine is poisoned, or
+        the content was discarded (level-2 sleep / empty init) without a
+        committed reload.
+        """
         engine = getattr(self, 'engine', None)
         if getattr(engine, 'weight_state', None) is None:
             return None
-        return (engine.weights_ready and 'weights' not in engine.sleeping_tags)
+        return bool(engine.weights_ready)
+
+    def _kv_wakeup_allowed(self, waking_tags) -> bool:
+        """A KV-cache wakeup must not enable serving on unloaded weights.
+
+        Valid when the weight content is committed AND already allocated, or
+        when this same call wakes the weights tag (a full wakeup loads them).
+        """
+        engine = getattr(self, 'engine', None)
+        loaded = self._engine_weights_ready()
+        if loaded is None:
+            return bool(getattr(self, 'weights_content_ready', True))
+        return loaded and ('weights' not in engine.sleeping_tags or 'weights' in waking_tags)
 
     def serving_blocked(self) -> bool:
         """True when inference must be refused (engine truth when available)."""
@@ -443,9 +460,7 @@ class AsyncEngine:
         """
         self._check_weights_ready_for_lifecycle('wakeup')
         tags = tags or list(self.sleeping_tags)
-        engine_ready = self._engine_weights_ready()
-        if 'kv_cache' in tags and (engine_ready is False
-                                   or (engine_ready is None and not self.weights_content_ready)):
+        if 'kv_cache' in tags and not self._kv_wakeup_allowed(tags):
             raise RuntimeError('Weight content is not ready; allocating weights is not loading them.')
         if any(tag not in self.sleeping_tags for tag in tags):
             logger.warning(f'some tag in {tags} not in sleeping tags {self.sleeping_tags}')
