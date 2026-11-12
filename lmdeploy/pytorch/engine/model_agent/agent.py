@@ -286,8 +286,10 @@ def model_forward(
                 from lmdeploy.pytorch.kernels.cuda.routed_experts import scatter_routed_experts
                 # Like KV, speculative rows remain private until acceptance.
                 # Checkpoint copies and Store fences must follow this write.
+                # Graph replay pads context lengths, but history and block
+                # tables still describe only the real input sequences.
                 scatter_routed_experts(output['all_routed_experts'], routed_cache,
-                                      context.q_start_loc, context.q_seqlens, inputs.history_lengths,
+                                      context.q_start_loc, inputs.seq_length, inputs.history_lengths,
                                       inputs.block_offsets, inputs.max_q_seqlen,
                                       cache_engine.cache_config.kernel_block_size)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward

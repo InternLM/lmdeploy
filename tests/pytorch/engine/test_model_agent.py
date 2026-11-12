@@ -894,6 +894,60 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
         assert copy_calls[3] == ('state', (7, ), (8, ))
 
 
+def test_model_forward_r3_ignores_cuda_graph_padding(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+    from lmdeploy.pytorch.kernels.cuda import routed_experts as routed_module
+
+    inputs = SimpleNamespace(
+        is_dummy=False, ssm_state_meta=None, ssm_prefill_meta=None,
+        seq_length=torch.ones(3, dtype=torch.long),
+        history_lengths=torch.tensor([7, 15, 23]),
+        block_offsets=torch.tensor([[0], [1], [2]]),
+        max_q_seqlen=1,
+    )
+    context = SimpleNamespace(q_seqlens=inputs.seq_length,
+                              q_start_loc=torch.arange(3), position_ids=torch.zeros(3),
+                              is_model_meta_updated=False)
+    routes = torch.zeros((3, 2, 3), dtype=torch.uint16)
+    cache = torch.zeros((3, 64, 2, 3), dtype=torch.uint16)
+
+    class Model:
+        ctx_mgr = SimpleNamespace(build_context=lambda **kwargs: context,
+                                  context=lambda ctx: nullcontext())
+
+        def update_model_metas(self, **kwargs):
+            return []
+
+        def prepare_inputs_for_generation(self, **kwargs):
+            return {}
+
+        def __call__(self, **kwargs):
+            # CUDA graph replay rewrites the context to the padded batch.
+            context.q_seqlens = torch.ones(4, dtype=torch.long)
+            context.q_start_loc = torch.arange(4)
+            return {'all_routed_experts': routes}
+
+    calls = []
+
+    def scatter(actual_routes, actual_cache, starts, lengths, history, blocks, max_q, page_size):
+        assert actual_routes is routes and actual_cache is cache
+        assert lengths is inputs.seq_length
+        assert lengths.numel() == history.numel() == blocks.shape[0] == 3
+        torch.testing.assert_close(starts[:3], torch.arange(3))
+        calls.append((max_q, page_size))
+
+    monkeypatch.setattr(agent_module, 'step_ctx_manager', lambda ctx_mgr: nullcontext())
+    monkeypatch.setattr(agent_module.torch.cuda, 'stream', lambda stream: nullcontext())
+    monkeypatch.setattr(routed_module, 'scatter_routed_experts', scatter)
+    agent_module.model_forward(
+        Model(), inputs, object(),
+        SimpleNamespace(routed_experts_cache=cache, cache_config=SimpleNamespace(quant_policy=0, kernel_block_size=64),
+                        gpu_cache=(), block_caches={}),
+        SimpleNamespace(compact_plan=None, state_caches=(), named_state_caches={}),
+        stream=object())
+    assert calls == [(1, 64)]
+
+
 def test_inputs_preprocess_transfers_cache_inputs_and_keeps_host_ref(monkeypatch, event_loop):
     from lmdeploy.pytorch.engine.model_agent import agent as agent_module
 
