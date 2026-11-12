@@ -9,6 +9,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <utility>
 #include <vector>
@@ -67,8 +68,14 @@ struct SessionParam {
 };
 
 struct RequestState {
-    int status;
-    int seq_len;
+    int status{};
+    int seq_len{};
+
+    int64_t num_drafts{};
+    int64_t num_draft_tokens{};
+    int64_t num_accepted_tokens{};
+
+    std::vector<int64_t> num_accepted_tokens_per_pos;
 };
 
 struct AtomicRequestState {
@@ -135,11 +142,48 @@ struct Request {
     std::shared_ptr<xgrammar::GrammarMatcher>  matcher;
 };
 
-void UpdateState(Request& r, int status, int seq_len);
+void UpdateState(Request& request, RequestState state);
+
+std::function<void()> MakeRequestSignal(std::shared_ptr<Request> request, int status, int seq_len);
 
 struct Sequence;
 
 struct MultiModalData;  // defined in models/vision_model.h
+
+struct SubmittedRow {
+    int input_len{};
+    int history_len{};
+
+    int query_begin{};
+    int query_count{};
+    int key_capacity_end{};
+
+    int cache_write_begin{};
+    int cache_write_end{};
+
+    bool generating{};
+    bool autoregres{};
+
+    // Producer-set effects: assigned by the scheduler together with the row's
+    // geometry; consumers read values instead of classifying rows by mode (ADR 0003).
+    int  verification_positions{};  // generating rows: query positions contributed to verification (K for speculative)
+    int  min_grant{1};              // fewest query rows admission may grant partially
+    int  inflight_input_delta{};    // completion effect on the sequence's inflight input length
+    int  inflight_new_delta{};      // completion effect on the sequence's inflight new tokens
+    bool frontier_reanchor{};       // completed row re-anchors the resume frontier to the verified prefix
+    bool primes_proposals{};        // forward primes the first proposals (bootstrap fold)
+
+    // Workload-shape selections over the effects (ADR 0003).
+    bool is_verification_row() const noexcept
+    {
+        return verification_positions > 1;
+    }
+
+    bool is_extension_candidate() const noexcept
+    {
+        return is_verification_row() || primes_proposals;
+    }
+};
 
 // The prefix-cache projection of one multimodal input: its token span and
 // content identity. The engine never sees MultiModalData / pixels.
@@ -193,11 +237,7 @@ struct Sequence {
 
     int seq_len = 0;  // set at request init, updated per step
 
-    int input_len   = 0;  // set at schedule
-    int history_len = 0;  // set at schedule from `resume_len`
-
-    bool autoregres = false;  // set at schedule, `seq_len` and `input_ids` taken from the engine
-    bool generating = false;  // set at schedule
+    std::optional<SubmittedRow> submitted;
 
     bool done = false;  // set at cancel / update, is the request finished / canceled
 
@@ -347,8 +387,9 @@ class Resource {
 public:
     virtual ~Resource() = default;
 
-    virtual int  Test(const Sequence& s) const noexcept = 0;
-    virtual void Commit(const Sequence& s) noexcept     = 0;
+    virtual int Test(const Sequence& s, const SubmittedRow& row) const noexcept = 0;
+
+    virtual void Commit(const Sequence& s, const SubmittedRow& row) noexcept = 0;
 };
 
 class ScheduleResources final: public Resource {
@@ -362,11 +403,11 @@ public:
         return ref;
     }
 
-    int Test(const Sequence& s) const noexcept override
+    int Test(const Sequence& s, const SubmittedRow& row) const noexcept override
     {
         int admitted = std::numeric_limits<int>::max();
         for (const auto& resource : resources_) {
-            const int next = resource->Test(s);
+            const int next = resource->Test(s, row);
             if (next == 0) {
                 return 0;
             }
@@ -375,10 +416,10 @@ public:
         return admitted == std::numeric_limits<int>::max() ? 0 : admitted;
     }
 
-    void Commit(const Sequence& s) noexcept override
+    void Commit(const Sequence& s, const SubmittedRow& row) noexcept override
     {
         for (const auto& resource : resources_) {
-            resource->Commit(s);
+            resource->Commit(s, row);
         }
     }
 
@@ -390,18 +431,19 @@ class ForwardTokenResource final: public Resource {
 public:
     explicit ForwardTokenResource(int max_fwd_tokens) noexcept: max_fwd_tokens_{max_fwd_tokens} {}
 
-    int Test(const Sequence& s) const noexcept override
+    int Test(const Sequence&, const SubmittedRow& row) const noexcept override
     {
-        const int input_len = InputLen(s);
-        if (input_len <= 0 || max_fwd_tokens_ <= 0) {
+        const int q = row.query_count;
+        if (q <= 0 || max_fwd_tokens_ <= 0) {
             return 0;
         }
-        return std::min(input_len, max_fwd_tokens_);
+
+        return max_fwd_tokens_ >= row.min_grant ? std::min(q, max_fwd_tokens_) : 0;
     }
 
-    void Commit(const Sequence& s) noexcept override
+    void Commit(const Sequence&, const SubmittedRow& row) noexcept override
     {
-        max_fwd_tokens_ -= s.input_len;
+        max_fwd_tokens_ -= row.query_count;
     }
 
     int remaining_tokens() const noexcept
@@ -410,11 +452,6 @@ public:
     }
 
 private:
-    static int InputLen(const Sequence& s) noexcept
-    {
-        return s.seq_len + s.inflight_new_tokens - s.inflight_input_len - s.resume_len;
-    }
-
     int max_fwd_tokens_{};
 };
 

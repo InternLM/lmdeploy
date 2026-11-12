@@ -44,7 +44,7 @@ void GuidedDecoding::Setup(int phase, TensorMap& env)
     d.matchers.clear();
     d.active = false;
     for (const auto& r : rs) {
-        if (!r->generating) {
+        if (!r->submitted->generating) {
             continue;
         }
         if (d.matchers.emplace_back(r->req->matcher)) {

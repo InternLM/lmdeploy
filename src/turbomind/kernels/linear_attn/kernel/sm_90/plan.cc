@@ -163,7 +163,7 @@ bool PlanSm90Operation(const GdrKernelSpec&   spec,
         KktTmaDescriptorBytes(plan->problem) + FusedGdrTmaDescriptorBytes(plan->problem) + 127;
     BuildOptimizedTensorPlans(plan, descriptor_bytes);
     plan->state_tma_desc_bytes_per_layer_group =
-        IsRecurrentGdr(plan->problem) ?
+        IsRecurrentGdr(plan->problem) || IsVerifyGdr(plan->problem) || IsCommitGdr(plan->problem) ?
             size_t(plan->problem.sequence_num) * plan->problem.num_head_groups * sizeof(CUtensorMap) :
             0;
     return true;
