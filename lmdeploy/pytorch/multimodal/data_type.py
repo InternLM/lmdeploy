@@ -53,6 +53,13 @@ def make_multimodal_content_hash(data: Any, meta: dict[str, Any] | None,
     return hasher.hexdigest()
 
 
+def make_embedding_content_hash(embeddings: Any) -> str:
+    """Create a stable content hash for prefix-cache embedding matching."""
+    hasher = hashlib.sha256()
+    _hash_multimodal_value(hasher, embeddings)
+    return hasher.hexdigest()
+
+
 @dataclass
 class MultiModalData:
     data: NestedTensor
