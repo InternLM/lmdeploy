@@ -193,4 +193,5 @@ class ARSpecStepInputs(StepInputs):
         # advance sampling state
         self.stopping_criteria = stopping_criteria.clone()
         self.sampling_delta = step_sampling_delta(sampling_delta, next_token_ids)
-        self.sampling_delta.generated_ids = None
+        if self.sampling_delta is not None:
+            self.sampling_delta.generated_ids = None
