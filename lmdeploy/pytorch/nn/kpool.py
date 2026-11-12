@@ -15,9 +15,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor, nn
 
+from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.linear import LinearBuildSpec
 from lmdeploy.pytorch.consts import DSA_INDEX_SCALE_BYTES, DSA_INDEXER_K_CACHE_NAME, dsa_packed_indexer_k_cache_shape
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheBinding, BlockCacheRequest, BlockCacheRequestContext
 from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
@@ -176,6 +177,13 @@ class KPoolIndexer(nn.Module):
             torch.empty(index_head_dim, hidden_size, dtype=dtype, device=device),
             requires_grad=False,
         )
+        # Keep the original parameter owner and checkpoint name while allowing
+        # the CUDA backend to select a measured local projection schedule.
+        from lmdeploy.pytorch.models.patch import get_build_model_context
+        self._compress_gate_impl = get_backend().build_op(
+            LinearBuildSpec(hidden_size, index_head_dim, False, dtype),
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
 
     def get_block_cache_requests(self, context: BlockCacheRequestContext):
         """Declare the pooled index cache through the shared cache planner."""
@@ -219,7 +227,7 @@ class KPoolIndexer(nn.Module):
 
     def project_compress_score(self, hidden_states: Tensor) -> Tensor:
         """Return per-slot, per-dimension compression gates."""
-        return F.linear(hidden_states, self.index_kpool_compress_gate)
+        return self._compress_gate_impl.forward(hidden_states, self.index_kpool_compress_gate)
 
     def project_head_gate(self, hidden_states: Tensor) -> Tensor:
         """Return FP32 head gates including SGLang's ``num_heads**-0.5``."""

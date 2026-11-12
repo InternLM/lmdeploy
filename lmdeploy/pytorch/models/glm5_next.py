@@ -88,6 +88,16 @@ from .utils.model import build_embedding, vlm_model
 
 Glm5NextVisionRMSNorm = RMSNorm
 
+_GLM53_SHARED_EXPERT_STREAMS: dict[int, torch.cuda.Stream] = {}
+
+
+def _get_glm53_shared_expert_stream(device: torch.device) -> torch.cuda.Stream:
+    """Reuse one auxiliary stream per device across GLM MoE layers."""
+    device_index = device.index if device.index is not None else torch.cuda.current_device()
+    if device_index not in _GLM53_SHARED_EXPERT_STREAMS:
+        _GLM53_SHARED_EXPERT_STREAMS[device_index] = torch.cuda.Stream(device=device_index)
+    return _GLM53_SHARED_EXPERT_STREAMS[device_index]
+
 
 def _build_glm53_latent_norm(hidden_size: int, eps: float,
                              dtype: torch.dtype | None,
@@ -553,12 +563,70 @@ class Glm5NextMoE(DeepseekV2MoE):
                 'The GLM-5.3 router does not permit fake '
                 'routing or EPLB expert remapping.')
         self.gate.noaux_tc_router = Glm5NextNoauxTCRouter(config)
+        # DP8 keeps each shared expert local, so this branch has no TP
+        # collective that could interfere with routed-expert communication.
+        self._enable_shared_expert_overlap = (
+            envs.glm53_shared_expert_overlap
+            and dist_config.dp == dist_config.ep == dist_config.world_size == 8
+            and self.shared_experts is not None
+            and not get_build_model_context().enable_deterministic
+        )
+        self._shared_expert_ready_event = None
+        self._enable_fused_route_prepare = (
+            envs.glm53_fuse_route_prepare
+            and dist_config.dp == dist_config.ep == dist_config.world_size == 8
+            and not get_build_model_context().enable_deterministic
+        )
+
+    def _forward_experts(self, hidden_states, topk_weights, topk_ids, routes_prepared=False):
+        manager = get_step_ctx_manager()
+        context = manager.current_context() if manager is not None else None
+        # Globally mixed steps use prefill's piecewise graph, whose eager
+        # boundaries must not split an active auxiliary-stream capture.
+        overlap = (getattr(self, '_enable_shared_expert_overlap', False) and hidden_states.is_cuda
+                   and context is not None and context.global_is_decoding())
+        if not overlap and not routes_prepared:
+            return super()._forward_experts(hidden_states, topk_weights, topk_ids)
+        expert_forward = self.experts.forward_prepared_routes if routes_prepared else self.experts
+        if not overlap:
+            out_states = expert_forward(hidden_states, topk_weights, topk_ids)
+            if self.shared_experts is not None:
+                out_states += self.shared_experts(hidden_states)
+            return out_states
+        main_stream = torch.cuda.current_stream(hidden_states.device)
+        shared_stream = _get_glm53_shared_expert_stream(hidden_states.device)
+        if self._shared_expert_ready_event is None:
+            self._shared_expert_ready_event = torch.cuda.Event()
+        self._shared_expert_ready_event.record(main_stream)
+
+        # The independent branches fork after routing and join before the
+        # original BF16 sum. Enqueue the longer routed branch first.
+        out_states = expert_forward(hidden_states, topk_weights, topk_ids)
+        shared_stream.wait_event(self._shared_expert_ready_event)
+        hidden_states.record_stream(shared_stream)
+        with torch.cuda.stream(shared_stream):
+            shared_states = self.shared_experts(hidden_states)
+        main_stream.wait_stream(shared_stream)
+        shared_states.record_stream(main_stream)
+        out_states += shared_states
+        return out_states
 
     def forward(
         self,
         hidden_states: torch.Tensor,
         all_routed_experts: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if (getattr(self, '_enable_fused_route_prepare', False) and hidden_states.is_cuda
+                and hidden_states.dtype == torch.bfloat16 and hidden_states.is_contiguous()
+                and all_routed_experts is None):
+            context = get_step_ctx_manager().current_context()
+            if context is not None and context.global_is_decoding():
+                original_shape = hidden_states.shape
+                x = hidden_states.view(-1, self.hidden_dim)
+                logits = self.gate.router_gemm(x, self.gate.weight)
+                weights, ids = self.experts.prepare_routes(logits, self.gate.e_score_correction_bias)
+                out = self._forward_experts(x, weights, ids, routes_prepared=True)
+                return out.view(*original_shape[:-1], self.hidden_dim)
         out = super().forward(hidden_states, all_routed_experts=all_routed_experts)
         if self._fp32_tp_reduce:
             output_dtype = out.dtype

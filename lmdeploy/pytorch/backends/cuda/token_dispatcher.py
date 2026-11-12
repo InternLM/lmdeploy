@@ -725,9 +725,23 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
         num_experts: int,
+        output_scale: float = 1.0,
+        routes_prepared: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         topk_idx = topk_idx.to(torch.int64)
-        mask_invalid_tokens(topk_idx)
+        if routes_prepared:
+            assert output_scale == 1.0
+        elif output_scale == 1.0:
+            mask_invalid_tokens(topk_idx)
+        else:
+            from lmdeploy.pytorch.kernels.cuda.moe.route_mask import prepare_low_latency_routes
+            from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+
+            context = get_step_ctx_manager().current_context()
+            topk_weights = prepare_low_latency_routes(
+                topk_idx, topk_weights,
+                context.moe_valid_token_count if context is not None else None,
+                output_scale, context.is_dummy if context is not None else False)
         expected_m = (hidden_states.shape[0] * self.get_buffer().group_size * topk_idx.shape[1] +
                       num_experts) // num_experts
 

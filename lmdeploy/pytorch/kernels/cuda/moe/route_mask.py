@@ -25,3 +25,39 @@ def mask_invalid_routes(topk_idx: torch.Tensor, valid_tokens: torch.Tensor) -> N
     assert topk_idx.is_contiguous() and topk_idx.ndim == 2
     _mask_invalid_routes_kernel[(triton.cdiv(topk_idx.numel(), 256),)](
         topk_idx, valid_tokens, topk_idx.numel(), topk_idx.size(1), 256, num_warps=4)
+
+
+@triton.jit
+def _prepare_routes_kernel(Ids, Weights, ScaledWeights, ValidTokens,
+                           SIZE: tl.constexpr, TOP_K: tl.constexpr,
+                           HAS_VALID_COUNT: tl.constexpr, IS_DUMMY: tl.constexpr,
+                           SCALE: tl.constexpr, BLOCK: tl.constexpr):
+    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    present = offsets < SIZE
+    weights = tl.load(Weights + offsets, present, 0).to(tl.float32)
+    tl.store(ScaledWeights + offsets, weights * SCALE, present)
+    if HAS_VALID_COUNT:
+        valid = tl.load(ValidTokens)
+        tl.store(Ids + offsets, -1, present & (offsets // TOP_K >= valid))
+    elif IS_DUMMY:
+        tl.store(Ids + offsets, -1, present)
+
+
+def prepare_low_latency_routes(topk_idx: torch.Tensor, topk_weights: torch.Tensor,
+                               valid_tokens: torch.Tensor | None, output_scale: float,
+                               is_dummy: bool = False) -> torch.Tensor:
+    """Mask dispatch IDs and scale FP32 combine weights in one launch.
+
+    Routing itself remains normalized and unscaled. IDs retain their original dtype and existing -1 sentinels. The
+    graph-owned valid count is read on device on every replay; no host synchronization or scalar extraction occurs.
+    """
+    assert topk_idx.ndim == 2 and topk_idx.is_contiguous()
+    assert topk_weights.shape == topk_idx.shape and topk_weights.is_contiguous()
+    scaled_weights = torch.empty_like(topk_weights, dtype=torch.float32)
+    if topk_idx.numel() == 0:
+        return scaled_weights
+    _prepare_routes_kernel[(triton.cdiv(topk_idx.numel(), 256),)](
+        topk_idx, topk_weights, scaled_weights, valid_tokens,
+        topk_idx.numel(), topk_idx.size(1), valid_tokens is not None,
+        is_dummy, output_scale, 256, num_warps=4)
+    return scaled_weights
