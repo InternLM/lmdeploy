@@ -244,6 +244,9 @@ with set_envs():
     # Disable dense prefill for sparse MLA; set before startup.
     mla_disable_dense_prefill = env_to_bool('LMDEPLOY_MLA_DISABLE_DENSE_PREFILL', False)
 
+    # Set before startup: use unrotated BF16 KPool queries/cache instead of FP8.
+    glm53_kpool_bf16 = env_to_bool('LMDEPLOY_GLM53_KPOOL_BF16', False)
+
     # cudagraph
     # fake capture flag for debug cudagraph padding behavior
     fake_capture = env_to_bool('LMDEPLOY_FAKE_CUDA_GRAPH_CAPTURE', False)
