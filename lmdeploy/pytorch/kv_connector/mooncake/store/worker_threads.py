@@ -665,8 +665,8 @@ class KVCacheStoreRecvingThread(threading.Thread):
     def _copy_routes(self, request: MooncakeStoreLoadRequest) -> np.ndarray:
         """Finish the API history copy before releasing the load's blocks.
 
-        This runs on the receiver thread and its own stream. The returned
-        NumPy array owns a CPU tensor; no view into the GPU pool escapes.
+        This runs on the receiver thread and its own stream. The returned NumPy array owns a CPU tensor; no view into
+        the GPU pool escapes.
         """
         cache = self.routed_experts_cache
         with torch.cuda.device(cache.device):

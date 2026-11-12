@@ -28,9 +28,8 @@ def scatter_routed_experts(routes: torch.Tensor, cache: torch.Tensor,
                           blocks: torch.Tensor, max_q_seqlen: int, kernel_block_size: int) -> None:
     """Queue one scatter on the forward stream, including partial pages.
 
-    The block table uses kernel pages; the owning pool is viewed as logical
-    blocks by Store. Rejected speculative rows are overwritten by the next
-    forward and never enter an accepted save frontier.
+    The block table uses kernel pages; the owning pool is viewed as logical blocks by Store. Rejected speculative rows
+    are overwritten by the next forward and never enter an accepted save frontier.
     """
     features = cache.shape[-2] * cache.shape[-1]
     grid = (triton.cdiv(max_q_seqlen * features, 512), lengths.numel())
