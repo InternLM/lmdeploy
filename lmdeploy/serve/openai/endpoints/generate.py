@@ -227,7 +227,7 @@ def register(router: APIRouter, server_context) -> None:
                         routed_experts=routed_experts)
                     yield f'data: {response_json}\n\n'
             except RequestError as e:
-                yield f'data: {json.dumps({"error": request_error_payload(e)})}\n\n'
+                yield f'data: {json.dumps({"error": request_error_payload(e)}, ensure_ascii=False)}\n\n'
             yield 'data: [DONE]\n\n'
 
         if request.stream:

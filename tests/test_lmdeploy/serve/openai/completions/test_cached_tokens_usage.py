@@ -44,9 +44,10 @@ class _AsyncEngine:
 
     model_name = 'fake-model'
 
-    def __init__(self, prompt_input_ids, cached_tokens):
+    def __init__(self, prompt_input_ids, cached_tokens, text='x'):
         self._prompt_input_ids = deque(prompt_input_ids)
         self._cached_tokens = deque(cached_tokens)
+        self._text = text
 
     async def preprocess(self, prompt, session, **kwargs):
         input_ids = self._prompt_input_ids.popleft()
@@ -59,7 +60,7 @@ class _AsyncEngine:
 
         async def _generator():
             yield SimpleNamespace(token_ids=token_ids,
-                                  response='x' * len(token_ids),
+                                  response=self._text * len(token_ids),
                                   finish_reason='length',
                                   logprobs=None,
                                   cache_block_ids=[],
@@ -171,3 +172,29 @@ def test_stream_chunks_carry_per_prompt_choice_index():
     # streamed chunks must keep the prompt index so multi-prompt streams
     # can be reassembled per prompt, like the non-streaming choices array
     assert asyncio.run(_collect_stream_choice_indexes(['a', 'b'])) == [0, 1]
+
+
+async def _collect_raw_stream_lines(text):
+    """Run the completions endpoint; return the raw SSE ``data:`` lines."""
+    engine = _AsyncEngine([[1]], [0], text=text)
+    context = _ServerContext(engine)
+    router = APIRouter()
+    register(router, context)
+    endpoint = router.routes[0].endpoint
+    request = CompletionRequest(
+        model='fake-model',
+        prompt=['p'],
+        max_tokens=8,
+        stream=True,
+        stream_options={'include_usage': True})
+    response = await endpoint(request, _RawRequest())
+    lines = []
+    async for chunk in response.body_iterator:
+        if chunk.startswith('data: ') and not chunk.startswith('data: [DONE]'):
+            lines.append(chunk.removeprefix('data: '))
+    return lines
+
+
+def test_stream_text_is_utf8_literal_not_escaped():
+    # non-ASCII generation must reach clients as UTF-8 literals, not \u escapes
+    assert any('你好' in line for line in asyncio.run(_collect_raw_stream_lines('你好')))

@@ -367,9 +367,9 @@ def register(router: APIRouter, server_context) -> None:
                         if res.cache_block_ids is not None:
                             response_json['cache_block_ids'] = res.cache_block_ids
                             response_json['remote_token_ids'] = res.token_ids
-                        yield f'data: {json.dumps(response_json)}\n\n'
+                        yield f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n'
             except RequestError as e:
-                yield f'data: {json.dumps({"error": request_error_payload(e)})}\n\n'
+                yield f'data: {json.dumps({"error": request_error_payload(e)}, ensure_ascii=False)}\n\n'
                 yield 'data: [DONE]\n\n'
                 return
             if final_usage is not None:
@@ -377,7 +377,7 @@ def register(router: APIRouter, server_context) -> None:
                 if counters is not None:
                     final_usage.completion_tokens_details = CompletionTokensDetails(
                         reasoning_tokens=sum(counter.reasoning_tokens for counter in counters))
-                yield f'data: {json.dumps(create_stream_usage_response_json(final_usage))}\n\n'
+                yield f'data: {json.dumps(create_stream_usage_response_json(final_usage), ensure_ascii=False)}\n\n'
             yield 'data: [DONE]\n\n'
 
         # Streaming response
