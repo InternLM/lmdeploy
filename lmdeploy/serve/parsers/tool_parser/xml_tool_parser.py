@@ -31,14 +31,15 @@ _MAX_SCHEMA_RESOLVE_DEPTH = 32
 # loop.
 _MAX_SCHEMA_RESOLVE_VISITS = 4096
 
-# Shared across literal collection, union, and intersection, including nested
-# JSON values. Memoizing schema nodes alone does not bound their result sizes.
+# Shared across literal collection, union, intersection, and final matching,
+# including nested JSON values. Memoizing nodes alone cannot bound result sizes.
 _MAX_SCHEMA_LITERAL_WORK = 65536
 
-# Resolved coercion contract of one schema node: the governing JSON type (or
-# ``None`` when no single type governs), whether ``null`` is acceptable, and
-# the declared ``enum``/``const`` literals when present.
-_SchemaCoercion = tuple[str | None, bool, tuple[Any, ...] | None]
+# A mixed type constraint retains its allowed non-null types. Only ``None``
+# means unconstrained; an empty set permits no non-null JSON type.
+_SchemaType = str | frozenset[str] | None
+# Governing type(s), nullability, and declared enum/const candidates.
+_SchemaCoercion = tuple[_SchemaType, bool, tuple[Any, ...] | None]
 
 
 class _SchemaResolutionExhausted(Exception):
@@ -82,18 +83,23 @@ class _SchemaResolutionBudget:
         return tuple(unique.values())
 
 
-def _json_literal_matches(value: Any, literal: Any) -> bool:
-    """Compare a coerced value with an ``enum``/``const`` literal.
+def _non_null_schema_types(schema_type: str | frozenset[str]) -> set[str]:
+    """Expand JSON number to include integer when combining type
+    constraints."""
+    types = {schema_type} if isinstance(schema_type, str) else set(schema_type)
+    types.discard('null')
+    if 'number' in types:
+        types.add('integer')
+    return types
 
-    JSON ``true`` and ``1`` are distinct values even though Python compares
-    them equal, so booleans never match numbers here; numbers match across
-    the integer/float boundary.
-    """
-    if isinstance(value, bool) or isinstance(literal, bool):
-        return isinstance(value, bool) and isinstance(literal, bool) and value == literal
-    if isinstance(value, (int, float)) and isinstance(literal, (int, float)):
-        return value == literal
-    return type(value) is type(literal) and value == literal
+
+def _compact_schema_types(types: set[str]) -> str | frozenset[str]:
+    """Keep one governing type where possible, otherwise retain the allowed
+    set."""
+    types = types - {'null'}
+    if 'number' in types:
+        types.discard('integer')
+    return next(iter(types)) if len(types) == 1 else frozenset(types)
 
 
 def _loads_strict_json(text: str) -> Any:
@@ -627,13 +633,14 @@ class XmlToolParser(ToolParser):
     @classmethod
     def _resolve_schema_coercion(cls, param_schema: dict[str, Any] | None,
                                  root_schema: dict[str, Any] | None = None,
+                                 *, budget: _SchemaResolutionBudget | None = None,
                                  ) -> _SchemaCoercion:
         """Resolve the effective JSON type, nullability, and literals of a
         schema.
 
-        Returns ``(schema_type, allows_null, literals)``. ``schema_type`` is ``None`` only
-        when no single JSON type governs the value (mixed unions, typeless schemas);
-        ``literals`` carries the declared ``enum``/``const`` values when present, so
+        Returns ``(schema_type, allows_null, literals)``. ``schema_type`` is a single
+        type, a set of allowed non-null types for mixed schemas, or ``None`` for
+        unconstrained schemas. ``literals`` carries the declared ``enum``/``const`` values when present, so
         coercion keeps the interpretation that actually matches one of them.
 
         ``$ref`` pointers are resolved one hop at a time against ``root_schema`` and merged
@@ -650,7 +657,8 @@ class XmlToolParser(ToolParser):
         if not isinstance(param_schema, dict):
             return None, False, None
         cache: dict[int, _SchemaCoercion] = {}
-        budget = _SchemaResolutionBudget(_MAX_SCHEMA_RESOLVE_VISITS, _MAX_SCHEMA_LITERAL_WORK)
+        if budget is None:
+            budget = _SchemaResolutionBudget(_MAX_SCHEMA_RESOLVE_VISITS, _MAX_SCHEMA_LITERAL_WORK)
         try:
             return cls._resolve_schema_impl(param_schema, root_schema, 0, cache, budget)
         except _SchemaResolutionExhausted as exc:
@@ -716,14 +724,19 @@ class XmlToolParser(ToolParser):
                             budget: _SchemaResolutionBudget) -> _SchemaCoercion:
         """Intersect two resolved constraints: a value must satisfy both.
 
-        An unconstrained side (``None`` type) adopts the other side's type, and an
-        explicit type conflict keeps ``left`` — always the schema's own constraint at
-        call sites. Null needs both sides' permission; literals survive when both
-        sides declare them.
+        An unconstrained side (``None`` type) adopts the other side's types. Otherwise
+        intersect the allowed types, including the integer subset of number. Null
+        needs both sides' permission; literals survive when both sides declare them.
         """
         left_type, left_nullable, left_literals = left
         right_type, right_nullable, right_literals = right
-        schema_type = right_type if left_type is None else left_type
+        if left_type is None:
+            schema_type = right_type
+        elif right_type is None or left_type == right_type:
+            schema_type = left_type
+        else:
+            schema_type = _compact_schema_types(_non_null_schema_types(left_type)
+                                                & _non_null_schema_types(right_type))
         literals: tuple[Any, ...] | None
         if left_literals is not None and right_literals is not None:
             right_keys = {budget.literal_key(literal) for literal in right_literals}
@@ -761,13 +774,9 @@ class XmlToolParser(ToolParser):
         if isinstance(schema_type, str):
             result = schema_type, schema_type == 'null', None
         elif isinstance(schema_type, list):
-            types = [item for item in schema_type if isinstance(item, str)]
+            types = {item for item in schema_type if isinstance(item, str)}
             nullable = 'null' in types
-            non_null = set(types) - {'null'}
-            single_type = next(iter(non_null)) if len(non_null) == 1 else None
-            if not non_null and nullable:
-                single_type = 'null'
-            result = single_type, nullable, None
+            result = _compact_schema_types(types), nullable, None
 
         if 'const' in schema:
             const_type = cls._json_type_of(schema['const'])
@@ -779,8 +788,7 @@ class XmlToolParser(ToolParser):
             # original type information for coercion (e.g. enum: [1, 1.0]).
             value_types = {cls._json_type_of(value) for value in schema['enum']}
             nullable = 'null' in value_types
-            distinct = {t for t in value_types if t not in (None, 'null')}
-            constraint = (distinct.pop() if len(distinct) == 1 else None), nullable, values
+            constraint = _compact_schema_types(value_types), nullable, values
             result = constraint if result is None else cls._intersect_coercion(result, constraint, budget)
 
         union = schema.get('anyOf') if isinstance(schema.get('anyOf'), list) else schema.get('oneOf')
@@ -788,18 +796,17 @@ class XmlToolParser(ToolParser):
             resolved = [cls._resolve_schema_impl(branch, root_schema, depth + 1, cache, budget)
                         for branch in union if isinstance(branch, dict)]
             if resolved:
-                # A union accepts a value matching ANY branch: one shared type
-                # when every non-null branch agrees, null when any branch
-                # accepts it, and the union of branch literals when every
-                # branch is itself an enum/const.
+                # Combine allowed types rather than treating a mixed union as
+                # unconstrained. A truly unconstrained branch still permits any type.
                 nullable = any(t == 'null' or allows_null for t, allows_null, _ in resolved)
-                distinct = {t for t, _, _ in resolved if t not in (None, 'null')}
+                union_type = None
+                if all(t is not None for t, _, _ in resolved):
+                    types = set().union(*(_non_null_schema_types(t) for t, _, _ in resolved))
+                    union_type = _compact_schema_types(types)
                 literals = None
                 if all(l is not None for _, _, l in resolved):
                     literals = budget.unique_literals(value for _, _, values in resolved for value in values)
-                single_type = distinct.pop() if len(distinct) == 1 and all(
-                    t is not None for t, _, _ in resolved) else None
-                constraint = single_type, nullable, literals
+                constraint = union_type, nullable, literals
                 result = constraint if result is None else cls._intersect_coercion(result, constraint, budget)
 
         if isinstance(schema.get('allOf'), list):
@@ -895,9 +902,10 @@ class XmlToolParser(ToolParser):
         """Coerce a complete raw value whose schema declares no single JSON
         type.
 
-        Mixed unions and typeless schemas impose no scalar type, so the model-emitted bare JSON form is kept: quoted
-        values decode as strings, other valid JSON keeps its native type, and anything unparseable or non-strict
-        (``NaN``, ``Infinity``) keeps its original string form.
+        Quoted values decode as strings, other valid JSON keeps its native type, and
+        anything unparseable or non-strict (``NaN``, ``Infinity``) keeps its original
+        string form. The caller checks mixed schemas' allowed types before accepting
+        the candidate.
         """
         original = raw_value
         raw_value = raw_value.strip()
@@ -921,19 +929,33 @@ class XmlToolParser(ToolParser):
             return raw_value
         if schema is None:
             return raw_value
-        schema_type, allows_null, literals = self._resolve_schema_coercion(schema, root_schema)
+        budget = _SchemaResolutionBudget(_MAX_SCHEMA_RESOLVE_VISITS, _MAX_SCHEMA_LITERAL_WORK)
+        schema_type, allows_null, literals = self._resolve_schema_coercion(schema, root_schema, budget=budget)
         if raw_value.strip().lower() == 'null':
             # Models emit a bare ``null`` routinely for optional parameters;
             # keep it as the string unless the schema really accepts null.
             return None if allows_null else raw_value
-        if schema_type is None:
+        if schema_type is None or isinstance(schema_type, frozenset):
             value = self._coerce_json_value(raw_value)
+            if isinstance(schema_type, frozenset):
+                value_type = self._json_type_of(value)
+                matches_type = (value_type in schema_type
+                                or (value_type == 'integer' and 'number' in schema_type)
+                                or (value_type == 'number' and 'integer' in schema_type and value.is_integer()))
+                # Keep the existing best-effort decoding of quoted strings even
+                # when neither interpretation satisfies the schema.
+                if not matches_type and not isinstance(value, str):
+                    return raw_value
         else:
             value = self._coerce_value(raw_value, schema_type)
         if literals is None:
             return value
-        if any(_json_literal_matches(value, literal) for literal in literals):
-            return value
+        try:
+            value_key = budget.literal_key(value)
+            if any(value_key == budget.literal_key(literal) for literal in literals):
+                return value
+        except _SchemaResolutionExhausted as exc:
+            logger.debug('tool argument literal matching stopped (%s); keeping the raw string', exc)
         # The coerced form is not one of the declared literals; the raw string
         # itself may still be (``enum: ['true', 1]`` with a bare ``true``).
         return raw_value
