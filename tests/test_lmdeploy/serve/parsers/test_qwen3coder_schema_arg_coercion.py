@@ -170,8 +170,22 @@ def _parse_complete(parser_cls, param_schema, raw_value):
     return json.loads(tool_call.function.arguments)
 
 
+COMPOSED_CASES = [
+    pytest.param({'enum': ['true', 'false'], 'allOf': [{'enum': ['true']}]},
+                 'true', 'true', id='intersect-enums'),
+    pytest.param({'$ref': '#/$defs/Empty', 'enum': [None]},
+                 'null', None, id='nullable-ref-empty-target'),
+    pytest.param({'allOf': [{'type': ['integer', 'null']}, {'description': 'number'}]},
+                 'null', None, id='nullable-allof-annotation'),
+    pytest.param({'type': ['string', 'object']}, '{}', {}, id='mixed-type-list-object'),
+    pytest.param({'anyOf': [{'type': 'string'}, {}]}, '[]', [], id='union-unconstrained-branch'),
+    pytest.param({}, 'null', None, id='unconstrained-null'),
+]
+
+
 # schema, raw emitted value, expected parsed value
 VALID_CASES = [
+    *COMPOSED_CASES,
     # $ref -> string keeps bare numeric/boolean-looking text as strings
     pytest.param(REF_STRING, '42', '42', id='ref-string-bare-number'),
     pytest.param(REF_STRING, '"42"', '42', id='ref-string-quoted-number'),
@@ -248,6 +262,7 @@ def test_arguments_validate_against_declared_schema(parser_cls, schema, raw_valu
 
 
 STREAM_CASES = [
+    *COMPOSED_CASES,
     pytest.param(ANYOF_OBJECT_ARRAY, '{"kind": "circle", "tags": ["a", "b"]}',
                  {'kind': 'circle', 'tags': ['a', 'b']}, id='union-object-json'),
     pytest.param(REF_STRING, '42', '42', id='ref-string-bare-number'),

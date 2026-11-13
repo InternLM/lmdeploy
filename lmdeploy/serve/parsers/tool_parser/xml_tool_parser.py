@@ -659,7 +659,7 @@ class XmlToolParser(ToolParser):
         own = cls._resolve_local_schema(schema, root_schema, depth, cache, visits)
         ref = schema.get('$ref')
         if not isinstance(ref, str):
-            return own if own is not None else (None, False, None)
+            return own if own is not None else (None, True, None)
         target = cls._lookup_local_ref(ref, root_schema)
         if target is None:
             if own is not None:
@@ -688,7 +688,7 @@ class XmlToolParser(ToolParser):
         literals: tuple[Any, ...] | None
         if left_literals is not None and right_literals is not None:
             literals = tuple(literal for literal in left_literals
-                             if any(cls._json_literal_matches(literal, other)
+                             if any(_json_literal_matches(literal, other)
                                     for other in right_literals))
         else:
             literals = left_literals if left_literals is not None else right_literals
@@ -724,8 +724,11 @@ class XmlToolParser(ToolParser):
         elif isinstance(schema_type, list):
             types = [item for item in schema_type if isinstance(item, str)]
             nullable = 'null' in types
-            first = next((item for item in types if item != 'null'), None)
-            result = first, nullable, None
+            non_null = set(types) - {'null'}
+            single_type = next(iter(non_null)) if len(non_null) == 1 else None
+            if not non_null and nullable:
+                single_type = 'null'
+            result = single_type, nullable, None
 
         if 'const' in schema:
             const_type = cls._json_type_of(schema['const'])
@@ -753,7 +756,9 @@ class XmlToolParser(ToolParser):
                 literals = None
                 if all(l is not None for _, _, l in resolved):
                     literals = tuple(lit for _, _, lit in resolved for lit in lit)
-                constraint = (distinct.pop() if len(distinct) == 1 else None), nullable, literals
+                single_type = distinct.pop() if len(distinct) == 1 and all(
+                    t is not None for t, _, _ in resolved) else None
+                constraint = single_type, nullable, literals
                 result = constraint if result is None else cls._intersect_coercion(result, constraint)
 
         if isinstance(schema.get('allOf'), list):
