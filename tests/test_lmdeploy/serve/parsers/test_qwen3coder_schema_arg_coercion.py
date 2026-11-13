@@ -446,6 +446,113 @@ def test_shared_ref_union_targets_resolve_once(parser_cls, monkeypatch):
     assert len(calls) < 200
 
 
+@pytest.mark.parametrize('parser_cls', PARSERS)
+@pytest.mark.parametrize('leaf', [{'const': '42'}, {'enum': ['42', '43']}])
+def test_shared_ref_enum_expansion_is_bounded(parser_cls, leaf):
+    """A small reference graph must not materialize every root-to-leaf path."""
+    levels = 10
+    parameters = _parameters({'$ref': '#/$defs/E0'})
+    for i in range(levels):
+        parameters['$defs'][f'E{i}'] = {
+            'anyOf': [{'$ref': f'#/$defs/E{i + 1}'} for _ in range(4)],
+        }
+    parameters['$defs'][f'E{levels}'] = leaf
+    schema = parameters['properties']['value']
+    expected = tuple(leaf.get('enum', ['42']))
+    assert parser_cls._resolve_schema_coercion(schema, parameters) == ('string', False, expected)
+
+    for stream in (False, True):
+        parser = parser_cls()
+        parser.adjust_request(_request_with_parameters(parser_cls, parameters))
+        arguments = (stream_tool_arguments(parser, _chunks(parser_cls, '42')) if stream else
+                     final_tool_call(parser, _payload(parser_cls, '42')).function.arguments)
+        assert json.loads(arguments) == {'value': '42'}
+
+
+@pytest.mark.parametrize('composition', ['anyOf', 'oneOf'])
+def test_union_enum_dedup_preserves_json_literals(composition):
+    """Deduplicate equal JSON values without losing boolean or container
+    literals."""
+    values = [True, 1, '1', None, [True], [1], {'a': True}, {'a': 1}, {'x': 1, 'y': 2}, 2**53, 2**53 + 1]
+    schema = {composition: [{'enum': values}, {'enum': [*values, 1.0, float(2**53), {'y': 2, 'x': 1}]}]}
+    _, _, literals = Glm47ToolParser._resolve_schema_coercion(schema)
+    assert json.dumps(literals) == json.dumps(values)
+
+
+@pytest.mark.parametrize('parser_cls', PARSERS)
+@pytest.mark.parametrize('reference', [False, True])
+def test_enum_work_budget_preserves_raw_value(parser_cls, reference, monkeypatch):
+    """Oversized enum processing must stop before guessing a different JSON
+    type."""
+    from lmdeploy.serve.parsers.tool_parser import xml_tool_parser
+
+    monkeypatch.setattr(xml_tool_parser, '_MAX_SCHEMA_LITERAL_WORK', 32, raising=False)
+    large_enum = {'enum': list(range(128))}
+    schema = {'$ref': '#/$defs/Large'} if reference else large_enum
+    parameters = _parameters(schema)
+    parameters['$defs']['Large'] = large_enum
+    for stream in (False, True):
+        parser = parser_cls()
+        parser.adjust_request(_request_with_parameters(parser_cls, parameters))
+        arguments = (stream_tool_arguments(parser, _chunks(parser_cls, '42')) if stream else
+                     final_tool_call(parser, _payload(parser_cls, '42')).function.arguments)
+        assert json.loads(arguments) == {'value': '42'}
+
+
+def test_literal_budget_is_shared_across_union_branches(monkeypatch):
+    from lmdeploy.serve.parsers.tool_parser import xml_tool_parser
+
+    monkeypatch.setattr(xml_tool_parser, '_MAX_SCHEMA_LITERAL_WORK', 32, raising=False)
+    # Each leaf fits by itself; processing all leaves and merging their values does not.
+    schema = {'anyOf': [{'enum': list(range(i, i + 8))} for i in range(0, 32, 8)]}
+    assert Glm47ToolParser._resolve_schema_coercion(schema) == ('string', False, None)
+
+
+def test_literal_budget_covers_intersections(monkeypatch):
+    from lmdeploy.serve.parsers.tool_parser import xml_tool_parser
+
+    monkeypatch.setattr(xml_tool_parser, '_MAX_SCHEMA_LITERAL_WORK', 32)
+    # Collecting these leaves fits in 32 steps; intersecting them exceeds the shared budget.
+    schema = {'allOf': [{'enum': list(range(8))} for _ in range(3)]}
+    assert Glm47ToolParser._resolve_schema_coercion(schema) == ('string', False, None)
+
+
+@pytest.mark.parametrize('keyword', ['const', 'enum'])
+@pytest.mark.parametrize('deep', [False, True])
+def test_nested_literal_processing_is_bounded(keyword, deep, monkeypatch):
+    from lmdeploy.serve.parsers.tool_parser import xml_tool_parser
+
+    if deep:
+        value = 42
+        for _ in range(64):
+            value = [value]
+    else:
+        monkeypatch.setattr(xml_tool_parser, '_MAX_SCHEMA_LITERAL_WORK', 32)
+        value = list(range(128))
+    schema = {keyword: [value] if keyword == 'enum' else value}
+    assert Glm47ToolParser._resolve_schema_coercion(schema) == ('string', False, None)
+
+
+def test_enum_intersection_fits_linear_work_budget(monkeypatch):
+    from lmdeploy.serve.parsers.tool_parser import xml_tool_parser
+
+    monkeypatch.setattr(xml_tool_parser, '_MAX_SCHEMA_LITERAL_WORK', 4096)
+    schema = {'allOf': [{'enum': list(range(512))}, {'enum': list(range(256, 768))}]}
+    assert Glm47ToolParser._resolve_schema_coercion(schema) == ('integer', False, tuple(range(256, 512)))
+
+
+def test_enum_intersection_uses_json_equality():
+    schema = {'allOf': [{'enum': [True, 1, [True], [1], {'a': True}, {'a': 1}]},
+                        {'enum': [1.0, [1.0], {'a': 1.0}]}]}
+    _, _, literals = Glm47ToolParser._resolve_schema_coercion(schema)
+    assert json.dumps(literals) == json.dumps((1, [1], {'a': 1}))
+
+
+@pytest.mark.parametrize('schema', [{'enum': [1, 1.0]}, {'enum': [1.0, 1]}])
+def test_numeric_enum_dedup_preserves_type_inference(schema):
+    assert _parse_complete(Glm47ToolParser, schema, '1.0') == {'value': 1.0}
+
+
 MULTI_PARAM_PARAMETERS = {
     'type': 'object',
     'properties': {
