@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from json.encoder import encode_basestring
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
@@ -30,6 +31,10 @@ _MAX_SCHEMA_RESOLVE_DEPTH = 32
 # loop.
 _MAX_SCHEMA_RESOLVE_VISITS = 4096
 
+# Shared across literal collection, union, and intersection, including nested
+# JSON values. Memoizing schema nodes alone does not bound their result sizes.
+_MAX_SCHEMA_LITERAL_WORK = 65536
+
 # Resolved coercion contract of one schema node: the governing JSON type (or
 # ``None`` when no single type governs), whether ``null`` is acceptable, and
 # the declared ``enum``/``const`` literals when present.
@@ -37,7 +42,44 @@ _SchemaCoercion = tuple[str | None, bool, tuple[Any, ...] | None]
 
 
 class _SchemaResolutionExhausted(Exception):
-    """Raised when schema resolution exceeds its total node-visit budget."""
+    """Raised when schema resolution exceeds a shared work budget."""
+
+
+@dataclass
+class _SchemaResolutionBudget:
+    visits: int
+    literal_work: int
+
+    def literal_key(self, value: Any, depth: int = 0) -> Any:
+        """Build a bounded JSON equality key, distinguishing booleans from
+        numbers."""
+        self.literal_work -= 1
+        if self.literal_work < 0 or depth >= _MAX_SCHEMA_RESOLVE_DEPTH:
+            raise _SchemaResolutionExhausted('literal work/depth budget')
+        if isinstance(value, list):
+            return list, tuple(self.literal_key(item, depth + 1) for item in value)
+        if isinstance(value, dict):
+            return dict, frozenset((key, self.literal_key(item, depth + 1)) for key, item in value.items())
+        if isinstance(value, bool):
+            return bool, value
+        if isinstance(value, (int, float)):
+            if isinstance(value, float) and not math.isfinite(value):
+                raise _SchemaResolutionExhausted('non-finite literal')
+            # JSON numbers compare equal across the integer/float boundary.
+            # Use text keys so adversarial integers cannot force hash collisions.
+            number = int(value) if isinstance(value, float) and value.is_integer() else value
+            return float, str(number)
+        if value is None or isinstance(value, str):
+            return type(value), value
+        raise _SchemaResolutionExhausted('non-JSON literal')
+
+    def unique_literals(self, values: Iterable[Any]) -> tuple[Any, ...]:
+        """Deduplicate while consuming the iterator, before allocating an
+        expanded tuple."""
+        unique = {}
+        for value in values:
+            unique.setdefault(self.literal_key(value), value)
+        return tuple(unique.values())
 
 
 def _json_literal_matches(value: Any, literal: Any) -> bool:
@@ -599,41 +641,37 @@ class XmlToolParser(ToolParser):
         schema's own ``type``/``enum``/``const`` narrows the referenced target instead of
         being dropped.
 
-        Two budgets bound the total work so request-provided schemas cannot stall the
-        serving loop: a node-visit budget shared across the whole resolution, and a depth
-        budget for ``$ref`` cycles. Exhausting either budget degrades to the string-
-        preserving fallback (logged), as does a ``$ref`` that cannot be resolved at all
-        (external pointer, missing target): raw values are kept instead of guessing a
-        JSON type.
+        Shared budgets bound node visits and literal processing, including enum unions
+        and intersections. A depth budget also bounds ``$ref`` cycles and nested literal
+        values. Exhausting a work budget degrades to the string-preserving fallback
+        (logged), as does an unresolvable ``$ref``: raw values are kept instead of guessing
+        a JSON type or using a partially collected enum.
         """
         if not isinstance(param_schema, dict):
             return None, False, None
         cache: dict[int, _SchemaCoercion] = {}
-        visits = [_MAX_SCHEMA_RESOLVE_VISITS]
+        budget = _SchemaResolutionBudget(_MAX_SCHEMA_RESOLVE_VISITS, _MAX_SCHEMA_LITERAL_WORK)
         try:
-            return cls._resolve_schema_impl(param_schema, root_schema, 0, cache, visits)
-        except _SchemaResolutionExhausted:
-            logger.debug('tool schema resolution exceeded %d node visits; coercing arguments '
-                         'as raw strings', _MAX_SCHEMA_RESOLVE_VISITS)
-            if isinstance(param_schema.get('$ref'), str):
-                return 'string', False, None
-            return None, False, None
+            return cls._resolve_schema_impl(param_schema, root_schema, 0, cache, budget)
+        except _SchemaResolutionExhausted as exc:
+            logger.debug('tool schema resolution stopped (%s); coercing arguments as raw strings', exc)
+            return 'string', False, None
 
     @classmethod
     def _resolve_schema_impl(cls, schema: dict[str, Any] | None,
                              root_schema: dict[str, Any] | None,
                              depth: int,
                              cache: dict[int, _SchemaCoercion],
-                             visits: list[int]) -> _SchemaCoercion:
+                             budget: _SchemaResolutionBudget) -> _SchemaCoercion:
         """Resolve one schema node under the shared memo and work budgets."""
         if not isinstance(schema, dict):
             return None, False, None
         cached = cache.get(id(schema))
         if cached is not None:
             return cached
-        visits[0] -= 1
-        if visits[0] < 0:
-            raise _SchemaResolutionExhausted()
+        budget.visits -= 1
+        if budget.visits < 0:
+            raise _SchemaResolutionExhausted('node-visit budget')
         if depth >= _MAX_SCHEMA_RESOLVE_DEPTH:
             logger.debug('tool schema resolution exceeded %d levels; coercing arguments as '
                          'raw strings', _MAX_SCHEMA_RESOLVE_DEPTH)
@@ -642,21 +680,21 @@ class XmlToolParser(ToolParser):
             if isinstance(schema.get('$ref'), str):
                 return 'string', False, None
             return None, False, None
-        result = cls._resolve_schema_node(schema, root_schema, depth, cache, visits)
+        result = cls._resolve_schema_node(schema, root_schema, depth, cache, budget)
         cache[id(schema)] = result
         return result
 
     @classmethod
     def _resolve_schema_node(cls, schema: dict[str, Any], root_schema: dict[str, Any] | None,
                              depth: int, cache: dict[int, _SchemaCoercion],
-                             visits: list[int]) -> _SchemaCoercion:
+                             budget: _SchemaResolutionBudget) -> _SchemaCoercion:
         """Interpret one schema node, merging its ``$ref`` target and siblings.
 
         The referenced target and every constraint declared beside the ``$ref`` both
         apply, so they are intersected hop by hop instead of following the pointer chain
         to the end and losing the intermediate layers.
         """
-        own = cls._resolve_local_schema(schema, root_schema, depth, cache, visits)
+        own = cls._resolve_local_schema(schema, root_schema, depth, cache, budget)
         ref = schema.get('$ref')
         if not isinstance(ref, str):
             return own if own is not None else (None, True, None)
@@ -668,13 +706,14 @@ class XmlToolParser(ToolParser):
             logger.debug('unresolvable $ref %s in tool schema; coercing arguments as raw '
                          'strings', ref)
             return 'string', False, None
-        target_result = cls._resolve_schema_impl(target, root_schema, depth + 1, cache, visits)
+        target_result = cls._resolve_schema_impl(target, root_schema, depth + 1, cache, budget)
         if own is None:
             return target_result
-        return cls._intersect_coercion(own, target_result)
+        return cls._intersect_coercion(own, target_result, budget)
 
     @classmethod
-    def _intersect_coercion(cls, left: _SchemaCoercion, right: _SchemaCoercion) -> _SchemaCoercion:
+    def _intersect_coercion(cls, left: _SchemaCoercion, right: _SchemaCoercion,
+                            budget: _SchemaResolutionBudget) -> _SchemaCoercion:
         """Intersect two resolved constraints: a value must satisfy both.
 
         An unconstrained side (``None`` type) adopts the other side's type, and an
@@ -687,9 +726,9 @@ class XmlToolParser(ToolParser):
         schema_type = right_type if left_type is None else left_type
         literals: tuple[Any, ...] | None
         if left_literals is not None and right_literals is not None:
+            right_keys = {budget.literal_key(literal) for literal in right_literals}
             literals = tuple(literal for literal in left_literals
-                             if any(_json_literal_matches(literal, other)
-                                    for other in right_literals))
+                             if budget.literal_key(literal) in right_keys)
         else:
             literals = left_literals if left_literals is not None else right_literals
         return schema_type, left_nullable and right_nullable, literals
@@ -698,7 +737,7 @@ class XmlToolParser(ToolParser):
     def _resolve_local_schema(cls, schema: dict[str, Any] | None,
                               root_schema: dict[str, Any] | None,
                               depth: int, cache: dict[int, _SchemaCoercion],
-                              visits: list[int]) -> _SchemaCoercion | None:
+                              budget: _SchemaResolutionBudget) -> _SchemaCoercion | None:
         """Resolve a schema's own constraints, ignoring its ``$ref`` keyword.
 
         ``type``, ``enum``/``const``, and the composition keywords
@@ -732,19 +771,21 @@ class XmlToolParser(ToolParser):
 
         if 'const' in schema:
             const_type = cls._json_type_of(schema['const'])
-            constraint = const_type, const_type == 'null', (schema['const'], )
-            result = constraint if result is None else cls._intersect_coercion(result, constraint)
+            constraint = const_type, const_type == 'null', budget.unique_literals((schema['const'], ))
+            result = constraint if result is None else cls._intersect_coercion(result, constraint, budget)
         elif isinstance(schema.get('enum'), list):
-            values = tuple(schema['enum'])
-            value_types = {cls._json_type_of(value) for value in values}
+            values = budget.unique_literals(schema['enum'])
+            # Equal integer/float literals may deduplicate, but retain their
+            # original type information for coercion (e.g. enum: [1, 1.0]).
+            value_types = {cls._json_type_of(value) for value in schema['enum']}
             nullable = 'null' in value_types
             distinct = {t for t in value_types if t not in (None, 'null')}
             constraint = (distinct.pop() if len(distinct) == 1 else None), nullable, values
-            result = constraint if result is None else cls._intersect_coercion(result, constraint)
+            result = constraint if result is None else cls._intersect_coercion(result, constraint, budget)
 
         union = schema.get('anyOf') if isinstance(schema.get('anyOf'), list) else schema.get('oneOf')
         if isinstance(union, list):
-            resolved = [cls._resolve_schema_impl(branch, root_schema, depth + 1, cache, visits)
+            resolved = [cls._resolve_schema_impl(branch, root_schema, depth + 1, cache, budget)
                         for branch in union if isinstance(branch, dict)]
             if resolved:
                 # A union accepts a value matching ANY branch: one shared type
@@ -755,21 +796,21 @@ class XmlToolParser(ToolParser):
                 distinct = {t for t, _, _ in resolved if t not in (None, 'null')}
                 literals = None
                 if all(l is not None for _, _, l in resolved):
-                    literals = tuple(lit for _, _, lit in resolved for lit in lit)
+                    literals = budget.unique_literals(value for _, _, values in resolved for value in values)
                 single_type = distinct.pop() if len(distinct) == 1 and all(
                     t is not None for t, _, _ in resolved) else None
                 constraint = single_type, nullable, literals
-                result = constraint if result is None else cls._intersect_coercion(result, constraint)
+                result = constraint if result is None else cls._intersect_coercion(result, constraint, budget)
 
         if isinstance(schema.get('allOf'), list):
-            resolved = [cls._resolve_schema_impl(member, root_schema, depth + 1, cache, visits)
+            resolved = [cls._resolve_schema_impl(member, root_schema, depth + 1, cache, budget)
                         for member in schema['allOf'] if isinstance(member, dict)]
             if resolved:
                 # Every ``allOf`` member constrains the same value.
                 merged = resolved[0]
                 for member_result in resolved[1:]:
-                    merged = cls._intersect_coercion(merged, member_result)
-                result = merged if result is None else cls._intersect_coercion(result, merged)
+                    merged = cls._intersect_coercion(merged, member_result, budget)
+                result = merged if result is None else cls._intersect_coercion(result, merged, budget)
 
         if result is not None:
             return result
