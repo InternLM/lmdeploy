@@ -771,6 +771,12 @@ Tensor UnifiedAttentionLayer::core_attention(Tensor& qkv, const ForwardParam& p,
                                                                     kMaxWorkspaceTokens,
                                                                     kMaxKVSplits,
                                                                     sm_count_);
+        // SM75 target verification is faster at ~1x SM occupancy than at
+        // the generic 2x target; the split reduction cost dominates beyond
+        // one full wave. Keep this arch-specific.
+        if (arch_ == 750) {
+            a.split_count = std::max(1, a.split_count / 2);
+        }
         return a;
     };
 
