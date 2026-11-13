@@ -904,13 +904,15 @@ class VisionConfig:
             in a multi-threaded environment.
         image_cache_max_bytes: Per-process budget for supported image
             preprocessing caches. Zero disables reuse. Currently used by GLM-5.
+            None uses ``LMDEPLOY_IMAGE_CACHE_MAX_BYTES`` set before startup,
+            which defaults to 2 GiB.
     """
     max_batch_size: int = 1
     thread_safe: bool = False
-    image_cache_max_bytes: int = 2 * 1024**3
+    image_cache_max_bytes: int | None = None
 
     def __post_init__(self):
-        if self.image_cache_max_bytes < 0:
+        if self.image_cache_max_bytes is not None and self.image_cache_max_bytes < 0:
             raise ValueError('image_cache_max_bytes must be non-negative')
 
 

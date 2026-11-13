@@ -218,7 +218,8 @@ with set_envs():
         False,
     )
 
-    # memory trim
+    # multimodal memory
+    image_cache_max_bytes = env_to_int('LMDEPLOY_IMAGE_CACHE_MAX_BYTES', 2 * 1024**3)
     multimodal_session_trim_count = env_to_int('LMDEPLOY_MULTIMODAL_SESSION_TRIM_COUNT', 128)
 
     # model format
