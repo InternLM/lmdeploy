@@ -553,6 +553,95 @@ def test_numeric_enum_dedup_preserves_type_inference(schema):
     assert _parse_complete(Glm47ToolParser, schema, '1.0') == {'value': 1.0}
 
 
+TYPE_AND_LITERAL_CASES = [
+    pytest.param({'type': ['string', 'integer']}, 'true', 'true', id='type-list-excludes-boolean'),
+    pytest.param({'type': ['string', 'integer']}, '1.5', '1.5', id='type-list-excludes-fraction'),
+    pytest.param({'type': ['string', 'object']}, '42', '42', id='type-list-excludes-number'),
+    pytest.param({'type': ['string', 'array']}, '{}', '{}', id='type-list-excludes-object'),
+    pytest.param({'anyOf': [{'type': 'string'}, {'type': 'integer'}]},
+                 'true', 'true', id='anyof-excludes-boolean'),
+    pytest.param({'oneOf': [{'type': 'string'}, {'type': 'integer'}]},
+                 'true', 'true', id='oneof-excludes-boolean'),
+    pytest.param({'$ref': '#/$defs/Union'}, 'true', 'true', id='referenced-union-excludes-boolean'),
+    pytest.param({'type': ['string', 'integer'], 'enum': ['true', True]},
+                 'true', 'true', id='type-list-intersects-enum'),
+    pytest.param({'allOf': [{'type': ['string', 'integer']}, {'type': ['string', 'boolean']}]},
+                 'true', 'true', id='allof-intersects-type-sets'),
+    pytest.param({'$ref': '#/$defs/Union', 'type': ['string', 'boolean']},
+                 'true', 'true', id='ref-sibling-intersects-type-sets'),
+    pytest.param({'anyOf': [{'type': ['string', 'integer']}, {'type': 'object'}]},
+                 'true', 'true', id='nested-union-excludes-boolean'),
+    pytest.param({'type': ['string', 'integer', 'null']},
+                 'true', 'true', id='nullable-mixed-excludes-boolean'),
+    pytest.param({'enum': ['[true]', [1]]}, '[true]', '[true]', id='nested-array-bool-number'),
+    pytest.param({'enum': ['[1]', [True]]}, '[1]', '[1]', id='nested-array-number-bool'),
+    pytest.param({'enum': ['{"a":true}', {'a': 1}]},
+                 '{"a":true}', '{"a":true}', id='nested-object-bool-number'),
+    pytest.param({'enum': ['{"a":[true]}', {'a': [1]}]},
+                 '{"a":[true]}', '{"a":[true]}', id='nested-object-array-bool-number'),
+    pytest.param({'anyOf': [{'const': '[true]'}, {'const': [1]}]},
+                 '[true]', '[true]', id='const-union-nested-bool-number'),
+    # Allowed native values and unconstrained branches must remain usable.
+    pytest.param({'type': ['string', 'integer']}, '42', 42, id='mixed-keeps-integer'),
+    pytest.param({'type': ['string', 'integer']}, '1.0', 1.0, id='mixed-keeps-integral-number'),
+    pytest.param({'type': ['string', 'number']}, '42', 42, id='number-includes-integer'),
+    pytest.param({'type': ['string', 'number']}, '1.5', 1.5, id='mixed-keeps-number'),
+    pytest.param({'type': ['string', 'boolean']}, 'true', True, id='mixed-keeps-boolean'),
+    pytest.param({'type': ['string', 'object']}, '{}', {}, id='mixed-keeps-object'),
+    pytest.param({'type': ['string', 'array']}, '[1]', [1], id='mixed-keeps-array'),
+    pytest.param({'type': ['string', 'integer', 'null']}, 'null', None, id='mixed-keeps-null'),
+    pytest.param({'anyOf': [{'type': ['string', 'integer']}, {}]},
+                 'true', True, id='unconstrained-union-keeps-boolean'),
+    pytest.param({'allOf': [{'type': ['string', 'integer']}, {}]},
+                 '42', 42, id='unconstrained-intersection-keeps-integer'),
+    pytest.param({'allOf': [{'type': ['string', 'integer']}, {'type': ['string', 'number']}]},
+                 '42', 42, id='intersection-number-includes-integer'),
+    pytest.param({'allOf': [{'type': ['string', 'integer']}, {'type': ['string', 'number']}]},
+                 '1.5', '1.5', id='intersection-excludes-fraction'),
+    pytest.param({'enum': ['[true]', [1]]}, '[1]', [1], id='nested-array-valid'),
+    pytest.param({'enum': ['[true]', [1]]}, '[1.0]', [1.0], id='nested-array-numeric-equality'),
+    pytest.param({'enum': ['{"a":true}', {'a': 1, 'b': [2]}]},
+                 '{"b":[2.0],"a":1.0}', {'a': 1.0, 'b': [2.0]}, id='nested-object-numeric-equality'),
+    pytest.param({'enum': ['[{"a":true}]', [{'a': True}]]},
+                 '[{"a":true}]', [{'a': True}], id='nested-boolean-valid'),
+]
+
+
+@pytest.mark.parametrize('parser_cls', PARSERS)
+@pytest.mark.parametrize('stream', [False, True], ids=['complete', 'stream'])
+@pytest.mark.parametrize(('schema', 'raw_value', 'expected'), TYPE_AND_LITERAL_CASES)
+def test_coercion_preserves_declared_types_and_json_literals(parser_cls, stream, schema, raw_value, expected):
+    """A valid string interpretation must survive an invalid native JSON
+    interpretation."""
+    parameters = _parameters(schema)
+    Draft202012Validator.check_schema(parameters)
+    validator = Draft202012Validator(parameters)
+    validator.validate({'value': expected})
+    parser = parser_cls()
+    parser.adjust_request(_request_with_parameters(parser_cls, parameters))
+    arguments = (stream_tool_arguments(parser, _chunks(parser_cls, raw_value)) if stream else
+                 final_tool_call(parser, _payload(parser_cls, raw_value)).function.arguments)
+    actual = json.loads(arguments)
+    assert actual == {'value': expected}
+    validator.validate(actual)
+
+
+@pytest.mark.parametrize('parser_cls', PARSERS)
+@pytest.mark.parametrize('stream', [False, True], ids=['complete', 'stream'])
+def test_final_enum_matching_shares_literal_budget(parser_cls, stream, monkeypatch):
+    from lmdeploy.serve.parsers.tool_parser import xml_tool_parser
+
+    # Resolving the two candidates takes four steps. Matching the value would
+    # exceed the remaining budget, so preserve its raw string interpretation.
+    monkeypatch.setattr(xml_tool_parser, '_MAX_SCHEMA_LITERAL_WORK', 5)
+    schema = {'enum': ['[1,2]', [1, 2]]}
+    parser = parser_cls()
+    parser.adjust_request(_request(parser_cls, schema))
+    arguments = (stream_tool_arguments(parser, _chunks(parser_cls, '[1,2]')) if stream else
+                 final_tool_call(parser, _payload(parser_cls, '[1,2]')).function.arguments)
+    assert json.loads(arguments) == {'value': '[1,2]'}
+
+
 MULTI_PARAM_PARAMETERS = {
     'type': 'object',
     'properties': {
