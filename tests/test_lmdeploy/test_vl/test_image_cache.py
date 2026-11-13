@@ -1,7 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import multiprocessing as mp
+import os
+import resource
 from io import BytesIO
 from types import SimpleNamespace
 
+import pytest
 import torch
 from PIL import Image
 
@@ -36,7 +40,47 @@ def test_image_cache_budget_and_inflight_ownership():
     assert cache.current_bytes <= cache.max_bytes
 
 
-def test_glm_image_cache_reuses_features_and_keeps_request_offsets():
+def _check_image_cache_shared_fds():
+    resource.setrlimit(resource.RLIMIT_NOFILE, (128, resource.getrlimit(resource.RLIMIT_NOFILE)[1]))
+    torch.multiprocessing.set_sharing_strategy('file_descriptor')
+    initial_fds = len(os.listdir('/proc/self/fd'))
+    cache = ImageProcessorCache(2 * 1024**3)
+    inflight = ProcessedImage(torch.ones(16).share_memory_(), torch.tensor([1, 2, 2]), 'first')
+    cache.put((0,), inflight)
+    for index in range(1, 1024):
+        cache.put((index,), ProcessedImage(torch.empty(16).share_memory_(), torch.tensor([1, 2, 2]), str(index)))
+    assert cache.get((0,)) is None
+    assert cache.get((1023,)) is not None
+    assert torch.all(inflight.pixel_values == 1)
+    assert len(os.listdir('/proc/self/fd')) <= initial_fds + 32 + 1
+    del cache
+    assert len(os.listdir('/proc/self/fd')) == initial_fds + 1
+    del inflight
+    assert len(os.listdir('/proc/self/fd')) == initial_fds
+
+
+def test_image_cache_bounds_retained_shared_fds():
+    # Isolate the process-wide FD limit and PyTorch sharing strategy.
+    process = mp.get_context('spawn').Process(target=_check_image_cache_shared_fds, daemon=True)
+    process.start()
+    process.join(timeout=60)
+    assert process.exitcode == 0
+    process.close()
+
+
+def test_palette_image_cache_key_includes_transparency():
+    image = Image.new('P', (2, 2))
+    image.putpalette([255, 0, 0] + [0] * 765)
+    opaque_key = ImageProcessorCache.key(image, torch.bfloat16, None)
+    transparent = image.copy()
+    transparent.info['transparency'] = 0
+    assert transparent.tobytes() == image.tobytes()
+    assert ImageProcessorCache.key(transparent, torch.bfloat16, None) != opaque_key
+    assert ImageProcessorCache.key(image.copy(), torch.bfloat16, None) == opaque_key
+
+
+@pytest.mark.parametrize('palette', [False, True])
+def test_glm_image_cache_reuses_features_and_keeps_request_offsets(palette):
     class ImageProcessor:
         merge_size = 2
         size = {'shortest_edge': 4, 'longest_edge': 16}
@@ -44,11 +88,15 @@ def test_glm_image_cache_reuses_features_and_keeps_request_offsets():
 
         def __call__(self, images, return_tensors, **kwargs):
             self.calls += 1
-            value = images[0].getpixel((0, 0))[0]
+            value = images[0].convert('RGB').getpixel((0, 0))[0]
             return dict(pixel_values=torch.full((4, 3), float(value)),
                         image_grid_thw=torch.tensor([[1, 2, 2]]))
 
     def image(value):
+        if palette:
+            result = Image.new('P', (2, 2))
+            result.putpalette([value, 0, 0] + [0] * 765)
+            return result
         buffer = BytesIO()
         Image.new('RGB', (2, 2), (value, 0, 0)).save(buffer, format='PNG')
         return EncodedImage(buffer.getvalue(), 'RGB')
@@ -67,6 +115,7 @@ def test_glm_image_cache_reuses_features_and_keeps_request_offsets():
     cold = run([image(1), image(2)], [9, 3, 9])
     warm = run([image(2), image(1)], [4, 9, 9])
     assert model.processor.image_processor.calls == 2
+    assert cold['multimodal'][0]['content_hash'] != cold['multimodal'][1]['content_hash']
     assert warm['input_ids'] == [4, 9, 9]
     assert warm['multimodal'][0]['offset'] == (1, 2)
     assert warm['multimodal'][0]['pixel_values'] is cold['multimodal'][1]['pixel_values']

@@ -906,6 +906,8 @@ class VisionConfig:
             preprocessing caches. Zero disables reuse. Currently used by GLM-5.
             None uses ``LMDEPLOY_IMAGE_CACHE_MAX_BYTES`` set before startup,
             which defaults to 2 GiB.
+            Cached images are also limited to 256 entries or one quarter of
+            the process FD soft limit, whichever is smaller.
     """
     max_batch_size: int = 1
     thread_safe: bool = False

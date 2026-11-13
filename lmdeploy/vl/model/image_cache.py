@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Per-encoder image preprocessing cache, accessed by its single worker."""
 import hashlib
+import resource
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -26,15 +27,21 @@ class ProcessedImage:
 
 
 class ImageProcessorCache:
-    """Own an LRU's tensor references and actual storage byte budget.
+    """Own an LRU's tensor references, storage byte budget and entry limit.
 
-    Eviction drops the cache's reference. In-flight requests retain their own references until terminal cleanup, so
-    eviction cannot invalidate them.
+    Each entry retains one shared pixel storage FD with PyTorch's default sharing strategy. Keep at most 256 entries and
+    use at most a quarter of the process FD limit, leaving room for RPC and other open files. Eviction drops the cache's
+    reference. In-flight requests retain their own references until terminal cleanup, so eviction cannot invalidate
+    them.
     """
 
     def __init__(self, max_bytes: int = 0):
         self.max_bytes = max_bytes
         self.current_bytes = 0
+        self._max_entries = 256
+        fd_limit = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        if fd_limit != resource.RLIM_INFINITY:
+            self._max_entries = min(self._max_entries, fd_limit // 4)
         self._entries: OrderedDict[tuple, ProcessedImage] = OrderedDict()
 
     @staticmethod
@@ -43,7 +50,9 @@ class ImageProcessorCache:
             content = hashlib.sha256(image.data).hexdigest()
             identity = ('encoded', image.mode, content)
         elif isinstance(image, Image.Image):
-            content = hashlib.sha256(image.tobytes()).hexdigest()
+            # Palette indices alone omit colors and transparency.
+            pixels = image.convert('RGBA') if image.mode in ('P', 'PA') else image
+            content = hashlib.sha256(pixels.tobytes()).hexdigest()
             identity = ('pixels', image.mode, image.size, content)
         else:
             # Offline pipelines can also supply NumPy arrays or CPU tensors.
@@ -57,12 +66,13 @@ class ImageProcessorCache:
         return item
 
     def put(self, key: tuple, item: ProcessedImage) -> None:
-        if item.nbytes > self.max_bytes:
+        if self._max_entries == 0 or item.nbytes > self.max_bytes:
             return
         previous = self._entries.pop(key, None)
         if previous is not None:
             self.current_bytes -= previous.nbytes
-        while self._entries and self.current_bytes + item.nbytes > self.max_bytes:
+        while self._entries and (len(self._entries) >= self._max_entries
+                                 or self.current_bytes + item.nbytes > self.max_bytes):
             _, evicted = self._entries.popitem(last=False)
             self.current_bytes -= evicted.nbytes
         self._entries[key] = item
