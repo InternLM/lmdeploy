@@ -4,12 +4,13 @@
 
 namespace turbomind {
 
+class LanguageModel;
+
 class OutputProcessor {
 public:
     ~OutputProcessor();
 
-    OutputProcessor(
-        int vocab_size, int max_logits_len, int tp_rank, int phases, std::function<Tensor(const Tensor&)> lm_head);
+    OutputProcessor(LanguageModel& model, int tp_rank, int phases);
 
     void Run(BatchOp op, int phase, TensorMap& env);
 

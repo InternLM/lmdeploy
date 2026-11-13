@@ -17,6 +17,17 @@ void invokeQkRMSNorm(Tensor&       qkv,
                      bool          zero_centered,
                      cudaStream_t  st);
 
+void invokeRMSNormConcat(Tensor&       out,
+                         const Tensor& left,
+                         const Tensor& left_weight,
+                         float         left_eps,
+                         bool          left_zero_centered,
+                         const Tensor& right,
+                         const Tensor& right_weight,
+                         float         right_eps,
+                         bool          right_zero_centered,
+                         cudaStream_t  stream);
+
 template<class T>
 void invokeBiasResidualRMSNorm(T*           residual,
                                T*           hidden_states,

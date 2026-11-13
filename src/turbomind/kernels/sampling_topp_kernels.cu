@@ -33,6 +33,41 @@
 
 namespace turbomind {
 
+namespace {
+
+template<class T>
+size_t GetTopPSortCubBytes(int batch_size, int vocab_size, int vocab_size_padded, cudaStream_t stream)
+{
+    const int num_items = vocab_size_padded * (batch_size - 1) + vocab_size;
+
+    size_t cub_bytes{};
+    cub::DeviceSegmentedRadixSort::SortPairsDescending(nullptr,
+                                                       cub_bytes,
+                                                       static_cast<T*>(nullptr),
+                                                       static_cast<T*>(nullptr),
+                                                       static_cast<int*>(nullptr),
+                                                       static_cast<int*>(nullptr),
+                                                       num_items,
+                                                       batch_size,
+                                                       static_cast<int*>(nullptr),
+                                                       static_cast<int*>(nullptr),
+                                                       0,
+                                                       sizeof(T) * 8,
+                                                       stream);
+
+    return cub_bytes;
+}
+
+}  // namespace
+
+size_t GetTopPSortWorkspaceBytes(int batch_size, int vocab_size, int vocab_size_padded, cudaStream_t stream)
+{
+    const size_t item_count = static_cast<size_t>(batch_size) * vocab_size_padded;
+
+    return GetTopPSortCubBytes<float>(batch_size, vocab_size, vocab_size_padded, stream) + item_count * sizeof(int)
+           + 2 * static_cast<size_t>(batch_size) * sizeof(int);
+}
+
 __global__ void topPSortInitialize(const int    vocab_size_padded,
                                    const int    vocab_size,
                                    const size_t batch_size,
@@ -222,20 +257,8 @@ void invokeTopPSort(TopPSortParams& params, cudaStream_t stream)
 {
     const int num_items = params.vocab_size_padded * (params.batch_size - 1) + params.vocab_size;
 
-    size_t cub_temp_storage_size{};
-    TM_CUDA_CHECK(cub::DeviceSegmentedRadixSort::SortPairsDescending(nullptr,
-                                                                     cub_temp_storage_size,
-                                                                     (T*)nullptr,
-                                                                     (T*)nullptr,
-                                                                     (int*)nullptr,
-                                                                     (int*)nullptr,
-                                                                     num_items,
-                                                                     params.batch_size,
-                                                                     (int*)nullptr,
-                                                                     (int*)nullptr,
-                                                                     0,              // begin_bit
-                                                                     sizeof(T) * 8,  // end_bit = sizeof(KeyT) * 8
-                                                                     stream));       // cudaStream_t
+    size_t cub_temp_storage_size =
+        GetTopPSortCubBytes<T>(params.batch_size, params.vocab_size, params.vocab_size_padded, stream);
 
     TM_CHECK(core::Context::stream().handle() == stream);
 

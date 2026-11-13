@@ -7,11 +7,13 @@ from ._base import Builder, BuiltModule, Context, SplitSide, _act_type_id, _torc
 from .attention import AttentionBuilder
 from .decoder_layer import DecoderLayerBuilder, DecoderLayerConfig
 from .deltanet import DeltaNetBuilder
+from .eagle3_weight import Eagle3WeightBuilder, Eagle3WeightConfig
 from .ffn import FfnBuilder
 from .mla import MLABuilder
 from .module_list import ModuleListBuilder, ModuleListConfig
 from .moe import MoeBuilder
 from .norm import LayerNormBuilder, NormBuilder, make_layer_norm_config, make_norm_config
+from .qwen3_5_mtp_weight import Qwen35MtpWeightBuilder, Qwen35MtpWeightConfig
 from .text_model import TextModelBuilder
 from .vision_model import VisionModelBuilder
 
@@ -32,6 +34,8 @@ __all__ = [
     'DeltaNetBuilder',
     'MLABuilder',
     'DecoderLayerBuilder',
+    'Eagle3WeightBuilder',
+    'Qwen35MtpWeightBuilder',
     'ModuleListBuilder',
     'NormBuilder',
     'LayerNormBuilder',
@@ -40,6 +44,8 @@ __all__ = [
     'make_layer_norm_config',
     # C++ config re-exports
     'DecoderLayerConfig',
+    'Eagle3WeightConfig',
+    'Qwen35MtpWeightConfig',
     'ModuleListConfig',
     # Helper functions
 ]

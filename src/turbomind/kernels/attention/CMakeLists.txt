@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
 add_subdirectory(kernel)
+add_subdirectory(verification)
 
 add_library(attention STATIC
             attention.cu
@@ -14,6 +15,7 @@ set_property(TARGET attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_compile_options(attention PRIVATE -O3
     $<$<COMPILE_LANGUAGE:CUDA>:-use_fast_math --expt-relaxed-constexpr -Xptxas=-v --threads=${NVCC_THREADS}>)
 target_link_libraries(attention PUBLIC $<LINK_LIBRARY:WHOLE_ARCHIVE,attention_kernels>)
+target_link_libraries(attention PUBLIC verification_attention)
 target_link_libraries(attention PRIVATE nvidia::cutlass::cutlass)
 
 if (BUILD_TEST)
