@@ -21,6 +21,11 @@ from ..op_backend import DlinferOpsBackend
 
 logger = get_logger('lmdeploy')
 
+# Select the MoE comm method by token capacity for prefill as well as decode,
+# mirroring vllm_ascend's FUSED_OR_CAPACITY policy. Set to '0' to restore the
+# upstream decode-only MC2 selection.
+_PREFILL_MC2_ENABLED = os.getenv('LMDEPLOY_ENABLE_PREFILL_MC2', '1') == '1'
+
 
 def _get_cpu_attention_metadata(cu_seqlens_q: torch.Tensor,
                                 kv_seqlens: torch.Tensor):
@@ -161,7 +166,9 @@ class AscendOpsBackend(DlinferOpsBackend):
     enable_graph: bool = False
     total_slots = None
     max_batches = None
+    max_prefill_token_num = 0
     dist_meta: DistMeta = None
+    _last_moe_comm_type = None
     fia_causal_masks: dict[torch.device, torch.Tensor] = {}
 
     @staticmethod
@@ -360,8 +367,14 @@ class AscendOpsBackend(DlinferOpsBackend):
             return actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp
 
         def init_mc2_token_capacity(tp_size):
+            # MC2 dispatch is bounded by the HCCL comm buffer: at most 512
+            # tokens per TP rank (vllm_ascend's _MC2_TOKENS_PER_RANK_LIMIT).
             max_num_tokens = min(cls.max_batches * (num_spec_tokens + 1), 512)
-            num_tokens_per_tp_rank = (max_num_tokens + tp_size - 1) // tp_size
+            if _PREFILL_MC2_ENABLED:
+                # Prefill batches ride MC2 too, so the capacity must also cover
+                # the per-forward token budget.
+                max_num_tokens = max(max_num_tokens, cls.max_prefill_token_num or 0)
+            num_tokens_per_tp_rank = min((max_num_tokens + tp_size - 1) // tp_size, 512)
             return num_tokens_per_tp_rank * tp_size
 
         def select_moe_comm_type(max_tokens_across_dp, dp_size, tp_size, ep_size):
@@ -377,10 +390,18 @@ class AscendOpsBackend(DlinferOpsBackend):
                 else:
                     return DlinferMoECommType.ALLGATHER
             elif SocVersion.is_A3():
-                if max_tokens_across_dp <= mc2_token_capacity and global_is_decoding:
-                    return DlinferMoECommType.MC2
+                # FUSED_OR_CAPACITY (vllm_ascend parity): batches within the MC2
+                # capacity use MC2, oversized ones fall back to ALLTOALL.
+                if max_tokens_across_dp <= mc2_token_capacity and (_PREFILL_MC2_ENABLED or global_is_decoding):
+                    moe_comm_type = DlinferMoECommType.MC2
                 else:
-                    return DlinferMoECommType.ALLTOALL
+                    moe_comm_type = DlinferMoECommType.ALLTOALL
+                if cls._last_moe_comm_type != moe_comm_type:
+                    cls._last_moe_comm_type = moe_comm_type
+                    logger.info('MoE comm method: %s (max_tokens_across_dp=%d, mc2_token_capacity=%d, '
+                                'is_decoding=%s)', moe_comm_type.name, max_tokens_across_dp,
+                                mc2_token_capacity, global_is_decoding)
+                return moe_comm_type
             else:
                 raise ValueError(f'Unsupported soc_version: {SocVersion.soc_version()}')
 
@@ -547,6 +568,8 @@ class AscendOpsBackend(DlinferOpsBackend):
         """Build graph runner."""
         AscendOpsBackend.enable_graph = not backend_config.eager_mode
         AscendOpsBackend.max_batches = cache_config.max_batches
+        # Prefill token budget feeding the MC2 capacity (init_mc2_token_capacity).
+        AscendOpsBackend.max_prefill_token_num = getattr(cache_config, 'max_prefill_token_num', 0)
         from dlinfer.framework.lmdeploy_ext.cudagraph.ascend_cudagraph import AscendGraphRunner
         is_mla = model_config.k_head_dim != model_config.v_head_dim
         return AscendGraphRunner(model, model_config, cache_config, backend_config, device, is_mla=is_mla)
