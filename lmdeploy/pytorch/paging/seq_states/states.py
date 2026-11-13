@@ -47,6 +47,9 @@ class SequenceLifecycle:
         self.release_paging_resources(seq)
         seq.session.sequences.pop(seq.seq_id)
         self._seq_manager.unregister_sequence(seq)
+        # State/sequence cycles can outlive a request until cyclic GC runs.
+        # Drop large inputs here, after terminal paging ownership is released.
+        seq.history_multimodals.multimodals.clear()
 
     def end_sequence(self, seq: SchedulerSequence) -> None:
         """Notify the connector that the request ended, then remove it."""

@@ -902,9 +902,16 @@ class VisionConfig:
         thread_safe: Specifies whether the engine instance is
             thread-safe. Please set it to True when using the pipeline
             in a multi-threaded environment.
+        image_cache_max_bytes: Per-process budget for supported image
+            preprocessing caches. Zero disables reuse. Currently used by GLM-5.
     """
     max_batch_size: int = 1
     thread_safe: bool = False
+    image_cache_max_bytes: int = 2 * 1024**3
+
+    def __post_init__(self):
+        if self.image_cache_max_bytes < 0:
+            raise ValueError('image_cache_max_bytes must be non-negative')
 
 
 @dataclass

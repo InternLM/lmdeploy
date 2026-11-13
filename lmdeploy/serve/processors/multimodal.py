@@ -38,7 +38,8 @@ class MultimodalProcessor:
                  chat_template: BaseChatTemplate,
                  vl_encoder=None,
                  backend: str | None = None,
-                 allowed_media_domains: list[str] | None = None):
+                 allowed_media_domains: list[str] | None = None,
+                 defer_image_decode: bool = False):
         """Initialize MultimodalProcessor.
 
         Args:
@@ -53,6 +54,7 @@ class MultimodalProcessor:
         self.vl_encoder = vl_encoder
         self.backend = backend
         self.allowed_media_domains = allowed_media_domains
+        self.defer_image_decode = defer_image_decode
 
     @staticmethod
     def merge_message_content(msg: dict) -> dict:
@@ -110,7 +112,8 @@ class MultimodalProcessor:
                                in_messages: list[dict],
                                out_messages: list[dict],
                                media_io_kwargs: dict[str, Any],
-                               allowed_media_domains: list[str] | None = None):
+                               allowed_media_domains: list[str] | None = None,
+                               defer_image_decode: bool = False):
         """Synchronous helper to parse a single multimodal message item."""
         role = in_messages[i]['role']
         # OpenAI protocol allows tool_call messages with missing/null content;
@@ -167,8 +170,9 @@ class MultimodalProcessor:
                 if isinstance(data_src, PIL.Image.Image):
                     data = data_src
                 elif isinstance(data_src, str):
+                    image_kwargs = dict(media_io_kwargs.get('image', {}), defer_decode=defer_image_decode)
                     data = load_from_url(data_src,
-                                         ImageMediaIO(**media_io_kwargs.get('image', {})),
+                                         ImageMediaIO(**image_kwargs),
                                          allowed_media_domains=allowed_media_domains)
                 else:
                     raise ValueError(f'Invalid multimodal image item at index {i}: {item}. '
@@ -200,7 +204,8 @@ class MultimodalProcessor:
     @staticmethod
     async def async_parse_multimodal_item(messages: list[dict],
                                           media_io_kwargs: dict[str, Any] | None = None,
-                                          allowed_media_domains: list[str] | None = None) -> list[dict]:
+                                          allowed_media_domains: list[str] | None = None,
+                                          defer_image_decode: bool = False) -> list[dict]:
         """Convert user-input multimodal data into GPT4V message format."""
         if isinstance(messages, dict):
             messages = [messages]
@@ -212,7 +217,8 @@ class MultimodalProcessor:
 
         await asyncio.gather(*[
             loop.run_in_executor(None, MultimodalProcessor._parse_multimodal_item, i, messages, out_messages,
-                                 media_io_kwargs, allowed_media_domains) for i in range(len(messages))
+                                 media_io_kwargs, allowed_media_domains, defer_image_decode)
+            for i in range(len(messages))
         ])
         return out_messages
 
@@ -440,9 +446,15 @@ class MultimodalProcessor:
         chat_template_kwargs = dict(chat_template_kwargs or {})
         if reasoning_effort is not None:
             chat_template_kwargs['reasoning_effort'] = reasoning_effort
+        # Mixed modalities retain the processor's existing eager media path.
+        defer_image_decode = self.defer_image_decode and all(
+            item.get('type') in ('text', 'image', 'image_url', 'image_data')
+            for message in messages if isinstance(message.get('content'), list)
+            for item in message['content'])
         messages = await self.async_parse_multimodal_item(messages,
                                                           media_io_kwargs,
-                                                          allowed_media_domains=self.allowed_media_domains)
+                                                          allowed_media_domains=self.allowed_media_domains,
+                                                          defer_image_decode=defer_image_decode)
         messages = chat_template.prepare_multimodal_messages(messages)
 
         if self.backend == 'turbomind':

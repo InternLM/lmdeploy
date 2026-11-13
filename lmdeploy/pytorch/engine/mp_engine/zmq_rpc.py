@@ -3,8 +3,12 @@ import asyncio
 import inspect
 import pickle
 from collections.abc import Callable
+from io import BytesIO
+from multiprocessing.reduction import ForkingPickler
 from uuid import uuid4
 
+import torch
+import torch.multiprocessing  # Registers PyTorch's shared-storage reducers.
 import zmq
 import zmq.asyncio
 from zmq.asyncio import Context
@@ -14,6 +18,25 @@ from lmdeploy.utils import get_logger
 from .base_worker import EngineOutputGather, StreamMailbox, StreamPollResult, iter_stream_poll_outputs
 
 logger = get_logger('lmdeploy')
+
+
+class _RequestPickler(pickle.Pickler):
+    """Pass already-shared CPU tensors by handle through the local RPC.
+
+    PyTorch's IPC reducer retains an FD until the receiver attaches. The streaming startup task stays alive through that
+    handoff even if its caller cancels. Ordinary tensors keep the existing pickle behavior.
+    """
+
+    def reducer_override(self, obj):
+        if isinstance(obj, torch.Tensor) and obj.device.type == 'cpu' and obj.is_shared():
+            return pickle.loads, (bytes(ForkingPickler.dumps(obj)),)
+        return NotImplemented
+
+    @classmethod
+    def dumps(cls, obj) -> bytes:
+        buffer = BytesIO()
+        cls(buffer).dump(obj)
+        return buffer.getvalue()
 
 
 class RPCServerDeadError(RuntimeError):
@@ -465,7 +488,7 @@ class AsyncRPCClient:
         self.pending[request_id] = future
 
         logger.debug(f'call method: {method}, request_id: {request_id}')
-        data = pickle.dumps(
+        data = _RequestPickler.dumps(
             dict(
                 request_id=request_id,
                 method=method,
@@ -479,6 +502,7 @@ class AsyncRPCClient:
 
         try:
             await self.async_socket.send(data)
+            del data
             self._check_server_alive()
             return await future
         except asyncio.CancelledError:

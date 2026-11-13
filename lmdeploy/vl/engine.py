@@ -92,6 +92,8 @@ class ImageEncoder:
         if vision_config is None:
             vision_config = VisionConfig()
         self.vision_config = vision_config
+        if self.model.supports_image_cache:
+            self.model.image_cache.max_bytes = vision_config.image_cache_max_bytes
         self.max_batch_size = vision_config.max_batch_size
         self.executor = ThreadPoolExecutor(max_workers=1)
         self._uses_new_preprocess = self._is_new_preprocess_api(self.model)

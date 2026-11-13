@@ -13,16 +13,26 @@ from lmdeploy.vl.constants import Modality
 NestedTensor = Tensor | list[Tensor]
 
 
+def get_image_mrope_pos_ids(grid_thw: Tensor) -> np.ndarray:
+    """Relative image positions for models with a 2x2 spatial merge."""
+    t, h, w = grid_thw.tolist() if grid_thw.dim() == 1 else grid_thw[0].tolist()
+    h, w = h // 2, w // 2
+    stride = np.array([h * w, w, 1])[None]
+    size = np.array([t, h, w])[None]
+    pos_ids = np.arange(t * h * w)[:, None].repeat(3, axis=1)
+    return pos_ids // stride % size
+
+
 def _hash_multimodal_value(hasher: 'hashlib._Hash', value: Any):
     """Update a hash with a deterministic multimodal value representation."""
     if isinstance(value, Tensor):
         tensor = value.detach().cpu().contiguous()
         hasher.update(f'tensor:{tensor.dtype}:{tuple(tensor.shape)}:'.encode())
-        hasher.update(tensor.view(torch.uint8).numpy().tobytes())
+        hasher.update(tensor.view(torch.uint8).numpy())
     elif isinstance(value, np.ndarray):
         array = np.ascontiguousarray(value)
         hasher.update(f'ndarray:{array.dtype}:{array.shape}:'.encode())
-        hasher.update(array.tobytes())
+        hasher.update(array)
     elif isinstance(value, dict):
         hasher.update(b'dict:{')
         for key in sorted(value, key=lambda x: repr(x)):
