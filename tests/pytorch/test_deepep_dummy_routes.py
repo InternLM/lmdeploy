@@ -187,7 +187,7 @@ def test_moe_forward_masks_before_tp_split(monkeypatch, backend, valid_count):
     from lmdeploy.pytorch.backends.cuda.moe import blocked_fp8, compressed_tensors, default, ep_utils
     from lmdeploy.pytorch.distributed import DistConfig
 
-    context = SimpleNamespace(is_dummy=False, global_is_decoding=lambda: True,
+    context = SimpleNamespace(is_dummy=False, global_is_decoding=lambda: True, moe_low_latency=True,
                               moe_valid_token_count=torch.tensor(valid_count, device='cuda', dtype=torch.int32))
     def manager():
         return SimpleNamespace(current_context=lambda: context)
@@ -213,7 +213,7 @@ def test_moe_forward_masks_before_tp_split(monkeypatch, backend, valid_count):
         ep_utils.mask_invalid_tokens(ids)
         return x
 
-    obj = SimpleNamespace(use_deep_gemm=True, renormalize=False,
+    obj = SimpleNamespace(renormalize=False,
                           do_renormalize=lambda x: x,
                           fusedmoe_build=lambda mode: SimpleNamespace(forward=experts),
                           _validate_local_weights=lambda *args: None,

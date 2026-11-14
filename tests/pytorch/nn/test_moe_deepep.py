@@ -9,6 +9,20 @@ import pytest
 import torch
 
 
+def test_small_prefill_capacity_requires_every_layer_to_support_it(monkeypatch):
+    from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
+
+    state = get_deepep_state()
+    monkeypatch.setattr(state, '_enabled', False)
+    monkeypatch.setattr(state, 'low_latency_prefill_tokens', 0)
+    state.enable(low_latency_prefill_tokens=192)
+    state.enable(low_latency_prefill_tokens=128)
+    assert state.low_latency_prefill_tokens == 128
+    state.enable()
+    state.enable(low_latency_prefill_tokens=192)
+    assert state.low_latency_prefill_tokens == 0
+
+
 def test_dist_checker_requires_deepep_and_deepgemm(monkeypatch):
     from lmdeploy.pytorch.check_env import dist as dist_check
 

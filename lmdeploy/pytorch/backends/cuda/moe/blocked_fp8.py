@@ -451,7 +451,6 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         self.layer_idx = layer_idx
         try:
             import deep_gemm  # noqa: F401
-            self.use_deep_gemm = True
         except ImportError:
             logger.exception('DeepGEMM is required for DeepEP MoE implementation.')
             raise
@@ -459,7 +458,10 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         if not use_deepep:
             raise ImportError('DeepEP is required for DeepEP MoE implementation. Please install '
                               'https://github.com/deepseek-ai/DeepEP.')
-        get_deepep_state().enable()
+        # FusedMoEBlockedF8 fixes the quantization block size at 128.
+        prefill_capacity = (num_max_dispatch_tokens_per_rank
+                            if out_dtype == torch.bfloat16 and fp8_dtype == torch.float8_e4m3fn else 0)
+        get_deepep_state().enable(low_latency_prefill_tokens=prefill_capacity)
         if hasattr(DeepEPBuffer, 'set_explicitly_destroy'):
             DeepEPBuffer.set_explicitly_destroy()
 
@@ -497,7 +499,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                      **kwargs):
         """forward."""
         step_ctx = get_step_ctx_manager().current_context()
-        low_latency_mode = step_ctx.global_is_decoding() and self.use_deep_gemm
+        low_latency_mode = step_ctx.moe_low_latency
         hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(
             hidden_states, topk_weights, topk_ids, mask_padding=low_latency_mode)
 

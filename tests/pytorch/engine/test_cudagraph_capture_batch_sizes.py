@@ -92,3 +92,42 @@ def test_model_context_kwarg_does_not_collide_with_graph_routing(monkeypatch):
     )
 
     assert output is model_context
+
+
+@pytest.mark.parametrize('tokens,decoding,microbatch,capacity,low_latency', [
+    ([31, 42, 1], False, False, 192, True),
+    ([192, 1], False, False, 192, True),
+    ([193, 1], False, False, 192, False),
+    ([31, 42], False, True, 192, False),
+    ([31, 42], False, False, 0, False),
+    ([6, 7], True, False, 0, True),
+])
+def test_small_prefill_mode_agrees_across_ranks_without_changing_attention(
+        monkeypatch, tokens, decoding, microbatch, capacity, low_latency):
+    from lmdeploy.pytorch.backends.cuda.graph_runner import runner as cuda_graph_runner
+    from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer, DeepEPMode
+    from lmdeploy.pytorch.model_inputs import DPMeta, StepContext
+
+    state = cuda_graph_runner.get_deepep_state()
+    monkeypatch.setattr(state, 'enabled', lambda: True)
+    monkeypatch.setattr(state, 'low_latency_prefill_tokens', capacity)
+    modes = []
+    monkeypatch.setattr(DeepEPBuffer, 'set_deepep_mode', modes.append)
+    runner = object.__new__(CUDAGraphRunner)
+    runner.enable_graph = lambda **kwargs: True
+
+    for rank, count in enumerate(tokens):
+        context = object.__new__(StepContext)
+        context.input_ids = torch.zeros(1, count, dtype=torch.long)
+        context.dp_meta = DPMeta.build(count, tokens)
+        context.dp_meta.dp_is_decoding = decoding
+        context.is_decoding = decoding or rank > 0
+        context.enable_microbatch = microbatch
+        cuda_graph_runner._update_deepep_mode(context)
+        assert context.moe_low_latency is low_latency
+        assert context.global_is_decoding() is decoding
+        assert context.is_decoding is (decoding or rank > 0)
+        assert runner._should_use_full_graph(context, {}) is decoding
+
+    expected = DeepEPMode.LOW_LATENCY if low_latency else DeepEPMode.NORMAL
+    assert modes == [expected] * len(tokens)
