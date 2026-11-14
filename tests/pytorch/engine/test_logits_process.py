@@ -250,3 +250,59 @@ def test_filter_ngram():
     stop_words = torch.randint(0, vocab_size, (batch_size, 3), dtype=torch.int64)
     _filter_repetition_ngram_(scores, stop_words, generated_ids, n, threshold, max_n, max_window_size)
     assert scores[0].isinf().sum().item() == vocab_size - 1
+
+
+def test_sampling_delta_keeps_generated_ids_current():
+    """The scheduler builds the next decode step's sampling inputs before the
+    current step's tokens reach the sequences, so the generated ids it sends
+    lag one token behind; the device-side delta must carry the latest one."""
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.engine.logits_process import SamplingInputs
+    from lmdeploy.pytorch.strategies.ar.step_inputs import (
+        merge_sampling_delta,
+        reindex_sampling_delta,
+        step_sampling_delta,
+    )
+
+    pad = 0
+    # step N: two sequences that have generated [5, 6] and [7]
+    inputs = SamplingInputs(
+        num_ignore_eos=torch.tensor([0, 0]),
+        random_offsets=torch.tensor([0, 0]),
+        repetition_penalty=torch.tensor([2.0, 2.0]),
+        generated_ids=torch.tensor([[5, 6], [pad, 7]]),
+        batch_size=2,
+    )
+    delta = step_sampling_delta(inputs.get_delta(), torch.tensor([8, 9]))
+
+    # step N + 1: scheduler-side generated ids do not have tokens 8 and 9 yet
+    stale = SamplingInputs(
+        num_ignore_eos=torch.tensor([0, 0]),
+        random_offsets=torch.tensor([0, 0]),
+        repetition_penalty=torch.tensor([2.0, 2.0]),
+        generated_ids=torch.tensor([[5, 6], [pad, 7]]),
+        batch_size=2,
+    )
+    stale.update_delta(delta)
+    assert stale.generated_ids.tolist() == [[5, 6, 8], [pad, 7, 9]]
+
+    # the last generated token is penalized
+    scores = torch.ones(2, 10)
+    from lmdeploy.pytorch.engine.logits_process import _process_repetition_penalty_
+    scores = _process_repetition_penalty_(scores, stale.generated_ids, stale.repetition_penalty)
+    assert scores[0, 8] == 0.5 and scores[1, 9] == 0.5
+
+    # merging keeps ids right-aligned; a batch without generated ids is padded
+    from lmdeploy.pytorch.engine.logits_process import SamplingInputsDelta
+    other = SamplingInputsDelta(num_ignore_eos=torch.tensor([0]),
+                                random_offsets=torch.tensor([0]),
+                                generated_ids=torch.tensor([[3]]))
+    merged = merge_sampling_delta(delta, other, pad)
+    assert merged.generated_ids.tolist() == [[5, 6, 8], [pad, 7, 9], [pad, pad, 3]]
+    no_ids = SamplingInputsDelta(num_ignore_eos=torch.tensor([0]), random_offsets=torch.tensor([0]))
+    merged = merge_sampling_delta(no_ids, other, pad)
+    assert merged.generated_ids.tolist() == [[pad], [3]]
+
+    reindexed = reindex_sampling_delta(delta, SimpleNamespace(indices=torch.tensor([1])))
+    assert reindexed.generated_ids.tolist() == [[pad, 7, 9]]

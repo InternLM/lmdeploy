@@ -82,6 +82,8 @@ def _step_sampling_delta_dllm(
     sampling_delta.num_ignore_eos = num_ignore_eos.flatten()
     if sampling_delta.random_offsets is not None:
         sampling_delta.random_offsets += 1
+    # Generated ids are provided by the scheduler for DLLM.
+    sampling_delta.generated_ids = None
     return sampling_delta
 
 
