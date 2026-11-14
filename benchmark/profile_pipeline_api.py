@@ -170,24 +170,21 @@ class Engine:
         for s in sess:
             s.tick(0)
 
-        if stream_output:
-            pbar = tqdm(total=len(requests))
-            for output in self.pipe.stream_infer(prompts, gen_config=gen_configs, do_preprocess=False):
-                index = output.index
-                n_token = output.generate_token_len
-                finish_reason = output.finish_reason
-                sess[index].tick(n_token)
-                if finish_reason is not None:
-                    sess[index].finish(_to_status(finish_reason))
-                    pbar.update(1)
-            pbar.close()
-        else:
-            for output in self.pipe(prompts, gen_configs, do_preprocess=False, use_tqdm=True):
-                index = output.index
-                n_token = output.generate_token_len
-                finish_reason = output.finish_reason
-                sess[index].tick(n_token)
+        # Without stream_response each request still yields once, when it finishes,
+        # so every session is stamped at its own end time.
+        pbar = tqdm(total=len(requests))
+        for output in self.pipe.stream_infer(prompts,
+                                             gen_config=gen_configs,
+                                             do_preprocess=False,
+                                             stream_response=stream_output):
+            index = output.index
+            n_token = output.generate_token_len
+            finish_reason = output.finish_reason
+            sess[index].tick(n_token)
+            if finish_reason is not None:
                 sess[index].finish(_to_status(finish_reason))
+                pbar.update(1)
+        pbar.close()
 
         profiler.finish()
 
