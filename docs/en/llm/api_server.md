@@ -342,6 +342,59 @@ if __name__ == '__main__':
     fire.Fire(main)
 ```
 
+## Returning incremental routed experts (PyTorch)
+
+For MoE router replay, enable `PytorchEngineConfig.enable_return_routed_experts`
+(or `--enable-return-routed-experts` when serving) and set
+`return_routed_experts=True` on each request. The optional
+`routed_experts_start_len` selects the first routing row to return:
+
+- Available in Python `GenerationConfig`, `/generate`, `/v1/chat/completions`,
+  and [`/v1/messages`](./api_server_anthropic.md).
+  The chat endpoint accepts the field at the top level or inside `extra_body`.
+  This is an LMDeploy extension, not a standard OpenAI or Anthropic field.
+  It is not supported by the TurboMind backend.
+- Defaults to `0`, preserving full-history responses. It must be a non-negative
+  integer (not a boolean, float, or string), no greater than the processed input
+  length after tokenization/template application and multimodal expansion.
+- For processed prompt length `P` and generated length `G`, normal routing rows
+  cover `[routed_experts_start_len, P + G - 1)`. The last generated token has not
+  been forwarded through the model yet. A slice with no remaining rows is empty;
+  missing routing data remains absent. The option does not enable collection.
+- Slicing occurs on final finish/cancel output, before the Ray shared-store put
+  when enabled; local array output is sliced as well. The response representation
+  is unchanged. Prefix-cache matching, cached routing history, GPU collection,
+  and target/MTP accepted-route selection are unchanged. Prefix reuse can extend
+  beyond this offset; the offset is not a cache boundary.
+
+For example, the following OpenAI client options request only routing rows
+starting at position 4 (the processed prompt must contain at least 4 tokens):
+
+```python
+extra_body = {
+    'return_routed_experts': True,
+    'routed_experts_start_len': 4,
+}
+# Pass extra_body=extra_body to client.chat.completions.create(...).
+```
+
+For `/generate`, put both fields directly in the JSON request body. In Python,
+use `GenerationConfig(return_routed_experts=True, routed_experts_start_len=4)`.
+
+For partial continuation, suppose input `A B C` generates `D E` before pausing.
+The client retains routing rows for `A B C D` (4 rows). Resume with input
+`A B C D E` and offset **4**, not 5: if the next output is `F G`, the returned
+rows are `E F`. Appending them to the retained rows restores the full 6-row
+history. In general, use `len(resumed_prompt_ids) - 1` only when the retained
+routing history covers exactly that unchanged token prefix. The client must
+verify lengths and concatenate the slices; this PR does not implement client
+continuation logic. Edited history or inserted tool tokens need separate
+continuity checks. Old servers may ignore the new field, so clients must check
+returned lengths rather than silently appending a full-history response.
+
+This reduces repeated returned routing rows, not GPU-to-CPU collection,
+internal cache storage, or the final full history required by training.
+
 ## FAQ
 
 1. When user got `"finish_reason":"length"`, it means the session is too long to be continued. The session length can be

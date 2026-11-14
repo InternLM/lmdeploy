@@ -580,6 +580,10 @@ class AsyncEngine:
                     f'Input length ({input_len}) must be smaller than the model context length ({self.session_len}).')
 
             gen_config = self._determine_gen_config(input_ids, gen_config=gen_config)
+            if gen_config.routed_experts_start_len > input_len:
+                raise RequestError(
+                    ErrorCode.INVALID_REQUEST,
+                    'routed_experts_start_len must not exceed the processed prompt length.')
             input_logprobs_requested = gen_config.logprob_start_len >= 0
             if input_logprobs_requested and gen_config.logprob_start_len >= input_len:
                 raise RequestError(

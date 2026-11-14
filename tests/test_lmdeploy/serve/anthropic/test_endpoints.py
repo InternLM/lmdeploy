@@ -1442,3 +1442,39 @@ def test_http_tool_result_images_keep_their_ids_and_content_order(stream):
                                       dict(type='image_url', image_url=dict(url=f'https://example.com/{identifier}.png')),
                                       dict(type='text', text='after')]
     assert len(context.session_mgr.removed) == 1
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('raw_tokens', [False, True])
+@pytest.mark.parametrize('fields, expected', [({}, 0), ({'routed_experts_start_len': 0}, 0),
+                                           ({'routed_experts_start_len': 2}, 2)])
+def test_http_messages_routed_experts_start_reaches_engine(stream, raw_tokens, fields, expected):
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    payload = _messages_payload(stream=stream, return_routed_experts=True, **fields)
+    if raw_tokens:
+        payload.update(messages=[], input_ids=[1, 2, 3])
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', json=payload, headers=ANTHROPIC_HEADERS)
+    assert response.status_code == 200, response.text
+    config = context.async_engine.preprocess_calls[0][1]['gen_config']
+    assert config.return_routed_experts is True
+    assert config.routed_experts_start_len == expected
+    assert len(context.async_engine.generate_calls) == 1
+
+
+@pytest.mark.parametrize('bad', [-1, 1.5, True, '2'])
+def test_http_messages_rejects_invalid_routed_experts_start(bad):
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', headers=ANTHROPIC_HEADERS,
+                               json=_messages_payload(routed_experts_start_len=bad))
+    assert response.status_code == 400, response.text
+    assert response.json()['error']['type'] == 'invalid_request_error'
+    assert 'routed_experts_start_len' in response.json()['error']['message']
+    assert context.async_engine.preprocess_calls == []
+    assert context.async_engine.generate_calls == []

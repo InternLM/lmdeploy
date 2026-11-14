@@ -474,7 +474,8 @@ class TestBlockTrie(BlockTrieTestMixin):
         assert node is not None
         assert node.prefix_len == block_size * 2
 
-    def test_match_replays_cached_routed_experts(self, block_trie, block_mgr, scheduler):
+    @pytest.mark.parametrize('return_start', [0, 2, 16])
+    def test_match_replays_cached_routed_experts(self, block_trie, block_mgr, scheduler, return_start):
         sess = scheduler.add_session(0)
         block_size = sess.seq_meta.block_size
         token_ids = [1] * block_size + [2] * block_size + [3]
@@ -492,6 +493,19 @@ class TestBlockTrie(BlockTrieTestMixin):
 
         assert matched.num_history_ids == block_size * 2
         assert np.array_equal(matched.all_routed_experts.get_real(), experts)
+
+        from types import SimpleNamespace
+
+        from lmdeploy.messages import ResponseType
+        from lmdeploy.pytorch.engine.engine_instance import EngineInstance
+
+        routes = matched.all_routed_experts.get_real()
+        resp = SimpleNamespace(type=ResponseType.FINISH, data={'routed_experts': routes})
+        result = EngineInstance._get_extra_outputs(
+            SimpleNamespace(_enable_transfer_obj_ref=False), resp, len(routes) + 1, return_start)
+        np.testing.assert_array_equal(result['routed_experts'], experts[return_start:])
+        assert matched.num_history_ids > return_start
+        np.testing.assert_array_equal(matched.all_routed_experts.get_real(), experts)
 
     def test_match_skips_routed_expert_replay_when_not_requested(self, block_trie, block_mgr, scheduler):
         sess = scheduler.add_session(0)
