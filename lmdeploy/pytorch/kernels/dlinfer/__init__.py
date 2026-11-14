@@ -4,13 +4,21 @@ from .apply_rotary_pos_emb import apply_rotary_pos_emb, apply_rotary_pos_emb_int
 from .awq_kernels import awq_linear
 from .fill_kv_cache import fill_kv_cache
 from .flash_attention import flash_attention_fwd
-from .fused_moe import DlinferMoECommType, DlinferMoeMetadata, fused_moe, fused_moe_w8a8
+from .fused_moe import (
+    DlinferMoECommType,
+    DlinferMoeMetadata,
+    fused_moe,
+    fused_moe_w8a8,
+    pack_w8a8_scales,
+    weights_in_fused_layout,
+)
 from .lightning_indexer import lightning_indexer
 from .linear import linear
 from .moe_gating_topk_softmax import moe_gating_topk_softmax
+from .moe_router import moe_gating_top_k
 from .pagedattention import paged_attention_fwd
 from .rms_norm import rms_norm
-from .sparse_attention import sparse_attention_fwd
+from .sparse_attention import sparse_attention_fwd, sparse_attention_fwd_split
 
 __all__ = [
     'rms_norm',
@@ -22,11 +30,15 @@ __all__ = [
     'DlinferMoeMetadata',
     'fused_moe',
     'fused_moe_w8a8',
+    'pack_w8a8_scales',
+    'weights_in_fused_layout',
     'paged_attention_fwd',
     'sparse_attention_fwd',
+    'sparse_attention_fwd_split',
     'flash_attention_fwd',
     'lightning_indexer',
     'linear',
+    'moe_gating_top_k',
     'moe_gating_topk_softmax',
     'multinomial_sampling',
     'per_channel_quant',
