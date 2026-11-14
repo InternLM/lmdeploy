@@ -61,6 +61,7 @@ class ServerContext:
         self.health_monitor: EngineHealthMonitor | None = None
         self.proxy_url: str | None = None
         self.api_server_url: str | None = None
+        self.api_keys: list[str] = []
         self.allow_terminate_by_client = False
         self.enable_abort_handling = False
         self.response_parser_cls: type[ResponseParser] | None = None
@@ -140,6 +141,8 @@ def register_to_proxy(context: ServerContext):
             'accept': 'application/json',
             'Content-Type': 'application/json'
         }
+        if context.api_keys:
+            headers['Authorization'] = f'Bearer {context.api_keys[0]}'
         response = requests.post(url, headers=headers, json=data)
 
         if response.status_code != 200:
@@ -463,6 +466,7 @@ def serve(model_path: str,
 
     if api_keys is not None and (tokens := [key for key in api_keys if key]):
         app.add_middleware(AuthenticationMiddleware, tokens=tokens)
+        server_context.api_keys = tokens
 
     def is_engine_sleeping() -> bool:
         eng = server_context.async_engine
