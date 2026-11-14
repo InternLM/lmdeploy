@@ -517,6 +517,41 @@ def test_messages_count_tokens_rejects_empty_messages():
     }
 
 
+@pytest.mark.parametrize('path,stream', [('/v1/messages', False), ('/v1/messages', True),
+                                        ('/v1/messages/count_tokens', False)])
+@pytest.mark.parametrize('version', [None, '', 'not-a-version', '20230601', '2023-6-1',
+                                     '2023-02-30', '2023-00-01', '2023-06-01extra'])
+def test_http_rejects_malformed_anthropic_version(path, stream, version):
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    payload = (_count_tokens_payload() if path.endswith('count_tokens')
+               else _messages_payload(stream=stream))
+    headers = {} if version is None else {'anthropic-version': version}
+    with TestClient(app) as client:
+        response = client.post(path, json=payload, headers=headers)
+    assert response.status_code == 400
+    error = response.json()
+    assert error['type'] == 'error'
+    assert error['error']['type'] == 'invalid_request_error'
+    assert 'anthropic-version' in error['error']['message']
+    assert context.async_engine.preprocess_calls == []
+    assert context.async_engine.generate_calls == []
+
+
+@pytest.mark.parametrize('path', ['/v1/messages', '/v1/messages/count_tokens'])
+@pytest.mark.parametrize('version', ['2023-06-01', '2026-10-21'])
+def test_http_version_format_validation_accepts_valid_dates(path, version):
+    # This validates header syntax, not full compatibility with each API version.
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    payload = _count_tokens_payload() if path.endswith('count_tokens') else _messages_payload()
+    with TestClient(app) as client:
+        response = client.post(path, json=payload, headers={'anthropic-version': version})
+    assert response.status_code == 200
+
+
 def _post_messages(client: _AnthropicTestClient, **overrides):
     return client.post('/v1/messages', headers=ANTHROPIC_HEADERS, json=_messages_payload(**overrides))
 
