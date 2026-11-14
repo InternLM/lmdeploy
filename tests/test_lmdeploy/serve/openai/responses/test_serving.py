@@ -13,6 +13,105 @@ from lmdeploy.serve.openai.responses import ResponsesRequest, create_responses_r
 
 
 @pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('explicit_metadata', [False, True])
+def test_http_response_preserves_required_nullable_fields(responses_endpoint, sse_payloads,
+                                                         stream, explicit_metadata):
+    """Required nullable fields must be present on JSON and every SSE
+    response."""
+    _, context = responses_endpoint
+    app = FastAPI()
+    app.include_router(create_responses_router(context))
+    payload = dict(model='fake-model', input='Hi', stream=stream)
+    expected = dict(access_programs=None, error=None, incomplete_details=None,
+                    instructions=None, metadata=None, temperature=None, top_p=None)
+    if explicit_metadata:
+        values = dict(instructions='Be brief.', metadata={'case': 'nullable'},
+                      temperature=0, top_p=1)
+        payload.update(values)
+        expected.update(values)
+    with TestClient(app) as client:
+        response = client.post('/v1/responses', json=payload)
+
+    assert response.status_code == 200
+    if stream:
+        events = sse_payloads([response.text])
+        bodies = [event['response'] for event in events if 'response' in event]
+        assert [body['status'] for body in bodies] == ['in_progress', 'in_progress', 'completed']
+    else:
+        bodies = [response.json()]
+    for body in bodies:
+        for field, value in expected.items():
+            assert field in body, f'Required nullable field {field} was omitted'
+            assert body[field] == value
+        # Absent optional fields should still be omitted.
+        assert 'conversation' not in body
+    assert bodies[-1]['output'][0]['content'][0]['logprobs'] == []
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('tool_fields', [
+    {},
+    dict(strict=None, parameters=None),
+    dict(strict=False, parameters={}),
+    dict(strict=True, parameters={'type': 'object', 'properties': {}, 'additionalProperties': False}),
+])
+def test_http_function_tools_preserve_required_nullable_fields(responses_endpoint, sse_payloads, stream, tool_fields):
+    _, context = responses_endpoint
+    app = FastAPI()
+    app.include_router(create_responses_router(context))
+    tool = dict(type='function', name='get_image', **tool_fields)
+    with TestClient(app) as client:
+        response = client.post('/v1/responses', json=dict(model='fake-model', input='Hi', stream=stream,
+                                                        tools=[tool], tool_choice='none'))
+    assert response.status_code == 200
+    bodies = ([event['response'] for event in sse_payloads([response.text]) if 'response' in event]
+              if stream else [response.json()])
+    for body in bodies:
+        assert body['tools'][0]['strict'] is tool_fields.get('strict')
+        assert body['tools'][0]['parameters'] == tool_fields.get('parameters')
+        assert body['tools'][0]['name'] == 'get_image'
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('value', [None, False, True])
+def test_http_parallel_tool_calls_echoes_effective_default(responses_endpoint, sse_payloads, stream, value):
+    _, context = responses_endpoint
+    app = FastAPI()
+    app.include_router(create_responses_router(context))
+    with TestClient(app) as client:
+        response = client.post('/v1/responses', json=dict(model='fake-model', input='Hi', stream=stream,
+                                                        parallel_tool_calls=value))
+    assert response.status_code == 200
+    bodies = ([event['response'] for event in sse_payloads([response.text]) if 'response' in event]
+              if stream else [response.json()])
+    for body in bodies:
+        assert body['parallel_tool_calls'] is (value is not False)
+
+
+def test_http_streaming_text_parts_include_required_logprobs(responses_endpoint, sse_payloads):
+    _, context = responses_endpoint
+    app = FastAPI()
+    app.include_router(create_responses_router(context))
+    with TestClient(app) as client:
+        response = client.post('/v1/responses', json=dict(model='fake-model', input='Hi', stream=True))
+
+    assert response.status_code == 200
+    events = sse_payloads([response.text])
+    parts = [event['part'] for event in events if event['type'] in
+             ('response.content_part.added', 'response.content_part.done')]
+    assert len(parts) == 2
+    for part in parts:
+        assert part['logprobs'] == []
+    text_events = [event for event in events if event['type'] in
+                   ('response.output_text.delta', 'response.output_text.done')]
+    assert len(text_events) == 2
+    for event in text_events:
+        assert event['logprobs'] == []
+    done = next(event['item'] for event in events if event['type'] == 'response.output_item.done')
+    assert done['content'][0]['logprobs'] == []
+
+
+@pytest.mark.parametrize('stream', [False, True])
 def test_http_unknown_content_is_rejected_with_its_location(responses_endpoint, stream):
     _, context = responses_endpoint
     app = FastAPI()

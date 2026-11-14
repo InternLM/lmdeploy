@@ -180,7 +180,10 @@ def test_responses_parallel_tool_calls_none_keeps_all_tool_calls():
     )
     response = response_model.model_dump(exclude_none=True)
 
-    assert response_model.parallel_tool_calls is None
+    # None uses the default behavior, which permits parallel calls. The
+    # response must contain the required boolean rather than omit the field.
+    assert response_model.parallel_tool_calls is True
+    assert request.parallel_tool_calls is None
     assert [item['call_id']
             for item in response['output']] == ['call_123', 'call_456']
 
