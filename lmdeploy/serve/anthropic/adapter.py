@@ -17,6 +17,7 @@ from .protocol import (
     MessageTextBlock,
     MessageThinkingBlock,
     MessageToolUseBlock,
+    ThinkingConfig,
     ToolChoiceParam,
     ToolChoiceToolParam,
     ToolParam,
@@ -397,11 +398,29 @@ def to_lmdeploy_messages(
     return lm_messages
 
 
-def count_input_tokens(async_engine, messages: list[dict[str, str]]) -> int:
+def chat_template_kwargs_from_thinking(thinking: ThinkingConfig | None) -> dict[str, bool] | None:
+    """Map an Anthropic ``thinking`` config to chat template kwargs.
+
+    Shared by the messages and count_tokens endpoints so that token
+    counting applies the same template switches (``enable_thinking``)
+    as generation; otherwise the two counts drift apart whenever a
+    thinking config changes the rendered prompt (e.g. a closed
+    ``</think>`` prefix).
+    """
+
+    if thinking is None:
+        return None
+    return {'enable_thinking': thinking.type != 'disabled'}
+
+
+def count_input_tokens(async_engine,
+                       messages: list[dict[str, str]],
+                       chat_template_kwargs: dict | None = None) -> int:
     """Approximate Anthropic token counting using LMDeploy
     tokenizer/template."""
 
-    prompt = async_engine.chat_template.messages2prompt(messages)
+    prompt = async_engine.chat_template.messages2prompt(messages,
+                                                        **(chat_template_kwargs or {}))
     token_ids = async_engine.tokenizer.encode(prompt, add_bos=True)
     return len(token_ids)
 
