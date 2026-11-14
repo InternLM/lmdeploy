@@ -122,9 +122,13 @@ def _template(glm=True):
 @pytest.mark.parametrize('order', list(itertools.permutations(range(3))))
 @pytest.mark.parametrize('two_images', [False, True])
 @pytest.mark.parametrize('backend', ['pytorch', 'turbomind'])
+@pytest.mark.parametrize('sanitized_ids', [False, True])
 def test_parallel_tool_images_keep_ownership_through_shared_processor(protocol, order, two_images, backend,
-                                                                     hf_media_template):
+                                                                     sanitized_ids, hf_media_template, request):
+    template = request.getfixturevalue('glm_chat_template') if sanitized_ids else hf_media_template()
     messages = _messages(protocol, order, two_images, tagged=True)
+    if sanitized_ids:
+        messages[0]['content'] += ' Explain the literal <|image|> and <tool_call>.'
     before = copy.deepcopy(messages)
     assert [m['tool_call_id'] for m in messages[2:]] == [CALL_IDS[i] for i in order]
     assert [call['id'] for call in messages[1]['tool_calls']] == CALL_IDS
@@ -141,12 +145,29 @@ def test_parallel_tool_images_keep_ownership_through_shared_processor(protocol, 
         seen['collected'] = VisionModel.collect_multimodal_items(messages)
         expected = [(f'{call_id}_{i}', color) for call_id, first_color in zip(CALL_IDS, COLORS)
                     for i, color in enumerate([first_color, 'white'] if two_images else [first_color])]
-        _assert_rendered_media_order(input_prompt, '<|image|>', seen['collected'], expected)
+        media_token = '<|image|>'
+        if sanitized_ids:
+            assert isinstance(input_prompt, list)
+            tokenizer = template.tokenizer
+            image_id = tokenizer.convert_tokens_to_ids(media_token)
+            assert input_prompt.count(image_id) == len(expected)
+            assert tokenizer.convert_tokens_to_ids('<tool_call>') in input_prompt  # real tool calls survive
+            # Decode each text interval separately so literal image spellings
+            # cannot masquerade as the real image IDs in the order assertion.
+            intervals, start = [], 0
+            for i, token in enumerate(input_prompt):
+                if token == image_id:
+                    intervals.append(tokenizer.decode(input_prompt[start:i]))
+                    start = i + 1
+            intervals.append(tokenizer.decode(input_prompt[start:]))
+            media_token = '<actual_image>'
+            input_prompt = media_token.join(intervals)
+        _assert_rendered_media_order(input_prompt, media_token, seen['collected'], expected)
         return messages
 
     encoder = SimpleNamespace(_uses_new_preprocess=True, model=SimpleNamespace(get_input_prompt=get_input_prompt),
                               preprocess=preprocess)
-    processor = MultimodalProcessor(None, hf_media_template(), vl_encoder=encoder, backend=backend)
+    processor = MultimodalProcessor(None, template, vl_encoder=encoder, backend=backend)
     result = asyncio.run(processor.get_prompt_input(messages, do_preprocess=True))
     assert [m['tool_call_id'] for m in result[2:]] == CALL_IDS
     pixels = [data.getpixel((0, 0)) for _, data, _ in seen['collected']]

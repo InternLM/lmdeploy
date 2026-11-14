@@ -302,3 +302,29 @@ def test_glm5_next_tail_checkpoint_policy_requires_closed_pool_boundary(monkeypa
     hf_config.text_config.index_kpool = 3
     with pytest.raises(ValueError, match='index_kpool=4'):
         Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=num_spec_tokens)
+
+
+def test_glm5_next_transformers_520_indexed_attention_config(monkeypatch):
+    pytest.importorskip('transformers', minversion='5.20.0')
+    from transformers.models.glm5_next.configuration_glm5_next import Glm5NextConfig
+
+    from lmdeploy.pytorch.configurations.glm5_next import Glm5NextModelConfigBuilder, is_glm5_kda_layer
+    from lmdeploy.pytorch.consts import GLM5_KDA_RECURRENT_STATE, GLM5_KPOOL_TAIL_K_STATE
+
+    monkeypatch.setattr('lmdeploy.pytorch.configurations.deepseek_v2.flash_mla_available', lambda: True)
+    # Native HF loading converts the checkpoint's legacy DSA spelling.
+    hf_config = Glm5NextConfig(text_config=dict(
+        num_hidden_layers=8, index_kpool=4,
+        layer_types=['linear_attention'] * 3 + ['deepseek_sparse_attention']
+        + ['linear_attention'] * 3 + ['deepseek_sparse_attention'],
+    ))
+    assert hf_config.text_config.layer_types[3] == 'indexed_attention'
+    model = Glm5NextModelConfigBuilder.build(hf_config, tp=8)
+    text = model.llm_config
+    assert text.linear_layer_ids == [0, 1, 2, 4, 5, 6]
+    assert text.full_attention_layer_ids == [3, 7]
+    assert [is_glm5_kda_layer(text, i) for i in range(8)] == [True, True, True, False] * 2
+    assert model.num_layers == 2
+    specs = {spec.name: spec for spec in model.state_cache_specs}
+    assert specs[GLM5_KDA_RECURRENT_STATE].shape[0] == 6
+    assert specs[GLM5_KPOOL_TAIL_K_STATE].shape[0] == 2
