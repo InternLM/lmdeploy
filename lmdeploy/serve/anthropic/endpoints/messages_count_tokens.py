@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request
 
 from lmdeploy.serve.utils.server_utils import validate_json_request
 
-from ..adapter import count_input_tokens, get_model_list, to_lmdeploy_messages
+from ..adapter import count_input_tokens, get_model_list, to_lmdeploy_messages, to_openai_tools
 from ..errors import create_error_response
 from ..protocol import CountTokensRequest, CountTokensResponse
 
@@ -39,7 +39,9 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
 
         try:
             messages = to_lmdeploy_messages(request, merge_inline_system=merge_inline_system)
-            input_tokens = count_input_tokens(server_context.async_engine, messages)
+            input_tokens = count_input_tokens(server_context.async_engine,
+                                              messages,
+                                              tools=to_openai_tools(request.tools))
         except ValueError as err:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
 

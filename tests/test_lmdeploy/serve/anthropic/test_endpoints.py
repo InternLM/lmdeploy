@@ -504,6 +504,43 @@ def test_http_messages_rejects_invalid_repetition_penalty(stream, raw_tokens, re
     assert context.session_mgr.next_session_id == 0
 
 
+def test_messages_count_tokens_counts_declared_tools(hf_media_template):
+    # A real chat template renders the whole tool schema into the prompt, so a
+    # count that ignores `tools` is not the count the same request produces.
+    # The template is also what rejects protocol objects, so the schemas have
+    # to reach it dumped, exactly as the generation path dumps them.
+    client = _make_client(server_context=_FakeServerContext(chat_template=hf_media_template('qwen3_vl')))
+    described = {**SEARCH_TOOL, 'description': 'Search the public web and return ranked result snippets.'}
+    two_parameters = {
+        **SEARCH_TOOL,
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'query': {
+                    'type': 'string'
+                },
+                'limit': {
+                    'type': 'integer'
+                },
+            },
+            'required': ['query'],
+        },
+    }
+
+    without_tools = _post_count_tokens(client)
+    with_tools = _post_count_tokens(client, tools=[SEARCH_TOOL])
+    with_description = _post_count_tokens(client, tools=[described])
+    with_parameter = _post_count_tokens(client, tools=[two_parameters])
+
+    for response in (without_tools, with_tools, with_description, with_parameter):
+        assert response.status_code == 200
+    declared = with_tools.json()['input_tokens']
+    assert declared > without_tools.json()['input_tokens']
+    # Descriptions and parameter schemas reach the prompt, not just names.
+    assert with_description.json()['input_tokens'] > declared
+    assert with_parameter.json()['input_tokens'] > declared
+
+
 def test_messages_count_tokens_rejects_empty_messages():
     response = _post_count_tokens(_make_client(), messages=[])
 
