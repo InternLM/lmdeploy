@@ -120,6 +120,7 @@ Documentation
    advance/context_parallel.md
    advance/prefix_caching.md
    advance/spec_decoding.md
+   advance/spec_decoding_new_method.md
    advance/update_weights.md
    advance/checkpoint_engine.md
 
