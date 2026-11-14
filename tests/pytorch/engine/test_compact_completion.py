@@ -452,7 +452,7 @@ def test_decode_input_retirement_waits_for_real_worker_event(cancel):
     pool[bank.unit_ids[0]].copy_(pool[ref.unit_id] + 1)
     torch.cuda.synchronize()
     with torch.cuda.stream(stream):
-        torch.cuda._sleep(150_000_000)
+        torch.cuda._sleep(1_500_000_000)
         pool[bank.unit_ids[0]].copy_(pool[ref.unit_id] + 1)
         agent._push_output(BatchedOutputs(tokens, None, ssm_state_access_id=access.access_id))
     done = agent._out_que._queue[0][1]
