@@ -30,6 +30,8 @@ class DPMeta:
     dp_is_decoding: bool = False
     dp_batches: list[int] = None
     dp_draft_num_tokens: list[int] = None
+    # Maximum over synchronized ranks before TP slicing; zero means unknown.
+    max_num_tokens: int = 0
 
     @staticmethod
     def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: list[int], dist_ctx: dist.DistContext, layer_type: str):
@@ -60,7 +62,7 @@ class DPMeta:
         else:
             moe_tp_sizes = cls._gather_tp_sizes(moe_tp, seqlen, num_tokens, dist_ctx, layer_type='moe')
 
-        return DPMeta(tp_sizes=tp_sizes, moe_tp_sizes=moe_tp_sizes)
+        return DPMeta(tp_sizes=tp_sizes, moe_tp_sizes=moe_tp_sizes, max_num_tokens=max(num_tokens))
 
     def sync_tp_size(self, tp_size: int):
         self.tp_sizes = [tp_size] * len(self.tp_sizes)
@@ -408,6 +410,8 @@ class StepContext:
     # Full-graph device scalar: zero for dummy DP steps, otherwise the
     # unpadded token count. Its address stays fixed while replay values change.
     moe_valid_token_count: torch.Tensor | None = None
+    # Selected once per forward, independently of the attention phase.
+    moe_low_latency: bool = False
 
     @classmethod
     def new(

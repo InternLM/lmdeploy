@@ -95,11 +95,17 @@ def _make_piecewise_graph_manager(model: torch.nn.Module, model_config: ModelCon
 
 def _update_deepep_mode(context: StepContext) -> None:
     """Select the DeepEP communication mode for this model forward."""
-    if not get_deepep_state().enabled():
+    state = get_deepep_state()
+    if not state.enabled():
         return
 
     from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPBuffer, DeepEPMode
-    mode = DeepEPMode.LOW_LATENCY if context.global_is_decoding() else DeepEPMode.NORMAL
+    max_tokens = (context.input_ids.numel() if context.dp_meta is None
+                  else context.dp_meta.max_num_tokens)
+    small_prefill = (not context.enable_microbatch
+                     and 0 < max_tokens <= state.low_latency_prefill_tokens)
+    context.moe_low_latency = context.global_is_decoding() or small_prefill
+    mode = DeepEPMode.LOW_LATENCY if context.moe_low_latency else DeepEPMode.NORMAL
     DeepEPBuffer.set_deepep_mode(mode)
 
 

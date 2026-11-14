@@ -4,6 +4,7 @@ import multiprocessing as mp
 from contextlib import suppress
 
 import pytest
+import torch
 
 from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.pytorch.engine.mp_engine.base import MPEngine
@@ -70,6 +71,11 @@ class TestZMQRPC:
         def stream_state():
             return (len(server.stream_output), len(server.stream_tasks), len(server._engine_output_gather._output))
 
+        def shared_tensor(tensor):
+            assert tensor.is_shared()
+            tensor.add_(1)
+            return tensor.sum().item()
+
         server.register_method('method', method)
         server.register_method('async_method', async_method)
         server.register_method('streaming_method', streaming_method)
@@ -77,6 +83,7 @@ class TestZMQRPC:
         server.register_method('instance_async_stream_infer', instance_async_stream_infer)
         server.register_method('stream_state', stream_state)
         server.register_method('close', close)
+        server.register_method('shared_tensor', shared_tensor)
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -96,6 +103,11 @@ class TestZMQRPC:
         assert result == 'test2: async method'
         result = await client.async_call('method', 'test1')
         assert result == 'test1: method'
+
+        pixels = torch.zeros(1024, 1024).share_memory_()
+        assert await client.async_call('shared_tensor', pixels) == pixels.numel()
+        # The receiver sees the same storage, not a deserialized tensor copy.
+        assert torch.all(pixels == 1)
 
         async for result in client.async_stream_call('streaming_method', asyncio.Event(), 'test3'):
             pass

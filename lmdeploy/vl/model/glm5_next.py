@@ -10,12 +10,15 @@ from typing import Any
 import torch
 from transformers import AutoProcessor, AutoTokenizer
 
+from lmdeploy.pytorch.multimodal.data_type import get_image_mrope_pos_ids, make_multimodal_content_hash
 from lmdeploy.vl.constants import Modality
+from lmdeploy.vl.media.image import EncodedImage
 from lmdeploy.vl.model.base import (
     VISION_MODELS,
     MultimodalSpecialTokens,
     VisionModel,
 )
+from lmdeploy.vl.model.image_cache import ImageProcessorCache, ProcessedImage
 from lmdeploy.vl.model.preprocess_utils import (
     get_expanded_mm_items,
     get_override_size,
@@ -47,6 +50,7 @@ class GLM5NextVisionModel(VisionModel):
     """Prepare GLM-5.3 images/videos for the native PyTorch vision tower."""
 
     _arch = ['Glm5NextForConditionalGeneration']
+    supports_image_cache = True
 
     @classmethod
     def match(cls, config):
@@ -88,6 +92,7 @@ class GLM5NextVisionModel(VisionModel):
                 and hasattr(processor, 'video_processor')):
             processor = self._build_compat_processor(trust_remote_code)
         self.processor = processor
+        self.image_cache = ImageProcessorCache()
 
         self.image_token = processor.image_token
         self.video_token = processor.video_token
@@ -221,12 +226,66 @@ class GLM5NextVisionModel(VisionModel):
                 expanded.append(token)
         return torch.tensor(expanded, dtype=torch.long)
 
+    def _preprocess_images(self, images, input_prompt, mm_processor_kwargs):
+        image_size = get_override_size(self.processor.image_processor,
+                                       (mm_processor_kwargs or {}).get('image'), modality='image')
+        image_kwargs = {'size': image_size} if image_size is not None else {}
+        processed = []
+        for image in images:
+            key = self.image_cache.key(image, self.mm_feature_dtype, image_size)
+            item = self.image_cache.get(key)
+            if item is None:
+                decoded = image.decode() if isinstance(image, EncodedImage) else image
+                output = self.processor.image_processor(images=[decoded], return_tensors='pt', **image_kwargs)
+                pixels = self._postprocess_mm_output(output['pixel_values'], self.mm_feature_dtype)
+                grid = output['image_grid_thw'][0].clone()
+                meta = dict(grid_thw=grid, image_token_id=self.image_token_id)
+                content_hash = make_multimodal_content_hash(pixels, meta, get_image_mrope_pos_ids(grid))
+                # Cache and in-flight requests share this CPU storage. The
+                # local engine RPC transfers its handle rather than its bytes.
+                pixels.share_memory_()
+                item = ProcessedImage(pixels, grid, content_hash)
+                self.image_cache.put(key, item)
+                # Keep cold temporary storage bounded to a single image.
+                del decoded, output, pixels, grid
+            processed.append(item)
+
+        if isinstance(input_prompt, str):
+            # Tokenize the original placeholders once, then expand their IDs.
+            # GLM image placeholders are special tokens, so this preserves the
+            # tokenizer's boundaries without constructing a huge repeated text.
+            input_prompt = self.processor(text=[input_prompt], padding=True,
+                                          return_tensors='pt')['input_ids'][0].tolist()
+        if input_prompt.count(self.image_token_id) != len(processed):
+            raise ValueError('GLM image placeholders must match the number of images')
+        merge_length = self.processor.image_processor.merge_size**2
+        input_ids, multimodal = [], []
+        image_index = 0
+        for token in input_prompt:
+            if token != self.image_token_id:
+                input_ids.append(token)
+                continue
+            item = processed[image_index]
+            num_tokens = int(item.image_grid_thw.prod().item()) // merge_length
+            start = len(input_ids)
+            input_ids.extend([self.image_token_id] * num_tokens)
+            multimodal.append(dict(modality=Modality.IMAGE,
+                                   pixel_values=item.pixel_values,
+                                   image_grid_thw=item.image_grid_thw,
+                                   content_hash=item.content_hash,
+                                   offset=(start, len(input_ids)),
+                                   image_token_id=self.image_token_id))
+            image_index += 1
+        return dict(input_ids=input_ids, multimodal=multimodal)
+
     def preprocess(self,
                    messages: list[dict],
                    input_prompt: str | list[int],
                    mm_processor_kwargs: dict[str, Any] | None = None):
         mm_items = self.collect_multimodal_items(messages)
         modalities = {item[0] for item in mm_items}
+        if self.backend == 'pytorch' and modalities == {Modality.IMAGE}:
+            return self._preprocess_images([item[1] for item in mm_items], input_prompt, mm_processor_kwargs)
         is_raw_video = (not isinstance(input_prompt, str)
                         and Modality.VIDEO in modalities)
         is_mixed = {Modality.IMAGE, Modality.VIDEO} <= modalities

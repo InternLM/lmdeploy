@@ -1,6 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from functools import lru_cache
 from typing import Any
 
@@ -11,7 +11,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
-from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData, get_image_mrope_pos_ids
 from lmdeploy.pytorch.nn import LayerNorm, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import build_colwise_linear, build_rowwise_linear
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -650,23 +650,9 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
         self.config = config
         self.dtype = dtype
 
-    @classmethod
-    def _get_multimodal_pos_ids(cls, grid_thw: Sequence[int]) -> np.ndarray:
-        """Get mrope ids."""
-        t, h, w = grid_thw
-        h = h // 2
-        w = w // 2
-        stride = np.array([h * w, w, 1])[None]
-        size = np.array([t, h, w])[None]
-        pos_ids = np.arange(t * h * w)[:, None].repeat(3, axis=1)
-        pos_ids = pos_ids // stride % size
-        return pos_ids
-
-    @classmethod
-    def make_mrope(cls, grid_thw: torch.Tensor):
-        grid_thw = grid_thw.tolist() if grid_thw.dim() == 1 else grid_thw[0].tolist()
-        img_pos_ids = cls._get_multimodal_pos_ids(grid_thw)
-        return img_pos_ids
+    @staticmethod
+    def make_mrope(grid_thw: torch.Tensor):
+        return get_image_mrope_pos_ids(grid_thw)
 
     def _make_image_mm_data(self, input_mm: dict[str, Any]) -> MultiModalData:
         """Make image MultiModalData."""
@@ -682,6 +668,7 @@ class Qwen3VLInputProcessor(BaseModelInputProcessor):
                                  start=offset[0],
                                  end=offset[1],
                                  mrope_pos_ids=mrope_pos_ids,
+                                 content_hash=input_mm.get('content_hash'),
                                  meta=dict(grid_thw=image_grid_thw, image_token_id=image_token_id))
         return mm_data
 
