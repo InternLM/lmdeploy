@@ -5,7 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pybase64
-from PIL import Image, ImageFile
+from PIL import Image, ImageFile, ImageOps
 
 from .base import MediaIO
 
@@ -22,8 +22,8 @@ class ImageMediaIO(MediaIO[Image.Image]):
         self.kwargs = kwargs
 
     def load_bytes(self, data: bytes) -> Image.Image:
-        image = Image.open(BytesIO(data))
-        return image.convert(self.image_mode)
+        with Image.open(BytesIO(data)) as image:
+            return ImageOps.exif_transpose(image).convert(self.image_mode)
 
     def load_base64(self, media_type: str, data: str) -> Image.Image:
         return self.load_bytes(pybase64.b64decode(data))
@@ -31,8 +31,7 @@ class ImageMediaIO(MediaIO[Image.Image]):
     def load_file(self, file_path: Path) -> Image.Image:
         with open(file_path, 'rb') as f:
             data = f.read()
-        image = Image.open(BytesIO(data))
-        return image.convert(self.image_mode)
+        return self.load_bytes(data)
 
     def encode_base64(self, image: Image.Image, image_format: str = 'PNG') -> str:
         with BytesIO() as buffer:
