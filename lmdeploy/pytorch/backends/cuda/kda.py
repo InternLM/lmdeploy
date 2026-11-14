@@ -48,7 +48,7 @@ class CudaKdaImpl(KdaImpl):
             from fla.ops.kda.gate import kda_gate_fwd
         except (ImportError, AttributeError) as exc:
             raise ImportError(
-                'GLM-5.3 KDA requires flash-linear-attention==0.5.2.'
+                'GLM-5.3 KDA requires flash-linear-attention==0.6.0.'
             ) from exc
         self.causal_conv1d_fwd = causal_conv1d_fwd
         self.causal_conv1d_update = causal_conv1d_update
