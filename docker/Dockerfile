@@ -5,6 +5,9 @@ ARG CUDA_VERSION=cu128
 FROM nvidia/cuda:13.0.3-devel-ubuntu24.04 AS cu130
 ENV CUDA_VERSION_SHORT=cu130
 ENV PYTORCH_CUDA_VERSION=cu130
+# FLA 0.5.2 does not check GPU architecture before selecting FlashKDA.
+# Enable explicitly with FLA_FLASH_KDA=1 on supported SM90+ GPUs.
+ENV FLA_FLASH_KDA=0
 
 FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS cu128
 ENV CUDA_VERSION_SHORT=cu128
@@ -88,6 +91,7 @@ COPY --from=lmdeploy-wheel /wheels /wheels
 FROM nvidia/cuda:13.0.3-base-ubuntu24.04 AS cu130-base
 ENV CUDA_VERSION_SHORT=cu130
 ENV PYTORCH_CUDA_VERSION=cu130
+ENV FLA_FLASH_KDA=0
 
 FROM nvidia/cuda:12.8.1-base-ubuntu24.04 AS cu128-base
 ENV CUDA_VERSION_SHORT=cu128

@@ -85,7 +85,11 @@ else
     pip install mooncake-transfer-engine==0.3.12.post1
 fi
 
-for package in deep_ep deep_gemm flash_attn_3 lmdeploy_router; do
+required_wheels=(deep_ep deep_gemm flash_attn_3 lmdeploy_router)
+if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    required_wheels+=(flash_kda)
+fi
+for package in "${required_wheels[@]}"; do
     if ! compgen -G "/wheels/${package}-*.whl" >/dev/null; then
         echo "${package} wheel is missing from /wheels" >&2
         exit 1
@@ -93,9 +97,16 @@ for package in deep_ep deep_gemm flash_attn_3 lmdeploy_router; do
 done
 pip install /wheels/*.whl
 python - <<'PY'
+import os
+
 import deep_ep
 import deep_gemm
 import lmdeploy.pytorch.third_party.flash_attn_interface
+
+if os.environ['CUDA_VERSION_SHORT'] == 'cu130':
+    import flash_kda
+
+    assert callable(flash_kda.fwd)
 PY
 pip install dlslime==0.0.2.post1
 
