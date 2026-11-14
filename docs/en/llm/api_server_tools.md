@@ -67,7 +67,11 @@ The required-tool constraint takes precedence over a client-provided `response_f
 
 With `tool_choice="auto"`, the model decides whether to call a tool. For example, a greeting may produce a text reply with `finish_reason="stop"`, even when tools are supplied.
 
-With `tool_choice="none"`, the default response parser disables tool-call extraction, but the supplied `tools` are still passed to the chat template. The model may still generate text in a tool-call format; this text is not extracted into structured `tool_calls`. GPT-OSS's Harmony parser removes `tools` before rendering the chat template in this mode.
+With `tool_choice="none"`, LMDeploy omits the supplied tool definitions from the chat template and disables structured tool-call extraction. This applies across models on the Chat Completions path, including requests without a configured tool-call parser, and matches the Responses API and GPT-OSS Harmony prompt behavior. Previous assistant tool calls and `tool` result messages remain in the conversation so the model can summarize earlier results. The model can still generate tool-like text; disabling tools does not constrain generation to a particular text format. In streaming and non-streaming responses, unsolicited tool output is treated as text rather than structured `tool_calls`, and a normal stop remains `finish_reason="stop"`.
+
+Omitting definitions shortens the prompt, but switching from `auto` or `required` to `none` between turns can reduce the common prompt prefix and therefore prefix-cache reuse. The effect on latency depends on the template, conversation, and cache state; a shorter prompt alone does not guarantee a faster response. Keep `auto` only when tool calls are still permitted.
+
+A named `tool_choice` (for example, `{"type": "function", "function": {"name": "get_current_weather"}}`) must match a function in `tools`. An unknown name, or a named choice with an empty or omitted `tools` list, returns HTTP 400 before generation.
 
 ## Multiple Round Invocation
 

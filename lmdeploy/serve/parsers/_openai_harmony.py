@@ -22,6 +22,7 @@ from lmdeploy.serve.openai.protocol import (
 from lmdeploy.utils import get_logger
 
 from .response_parser import ResponseParser, ResponseParserManager, normalize_chat_request
+from .tool_parser.tool_parser import validate_named_tool_choice
 
 if TYPE_CHECKING:
 
@@ -47,6 +48,7 @@ class GptOssResponseParser(ResponseParser):
 
     def __init__(self, request: ChatCompletionRequest):
         if hasattr(request, 'tools') and hasattr(request, 'tool_choice'):
+            validate_named_tool_choice(request)
             # GPT-OSS templates expect full tool wrappers.
             if request.tools is None or request.tool_choice == 'none':
                 rendered_tools = None
@@ -440,6 +442,12 @@ class GptOssResponseParser(ResponseParser):
             is_tool_channel = cur_channel in ('commentary', 'analysis')
 
             if is_tool_channel and tool_name:
+                if getattr(self.request, 'tool_choice', None) == 'none':
+                    # Keep unsolicited tool payloads as plain text, consistent
+                    # with disabled extraction in the default response parser.
+                    if token_delta:
+                        yield 'content', token_delta
+                    continue
                 if tool_name != prev_tool_name:
                     yield 'tool_start', tool_name
                 if token_delta:
