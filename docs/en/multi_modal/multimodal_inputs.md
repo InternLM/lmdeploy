@@ -52,6 +52,10 @@ ______________________________________________________________________
 
 ## Single Image
 
+Image loading and encoding apply valid EXIF orientation before mode conversion or processing, including direct PIL image inputs. Applied orientation tags are removed so processing the result again does not rotate it twice; the caller's PIL image is not modified. Images without EXIF orientation retain their existing behavior. Invalid orientation metadata is ignored without hiding pixel-decoding errors. If you rotate pixels yourself, remove or reset the old orientation tag before passing the image to LMDeploy.
+
+This corrects the previous behavior for EXIF orientations 2–8 across models; it does not change pixel/token budget units or video frame sampling. Base64 JPEG video frames use the same image decoder and also inherit orientation normalization; this does not establish training/serving video preprocessing equivalence.
+
 <details>
 <summary>Complete example</summary>
 
@@ -577,10 +581,34 @@ ______________________________________________________________________
 
 Two optional parameters let you control media processing:
 
-- **`mm_processor_kwargs`**: controls vision token resolution (min/max pixels per image or video frame)
+- **`mm_processor_kwargs`**: passes model-specific HF processor options, keyed by `image`, `video`, or `audio`
 - **`media_io_kwargs`**: controls how media is loaded (e.g. video frame sampling rate/count and audio sampling rate)
 
 Both are passed as extra fields in the API request body via `extra_body`, or directly to `pipe()` when using the pipeline API.
+
+`/generate`, `/v1/chat/completions`, and the Anthropic-compatible `/v1/messages` endpoint accept these fields at the top level of the JSON body. SDK `extra_body` merges them into that body.
+
+For native GLM-5.3-Flash processors, use **token budgets**, not pixel budgets:
+
+```json
+{"mm_processor_kwargs": {"image": {"min_image_tokens": 64, "max_image_tokens": 64}}}
+```
+
+The same token-budget names can control video spatial processing under `video`. Overrides are request-local and do not change the shared processor defaults. A single bound can be supplied; the other bound uses the processor default. Bounds must be positive integers with minimum no greater than maximum.
+
+Native GLM processors do not use the generic `size` contract: `min_pixels`, `max_pixels`, and `size` are rejected rather than silently ignored. Qwen and the older GLM-4V compatibility processor retain the pixel-budget syntax shown below; the compatibility processor does not support native GLM token-budget overrides. XTuner's GLM tokenizer currently names its token-valued configuration `min_pixels/max_pixels`; map those values to the explicit `min_image_tokens/max_image_tokens` request keys instead of copying the names.
+
+### Video sampling and backward compatibility
+
+For video files and URLs, LMDeploy's media loader decodes and samples frames **before** calling the HF processor. Set `media_io_kwargs.video.fps/num_frames` to control sampling. The loader defaults to at most 32 frames; when both a positive `fps` and `num_frames` apply, the tighter frame-count limit wins. The processor's own sampling defaults do not automatically configure the loader.
+
+To preserve older requests, `fps`, `num_frames`, `min_frames`, `max_frames`, `do_sample_frames`, and `video_metadata` inside `mm_processor_kwargs.video` are **ignored with a warning**, not rejected or moved to `media_io_kwargs`. HF frame resampling remains disabled, and metadata comes from the media loader. `min_frames/max_frames` do not currently have matching loader options.
+
+For size-based processors such as Qwen and InternS2, the existing `min_pixels/max_pixels` behavior is retained: pixel aliases take precedence over a simultaneously supplied `size`, and an inverted range falls back to processor defaults. Other supported HF options now take effect when explicitly supplied. The native GLM pixel-field rejection described above is a separate compatibility change; it does not apply to size-based processors.
+
+If the caller has already sampled frames and sends a `video/jpeg` sequence, LMDeploy keeps all supplied frames rather than applying the ordinary loader's frame-count limit again. In this path, `num_frames` does not trim the sequence; `fps` is used to construct fallback metadata, not to select frames.
+
+These rules define serving behavior, not training/serving equivalence. Matching parameter values alone does not guarantee identical frame indices or timestamps across XTuner and LMDeploy; their sampling algorithms and metadata must also be checked.
 
 <details>
 <summary>API server example (extra_body)</summary>
@@ -629,34 +657,35 @@ print(response.choices[0].message.content)
 ```python
 from lmdeploy import pipeline, PytorchEngineConfig
 
-pipe = pipeline('<model_path>', backend_config=PytorchEngineConfig(tp=1))
+if __name__ == '__main__':
+    pipe = pipeline('<model_path>', backend_config=PytorchEngineConfig(tp=1))
 
-video_url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
+    video_url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
 
-messages = [{
-    'role': 'user',
-    'content': [
-        {'type': 'video_url', 'video_url': {'url': video_url}},
-        {'type': 'text', 'text': 'Describe this video.'},
-    ],
-}]
+    messages = [{
+        'role': 'user',
+        'content': [
+            {'type': 'video_url', 'video_url': {'url': video_url}},
+            {'type': 'text', 'text': 'Describe this video.'},
+        ],
+    }]
 
-response = pipe(
-    messages,
-    mm_processor_kwargs={
-        'video': {
-            'min_pixels': 4 * 32 * 32,
-            'max_pixels': 256 * 32 * 32,
+    response = pipe(
+        messages,
+        mm_processor_kwargs={
+            'video': {
+                'min_pixels': 4 * 32 * 32,
+                'max_pixels': 256 * 32 * 32,
+            },
         },
-    },
-    media_io_kwargs={
-        'video': {
-            'num_frames': 16,
-            'fps': 2,
+        media_io_kwargs={
+            'video': {
+                'num_frames': 16,
+                'fps': 2,
+            },
         },
-    },
-)
-print(response)
+    )
+    print(response)
 ```
 
 </details>

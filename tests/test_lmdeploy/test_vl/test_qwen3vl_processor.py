@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 
 from lmdeploy.vl import load_image, load_video
@@ -51,6 +54,36 @@ def _preprocess(model, messages, mm_processor_kwargs=None):
     result = model.preprocess(messages=list(messages), input_prompt=input_prompt,
                               mm_processor_kwargs=mm_processor_kwargs)
     return result['multimodal'][0]
+
+
+def test_video_legacy_options_keep_loader_metadata_and_disable_resampling():
+    import torch
+
+    from lmdeploy.vl.model.base import MultimodalSpecialTokens
+
+    model = Qwen3VLModel.__new__(Qwen3VLModel)
+    model.mm_tokens = MultimodalSpecialTokens(image_token_id=42, video_token_id=43)
+    model.processor = Mock(return_value={
+        'input_ids': torch.tensor([[43, 1, 43]]),
+        'video_grid_thw': torch.tensor([[2, 2, 2]]),
+        'pixel_values_videos': torch.zeros(8, 1),
+    })
+    model.processor.video_processor = SimpleNamespace(size={'shortest_edge': 64, 'longest_edge': 1024})
+    metadata = {'total_num_frames': 64, 'fps': 8, 'frames_indices': [0, 21, 42, 63]}
+    options = {'fps': 1, 'num_frames': 2, 'do_sample_frames': True,
+               'video_metadata': [{'fps': 999}], 'max_pixels': 256}
+    messages = [{'role': 'user', 'content': [
+        {'type': Modality.VIDEO, 'data': object(), 'video_metadata': metadata}]}]
+
+    result = model.preprocess(messages, 'video prompt', {'video': options})
+
+    assert model.processor.call_args.kwargs['videos_kwargs'] == {
+        'size': {'shortest_edge': 64, 'longest_edge': 256},
+        'video_metadata': [metadata], 'do_resize': True, 'do_sample_frames': False,
+    }
+    assert result['input_ids'] == [43, 1, 43]
+    assert len(result['multimodal']) == 2
+    assert metadata['fps'] == 8 and options['video_metadata'] == [{'fps': 999}]
 
 
 def test_image_with_custom_pixels(qwen3vl_model, sample_messages):

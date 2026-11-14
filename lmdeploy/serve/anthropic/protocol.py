@@ -123,6 +123,10 @@ class MessagesRequest(BaseModel):
     service_tier: Literal['auto', 'standard_only'] | None = None
     # LMDeploy-compatible generation extensions.
     repetition_penalty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    media_io_kwargs: dict[str, Any] | None = Field(
+        default=None, description='Media loading options, keyed by modality.')
+    mm_processor_kwargs: dict[str, Any] | None = Field(
+        default=None, description='HF processor options, keyed by modality.')
     # Extended input fields from /generate endpoint.
     # input_ids and image_data are fallback inputs — they are only used when
     # messages is empty. When messages is non-empty, it takes priority.
