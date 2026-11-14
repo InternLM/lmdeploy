@@ -157,8 +157,8 @@ if get_target_device() == 'cuda' and os.getenv('DISABLE_TURBOMIND', '').lower() 
             ],
         ),
     ]
-    cuda_version = None if os.name == 'nt' else get_cuda_version()
-    extra_deps = [] if os.name == 'nt' else get_turbomind_deps(cuda_version)
+    cuda_version = get_cuda_version()
+    extra_deps = [f'{dep}; sys_platform == "linux"' for dep in get_turbomind_deps(cuda_version)]
     extra_setup_deps = [] if os.name == 'nt' else get_extra_setup_deps(cuda_version)
     cmdclass = dict(build_ext=cmake_build_extension.BuildExtension, )
 else:
