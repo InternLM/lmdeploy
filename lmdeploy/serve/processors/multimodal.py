@@ -381,6 +381,11 @@ class MultimodalProcessor:
                     continue
                 if item_type not in MULTIMODAL_TYPES:
                     raise ValueError(f'Unsupported content block type {item_type!r} at `{field}.type`.')
+                if item_type == 'image_url' and isinstance(item.get('image_url'), dict):
+                    detail = item['image_url'].get('detail')
+                    if detail is not None and detail not in ('auto', 'low', 'high', 'original'):
+                        raise ValueError(f'Invalid image detail at `{field}.image_url.detail`. '
+                                         'Expected auto, low, high or original.')
                 # Scan the entire history: an earlier image must not hide an
                 # invalid block later in this message or a subsequent turn.
                 has_multimodal_input = True
