@@ -86,6 +86,17 @@ def normalize_tool_choice(tool_choice: ToolChoiceParam | str | None) -> ToolChoi
     return 'auto'
 
 
+def parallel_tool_calls_from_tool_choice(tool_choice: ToolChoiceParam | str | None) -> bool | None:
+    """Map Anthropic ``disable_parallel_tool_use`` to ``parallel_tool_calls``.
+
+    The string forms, and the object forms Anthropic defines without the flag, leave the OpenAI default alone.
+    """
+
+    if tool_choice is None or isinstance(tool_choice, str):
+        return None
+    return False if getattr(tool_choice, 'disable_parallel_tool_use', None) else None
+
+
 def _safe_parse_tool_input(arguments: str | None) -> dict[str, Any]:
     if not arguments:
         return {}

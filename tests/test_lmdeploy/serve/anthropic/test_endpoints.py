@@ -325,6 +325,21 @@ class _ToolAndReasoningParser:
             'internal reasoning',
         )
 
+def _search_tool_call(index: int) -> ToolCall:
+    """One complete `search` call, distinguishable by id."""
+    return ToolCall(id=f'toolu_{index}', function=FunctionCall(name='search', arguments='{"query":"hi"}'))
+
+
+def _search_tool_delta(index: int) -> DeltaMessage:
+    """The streaming form of :func:`_search_tool_call`."""
+    return DeltaMessage(role='assistant',
+                        tool_calls=[
+                            DeltaToolCall(index=index,
+                                          id=f'toolu_{index}',
+                                          function=DeltaFunctionCall(name='search', arguments='{"query":"hi"}'))
+                        ])
+
+
 def _make_client(response_parser_cls=_BasicParser,
                  *,
                  server_context=None,
@@ -1268,6 +1283,46 @@ def test_messages_raw_tokens_preserve_tool_parsing(stream, choice):
         assert data['stop_reason'] == 'tool_use'
         assert data['content'][0]['name'] == 'search'
         assert data['content'][0]['input'] == {'query': 'hi'}
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('disable_parallel', [False, True])
+def test_messages_disable_parallel_tool_use_keeps_one_tool_call(stream, disable_parallel):
+    # `disable_parallel_tool_use` is the Anthropic spelling of the switch the
+    # OpenAI endpoints already honour as `parallel_tool_calls`.
+    class Parser:
+        tool_parser_cls = object
+
+        def __init__(self, request):
+            self.request = request
+            self.tool_parser = object()
+            self.reasoning_tokens = None
+
+        def stream_chunk(self, delta_text: str, delta_token_ids: list[int], **kwargs):
+            if delta_text.startswith('Hello'):
+                return [(_search_tool_delta(0), False)]
+            if delta_text.startswith('world'):
+                return [(_search_tool_delta(1), True)]
+            return []
+
+        def parse_complete(self, text: str, token_ids: list[int] | None = None, **kwargs):
+            return '', [_search_tool_call(0), _search_tool_call(1)], None
+
+    response = _post_messages(
+        _make_client(Parser),
+        tools=[SEARCH_TOOL],
+        tool_choice={'type': 'auto', 'disable_parallel_tool_use': disable_parallel},
+        stream=stream,
+    )
+
+    assert response.status_code == 200
+    if stream:
+        events = [json.loads(line[6:]) for line in response.iter_lines() if line.startswith('data: ')]
+        blocks = [event['content_block'] for event in events
+                  if event['type'] == 'content_block_start' and event['content_block']['type'] == 'tool_use']
+    else:
+        blocks = [block for block in response.json()['content'] if block['type'] == 'tool_use']
+    assert [block['id'] for block in blocks] == (['toolu_0'] if disable_parallel else ['toolu_0', 'toolu_1'])
 
 
 def test_anthropic_model_listing():
