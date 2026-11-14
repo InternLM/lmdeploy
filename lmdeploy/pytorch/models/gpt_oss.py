@@ -432,6 +432,7 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
 
         # for router replay
         bm_ctx = get_build_model_context()
+        self.routed_experts_shape = (config.num_hidden_layers, config.num_experts_per_tok)
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
 
     def forward(

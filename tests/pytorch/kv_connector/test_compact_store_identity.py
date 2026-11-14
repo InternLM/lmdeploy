@@ -136,3 +136,15 @@ def test_legacy_and_no_store_agent_do_not_require_identity_or_retained_plans():
     agent.cache_config.compact_state_capacity = _state().capacity
     agent.cache_config.kv_transfer_config = None
     assert agent._get_compact_store_schema() is None
+
+
+def test_output_rank_r3_pool_does_not_change_kv_state_schema():
+    from lmdeploy.pytorch.engine.cache_engine.layout import CompositeBlockCacheLayout, ContiguousBlockCacheLayout
+
+    plan = _plan()
+    routes = CacheTensorSpec('routed_experts', CacheDesc([4, 2, 3], torch.uint16),
+                             consumer_rows=(0,), per_row_contiguous=True, store_cacheable=False)
+    with_routes = BlockCachePlan((*plan.tensor_specs, routes), CompositeBlockCacheLayout(
+        (plan.layout, ContiguousBlockCacheLayout((routes,), 2))), 1)
+    assert _schema(with_routes) == _schema(plan)
+    assert with_routes.logical_block_nbytes == plan.logical_block_nbytes + 4 * 2 * 3 * 2

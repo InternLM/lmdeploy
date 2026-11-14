@@ -730,7 +730,7 @@ def _make_minimal_build_agent(target_layer_ids, mask_token_id=99):
     )
     agent.need_output = False
     agent.strategy_factory = None
-    agent.cache_config = SimpleNamespace(max_batches=4)
+    agent.cache_config = SimpleNamespace(max_batches=4, kv_transfer_config=None)
     agent.spec_agent = spec_agent
     return agent
 
@@ -838,6 +838,7 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
             return {'hidden_states': torch.tensor([0])}
 
     class _CacheEngine:
+        routed_experts_cache = None
         cache_config = SimpleNamespace(quant_policy=0)
         gpu_cache = object()
         block_caches = {}
@@ -891,6 +892,60 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
         assert copy_calls[2][0] == 'kv'
         assert copy_calls[2][1] is save_plan
         assert copy_calls[3] == ('state', (7, ), (8, ))
+
+
+def test_model_forward_r3_ignores_cuda_graph_padding(monkeypatch):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+    from lmdeploy.pytorch.kernels.cuda import routed_experts as routed_module
+
+    inputs = SimpleNamespace(
+        is_dummy=False, ssm_state_meta=None, ssm_prefill_meta=None,
+        seq_length=torch.ones(3, dtype=torch.long),
+        history_lengths=torch.tensor([7, 15, 23]),
+        block_offsets=torch.tensor([[0], [1], [2]]),
+        max_q_seqlen=1,
+    )
+    context = SimpleNamespace(q_seqlens=inputs.seq_length,
+                              q_start_loc=torch.arange(3), position_ids=torch.zeros(3),
+                              is_model_meta_updated=False)
+    routes = torch.zeros((3, 2, 3), dtype=torch.uint16)
+    cache = torch.zeros((3, 64, 2, 3), dtype=torch.uint16)
+
+    class Model:
+        ctx_mgr = SimpleNamespace(build_context=lambda **kwargs: context,
+                                  context=lambda ctx: nullcontext())
+
+        def update_model_metas(self, **kwargs):
+            return []
+
+        def prepare_inputs_for_generation(self, **kwargs):
+            return {}
+
+        def __call__(self, **kwargs):
+            # CUDA graph replay rewrites the context to the padded batch.
+            context.q_seqlens = torch.ones(4, dtype=torch.long)
+            context.q_start_loc = torch.arange(4)
+            return {'all_routed_experts': routes}
+
+    calls = []
+
+    def scatter(actual_routes, actual_cache, starts, lengths, history, blocks, max_q, page_size):
+        assert actual_routes is routes and actual_cache is cache
+        assert lengths is inputs.seq_length
+        assert lengths.numel() == history.numel() == blocks.shape[0] == 3
+        torch.testing.assert_close(starts[:3], torch.arange(3))
+        calls.append((max_q, page_size))
+
+    monkeypatch.setattr(agent_module, 'step_ctx_manager', lambda ctx_mgr: nullcontext())
+    monkeypatch.setattr(agent_module.torch.cuda, 'stream', lambda stream: nullcontext())
+    monkeypatch.setattr(routed_module, 'scatter_routed_experts', scatter)
+    agent_module.model_forward(
+        Model(), inputs, object(),
+        SimpleNamespace(routed_experts_cache=cache, cache_config=SimpleNamespace(quant_policy=0, kernel_block_size=64),
+                        gpu_cache=(), block_caches={}),
+        SimpleNamespace(compact_plan=None, state_caches=(), named_state_caches={}),
+        stream=object())
+    assert calls == [(1, 64)]
 
 
 def test_inputs_preprocess_transfers_cache_inputs_and_keeps_host_ref(monkeypatch, event_loop):
@@ -1508,7 +1563,7 @@ class TestResetGraphRunner:
                 events.append('memdecode_reset')
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
-        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None, kv_transfer_config=None)
         agent.patched_model = _PatchedModel()
         agent.spec_agent = _SpecAgent()
         agent.memdecode_agent = _MemDecodeAgent()
@@ -1551,7 +1606,7 @@ class TestResetGraphRunner:
         events = []
         model = object()
         agent = BaseModelAgent.__new__(BaseModelAgent)
-        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None, kv_transfer_config=None)
         agent._model_update_group = {'update': object()}
         agent.patched_model = SimpleNamespace(
             get_model=lambda: model,
@@ -1747,6 +1802,7 @@ class TestModelAgentWakeup:
         model_agent.dist_config = SimpleNamespace(dp=1)
         model_agent.memdecode_agent = None
         model_agent.kv_connector = None
+        model_agent.cache_config = SimpleNamespace(kv_transfer_config=None)
         model_agent.cache_engine = object()
         model_agent.state_cache_engine = object()
         model_agent.patched_model = _PatchedModel()
@@ -1850,7 +1906,7 @@ class TestCheckpointEngineWeightUpdate:
                 return self.model
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
-        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None, kv_transfer_config=None)
         agent.patched_model = _PatchedModel()
         agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
         agent.spec_agent._enabled = False
@@ -1999,7 +2055,7 @@ class TestMemDecodeModelAgentLifecycle:
 
         monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
         agent, events = self._make_agent(enabled=True)
-        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None, kv_transfer_config=None)
 
         BaseModelAgent.release(agent)
 
@@ -2152,7 +2208,7 @@ class TestMemDecodeModelAgentLifecycle:
 @pytest.fixture(params=['flat', 'null_llm', 'nested', 'mirrored'])
 def weight_update_agent(request):
     agent = BaseModelAgent.__new__(BaseModelAgent)
-    agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+    agent.cache_config = SimpleNamespace(compact_state_capacity=None, kv_transfer_config=None)
     config = SimpleNamespace(num_hidden_layers=5, num_nextn_predict_layers=2)
     # Follower ranks have the draft config but no local proposer.
     agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)

@@ -65,6 +65,7 @@ def _request(
 ):
     return SimpleNamespace(
         seq_id=seq_id,
+        return_routed_experts=False,
         num_history_ids=0,
         adapter_name=adapter_name,
         all_ids=np.asarray(token_ids, dtype=np.int64),
@@ -193,6 +194,7 @@ def test_hybrid_multimodal_save_lookup_and_load_without_local_prefix_cache(
     consumer = MooncakeStoreScheduler(config)
     # Exercise the real lookup algorithm over saved keys without CUDA or IPC.
     worker = MooncakeStoreWorker.__new__(MooncakeStoreWorker)
+    worker._store_routes = False
     worker._cache_config = config
     worker.key_metadata = metadata
     worker.global_rank = worker.tp_rank = 0
@@ -426,6 +428,7 @@ def test_fa_multimodal_save_hashes_include_mtp_lookahead(modality, lookahead, lo
         assert save.block_hashes[:2] == prefix
         assert (save.block_hashes[0] == build_prefix_block_hashes(range(4), 4)[0]) == (not lookahead)
         hashes.append(save.block_hashes)
+        store.update_connector_output(KVConnectorOutput(completed_save_ids={save.save_id}))
     assert hashes[0][:-1] == hashes[2][:-1]
     assert (hashes[0][-1] != hashes[2][-1]) == bool(lookahead)
     assert (hashes[0][0] != hashes[1][0]) == bool(lookahead)
@@ -457,6 +460,7 @@ def test_mtp_store_save_lookup_and_load_matches_successor(local_prefix_cache, ch
                     kv_transfer_config=KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_consumer'))
     consumer = MooncakeStoreScheduler(cache)
     worker = MooncakeStoreWorker.__new__(MooncakeStoreWorker)
+    worker._store_routes = False
     worker._cache_config = cache
     worker.key_metadata = metadata
     worker.global_rank = worker.tp_rank = 0
@@ -913,14 +917,19 @@ def test_scheduler_builds_incremental_save_operations_and_poll_metadata():
     assert second_save.block_ids == (33, )
     assert second_save.logical_block_ids == (43, )
 
+    full_step = _connector_step((request,), (16,), ((31, 32, 33, 34, 35),), ((41, 42, 43, 44, 45),))
+    assert scheduler.build_connector_meta(full_step).save_requests == ()
+    assert scheduler._next_save_block[request.seq_id] == 3
+
     result = scheduler.update_connector_output(
         KVConnectorOutput(completed_save_ids={0, 999}))
     assert result.completed_save_ids == frozenset({0})
-    assert scheduler.build_connector_meta(_connector_step()) is not None
+    retry = scheduler.build_connector_meta(full_step).save_requests[0]
+    assert retry.start_block == 3 and retry.block_ids == (34,)
 
     result = scheduler.update_connector_output(
-        KVConnectorOutput(completed_save_ids={1}))
-    assert result.completed_save_ids == frozenset({1})
+        KVConnectorOutput(completed_save_ids={1, retry.save_id}))
+    assert result.completed_save_ids == frozenset({1, retry.save_id})
     assert scheduler.build_connector_meta(_connector_step()) is None
     scheduler.shutdown()
 

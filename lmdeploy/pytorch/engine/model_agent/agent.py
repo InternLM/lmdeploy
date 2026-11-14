@@ -10,6 +10,7 @@ from functools import partial
 from multiprocessing.reduction import ForkingPickler
 from os import getenv
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 import pybase64
@@ -280,6 +281,17 @@ def model_forward(
             output = model(**input_dict)
             if not isinstance(output, dict):
                 output = dict(hidden_states=output)
+            routed_cache = cache_engine.routed_experts_cache
+            if routed_cache is not None and not inputs.is_dummy:
+                from lmdeploy.pytorch.kernels.cuda.routed_experts import scatter_routed_experts
+                # Like KV, speculative rows remain private until acceptance.
+                # Checkpoint copies and Store fences must follow this write.
+                # Graph replay pads context lengths, but history and block
+                # tables still describe only the real input sequences.
+                scatter_routed_experts(output['all_routed_experts'], routed_cache,
+                                      context.q_start_loc, inputs.seq_length, inputs.history_lengths,
+                                      inputs.block_offsets, inputs.max_q_seqlen,
+                                      cache_engine.cache_config.kernel_block_size)
             # InternVL-3.5-Flash will change the seqlen, model_metas during forward
             if getattr(context, 'is_model_meta_updated', False):
                 model_metas = context.model_metas
@@ -482,6 +494,19 @@ class BaseModelAgent:
 
     def set_cache_config(self, cache_config: CacheConfig, spec_cache_config: CacheConfig = None):
         """Set all cache config."""
+        old_transfer = self.cache_config.kv_transfer_config
+        new_transfer = cache_config.kv_transfer_config
+        if (old_transfer is not None and new_transfer is not None
+                and old_transfer.kv_connector == new_transfer.kv_connector == 'MooncakeStoreConnector'):
+            old_extra = old_transfer.kv_connector_extra_config
+            new_extra = new_transfer.kv_connector_extra_config
+            if (old_extra.get('rl_weight_versioning', False) and new_extra.get('rl_weight_versioning', False)
+                    and old_extra.get('weight_version') is not None
+                    and all(old_extra.get(key) == new_extra.get(key) for key in ('cache_prefix', 'model_name'))
+                    and bool(old_extra.get('rl_share_across_engines', False))
+                    == bool(new_extra.get('rl_share_across_engines', False))):
+                # Driver layout refreshes must not roll back the worker's committed epoch.
+                new_extra['weight_version'] = old_extra['weight_version']
         self.cache_config = cache_config
         self.spec_agent.set_cache_config(spec_cache_config)
         if self.memdecode_agent is not None:
@@ -1493,7 +1518,10 @@ class BaseModelAgent:
             update_custom_module_map(custom_module_map)
         logger.debug(msg_with_rank(rank, 'build model.'))
         # for router replay
-        enable_return_routed_experts = self.misc_config.enable_return_routed_experts and self.need_output
+        transfer = self.cache_config.kv_transfer_config
+        store_routes = transfer is not None and transfer.kv_connector_extra_config.get('store_routed_experts', False)
+        enable_return_routed_experts = ((self.misc_config.enable_return_routed_experts or store_routes)
+                                       and self.need_output)
 
         spec_model_ctx = self.spec_agent.build_model_context()
 
@@ -1548,11 +1576,16 @@ class BaseModelAgent:
             if not isinstance(cache_request_model, torch.nn.Module):
                 cache_request_model = cache_request_model.get_model()
             request_collector = partial(collect_block_cache_requests, cache_request_model)
+            transfer = cache_config.kv_transfer_config
+            store_routes = (transfer is not None
+                            and transfer.kv_connector_extra_config.get('store_routed_experts', False))
+            routed_shape = cache_request_model.routed_experts_shape if store_routes and self.need_output else None
             self.block_cache_plan = build_block_cache_plan(
                 self.model_config,
                 cache_config,
                 tp,
                 request_collector=request_collector,
+                routed_experts_shape=routed_shape,
             )
             target_nbytes = self.block_cache_plan.logical_block_nbytes
             spec_nbytes = self.spec_agent.build_cache_plan(spec_cache_config)
@@ -1732,6 +1765,8 @@ class BaseModelAgent:
                     self._get_connector_kv_caches(),
                     state_cache_pools=self.state_cache_engine.connector_state_cache_pools,
                     **({'state_cache_schema': schema} if schema is not None else {}),
+                    **({'routed_experts_cache': self.cache_engine.routed_experts_cache}
+                       if self.cache_engine.routed_experts_cache is not None else {}),
                 )
 
             if self.memdecode_agent is not None:
@@ -1787,9 +1822,47 @@ class BaseModelAgent:
         """Route HF-named update tensors before model-specific renaming."""
         return self.spec_agent.split_updated_weights(weights)
 
+    def _check_rl_store_weights_update(self):
+        """Reject writes before a drained Store worker has released its
+        caches."""
+        transfer = self.cache_config.kv_transfer_config
+        if (transfer is not None and transfer.kv_connector == 'MooncakeStoreConnector'
+                and transfer.kv_connector_extra_config.get('rl_weight_versioning', False)
+                and self.kv_connector is not None):
+            raise RuntimeError('RL Mooncake Store weight updates require sleep before updating weights')
+
+    def _advance_rl_store_weight_version(self, reason: str = 'weights', version: str | None = None) -> None:
+        """Isolate old KV/state after a successful, all-rank weight commit."""
+        transfer = self.cache_config.kv_transfer_config
+        if (transfer is None or transfer.kv_connector != 'MooncakeStoreConnector'
+                or not transfer.kv_connector_extra_config.get('rl_weight_versioning', False)):
+            return
+        self._check_rl_store_weights_update()
+        shared = transfer.kv_connector_extra_config.get('rl_share_across_engines', False)
+        if reason == 'weights':
+            versions = [version] * self.dist_config.world_size
+            if self.dist_config.world_size > 1:
+                dist.all_gather_object(versions, version, group=self.dist_ctx.cpu_group)
+            # Include None in consensus so every rank takes the same commit path.
+            if any(value != versions[0] for value in versions):
+                raise ValueError('RL Store final weight versions disagree within the engine')
+            version = versions[0]
+            if version is not None and (not isinstance(version, str) or not version):
+                raise ValueError('RL Store weight_version must be a non-empty string or None')
+        if reason != 'weights' or version is None:
+            # Sleep and unversioned updates use a fresh engine-private generation.
+            values = [uuid4().hex if self.dist_ctx.rank == 0 else None]
+            if self.dist_config.world_size > 1:
+                dist.broadcast_object_list(values, src=0, group=self.dist_ctx.cpu_group)
+            version = values[0]
+        transfer.kv_connector_extra_config['weight_version'] = version
+        self._rl_store_needs_shared_commit = bool(shared and reason == 'sleep')
+        logger.info('RL Mooncake Store namespace invalidated: reason=%s version=%s', reason, version)
+
     def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):
         """Load one externally supplied bucket into the target and draft
         models."""
+        self._check_rl_store_weights_update()
         model = self.patched_model.get_model() if self.patched_model is not None else None
         spec_model = self.spec_agent.get_model()
         main_weights, draft_weights = self._split_updated_weights(weights)
@@ -1808,6 +1881,7 @@ class BaseModelAgent:
         for target in filter(None, [model, spec_model]):
             process_weights_after_loading(target)
             torch.cuda.synchronize()
+        self._advance_rl_store_weight_version()
         # FusedMoE finalization may replace Parameter objects, so captured
         # graphs must not retain pointers to the previous weights.
         self.reset_graph_runner()
@@ -1946,6 +2020,7 @@ class BaseModelAgent:
             return [(k, _construct(v)) for k, v in weights]
 
         with self.all_context():
+            self._check_rl_store_weights_update()
             # After deserialization, weights is a dict with following keys:
             # - metadata: List[FlattenedTensorMetadata]
             # - flattened_tensor: the flattened tensor for weights, optional
@@ -1979,6 +2054,7 @@ class BaseModelAgent:
                     torch.cuda.synchronize()
                     self._update_params_ipc_event = None
                     self._update_params_ipc_tensor = None
+                self._advance_rl_store_weight_version(version=request.weight_version)
 
             torch.cuda.empty_cache()
 
@@ -2090,6 +2166,7 @@ class BaseModelAgent:
         # Stop producers of GPU work and wait for queued work before closing the
         # connector threads that still reference registered cache addresses.
         self.shutdown_kv_connector()
+        self._advance_rl_store_weight_version(reason='sleep')
         self.cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()
@@ -2150,6 +2227,8 @@ class BaseModelAgent:
                 self._rebuild_models_after_level2_sleep()
 
         if 'kv_cache' in tags:
+            if getattr(self, '_rl_store_needs_shared_commit', False):
+                raise RuntimeError('Shared RL Store KV wakeup requires a successful full IPC weight commit')
             self.build_cache_engine()
             self.warmup()
             self.state.is_sleeping = False

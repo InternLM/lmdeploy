@@ -99,3 +99,50 @@ and Store hit rates, see [cache hit metrics](./metrics.md).
 Changing prefill, PCG padding, batch shapes or parallel topology can change
 FP8 generation trajectories; compare task accuracy and MTP acceptance as well
 as cache hits rather than assuming bitwise-identical outputs or a guaranteed speedup.
+
+## RL weight versions and routed experts in Mooncake Store
+
+For PyTorch RL workloads, configure `KVTransferConfig` with
+`kv_connector='MooncakeStoreConnector'`, `kv_role='kv_both'`, and these
+`kv_connector_extra_config` options (in addition to the Store connection settings):
+
+- `rl_weight_versioning=True`: isolate cached KV, recurrent state and routes by
+  weight generation. Supply a unique nonempty bootstrap `weight_version` before
+  creating the connector.
+- `store_routed_experts=True`: save and restore complete uint16 routed-expert
+  blocks alongside KV/state on models that support routed-expert collection.
+  The output rank owns a fixed GPU pool indexed by the same logical blocks as
+  KV. Its memory is included in cache capacity planning, at
+  `block_size * num_layers * topk * 2` bytes per block on that rank.
+  Registration lasts for the pool's lifetime; transfers use the existing Store
+  sender/receiver and block leases. Missing or short R3 values fall back to
+  computation. The new group-2 format does not reuse legacy CPU sidecars.
+- `rl_share_across_engines=True` (default: `False`): require a successful weight
+  commit after sleep before waking the KV cache. The trainer must coordinate the
+  same version across replicas to enable sharing.
+
+Drain and sleep before updating weights. On the colocated IPC `/update_weights`
+path, use `distributed_executor_backend='ray'` and attach `weight_version`
+to the final `finished=True` request. The `uni` executor does not implement
+this weight-update endpoint. All ranks in an
+engine must provide the same nonempty string, or all omit it/use `None`. Omission
+uses a fresh engine-private generation. Different weights must never reuse a
+version: it is a caller-provided identity, not a content hash or authorization.
+A rejected final version does not roll back weights already loaded.
+
+Sleep invalidates the previous generation. RL keys use `rl-store-v2:` plus the
+SHA256 of the canonical JSON `[cache_prefix, weight_version]` pair; old RL keys
+cold-miss without global Store deletion. Non-RL keys are unchanged. Shared
+versions have been validated with coordinated full colocated IPC updates, not
+partial recovery or every weight transport. This feature does not require or
+implement incremental routed-expert response offsets.
+
+Saving R3 adds a GPU scatter after forward, with no additional D2H or host wait
+on the inference path. Lookup only checks keys. When an API response needs
+routed experts, the receiver copies the loaded suffix to independent pinned
+CPU storage on its own CUDA stream and waits for that copy before reporting
+load completion. All ranks must finish before paging publishes the prefix or
+releases a cancelled load. Local block copies include R3, and sleep/shutdown
+drain model and Store work before releasing cache ownership. Pending save
+operations are bounded to twice `max_batches`; saturation skips a save wave
+without advancing its retry frontier.

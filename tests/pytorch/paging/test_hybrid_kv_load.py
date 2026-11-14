@@ -626,3 +626,105 @@ def test_rejected_hybrid_admission_releases_tentative_local_restore(make_schedul
     assert connector.build_connector_meta(KVConnectorStepInput()) is None
     assert scheduler.schedule_metrics.external_prefix_cache_queries == 0
     assert scheduler.schedule_metrics.external_prefix_cache_hits == 0
+
+
+@pytest.mark.parametrize('outcome', ['success', 'worker-failure', 'cancel', 'missing-r3'])
+def test_remote_r3_publishes_only_after_all_ranks_and_returns_full_history(make_scheduler, outcome):
+    import numpy as np
+
+    from lmdeploy.pytorch.engine.engine_instance import EngineInstance
+    from lmdeploy.pytorch.engine.request import ResponseType
+    from lmdeploy.pytorch.messages import SamplingParam
+
+    scheduler, connector = make_scheduler()
+    connector._store_routes = True
+    routes = np.arange(16 * 2 * 3, dtype=np.uint16).reshape(16, 2, 3)
+    seq = scheduler.add_session(1).add_sequence(
+        torch.arange(21), sampling_param=SamplingParam(return_routed_experts=True))
+    output = scheduler.schedule(is_prefill=True)
+    assert output.running == []
+    connector.build_connector_meta(output)
+    aggregator = KVConnectorOutputAggregator(world_size=2)
+    first = KVConnectorOutput(finished_receiving={seq.seq_id},
+                              routed_experts={} if outcome == 'missing-r3' else {seq.seq_id: routes},
+                              failed_receiving={seq.seq_id} if outcome == 'worker-failure' else set())
+    scheduler.update_connector_output(aggregator.aggregate([first, None]))
+    assert len(seq.all_routed_experts) == 0
+    if outcome == 'cancel':
+        scheduler.end_session(1)
+    scheduler.update_connector_output(aggregator.aggregate([
+        None, KVConnectorOutput(finished_receiving={seq.seq_id})]))
+    if outcome != 'success':
+        assert len(seq.all_routed_experts) == 0
+        assert seq.cached_tokens == 0
+        if outcome != 'cancel':
+            assert scheduler.schedule(is_prefill=True).running == [seq]
+        return
+    np.testing.assert_array_equal(seq.all_routed_experts.get_real(), routes)
+    assert seq.num_history_ids == 16
+    # Existing terminal EngineInstance path sees restored prefix + new forward.
+    suffix = np.full((5, 2, 3), 7, dtype=np.uint16)
+    seq.append_routed_experts(suffix)
+    complete = np.concatenate((routes, suffix), axis=0)
+    response = SimpleNamespace(type=ResponseType.FINISH, data={'routed_experts': seq.all_routed_experts.get_real()})
+    result = EngineInstance._get_extra_outputs(SimpleNamespace(_enable_transfer_obj_ref=False), response, 22)
+    np.testing.assert_array_equal(result['routed_experts'], complete)
+
+
+@pytest.fixture
+def fa_r3_scheduler():
+    from lmdeploy.pytorch.messages import SamplingParam
+    from lmdeploy.pytorch.prefix_cache_state import MultimodalSpan
+    config = CacheConfig(max_batches=1, block_size=4, num_cpu_blocks=0, num_gpu_blocks=16,
+                         max_prefill_token_num=4, enable_prefix_caching=True,
+                         kv_transfer_config=KVTransferConfig(
+                             kv_connector='MooncakeStoreConnector', kv_role='kv_both',
+                             kv_connector_extra_config={'store_routed_experts': True}))
+    connector = MooncakeStoreScheduler(config)
+    connector.client.lookup = Mock(return_value=16)
+    scheduler = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64, max_request_output_len=16),
+                          config, SequenceMeta(4, strategy=ARSequenceStrategy()), kv_connector=connector)
+    seq = scheduler.add_session(1).add_sequence(
+        torch.arange(25), sampling_param=SamplingParam(return_routed_experts=True))
+    seq.prefix_cache.multimodal_spans = (
+        MultimodalSpan(modality='image', content_hash='img', start=8, end=20),)
+    try:
+        yield scheduler, connector, seq
+    finally:
+        scheduler.end_session(1)
+        scheduler.shutdown()
+
+
+@pytest.mark.parametrize('local_step', [0, 6])
+def test_r3_fa_multimodal_clamp_restores_exact_safe_prefix_and_advances(fa_r3_scheduler, local_step):
+    import numpy as np
+    scheduler, connector, seq = fa_r3_scheduler
+    routes = np.arange(16 * 2 * 3, dtype=np.uint16).reshape(16, 2, 3)
+    if local_step:
+        seq.append_routed_experts(routes[:local_step])
+        seq.kv_token_limit = local_step
+        scheduler.block_manager.allocate(seq)
+        scheduler.block_trie.allocate(seq)
+        seq.set_step(local_step)
+        seq.kv_token_limit = None
+    assert scheduler.schedule(is_prefill=True).running == []
+    metadata = connector.build_connector_meta(KVConnectorStepInput())
+    assert metadata.load_requests[0].remote_block_count == 2
+    scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id},
+                                                        routed_experts={seq.seq_id: routes[local_step // 4 * 4:8]}))
+    assert seq.num_history_ids == 8
+    np.testing.assert_array_equal(seq.all_routed_experts.get_real(), routes[:8])
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+
+
+def test_r3_paging_rejection_marks_load_failed_and_recomputes(fa_r3_scheduler):
+    scheduler, connector, seq = fa_r3_scheduler
+    assert scheduler.schedule(is_prefill=True).running == []
+    connector.build_connector_meta(KVConnectorStepInput())
+    # Simulate a corrupt/missing result after a valid plan and successful worker I/O.
+    scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+    assert seq.num_history_ids == len(seq.all_routed_experts) == 0
+    assert connector._next_save_block.get(seq.seq_id, 0) == 0
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert connector.build_connector_meta(KVConnectorStepInput()) is None
+    assert connector.client.lookup.call_count == 1
