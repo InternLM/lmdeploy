@@ -174,8 +174,9 @@ def _text_from_blocks(blocks: list[ContentBlockParam | dict[str, Any]], field_na
             tool_payload = _stringify_block_value(tool_input)
             out.append(f'\n[tool_use name={tool_name or ""}]\n{tool_payload}\n[/tool_use]\n')
         elif block_type in ('thinking', 'redacted_thinking'):
-            if thinking:
-                out.append(f'\n[thinking]\n{thinking}\n[/thinking]\n')
+            # assistant reasoning rides on ``reasoning_content`` (see
+            # ``to_lmdeploy_messages``), never flattened into the content
+            pass
         else:
             out.append(f'\n[{block_type}]\n{_stringify_block_value(block)}\n[/{block_type}]\n')
     return ''.join(out)
@@ -193,6 +194,18 @@ def _block_get(block: ContentBlockParam | dict[str, Any], key: str, default: Any
     if isinstance(block, dict):
         return block.get(key, default)
     return getattr(block, key, default)
+
+
+def _reasoning_from_blocks(blocks: list[ContentBlockParam | dict[str, Any]]) -> str | None:
+    """Concatenate ``thinking`` block texts, mirroring the generation path."""
+
+    parts = []
+    for block in blocks:
+        if _block_get(block, 'type') == 'thinking':
+            thinking = _block_get(block, 'thinking')
+            if thinking:
+                parts.append(thinking)
+    return ''.join(parts) or None
 
 
 def _convert_image_source_to_url(source: Any) -> str:
@@ -392,7 +405,14 @@ def to_lmdeploy_messages(
             lm_messages.extend(_convert_system_message(message.content))
             continue
         content = text_from_content(message.content, field_name=f'messages[{idx}].content')
-        lm_messages.append(dict(role=message.role, content=content))
+        lm_message = dict(role=message.role, content=content)
+        if message.role == 'assistant' and isinstance(message.content, list):
+            # structured like the generation path; thinking-mode templates
+            # (deepseek) require reasoning_content on assistant turns
+            reasoning = _reasoning_from_blocks(message.content)
+            if reasoning:
+                lm_message['reasoning_content'] = reasoning
+        lm_messages.append(lm_message)
     if merge_inline_system:
         return _merge_system_messages(lm_messages)
     return lm_messages

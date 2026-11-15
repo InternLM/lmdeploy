@@ -48,7 +48,9 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
                 server_context.async_engine,
                 messages,
                 chat_template_kwargs=chat_template_kwargs_from_thinking(request.thinking))
-        except ValueError as err:
+        except (ValueError, AssertionError) as err:
+            # chat templates validate message shapes with assert; e.g. deepseek
+            # rejects a thinking-mode assistant turn without reasoning_content
             return create_error_response(HTTPStatus.BAD_REQUEST, str(err))
 
         return CountTokensResponse(input_tokens=input_tokens).model_dump()

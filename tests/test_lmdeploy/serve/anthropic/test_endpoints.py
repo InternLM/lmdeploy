@@ -1490,3 +1490,33 @@ def test_count_tokens_applies_thinking_switch_like_generation():
         assert response.status_code == 200, response.text
         (_, kwargs), = context.async_engine.preprocess_calls
         assert kwargs['chat_template_kwargs'] == expected
+
+
+def test_count_tokens_keeps_assistant_reasoning_structured():
+    """Regression (PR review): with thinking enabled, a history ending in an
+    assistant message with thinking+text blocks used to 500 on deepseek-style
+    templates -- the count path flattened the thinking block into plain text,
+    losing ``reasoning_content``, and the template's structural assert escaped
+    the endpoint's ``except ValueError``.
+    """
+    from lmdeploy.model import DeepseekV32ChatTemplate
+    from lmdeploy.serve.anthropic.adapter import to_lmdeploy_messages
+
+    context = _FakeServerContext(chat_template=DeepseekV32ChatTemplate())
+    client = _make_client(server_context=context)
+    messages = [
+        {'role': 'user', 'content': 'hi'},
+        {'role': 'assistant', 'content': [
+            {'type': 'thinking', 'thinking': 'let me think', 'signature': 'sig'},
+            {'type': 'text', 'text': 'hello!'},
+        ]},
+    ]
+
+    response = _post_count_tokens(client, messages=messages, thinking={'type': 'enabled'})
+
+    assert response.status_code == 200, response.text
+    assert response.json()['input_tokens'] > 0
+
+    lm_messages = to_lmdeploy_messages(CountTokensRequest(model='fake-model', messages=messages))
+    assert lm_messages[-1]['reasoning_content'] == 'let me think'
+    assert lm_messages[-1]['content'] == 'hello!'
