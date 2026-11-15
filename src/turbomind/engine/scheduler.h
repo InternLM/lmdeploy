@@ -12,6 +12,7 @@
 #include "src/turbomind/engine/prefix_trie.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/memory/object.h"
+#include "src/turbomind/models/speculative/speculative_policy.h"
 
 #define TM_SCHED_PROFILE 0
 
@@ -93,6 +94,8 @@ public:
               const std::string& cache_prompt,
               int                cache_prompt_boundary_skip,
               const std::string& cache_generation,
+              int                session_len,
+              const SpeculativePolicy* policy,
               const int&         is_warm_up);
 
     ~Scheduler();
@@ -204,7 +207,7 @@ private:
     // dedup intent across requests.
     void PlanPublication(ScheduleState& pass, int i, Sequence& s, int end, bool at_prompt_boundary);
 
-    void EnsureBlocks(Sequence& s);
+    void EnsureBlocks(Sequence& s, int end);
 
     bool      PrefixEligible(const Sequence& s) const noexcept;
     bool      CheckpointPublicationEligible() const noexcept;
@@ -216,6 +219,8 @@ private:
     CacheMode        prompt_cache_mode_{CacheMode::kAuto};
     int              cache_prompt_boundary_skip_{1};
     CacheMode        generation_cache_mode_{CacheMode::kAuto};
+    const int        session_len_;
+    const SpeculativePolicy* policy_;
     const int&       is_warm_up_;
     ObjectAllocator& alloc_;     // owned by Engine; also used outside the scheduler
     CacheRegistry    registry_;  // owned: registration is closed before construction

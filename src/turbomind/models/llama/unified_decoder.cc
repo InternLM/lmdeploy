@@ -17,6 +17,7 @@
 #include "src/turbomind/models/llama/unified_attention_layer.h"
 #include "src/turbomind/models/llama/unified_decoder.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/speculative/hidden_state_tap.h"
 #include "src/turbomind/utils/anomaly_handler.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
@@ -180,7 +181,10 @@ void UnifiedDecoder::AllreduceResidualRMSnorm(Tensor&       hidden_states,
     }
 }
 
-void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<WeightType*>& weights)
+void UnifiedDecoder::Forward(int                     phase,
+                             TensorMap&              args,
+                             const std::vector<WeightType*>& weights,
+                             const Tensor&           selected_hidden_buffer)
 {
     TM_FUNCTION_SCOPE();
     /**
@@ -203,11 +207,38 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     constexpr auto device = kDEVICE;
 
-    Tensor      local_residual   = args.try_consume("input_embeds");
-    const auto& local_token_nums = args.at("batch").data<BatchData*>()[0]->local_token_num;
+    HiddenStateTap* tap    = nullptr;
+    Tensor          handle = args.try_consume("hidden_state_tap");
+    if (handle) {
+        tap = handle.data<HiddenStateTap*>()[0];
+    }
+
+    Tensor local_residual = args.try_consume("residual");
+
+    std::vector<int> token_topology;
+    if (const Tensor* topology = args.try_("decoder_local_token_nums")) {
+        token_topology.assign(topology->data<int>(), topology->data<int>() + topology->shape(0));
+    }
+    else {
+        token_topology = args.at("batch").data<BatchData*>()[0]->local_token_num;
+    }
+    const int* local_token_nums = token_topology.data();
 
     const auto local_token_num  = local_residual.shape(0);
-    const auto global_token_num = std::accumulate(local_token_nums.begin(), local_token_nums.end(), ssize_t{});
+    const auto global_token_num = std::accumulate(token_topology.begin(), token_topology.end(), ssize_t{});
+
+    // The MoE router consumes a per-token validity mask (attn-DP padding rows route
+    // nowhere). This executor composition has no padding rows — supply an all-valid
+    // mask when no producer provided one.
+    const bool* token_mask = nullptr;
+    if (const Tensor* mask = args.try_("token_mask")) {
+        token_mask = (const bool*)mask->buffer().raw_data();
+    }
+    else if (global_token_num > 0) {
+        all_valid_mask_ = Buffer_<bool>{(size_t)global_token_num, kDEVICE};
+        TM_CUDA_CHECK(cudaMemsetAsync(all_valid_mask_.data(), 1, global_token_num, core::Context::stream().handle()));
+        token_mask = all_valid_mask_.data();
+    }
 
     TM_CHECK_EQ(local_token_num, local_token_nums[attn_dp_rank_]);
 
@@ -224,9 +255,8 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     Tensor local_hidden_states;
     if (attn_dp_size_ > 1) {  // Offset hidden states buffer for mixed DP
-        TM_CHECK_EQ(local_token_nums.size(), attn_dp_size_);
         std::vector offsets(attn_dp_size_ + 1, 0);
-        std::inclusive_scan(local_token_nums.data(), local_token_nums.data() + attn_dp_size_, offsets.begin() + 1);
+        std::inclusive_scan(local_token_nums, local_token_nums + attn_dp_size_, offsets.begin() + 1);
         const int offset    = offsets[attn_dp_rank_];
         local_hidden_states = global_hidden_states.slice({offset, 0}, {local_token_num, -1});
 
@@ -242,17 +272,23 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
 
     const auto stream = core::Context::stream().handle();
 
-    const auto& first_norm = *weights.at(0)->attention_norm;
-    invokeRMSNorm(local_hidden_states,
-                  local_residual,
-                  first_norm.weight,
-                  first_norm.norm_eps_,
-                  first_norm.zero_centered_,
-                  stream);
+    Tensor layer_attention_input;
+    if (args.contains("attention_input")) {
+        layer_attention_input = args.try_consume("attention_input");
+    }
+    else {
+        const auto& first_norm = *weights.at(0)->attention_norm;
+        invokeRMSNorm(local_hidden_states,
+                      local_residual,
+                      first_norm.weight,
+                      first_norm.norm_eps_,
+                      first_norm.zero_centered_,
+                      stream);
 
-    TM_CUDA_CHECK(cudaGetLastError());
+        layer_attention_input = local_hidden_states;
+    }
 
-    TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", 0), 2);
+    TM_DEBUG_TENSOR(layer_attention_input, Concat("norm0", 0), 2);
 
     // auto stack_alloc{core::Context::device_alloc().adapt<core::StackAllocatorImpl>()};
     // core::ContextGuard ctx{Allocator{stack_alloc}};
@@ -276,11 +312,11 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         /// self-attention or linear-attention
         if (weights.at(layer)->linear_attn) {
             linear_attn_layer_->Forward(
-                {phase, local_hidden_states, local_hidden_states, weights.at(layer)->linear_attn.get()});
+                {phase, layer_attention_input, local_hidden_states, weights.at(layer)->linear_attn.get()});
         }
         else {
             auto* attn = weights.at(layer)->attention.get();
-            attn_layer_->Forward({phase, local_hidden_states, local_hidden_states, attn, layer});
+            attn_layer_->Forward({phase, layer_attention_input, local_hidden_states, attn, layer});
         }
 
         TM_DEBUG_TENSOR(local_hidden_states, Concat("attn_block", layer), 2);
@@ -308,8 +344,8 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                  local_token_num,
                                  attn_tp_group_,
                                  ffn_group,
-                                 local_token_nums.data(),
-                                 local_token_nums.size());
+                                 local_token_nums,
+                                 (int)token_topology.size());
 
         TM_DEBUG_TENSOR(local_residual, Concat("residual0", layer), 2);
         TM_DEBUG_TENSOR(local_hidden_states, Concat("norm1", layer), 2);
@@ -320,10 +356,10 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
         if (weights.at(layer)->moe_ffn) {
             moe_ffn_layer_->Forward({global_hidden_states,
                                      global_hidden_states,
-                                     local_token_nums,
+                                     token_topology,
                                      weights.at(layer)->moe_ffn.get(),
                                      (int)layer,
-                                     (const bool*)args.at("token_mask").buffer().raw_data()});
+                                     token_mask});
         }
 
         if (ffn_layer_ && weights.at(layer)->feed_forward) {
@@ -354,12 +390,23 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
                                  local_token_num,
                                  ffn_group,
                                  attn_tp_group_,
-                                 local_token_nums.data(),
-                                 local_token_nums.size());
+                                 local_token_nums,
+                                 (int)token_topology.size());
         TM_CUDA_CHECK(cudaGetLastError());
+
+        if (tap) {
+            const int completed_layer_count = layer + 1;
+            const int tap_ordinal           = tap->TapOrdinal(completed_layer_count);
+            if (tap_ordinal >= 0) {
+                tap->Capture(
+                    tap_ordinal, local_residual, local_hidden_states, core::Context::stream().handle());
+            }
+        }
 
         TM_DEBUG_TENSOR(local_residual, Concat("residual1", layer), 2);
         TM_DEBUG_TENSOR(local_hidden_states, Concat("norm0", layer + 1), 2);
+
+        layer_attention_input = local_hidden_states;
 
         // if (layer == layer_num_ - 1) {
         //     args.at("batch").data<BatchData*>()[0]->Notify();
@@ -372,11 +419,12 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
     // When there are no prefill sequences, token selection is not needed
     const bool reuse_hidden_states = selected_pos.size() == local_token_num;
 
-    const bool output_hidden_states = args.try_("output_hidden_states");
+    const bool caller_owns_selected_states = static_cast<bool>(selected_hidden_buffer);
+    const bool output_hidden_states        = args.try_("output_hidden_states");
 
     Tensor hidden_states{local_hidden_states};
 
-    if (d_comm_ && (output_hidden_states || reuse_hidden_states)) {
+    if (!caller_owns_selected_states && d_comm_ && (output_hidden_states || reuse_hidden_states)) {
         // The full `hidden_states` buffer is needed for output but it's a ref into `symm_buf` atm.
         // Copy to residual buf so that `symm_buf` may be reused safely later
         Copy(hidden_states, local_residual);
@@ -384,14 +432,24 @@ void UnifiedDecoder::Forward(int phase, TensorMap& args, const std::vector<Weigh
     }
 
     Tensor selected_states;
-    if (reuse_hidden_states) {
+    if (caller_owns_selected_states) {
+        selected_states = selected_hidden_buffer;
+    }
+    else if (reuse_hidden_states) {
         selected_states = hidden_states;
     }
     else {
         selected_states = {{selected_pos.size(), (int)hidden_units_}, dtype, kDEVICE};
+    }
+
+    if (caller_owns_selected_states || !reuse_hidden_states) {
         CollectHiddenStates(hidden_states, selected_pos, selected_states, stream);
     }
     args.produce("hidden_states", selected_states);
+
+    if (caller_owns_selected_states) {
+        args.produce("pre_final_residual", std::move(local_residual));
+    }
 
     // TM_DEBUG_TENSOR(selected_states.slice(0, selected_pos.size()), "out", 1);
 

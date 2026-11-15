@@ -85,6 +85,11 @@ void CudaIpcCommImpl::AllGather(
     const int ranks = this->n_ranks(group);
     const int rank  = this->rank(group);
 
+    auto* local_slot = static_cast<char*>(recvbuff) + rank * bytesize;
+    if (sendbuff != local_slot && bytesize != 0) {
+        cudaMemcpyAsync(local_slot, sendbuff, bytesize, cudaMemcpyDeviceToDevice, stream);
+    }
+
     auto semaphore = groups_.at(group).semaphore.handle();
 
     auto invoke = [&](auto t) {

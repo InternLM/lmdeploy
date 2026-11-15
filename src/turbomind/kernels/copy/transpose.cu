@@ -3,6 +3,8 @@
 #include "src/turbomind/kernels/copy/copy.h"
 #include <cute/layout.hpp>
 #include <cute/tensor.hpp>
+#include <algorithm>
+#include <limits>
 
 namespace turbomind::core {
 
@@ -15,9 +17,13 @@ namespace kernel {
 
 extern __shared__ char smem_buf[];
 
-template<int kTileDim, int kVec, typename SrcEngine, typename SrcLayout, typename DstEngine, typename DstLayout>
+template<int kTileDim, int kVec, typename SrcEngine, typename SrcLayout, typename DstEngine, typename DstLayout,
+         typename TileGridShape>
 __global__ void __launch_bounds__(256)
-    TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src, cute::Tensor<DstEngine, DstLayout> dst)
+    TransposeCopyKernel(cute::Tensor<SrcEngine, SrcLayout> src,
+                        cute::Tensor<DstEngine, DstLayout> dst,
+                        TileGridShape tile_grid_shape,
+                        int64_t tile_base)
 {
     using T = typename SrcEngine::value_type;
     static_assert(std::is_same_v<T, typename DstEngine::value_type>,
@@ -40,7 +46,14 @@ __global__ void __launch_bounds__(256)
         make_tensor(make_smem_ptr(smem_base + kTileDim * kStride),
                     make_layout(make_shape(Int<kTileDim>{}, Int<kTileDim>{}), make_stride(Int<kStride>{}, Int<1>{})));
 
-    // Decode blockIdx.z → multi-dim batch coord → per-block pointer offsets.
+    // Preserve the original column, row, batch tile order in a linear grid.
+    // Logical row and batch counts no longer consume grid.y or grid.z.
+    const auto tile_coord = idx2crd(tile_base + int64_t(blockIdx.x), tile_grid_shape);
+    const auto tile_n     = get<0>(tile_coord);
+    const auto tile_m     = get<1>(tile_coord);
+    const auto batch      = get<2>(tile_coord);
+
+    // Decode the logical batch index into per-block pointer offsets.
     // The `if constexpr (kRank > 2)` guard is REQUIRED: cute::crd2idx /
     // cute::idx2crd are implemented with unary fold expressions of the form
     // `(... + crd2idx_inner(...))` over the shape's tuple_seq. For rank == 2
@@ -54,7 +67,7 @@ __global__ void __launch_bounds__(256)
         auto batch_shape   = take<2, kRank>(shape(src));
         auto src_batch_str = take<2, kRank>(stride(src));
         auto dst_batch_str = take<2, kRank>(stride(dst));
-        auto batch_coord   = idx2crd(int64_t(blockIdx.z), batch_shape);
+        auto batch_coord   = idx2crd(batch, batch_shape);
         src_off            = crd2idx(batch_coord, batch_shape, src_batch_str);
         dst_off            = crd2idx(batch_coord, batch_shape, dst_batch_str);
     }
@@ -76,12 +89,8 @@ __global__ void __launch_bounds__(256)
     auto src_tiled = tiled_divide(src_2d, tiler);
     auto dst_tiled = tiled_divide(dst_2d, tiler);
 
-    // Bounds check on tile grid
-    if (blockIdx.y >= size<1>(src_tiled) || blockIdx.x >= size<2>(src_tiled))
-        return;
-
-    auto src_tile = src_tiled(make_coord(_, _), blockIdx.y, blockIdx.x);
-    auto dst_tile = dst_tiled(make_coord(_, _), blockIdx.y, blockIdx.x);
+    auto src_tile = src_tiled(make_coord(_, _), tile_m, tile_n);
+    auto dst_tile = dst_tiled(make_coord(_, _), tile_m, tile_n);
 
     // Phase 1: gmem(src) -> smem1, vectorize along dim 0
     auto tc1  = make_tiled_copy(Copy_Atom<UniversalCopy<VecT>, T>{},
@@ -118,7 +127,7 @@ namespace detail {
 template<size_t... Is>
 auto make_cute_shape_impl(const ssize_t* data, std::index_sequence<Is...>)
 {
-    return make_shape(static_cast<int32_t>(data[Is])...);
+    return make_shape(static_cast<int64_t>(data[Is])...);
 }
 
 template<int kRank>
@@ -161,9 +170,9 @@ auto make_unit_stride(const ssize_t* data)
 void TransposeCopy(
     const void* data_a, void* data_b, const Layout& a, const Layout& b, DataType dtype, cudaStream_t stream)
 {
-    const int rank = a.rank();
-    int32_t   M    = static_cast<int32_t>(a.shape(0));
-    int32_t   N    = static_cast<int32_t>(a.shape(1));
+    const int     rank = a.rank();
+    const int64_t M    = a.shape(0);
+    const int64_t N    = a.shape(1);
 
     auto launch = [&](auto t, auto kvec, auto ktiledim, auto rank_c) {
         using T                = decltype(t);
@@ -189,11 +198,16 @@ void TransposeCopy(
             total_batch *= a.shape(i);
 
         constexpr int smem_bytes = 2 * kTileDim * (kTileDim + kVec) * sizeof(T);
-        dim3          grid(static_cast<uint32_t>(N / kTileDim),
-                  static_cast<uint32_t>(M / kTileDim),
-                  static_cast<uint32_t>(total_batch));
-
-        kernel::TransposeCopyKernel<kTileDim, kVec><<<grid, 256, smem_bytes, stream>>>(src_gmem, dst_gmem);
+        const auto tile_grid_shape = make_shape(N / kTileDim, M / kTileDim, total_batch);
+        const int64_t total_tiles  = product(tile_grid_shape);
+        constexpr int64_t max_blocks = std::numeric_limits<int32_t>::max();
+        // Keep every launch within grid.x's limit while retaining 64-bit
+        // logical tile indices. Normal workloads use a single launch.
+        for (int64_t tile_base = 0; tile_base < total_tiles; tile_base += max_blocks) {
+            const auto blocks = static_cast<uint32_t>(std::min(total_tiles - tile_base, max_blocks));
+            kernel::TransposeCopyKernel<kTileDim, kVec><<<blocks, 256, smem_bytes, stream>>>(
+                src_gmem, dst_gmem, tile_grid_shape, tile_base);
+        }
     };
 
     auto dispatch_rank = [&](auto t, auto kvec, auto ktiledim) {

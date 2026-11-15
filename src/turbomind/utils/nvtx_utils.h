@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <string>
+#include <string_view>
+
 namespace ft_nvtx {
 static std::string scope;
 std::string        getScope();
@@ -30,9 +33,35 @@ bool               isEnableNvtx();
 
 static bool has_read_nvtx_env = false;
 static bool is_enable_ft_nvtx = false;
-void        ftNvtxRangePush(std::string name);
+void        ftNvtxRangePush(std::string_view name);
 void        ftNvtxRangePop();
 }  // namespace ft_nvtx
+
+namespace turbomind {
+
+struct NvtxScope {
+    explicit NvtxScope(std::string_view name): active_{ft_nvtx::isEnableNvtx()}
+    {
+        if (active_) {
+            ft_nvtx::ftNvtxRangePush(name);
+        }
+    }
+
+    NvtxScope(const NvtxScope&)            = delete;
+    NvtxScope& operator=(const NvtxScope&) = delete;
+
+    ~NvtxScope()
+    {
+        if (active_) {
+            ft_nvtx::ftNvtxRangePop();
+        }
+    }
+
+private:
+    bool active_;
+};
+
+}  // namespace turbomind
 
 #define PUSH_RANGE(name)                                                                                               \
     {                                                                                                                  \

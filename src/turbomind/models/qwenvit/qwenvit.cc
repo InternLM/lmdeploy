@@ -50,6 +50,7 @@ struct QwenVit::Impl {
     comm::DeviceCommImpl* const d_comm_;
     const int                   tp_group_;
     const DataType              engine_data_type_;
+    const bool                  successor_embeddings_;
     const std::string           communicator_;
 
     Buffer_<int> grid_thws_buf_;     // (t, h, w)
@@ -62,8 +63,8 @@ struct QwenVit::Impl {
         Tensor                           batch_input;
         int                              batch_size;
         std::vector<std::array<int, 3>>  grid_thws_host;
-        std::vector<std::pair<int, int>> image_embeds_coords;  // (size, pos) for image embeddings
-        std::vector<std::pair<int, int>> input_embeds_coords;  // (size, pos) for input embeddings
+        std::vector<EmbeddingPatch> target_patches;     // (rows, source, destination) for target embeddings
+        std::vector<EmbeddingPatch> successor_patches;  // (rows, source, destination) for successor embeddings
 
         // for RoPE / pos-embed interpolation
         Tensor_<int> grid_thws;
@@ -107,8 +108,8 @@ struct QwenVit::Impl {
             window_attn_batch_size = 0;
             max_window_attn_len    = 0;
             grid_thws_host.clear();
-            image_embeds_coords.clear();
-            input_embeds_coords.clear();
+            target_patches.clear();
+            successor_patches.clear();
         }
     };
 
@@ -117,7 +118,11 @@ struct QwenVit::Impl {
 
     std::vector<Data> data_;
 
-    Impl(const EngineParam& engine, const Context& ctx, const QwenVitWeight& weights, int phases):
+    Impl(const EngineParam&       engine,
+         const Context&           ctx,
+         const QwenVitWeight&     weights,
+         int                      phases,
+         bool                     successor_embeddings):
         weights_{weights},
         config_{weights.config()},
         linear_{*ctx.linear},
@@ -125,6 +130,7 @@ struct QwenVit::Impl {
         d_comm_{ctx.comm.d_comm},
         tp_group_{ctx.comm.d_tp_group},
         engine_data_type_{engine.data_type},
+        successor_embeddings_{successor_embeddings},
         communicator_{engine.communicator}
     {
         for (int i = 0; i < phases; ++i) {
@@ -193,22 +199,35 @@ struct QwenVit::Impl {
         int input_ids_offsets    = 0;
         int image_embeds_offsets = 0;
         for (int i = 0; i < rc.size(); ++i) {
-            const auto& s = *rc[i];
+            const Sequence&     s         = *rc[i];
+            const SubmittedRow& submitted = *s.submitted;
 
-            if ((not s.autoregres) && (not s.multimodal_inputs.empty())) {
+            if ((not submitted.autoregres) && (not s.multimodal_inputs.empty())) {
                 ++mm_prefill_seqs;
                 images_total += (int)s.multimodal_inputs.size();
-                Interval text{s.history_len + s.inflight_input_len, Interval::Size{s.input_len}};
+                const int           begin     = submitted.history_len + s.inflight_input_len;
+                const int           end       = begin + submitted.input_len;
+                const Interval      target{begin, end};
+                const Interval      successor{begin + 1, std::min(end + 1, s.seq_len)};
                 for (const auto& mm : s.multimodal_inputs) {
-                    auto o = mm->interval & text;
-                    if (auto size = (int)o.size()) {
+                    const Interval target_overlap    = mm->interval & target;
+                    const Interval successor_overlap = successor_embeddings_ ? mm->interval & successor : Interval{};
+                    if (!target_overlap.empty() || !successor_overlap.empty()) {
                         pixel_values.push_back(mm->data);
                         d.batch_size += mm->data.shape(0);
 
-                        const int text_offset  = input_ids_offsets + o.begin() - text.begin();
-                        const int image_offset = image_embeds_offsets + o.begin() - mm->interval.begin();
-                        d.input_embeds_coords.emplace_back(size, text_offset);
-                        d.image_embeds_coords.emplace_back(size, image_offset);
+                        if (!target_overlap.empty()) {
+                            d.target_patches.push_back(
+                                {static_cast<int>(target_overlap.size()),
+                                 image_embeds_offsets + target_overlap.begin() - mm->interval.begin(),
+                                 input_ids_offsets + target_overlap.begin() - target.begin()});
+                        }
+                        if (!successor_overlap.empty()) {
+                            d.successor_patches.push_back(
+                                {static_cast<int>(successor_overlap.size()),
+                                 image_embeds_offsets + successor_overlap.begin() - mm->interval.begin(),
+                                 input_ids_offsets + successor_overlap.begin() - successor.begin()});
+                        }
 
                         const auto& grid_thw = mm->grid_thw;
                         d.grid_thws_host.emplace_back(grid_thw);
@@ -219,7 +238,7 @@ struct QwenVit::Impl {
                 }
             }
 
-            input_ids_offsets += s.autoregres ? 1 : s.input_len;
+            input_ids_offsets += submitted.input_len;
         }
 
         // Prefix-cache observability: on a fully-cached image, the window filter
@@ -612,11 +631,12 @@ struct QwenVit::Impl {
         int upper_segs     = 0;
         int total_q_tokens = 0;
         for (int i = 0; i < bsz; ++i) {
-            const auto& s = *rc[i];
+            const Sequence&     s         = *rc[i];
+            const SubmittedRow& submitted = *s.submitted;
 
             d.mrope_offsets_host.data()[i] = total_q_tokens;
-            total_q_tokens += s.autoregres ? 1 : s.input_len;
-            if (!s.autoregres && !s.multimodal_inputs.empty()) {
+            total_q_tokens += submitted.input_len;
+            if (!submitted.autoregres && !s.multimodal_inputs.empty()) {
                 upper_segs += 2 * (int)s.multimodal_inputs.size() + 1;
             }
         }
@@ -635,11 +655,12 @@ struct QwenVit::Impl {
         int   max_seg_len = 0;
 
         for (int i = 0; i < bsz; ++i) {
-            const auto& s            = *rc[i];
-            const int   seq_len      = (int)s.req->inputs.at("input_ids").shape(0);
-            const bool  needs_table  = !s.autoregres && !s.multimodal_inputs.empty();
-            const int   active_start = s.history_len + s.inflight_input_len;
-            const int   active_end   = active_start + s.input_len;
+            const Sequence&     s            = *rc[i];
+            const SubmittedRow& submitted    = *s.submitted;
+            const int           seq_len      = (int)s.req->inputs.at("input_ids").shape(0);
+            const bool          needs_table  = !submitted.autoregres && !s.multimodal_inputs.empty();
+            const int           active_start = submitted.history_len + s.inflight_input_len;
+            const int           active_end   = active_start + submitted.input_len;
             const int   q_offset     = d.mrope_offsets_host.data()[i];
 
             auto emit = [&](int run_start, int run_n, int run_base, int h2, int w2) {
@@ -682,7 +703,7 @@ struct QwenVit::Impl {
                 emit(row, active_end - row, pos, /*h2=*/0, /*w2=*/0);
             }
 
-            d.mrope_length_host.data()[i] = needs_table ? s.input_len : 0;
+            d.mrope_length_host.data()[i] = needs_table ? submitted.input_len : 0;
             d.mrope_delta_host.data()[i]  = mm_off;
         }
 
@@ -884,8 +905,7 @@ struct QwenVit::Impl {
         // must match before publishing.
         EnsureFloatDtype(image_embeds, engine_data_type_);
 
-        args.produce("multimodal",
-                     MultiModalEmbeddingData{image_embeds, d.image_embeds_coords, d.input_embeds_coords}.buf());
+        args.produce("multimodal", MultiModalEmbeddingData{image_embeds, d.target_patches, d.successor_patches}.buf());
     }
 
     template<typename T>
@@ -1044,8 +1064,12 @@ struct QwenVit::Impl {
     }
 };
 
-QwenVit::QwenVit(const EngineParam& engine, const Context& ctx, const QwenVitWeight& weights, int phases):
-    impl_{std::make_unique<Impl>(engine, ctx, weights, phases)}
+QwenVit::QwenVit(const EngineParam&   engine,
+                 const Context&       ctx,
+                 const QwenVitWeight& weights,
+                 int                  phases,
+                 bool                 successor_embeddings):
+    impl_{std::make_unique<Impl>(engine, ctx, weights, phases, successor_embeddings)}
 {
 }
 

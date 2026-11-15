@@ -41,6 +41,7 @@ Problem BuildProblem(const PlanningContext& context, const GdrKernelSpec& spec)
 {
     Problem problem{};
     problem.arch              = context.arch;
+    problem.mode              = spec.mode;
     problem.sm_count          = context.sm_count;
     problem.input_dtype       = context.input_dtype;
     problem.state_dtype       = context.state_dtype;
@@ -56,7 +57,7 @@ Problem BuildProblem(const PlanningContext& context, const GdrKernelSpec& spec)
     problem.chunk_size        = spec.chunk_size;
     problem.num_head_groups   = context.num_head_groups;
     problem.heads_per_block   = context.heads_per_block;
-    if (spec.mode == GdrMode::kRecurrent) {
+    if (spec.mode == GdrMode::kRecurrent || spec.mode == GdrMode::kVerify || spec.mode == GdrMode::kCommit) {
         problem.sequence_num        = context.physical_batch;
         problem.total_chunks        = context.physical_batch;
         problem.max_sequence_chunks = context.physical_batch > 0 ? 1 : 0;
@@ -105,6 +106,16 @@ void BuildOptimizedTensorPlans(Plan* plan, size_t direct_descriptor_bytes)
         TensorPlan{core::Layout{{problem.batch, problem.token_num, problem.hv, 128}, {value_batch, value_row, 128, 1}},
                    problem.input_dtype,
                    value_elements};
+    if (IsCommitGdr(problem)) {
+        plan->out = TensorPlan{core::Layout{{0}}, problem.input_dtype};
+    }
+    if (IsVerifyGdr(problem) || IsCommitGdr(problem)) {
+        plan->g_cumsum        = TensorPlan{core::Layout{{0}}, kFloat32};
+        plan->resolvent       = TensorPlan{core::Layout{{0}}, problem.input_dtype};
+        plan->workspace       = TensorPlan{core::Layout{{0}}, kUint8};
+        plan->workspace_bytes = 0;
+        return;
+    }
     const bool          chunked     = IsChunkedGdr(problem);
     const core::ssize_t gate_stride = chunked ? core::ssize_t(AlignUp(size_t(problem.hv), 4)) : problem.gate_stride;
     const core::ssize_t gate_batch_stride =
