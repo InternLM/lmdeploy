@@ -41,6 +41,14 @@ _SchemaType = str | frozenset[str] | None
 # Governing type(s), nullability, and declared enum/const candidates.
 _SchemaCoercion = tuple[_SchemaType, bool, tuple[Any, ...] | None]
 
+# Other assertion keywords may distinguish branches that share these coercion
+# constraints. Their presence makes a successful partial match inconclusive.
+_COERCION_SCHEMA_KEYS = frozenset({
+    'type', 'const', 'enum', '$ref', 'allOf', 'anyOf', 'oneOf',
+    '$schema', '$id', '$anchor', '$defs', 'definitions', '$comment',
+    'title', 'description', 'default', 'examples', 'deprecated', 'readOnly', 'writeOnly',
+})
+
 
 class _SchemaResolutionExhausted(Exception):
     """Raised when schema resolution exceeds a shared work budget."""
@@ -50,6 +58,7 @@ class _SchemaResolutionExhausted(Exception):
 class _SchemaResolutionBudget:
     visits: int
     literal_work: int
+    has_combinators: bool = False
 
     def literal_key(self, value: Any, depth: int = 0) -> Any:
         """Build a bounded JSON equality key, distinguishing booleans from
@@ -612,12 +621,12 @@ class XmlToolParser(ToolParser):
         return None
 
     @staticmethod
-    def _lookup_local_ref(ref: Any, root_schema: dict[str, Any] | None) -> dict[str, Any] | None:
+    def _lookup_local_ref(ref: Any, root_schema: dict[str, Any] | None) -> dict[str, Any] | bool | None:
         """Resolve one local JSON pointer (``#/$defs/...``) to its target.
 
         Pointer tokens are unescaped per RFC 6901 first (``~1`` decodes to ``/``,
         ``~0`` to ``~``). Returns ``None`` for external pointers, missing targets, and
-        anything that does not land on a schema object.
+        anything that does not land on an object or boolean schema.
         """
         if not isinstance(ref, str) or not ref.startswith('#/'):
             return None
@@ -628,7 +637,7 @@ class XmlToolParser(ToolParser):
             if not isinstance(target, dict) or part not in target:
                 return None
             target = target[part]
-        return target if isinstance(target, dict) else None
+        return target if isinstance(target, (dict, bool)) else None
 
     @classmethod
     def _resolve_schema_coercion(cls, param_schema: dict[str, Any] | None,
@@ -666,13 +675,13 @@ class XmlToolParser(ToolParser):
             return 'string', False, None
 
     @classmethod
-    def _resolve_schema_impl(cls, schema: dict[str, Any] | None,
+    def _resolve_schema_impl(cls, schema: dict[str, Any] | bool | None,
                              root_schema: dict[str, Any] | None,
                              depth: int,
                              cache: dict[int, _SchemaCoercion],
                              budget: _SchemaResolutionBudget) -> _SchemaCoercion:
         """Resolve one schema node under the shared memo and work budgets."""
-        if not isinstance(schema, dict):
+        if not isinstance(schema, (dict, bool)):
             return None, False, None
         cached = cache.get(id(schema))
         if cached is not None:
@@ -685,10 +694,13 @@ class XmlToolParser(ToolParser):
                          'raw strings', _MAX_SCHEMA_RESOLVE_DEPTH)
             # A budget-exhausted ``$ref`` chain degrades like an unresolvable
             # one; exhausted union nesting keeps the JSON-value fallback.
-            if isinstance(schema.get('$ref'), str):
+            if isinstance(schema, dict) and isinstance(schema.get('$ref'), str):
                 return 'string', False, None
             return None, False, None
-        result = cls._resolve_schema_node(schema, root_schema, depth, cache, budget)
+        if isinstance(schema, bool):
+            result = (None, True, None) if schema else (frozenset(), False, ())
+        else:
+            result = cls._resolve_schema_node(schema, root_schema, depth, cache, budget)
         cache[id(schema)] = result
         return result
 
@@ -791,10 +803,16 @@ class XmlToolParser(ToolParser):
             constraint = _compact_schema_types(value_types), nullable, values
             result = constraint if result is None else cls._intersect_coercion(result, constraint, budget)
 
-        union = schema.get('anyOf') if isinstance(schema.get('anyOf'), list) else schema.get('oneOf')
-        if isinstance(union, list):
+        # Sibling applicators all constrain the value. The flattened result is
+        # only a coercion hint; final matching retains branch-local constraints
+        # and the distinction between anyOf and oneOf.
+        for keyword in ('anyOf', 'oneOf'):
+            union = schema.get(keyword)
+            if not isinstance(union, list):
+                continue
+            budget.has_combinators = True
             resolved = [cls._resolve_schema_impl(branch, root_schema, depth + 1, cache, budget)
-                        for branch in union if isinstance(branch, dict)]
+                        for branch in union if isinstance(branch, (dict, bool))]
             if resolved:
                 # Combine allowed types rather than treating a mixed union as
                 # unconstrained. A truly unconstrained branch still permits any type.
@@ -811,7 +829,7 @@ class XmlToolParser(ToolParser):
 
         if isinstance(schema.get('allOf'), list):
             resolved = [cls._resolve_schema_impl(member, root_schema, depth + 1, cache, budget)
-                        for member in schema['allOf'] if isinstance(member, dict)]
+                        for member in schema['allOf'] if isinstance(member, (dict, bool))]
             if resolved:
                 # Every ``allOf`` member constrains the same value.
                 merged = resolved[0]
@@ -826,6 +844,96 @@ class XmlToolParser(ToolParser):
         if schema.get('items') is not None:
             return 'array', False, None
         return None
+
+    @classmethod
+    def _value_matches_type(cls, value: Any, schema_type: str | list[str] | frozenset[str]) -> bool:
+        """Check JSON types, including integral floats without conflating
+        booleans."""
+        types = (schema_type,) if isinstance(schema_type, str) else schema_type
+        value_type = cls._json_type_of(value)
+        return (value_type in types
+                or (value_type == 'integer' and 'number' in types)
+                or (value_type == 'number' and 'integer' in types and value.is_integer()))
+
+    @classmethod
+    def _match_schema_value(cls, value: Any, schema: Any, root_schema: dict[str, Any] | None,
+                            depth: int, cache: dict[int, bool | None],
+                            budget: _SchemaResolutionBudget) -> bool | None:
+        """Match one candidate under the remaining resolution budget.
+
+        Cache entries belong to this candidate only. ``None`` means inconclusive,
+        including a recursive reference currently being evaluated. Shared targets
+        are evaluated once, but repeated oneOf branches still count separately.
+        """
+        budget.visits -= 1
+        if budget.visits < 0 or depth >= _MAX_SCHEMA_RESOLVE_DEPTH:
+            raise _SchemaResolutionExhausted('branch matching work/depth budget')
+        key = id(schema)
+        if key in cache:
+            return cache[key]
+        cache[key] = None
+        if isinstance(schema, bool):
+            result = schema
+        elif isinstance(schema, dict):
+            result = cls._match_schema_value_impl(value, schema, root_schema, depth, cache, budget)
+        else:
+            result = None
+        cache[key] = result
+        return result
+
+    @classmethod
+    def _match_schema_value_impl(cls, value: Any, schema: dict[str, Any], root_schema: dict[str, Any] | None,
+                                 depth: int, cache: dict[int, bool | None],
+                                 budget: _SchemaResolutionBudget) -> bool | None:
+        """Check the original branch structure instead of its flattened hint.
+
+        This is a coercion check, not a general JSON Schema validator. Assertions
+        outside the supported type/literal/applicator vocabulary yield an unknown
+        match: e.g. object properties may distinguish two object-typed branches.
+        Rejecting oneOf overlap requires two definite matches, not two guesses.
+        """
+        schema_type = schema.get('type')
+        if isinstance(schema_type, (str, list)) and not cls._value_matches_type(value, schema_type):
+            return False
+        if 'const' in schema and budget.literal_key(value) != budget.literal_key(schema['const']):
+            return False
+        if isinstance(schema.get('enum'), list):
+            value_key = budget.literal_key(value)
+            if not any(value_key == budget.literal_key(literal) for literal in schema['enum']):
+                return False
+
+        uncertain = any(key not in _COERCION_SCHEMA_KEYS for key in schema)
+        if isinstance(schema.get('$ref'), str):
+            target = cls._lookup_local_ref(schema['$ref'], root_schema)
+            match = (cls._match_schema_value(value, target, root_schema, depth + 1, cache, budget)
+                     if target is not None else None)
+            if match is False:
+                return False
+            uncertain |= match is None
+
+        for keyword in ('allOf', 'anyOf', 'oneOf'):
+            branches = schema.get(keyword)
+            if not isinstance(branches, list):
+                continue
+            matched = 0
+            unknown = False
+            for branch in branches:
+                match = cls._match_schema_value(value, branch, root_schema, depth + 1, cache, budget)
+                if match is None:
+                    unknown = True
+                elif match:
+                    matched += 1
+                elif keyword == 'allOf':
+                    return False
+                if keyword == 'anyOf' and matched:
+                    unknown = False
+                    break
+                if keyword == 'oneOf' and matched > 1:
+                    return False
+            if keyword != 'allOf' and not matched and not unknown:
+                return False
+            uncertain |= unknown
+        return None if uncertain else True
 
     @staticmethod
     def _coerce_value(raw_value: str, schema_type: str | None) -> Any:
@@ -934,28 +1042,35 @@ class XmlToolParser(ToolParser):
         if raw_value.strip().lower() == 'null':
             # Models emit a bare ``null`` routinely for optional parameters;
             # keep it as the string unless the schema really accepts null.
-            return None if allows_null else raw_value
-        if schema_type is None or isinstance(schema_type, frozenset):
+            if not allows_null:
+                return raw_value
+            value = None
+        elif schema_type is None or isinstance(schema_type, frozenset):
             value = self._coerce_json_value(raw_value)
             if isinstance(schema_type, frozenset):
-                value_type = self._json_type_of(value)
-                matches_type = (value_type in schema_type
-                                or (value_type == 'integer' and 'number' in schema_type)
-                                or (value_type == 'number' and 'integer' in schema_type and value.is_integer()))
                 # Keep the existing best-effort decoding of quoted strings even
                 # when neither interpretation satisfies the schema.
-                if not matches_type and not isinstance(value, str):
+                if not self._value_matches_type(value, schema_type) and not isinstance(value, str):
                     return raw_value
         else:
             value = self._coerce_value(raw_value, schema_type)
-        if literals is None:
-            return value
         try:
+            if budget.has_combinators and value != raw_value:
+                match = self._match_schema_value(value, schema, root_schema, 0, {}, budget)
+                if match is False:
+                    # Preserve quoted-string decoding when both interpretations
+                    # are invalid, but prefer a possibly valid raw string. Each
+                    # candidate needs its own cache while sharing the work budget.
+                    if (not isinstance(value, str)
+                            or self._match_schema_value(raw_value, schema, root_schema, 0, {}, budget) is not False):
+                        return raw_value
+            if literals is None:
+                return value
             value_key = budget.literal_key(value)
             if any(value_key == budget.literal_key(literal) for literal in literals):
                 return value
         except _SchemaResolutionExhausted as exc:
-            logger.debug('tool argument literal matching stopped (%s); keeping the raw string', exc)
+            logger.debug('tool argument constraint matching stopped (%s); keeping the raw string', exc)
         # The coerced form is not one of the declared literals; the raw string
         # itself may still be (``enum: ['true', 1]`` with a bare ``true``).
         return raw_value
