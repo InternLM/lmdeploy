@@ -4,6 +4,32 @@
 
 支持的模型列表在[这里](../../supported_models/supported_models.md#pytorchengine-其他平台).
 
+## A3 原生后端安装
+
+当前 A3 PyTorch 后端由 LMDeploy 内部实现，无需 dlinfer。请使用未安装 dlinfer 的独立
+Python 环境，并先加载当前安装的 CANN 和 NNAL/ATB 环境脚本。以下源码安装示例沿用
+[`Dockerfile_ascend_a3`](../../../../docker/Dockerfile_ascend_a3) 的 PyTorch 版本：
+
+```bash
+python3.11 -m venv .venv-ascend
+source .venv-ascend/bin/activate
+python -m pip install torch==2.9.0 torch-npu==2.9.0 torchvision==0.24.0
+python -m pip install -r requirements/ascend_kernels.txt
+LMDEPLOY_TARGET_DEVICE=ascend python -m pip install .
+python tools/ascend/check_runtime.py --require-kernels
+```
+
+在仓库根目录执行这些命令。CANN、torch_npu、Triton Ascend 和外部
+`triton-ascend-kernels` 仍是运行依赖；请将后者固定在与环境兼容的 revision。
+推理入口继续使用 `device_type="ascend"` 或 `--device ascend`。图模式通过
+`torch.npu.NPUGraph` 执行，可使用 `eager_mode=True` 或 `--eager-mode` 关闭。
+
+下方预构建镜像说明对应依赖 dlinfer 的旧版本。本次原生迁移面向 A3，A2 和 Atlas 300I Duo
+尚未在此后端上验证。使用容器时，可通过 `docker/Dockerfile_ascend_a3` 构建当前源码，
+其 CANN/PyTorch 组合需要与宿主驱动及运行时匹配。
+
+## 旧版预构建镜像
+
 > \[!IMPORTANT\]
 > 我们已经在阿里云上提供了构建完成的鲲鹏CPU版本的镜像。
 > 请使用下面的命令来拉取镜像:

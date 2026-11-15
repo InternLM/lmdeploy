@@ -1001,7 +1001,7 @@ class QuantizationConfig:
             if quant_dtype is None:
                 # awq does not need a quant dtype, this is just a placeholder
                 quant_dtype = 'bfloat16'
-        elif quant_method == 'smooth_quant':
+        elif quant_method in ('smooth_quant', 'modelslim'):
             if quant_dtype is None:
                 quant_dtype = 'int8'
         elif quant_method == 'fp8':
@@ -1046,6 +1046,9 @@ class QuantizationConfig:
         """Get quant method for module."""
         if module_kind not in {'linear', 'moe', 'norm'}:
             raise ValueError(f'Unsupported quant module kind: {module_kind}')
+        if self.quant_method == 'modelslim':
+            from lmdeploy.pytorch.backends.ascend.modelslim import get_modelslim_quant_method
+            return get_modelslim_quant_method(self, prefix, module_kind)
         if self.quant_method == 'compressed-tensors':
             if module_kind == 'norm':
                 return None

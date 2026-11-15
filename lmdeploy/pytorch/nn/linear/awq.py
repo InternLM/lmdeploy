@@ -6,6 +6,7 @@ import torch
 
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.awq_modules import LinearW4A16BuildSpec
+from lmdeploy.pytorch.devices import is_ascend
 from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
@@ -161,7 +162,11 @@ class AwqLinear(LinearBase):
         quant_out_feats = out_features // elem_per_int
         qweight = torch.empty((in_features, quant_out_feats), dtype=torch.int32, device=device)
         scales = torch.empty((grouped_in_feats, out_features), dtype=dtype, device=device)
-        qzeros = torch.empty((grouped_in_feats, quant_out_feats), dtype=torch.int32, device=device)
+        if is_ascend():
+            assert w_bit == 4, 'Ascend AWQ supports 4-bit weights.'
+            qzeros = torch.empty((grouped_in_feats, out_features), dtype=dtype, device=device)
+        else:
+            qzeros = torch.empty((grouped_in_feats, quant_out_feats), dtype=torch.int32, device=device)
         if bias:
             bias = torch.empty((out_features, ), dtype=dtype, device=device)
         else:
@@ -224,7 +229,8 @@ class MergedAwqLinear(AwqLinear):
         self.scales.weight_spliter = self.weight_spliter_s
         self.scales._weight_type = 'scales'
         self.qzeros.weight_loader = self.weight_loader
-        self.qzeros.weight_spliter = self.weight_spliter_wz
+        self.qzeros.weight_spliter = (self.weight_spliter_s if self.qzeros.is_floating_point()
+                                     else self.weight_spliter_wz)
         self.qzeros._weight_type = 'qzeros'
         if self.bias is not None:
             self.bias.weight_loader = self.weight_loader
@@ -256,7 +262,7 @@ class MergedAwqLinear(AwqLinear):
             weight = chunk_aligned(loaded_weight, world_size, 0, align)[rank]
             param_w.copy_(weight)
 
-        if param._weight_type in ['scales', 'bias']:
+        if param._weight_type in ['scales', 'bias'] or (param._weight_type == 'qzeros' and param.is_floating_point()):
             # scales
             align = max(self.elem_per_int, self.group_size)
             param_w = param.data.split(self.all_out_features, -1)[shard_idx]
@@ -342,7 +348,7 @@ class QKVAwqLinear(MergedAwqLinear, QKVMixin):
             param_w.copy_(weight)
             return
 
-        if param._weight_type in ['scales', 'bias']:
+        if param._weight_type in ['scales', 'bias'] or (param._weight_type == 'qzeros' and param.is_floating_point()):
             # scales
             align = max(self.elem_per_int, self.group_size)
             param_w = param.data.split(self.all_out_features, -1)[shard_idx]

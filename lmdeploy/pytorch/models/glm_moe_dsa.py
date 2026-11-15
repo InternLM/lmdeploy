@@ -6,6 +6,7 @@ import torch
 from torch import nn
 
 from lmdeploy.pytorch import envs as _envs
+from lmdeploy.pytorch.devices import is_ascend
 from lmdeploy.pytorch.model_inputs import StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb
 from lmdeploy.pytorch.nn.linear import build_colwise_linear
@@ -67,7 +68,8 @@ class GlmMoeDsaIndexer(nn.Module):
                                          is_tp=False,
                                          quant_config=quant_config,
                                          prefix=add_prefix('wq_b', prefix))
-        self.use_fusion = not _envs.disable_dsa_indexer_fusion
+        self.is_ascend = is_ascend()
+        self.use_fusion = not self.is_ascend and not _envs.disable_dsa_indexer_fusion
         if self.use_fusion:
             self.wk_weights_proj = build_colwise_linear(self.dim,
                                                         self.head_dim + self.n_heads,
@@ -105,7 +107,7 @@ class GlmMoeDsaIndexer(nn.Module):
     def _apply_rotary_pos_emb(self, q_pe: torch.Tensor, k_pe: torch.Tensor,
                               freqs_cis: tuple[torch.Tensor, torch.Tensor]):
         cos, sin = freqs_cis
-        if self.rope_interleave:
+        if self.rope_interleave and not self.is_ascend:
             half_size = cos.size(-1) // 2
             cos = cos[..., :half_size]
             sin = sin[..., :half_size]
@@ -144,8 +146,11 @@ class GlmMoeDsaIndexer(nn.Module):
         k = self.k_norm(self.wk(x))
         k_pe, k_nope = torch.split(k, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1)
         q_pe, k_pe = self._apply_rotary_pos_emb(q_pe, k_pe, freqs_cis)
-        q = rotate_activation(torch.cat([q_pe, q_nope], dim=-1))
-        k = rotate_activation(torch.cat([k_pe[0], k_nope[0, :, None]], dim=-1))
+        q = torch.cat([q_pe, q_nope], dim=-1)
+        k = torch.cat([k_pe[0], k_nope[0, :, None]], dim=-1)
+        if not self.is_ascend:
+            q = rotate_activation(q)
+            k = rotate_activation(k)
         weights = self.weights_proj(x) * self.n_heads**-0.5
         return self.indexer_topk(q[0],
                                  k[:, 0],
@@ -260,7 +265,7 @@ class GlmMoeDsaAttention(DeepseekV32Attention):
             key_states,
             value_states,
             past_key_value[0],
-            past_key_value[0][..., :nope_size],
+            past_key_value[1] if self.is_ascend else past_key_value[0][..., :nope_size],
             attn_metadata,
             k_scales_zeros=None if len(past_key_value) == 2 else past_key_value[2],
             v_scales_zeros=None if len(past_key_value) == 2 else past_key_value[3],
@@ -273,6 +278,12 @@ class GlmMoeDsaAttention(DeepseekV32Attention):
 
 class GlmMoeDsaDecoderLayer(DeepseekV32DecoderLayer):
     attention_cls = GlmMoeDsaAttention
+
+    def __init__(self, config, layer_idx, dtype=None, device=None, prefix=''):
+        super().__init__(config, layer_idx, dtype=dtype, device=device, prefix=prefix)
+        if is_ascend() and dtype is not None:
+            self.input_layernorm.to(dtype=dtype)
+            self.post_attention_layernorm.to(dtype=dtype)
 
     def forward(
         self,
@@ -311,6 +322,8 @@ class GlmMoeDsaModel(DeepseekV32Model):
     def __init__(self, config: Any, dtype: torch.dtype = None, device: torch.device = None):
         super().__init__(config, dtype=dtype, device=device)
         self.topk_indices_buffer = DSATopKIndicesBuffer(config.index_topk)
+        if is_ascend() and dtype is not None:
+            self.norm.to(dtype=dtype)
 
     def forward(
         self,
@@ -361,6 +374,11 @@ class GlmMoeDsaModel(DeepseekV32Model):
 
 class GlmMoeDsaForCausalLM(DeepseekV32ForCausalLM, PiecewiseCudaGraphMixin):
     model_cls = GlmMoeDsaModel
+
+    def load_weights(self, weights):
+        if is_ascend():
+            weights = ((name, weight) for name, weight in weights if name != 'rot.weight')
+        return super().load_weights(weights)
 
     def __init__(self,
                  config: Any,

@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
 from collections.abc import Iterable
 from functools import lru_cache
 from typing import Any
@@ -9,6 +8,7 @@ import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.devices import is_ascend
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
@@ -1129,8 +1129,12 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, PiecewiseCu
         attn_metadata = context.attn_metadata
 
         # make past_key_values
-        state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
-        state_caches = list(zip(state_caches[0], state_caches[1]))
+        if is_ascend():
+            n = len(context.state_caches) // 2
+            state_caches = list(zip(context.state_caches[:n], context.state_caches[n:]))
+        else:
+            state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
+            state_caches = list(zip(state_caches[0], state_caches[1]))
         past_key_values = list(past_key_values)
         new_past_key_values = []
         for layer_type in self.config.text_config.layer_types:

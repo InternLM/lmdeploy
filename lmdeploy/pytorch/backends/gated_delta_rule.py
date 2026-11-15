@@ -286,3 +286,10 @@ class GatedDeltaRuleImpl(ABC):
 class GatedDeltaRuleBuildSpec(BuildSpec[GatedDeltaRuleImpl]):
     """Request construction of a gated-delta-rule operator."""
     indexed_state: bool = False
+
+
+@dataclass(frozen=True)
+class RMSNormGatedBuildSpec(BuildSpec[torch.nn.Module]):
+    hidden_size: int
+    eps: float
+    kwargs: dict

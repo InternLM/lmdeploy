@@ -16,6 +16,10 @@ class DefaultOpsBackend(OpsBackend):
     @classmethod
     def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed operator implementation."""
+        from ..gated_delta_rule import RMSNormGatedBuildSpec
+        if isinstance(spec, RMSNormGatedBuildSpec):
+            from .gated_norm import build_rmsnorm_gated
+            return cast(ImplT, build_rmsnorm_gated(spec.hidden_size, spec.eps, **spec.kwargs))
         from ..activation import GeluAndMulBuildSpec, SiluAndMulBuildSpec
         from ..apply_rotary_emb import ApplyRotaryEmbBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec

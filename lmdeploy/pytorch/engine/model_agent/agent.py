@@ -716,11 +716,15 @@ class BaseModelAgent:
                                     extra_inputs: ExtraInputs, sampling_inputs: SamplingInputs):
         """Sampling logits."""
         if self.spec_agent.is_enabled():
+            if self.cache_config.device_type == 'ascend':
+                extra_inputs.target_logits = extra_inputs.target_logits.to(torch.float32)
             extra_inputs = await self.spec_agent.async_sampling_logits(inputs, extra_inputs, sampling_inputs)
             return extra_inputs.next_token_ids, extra_inputs.logprobs, extra_inputs.output_token_ids, extra_inputs
         # record function does not support async function
         # so we can not decorate it on async_sampling_logits
         with record_function('sampling_logits'):
+            if self.cache_config.device_type == 'ascend':
+                logits = logits.to(torch.float32)
             logits_processor = FusedLogitsProcessor(
                 sampling_inputs,
                 logprobs_mode=self.misc_config.logprobs_mode,

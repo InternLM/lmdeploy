@@ -6,6 +6,36 @@ Please read the original [Get Started](../get_started.md) guide before reading t
 
 Here is the [supported model list](../../supported_models/supported_models.md#pytorchengine-on-other-platforms).
 
+## Native A3 installation
+
+The current A3 PyTorch backend is implemented inside LMDeploy and does not
+require dlinfer. Use a separate Python environment without dlinfer installed.
+Load the CANN and NNAL/ATB environment scripts for your installation first.
+The following source-install recipe uses the PyTorch versions in
+[`Dockerfile_ascend_a3`](../../../../docker/Dockerfile_ascend_a3):
+
+```bash
+python3.11 -m venv .venv-ascend
+source .venv-ascend/bin/activate
+python -m pip install torch==2.9.0 torch-npu==2.9.0 torchvision==0.24.0
+python -m pip install -r requirements/ascend_kernels.txt
+LMDEPLOY_TARGET_DEVICE=ascend python -m pip install .
+python tools/ascend/check_runtime.py --require-kernels
+```
+
+Run these commands from the repository root. CANN, torch_npu, Triton Ascend,
+and the external `triton-ascend-kernels` library remain required; pin the latter
+to a revision compatible with your environment. Keep `device_type="ascend"`
+or `--device ascend` in inference commands. Graph mode uses `torch.npu.NPUGraph`;
+use `eager_mode=True` or `--eager-mode` to disable it.
+
+The prebuilt images below describe older dlinfer-based releases. The native
+migration targets A3; A2 and Atlas 300I Duo have not been validated with this
+backend. Build the current A3 checkout with `docker/Dockerfile_ascend_a3` when
+using containers. Its CANN/PyTorch recipe must match the host driver and runtime.
+
+## Legacy prebuilt images
+
 > \[!IMPORTANT\]
 > We have uploaded a docker image with KUNPENG CPU to aliyun.
 > Please try to pull the image by following command:

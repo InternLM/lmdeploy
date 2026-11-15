@@ -1,6 +1,5 @@
 # DOCKER_BUILDKIT=1 docker build --build-arg ASCEND_DEVICE=ascend_a3 \
-#     --build-arg DLINFER_TAG=main --build-arg LMDEPLOY_TAG=main --network=host \
-#     -t lmdeploy_dlinfer:a3 -f  Dockerfile_ascend_a3 .
+#     --network=host -t lmdeploy:a3 -f docker/Dockerfile_ascend_a3 .
 ARG ASCEND_DEVICE_TYPE=ascend_a3
 ARG ASCEND_HUB=swr.cn-south-1.myhuaweicloud.com/ascendhub
 
@@ -17,11 +16,11 @@ ENV HCCL_CONNECT_TIMEOUT=7200 \
     HCCL_OP_EXPANSION_MODE="AIV" \
     LD_PRELOAD=/usr/lib64/libjemalloc.so.2:$LD_PRELOAD
 
-ARG DLINFER_TAG=main
-ARG LMDEPLOY_TAG=main
+COPY . /opt/lmdeploy
+WORKDIR /opt/lmdeploy
 RUN --mount=type=cache,target=/root/.cache \
     pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
     pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn && \
     pip install --no-cache-dir torch==2.9.0 torch-npu==2.9.0 torchvision==0.24.0 && \
-    TORCH_DEVICE_BACKEND_AUTOLOAD=0 DEVICE=ascend pip install git+https://github.com/DeepLink-org/dlinfer.git@${DLINFER_TAG} && \
-    LMDEPLOY_TARGET_DEVICE=ascend pip install git+https://github.com/InternLM/lmdeploy.git@${LMDEPLOY_TAG}
+    pip install -r requirements/ascend_kernels.txt && \
+    LMDEPLOY_TARGET_DEVICE=ascend pip install .

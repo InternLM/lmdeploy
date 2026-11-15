@@ -1,10 +1,21 @@
 -r common.txt
+absl-py
 
 accelerate>=0.29.3
 aiohttp
-dlinfer-ascend>=0.2.5
+attrs
+decorator
+
+# CANN/torch_npu Python prerequisites previously supplied by dlinfer-ascend.
+importlib-metadata
+ml-dtypes
+packaging
 peft<=0.11.1
 prometheus_client
-torch>=2.3.1,<2.10.0
-torch-npu>=2.3.1,<2.10.0
-torchvision>=0.18.1,<0.25.0
+psutil
+pyyaml
+scipy
+torch>=2.8.0,<2.10.0
+torch-npu>=2.8.0.post1,<2.10.0
+torchvision>=0.23.0,<0.25.0
+tornado
