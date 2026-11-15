@@ -1,14 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2024, Tri Dao.
 #
-# RMSNorm with gated SiLU activation (Triton kernel for Ascend NPU).
+# RMSNorm with gated SiLU or sigmoid activation (Triton kernel for Ascend NPU).
 # Adapted from https://github.com/vllm-project/vllm-ascend/blob/main/vllm_ascend/ops/triton/fla/layernorm_guard.py
 # Original source: https://github.com/fla-org/flash-linear-attention/blob/main/fla/modules/layernorm_gated.py
 # mypy: ignore-errors
 
 
 import torch
-import torch.nn as nn
 import triton
 import triton.language as tl
 
@@ -17,6 +16,7 @@ MAX_CORES = 65535
 
 @triton.heuristics(
     {
+        'HAS_WEIGHT': lambda args: args['W'] is not None,
         'HAS_BIAS': lambda args: args['B'] is not None,
         'HAS_Z': lambda args: args['Z'] is not None,
     }
@@ -36,9 +36,11 @@ def _rms_norm_fwd_kernel(
     N,
     eps,
     BLOCK_N: tl.constexpr,
+    HAS_WEIGHT: tl.constexpr,
     HAS_BIAS: tl.constexpr,
     HAS_Z: tl.constexpr,
     NORM_BEFORE_GATE: tl.constexpr,
+    ACTIVATION: tl.constexpr,
     N_CORES: tl.constexpr,
 ):
     row = tl.program_id(0)
@@ -56,7 +58,8 @@ def _rms_norm_fwd_kernel(
         if HAS_Z:
             Z_base = Z + (i * BLOCK_ROWS * stride_z_row) + row * stride_z_row + group * N
         Rstd_base = Rstd + (i * BLOCK_ROWS) + group * M
-        W_base = W + group * N
+        if HAS_WEIGHT:
+            W_base = W + group * N
         if HAS_BIAS:
             B_base = B + group * N
 
@@ -64,7 +67,10 @@ def _rms_norm_fwd_kernel(
         x = tl.load(X_base + cols, mask=cols < N, other=0.0).to(tl.float32)
         if HAS_Z and not NORM_BEFORE_GATE:
             z = tl.load(Z_base + cols, mask=cols < N).to(tl.float32)
-            x *= z * tl.sigmoid(z)
+            if ACTIVATION == 'sigmoid':
+                x *= tl.sigmoid(z)
+            else:
+                x *= z * tl.sigmoid(z)
 
         xbar = tl.where(cols < N, x, 0.0)
         var = tl.sum(xbar * xbar, axis=0) / N
@@ -72,17 +78,26 @@ def _rms_norm_fwd_kernel(
         tl.store(Rstd_base + row, rstd)
 
         mask = cols < N
-        w = tl.load(W_base + cols, mask=mask).to(tl.float32)
+        if HAS_WEIGHT:
+            w = tl.load(W_base + cols, mask=mask).to(tl.float32)
+        else:
+            w = 1.0
         if HAS_BIAS:
             b = tl.load(B_base + cols, mask=mask).to(tl.float32)
         y = x * rstd * w + b if HAS_BIAS else x * rstd * w
         if HAS_Z and NORM_BEFORE_GATE:
             z = tl.load(Z_base + cols, mask=mask).to(tl.float32)
-            y *= z * tl.sigmoid(z)
+            if ACTIVATION == 'sigmoid':
+                y *= tl.sigmoid(z)
+            else:
+                y *= z * tl.sigmoid(z)
         tl.store(Y_base + cols, y, mask=mask)
 
 
-def rmsnorm_fn(x, weight, bias, z=None, eps=1e-6, group_size=None, norm_before_gate=True):
+def rmsnorm_fn(x, weight, bias, z=None, eps=1e-6, group_size=None, norm_before_gate=True, activation='silu'):
+    """Run the fused Ascend kernel with optional grouping and gating."""
+    if activation not in ('silu', 'swish', 'sigmoid'):
+        raise ValueError(f'Unsupported gated RMSNorm activation: {activation}')
     x_shape_og = x.shape
     x = x.reshape(-1, x.shape[-1])
     if x.stride(-1) != 1:
@@ -92,7 +107,8 @@ def rmsnorm_fn(x, weight, bias, z=None, eps=1e-6, group_size=None, norm_before_g
         z = z.reshape(-1, z.shape[-1])
         if z.stride(-1) != 1:
             z = z.contiguous()
-    weight = weight.contiguous()
+    if weight is not None:
+        weight = weight.contiguous()
     if bias is not None:
         bias = bias.contiguous()
 
@@ -128,40 +144,8 @@ def rmsnorm_fn(x, weight, bias, z=None, eps=1e-6, group_size=None, norm_before_g
             eps,
             BLOCK_N=BLOCK_N,
             NORM_BEFORE_GATE=norm_before_gate,
+            ACTIVATION=activation,
             N_CORES=MAX_CORES,
             num_warps=num_warps,
         )
     return out.reshape(x_shape_og)
-
-
-class RMSNormGated(nn.Module):
-    def __init__(
-        self,
-        hidden_size,
-        eps: float = 1e-5,
-        group_size: int | None = None,
-        norm_before_gate: bool = False,
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
-    ):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.empty(hidden_size, device=device, dtype=torch.bfloat16))
-        self.register_parameter('bias', None)
-        self.group_size = group_size
-        self.norm_before_gate = norm_before_gate
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        torch.nn.init.ones_(self.weight)
-
-    def forward(self, x, z=None):
-        return rmsnorm_fn(
-            x,
-            self.weight,
-            self.bias,
-            z=z,
-            eps=self.eps,
-            group_size=self.group_size,
-            norm_before_gate=self.norm_before_gate,
-        )

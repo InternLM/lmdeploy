@@ -25,7 +25,6 @@ from lmdeploy.pytorch.nn.gated_delta import (
     GatedDelta,
     GatedDeltaMeta,
     GatedDeltaMetaBuilder,
-    build_rmsnorm_gated,
 )
 from lmdeploy.pytorch.nn.linear import (
     build_colwise_linear,
@@ -34,6 +33,7 @@ from lmdeploy.pytorch.nn.linear import (
     build_qkv_proj,
     build_rowwise_linear,
 )
+from lmdeploy.pytorch.nn.norm import RMSNormGated
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 from lmdeploy.vl.constants import Modality
 
@@ -455,11 +455,11 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.make_params(self.num_v_heads, device=device)
         self.A_log_exp = None
 
-        self.norm = build_rmsnorm_gated(self.head_v_dim,
-                                        eps=self.layer_norm_epsilon,
-                                        activation=self.activation,
-                                        dtype=dtype,
-                                        device=device)
+        self.norm = RMSNormGated(self.head_v_dim,
+                                 eps=self.layer_norm_epsilon,
+                                 activation=self.activation,
+                                 dtype=dtype,
+                                 device=device)
         self.out_proj = build_o_proj(self.value_dim,
                                      self.hidden_size,
                                      bias=False,

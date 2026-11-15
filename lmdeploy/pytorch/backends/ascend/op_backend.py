@@ -171,13 +171,6 @@ class AscendOpsBackend(DefaultOpsBackend):
 
     @classmethod
     def build_op(cls, spec, *, enable_deterministic: bool = False):
-        # Keep Ascend GDN operators behind the existing BuildSpec dispatch.
-        from ..gated_delta_rule import RMSNormGatedBuildSpec
-
-        if isinstance(spec, RMSNormGatedBuildSpec):
-            from lmdeploy.pytorch.kernels.ascend.triton_ops.rms_norm_gated import RMSNormGated
-
-            return RMSNormGated(spec.hidden_size, eps=spec.eps, norm_before_gate=True, device=spec.kwargs['device'])
         from ..causal_conv1d import CausalConv1dBuildSpec
         from ..gated_delta_rule import (
             GatedDeltaMetaBuildSpec,
@@ -212,7 +205,7 @@ class AscendOpsBackend(DefaultOpsBackend):
             FusedMoEW8A8BuildSpec,
             SoftmaxTopKBuildSpec,
         )
-        from ..norm import RMSNormBuildSpec
+        from ..norm import RMSNormBuildSpec, RMSNormGatedBuildSpec
         from ..nsa import NSAIndexFP8BuildSpec
         from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
         from ..rotary_embedding import RotaryEmbeddingBuildSpec
@@ -231,6 +224,10 @@ class AscendOpsBackend(DefaultOpsBackend):
             from .norm import AscendRMSNormImpl
 
             return cast(ImplT, AscendRMSNormImpl(spec.hidden_size, spec.eps))
+        if isinstance(spec, RMSNormGatedBuildSpec):
+            from .norm import AscendRMSNormGatedImpl
+
+            return cast(ImplT, AscendRMSNormGatedImpl(spec.hidden_size, spec.eps, spec.activation))
         if isinstance(spec, RMSNormW8A8BuildSpec):
             from .qmodules import AscendRMSNormW8A8Impl
 

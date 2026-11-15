@@ -17,14 +17,6 @@ from lmdeploy.pytorch.backends.gated_delta_rule import (
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
-from lmdeploy.utils import get_logger
-
-logger = get_logger('lmdeploy')
-
-
-def build_rmsnorm_gated(hidden_size: int, eps=1e-6, **kwargs):
-    from lmdeploy.pytorch.backends.gated_delta_rule import RMSNormGatedBuildSpec
-    return get_backend().build_op(RMSNormGatedBuildSpec(hidden_size, eps, kwargs))
 
 
 class GatedDeltaMetaBuilder:

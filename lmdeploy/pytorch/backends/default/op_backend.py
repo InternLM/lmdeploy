@@ -16,10 +16,6 @@ class DefaultOpsBackend(OpsBackend):
     @classmethod
     def build_op(cls, spec: BuildSpec[ImplT], *, enable_deterministic: bool = False) -> ImplT:
         """Build a typed operator implementation."""
-        from ..gated_delta_rule import RMSNormGatedBuildSpec
-        if isinstance(spec, RMSNormGatedBuildSpec):
-            from .gated_norm import build_rmsnorm_gated
-            return cast(ImplT, build_rmsnorm_gated(spec.hidden_size, spec.eps, **spec.kwargs))
         from ..activation import GeluAndMulBuildSpec, SiluAndMulBuildSpec
         from ..apply_rotary_emb import ApplyRotaryEmbBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
@@ -28,7 +24,7 @@ class DefaultOpsBackend(OpsBackend):
         from ..moe import SoftmaxTopKBuildSpec
         from ..moe_router import RouterGemmBuildSpec, RouterNoauxTCBuildSpec
         from ..multinomial_sampling import MultinomialSamplingBuildSpec
-        from ..norm import LayerNormBuildSpec, RMSNormBuildSpec
+        from ..norm import LayerNormBuildSpec, RMSNormBuildSpec, RMSNormGatedBuildSpec
         from ..rejection_sampling import RejectionSamplingBuildSpec
         from ..rotary_embedding import RotaryEmbeddingBuildSpec
         if isinstance(spec, SiluAndMulBuildSpec):
@@ -46,6 +42,9 @@ class DefaultOpsBackend(OpsBackend):
         if isinstance(spec, RMSNormBuildSpec):
             from .norm import DefaultRMSNormImpl
             return cast(ImplT, DefaultRMSNormImpl(spec.hidden_size, spec.eps))
+        if isinstance(spec, RMSNormGatedBuildSpec):
+            from .norm import DefaultRMSNormGatedImpl
+            return cast(ImplT, DefaultRMSNormGatedImpl(spec.hidden_size, spec.eps, spec.activation))
         if isinstance(spec, LayerNormBuildSpec):
             from .norm import DefaultLayerNormImpl
             return cast(ImplT, DefaultLayerNormImpl(spec.normalized_shape, spec.eps))

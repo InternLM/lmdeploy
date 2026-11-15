@@ -8,7 +8,7 @@ This directory contains custom Triton kernels optimized for running Qwen3.5 (lin
 triton_ops/
 ├── __init__.py                    # Operators are imported explicitly from their submodules
 ├── causal_conv1d.py               # Causal 1D convolution (prefill + decode)
-├── rms_norm_gated.py              # Gated RMSNorm with SiLU activation
+├── rms_norm_gated.py              # Gated RMSNorm with SiLU or sigmoid activation
 ├── triton_utils.py                # NPU device property helpers
 └── fla/
     ├── __init__.py                # FLA submodule entry
@@ -24,7 +24,7 @@ triton_ops/
 | `causal_conv1d_update_npu`               | `causal_conv1d.py`      | Decode  | Tiled stateful causal conv1d Triton kernel      |
 | `chunk_gated_delta_rule`                 | `fla/chunk.py`          | Prefill | Chunked gated delta rule attention              |
 | `fused_sigmoid_gating_delta_rule_update` | `fla/sigmoid_gating.py` | Decode  | Fused sigmoid-gated delta rule recurrent update |
-| `RMSNormGated`                           | `rms_norm_gated.py`     | Both    | Gated RMSNorm layer                             |
+| `rmsnorm_fn`                             | `rms_norm_gated.py`     | Both    | Gated RMSNorm kernel                            |
 
 ______________________________________________________________________
 
@@ -115,7 +115,7 @@ Implements the decode-phase recurrent update for the gated delta rule using a fu
 
 ______________________________________________________________________
 
-### 4. `RMSNormGated`
+### 4. `rmsnorm_fn`
 
 **File**: `rms_norm_gated.py`
 
@@ -125,7 +125,10 @@ ______________________________________________________________________
 - Original: https://github.com/fla-org/flash-linear-attention/blob/main/fla/modules/layernorm_gated.py
 
 **Purpose**:
-Implements RMSNorm (Root Mean Square Normalization) with optional gated SiLU activation. The gating allows the norm output to be modulated by a "gate" tensor.
+Implements RMSNorm (Root Mean Square Normalization) with optional SiLU (`silu`/`swish`) or sigmoid gating.
+The public `lmdeploy.pytorch.nn.RMSNormGated` layer owns the weight and selects an implementation through
+`RMSNormGatedBuildSpec`; the Ascend backend calls this kernel. Qwen3-Next/Qwen3.5 use SiLU gating,
+while GLM5-Next uses sigmoid gating.
 
 **Why Required**:
 
@@ -136,7 +139,9 @@ Implements RMSNorm (Root Mean Square Normalization) with optional gated SiLU act
 **Formula**:
 
 - Without gate: `y = (x / sqrt(mean(x^2) + eps)) * weight`
-- With gate: `y = norm(x) * silu(z)` (if `norm_before_gate=False`)
+- With gate after normalization: `y = norm(x) * activation(z)` (`norm_before_gate=True`, used by the public layer)
+- With gate before normalization: `y = norm(x * activation(z))` (`norm_before_gate=False`)
+- The kernel also preserves optional bias, grouped normalization, and the ungated path.
 
 ______________________________________________________________________
 
@@ -172,7 +177,7 @@ Input tokens
     ↓
 [Linear Attention] ← chunk_gated_delta_rule (triton_ascend_kernels)
     ↓
-[Gated RMSNorm] ← RMSNormGated
+[Gated RMSNorm] ← RMSNormGated → rmsnorm_fn
     ↓
 Output logits
 ```
@@ -186,7 +191,7 @@ New token(s)
     ↓
 [Sigmoid-Gated Delta Rule Update] ← fused_sigmoid_gating_delta_rule_update
     ↓
-[Gated RMSNorm] ← RMSNormGated
+[Gated RMSNorm] ← RMSNormGated → rmsnorm_fn
     ↓
 Output logits
 ```
