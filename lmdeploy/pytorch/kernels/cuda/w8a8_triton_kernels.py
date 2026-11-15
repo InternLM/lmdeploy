@@ -3,10 +3,11 @@ import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
+from triton.language.extra import libdevice
 
 from ..default.w8a8_kernels import per_channel_quant
 
-tl_round = tl.extra.cuda.libdevice.round
+tl_round = libdevice.round
 
 
 @triton.autotune(
