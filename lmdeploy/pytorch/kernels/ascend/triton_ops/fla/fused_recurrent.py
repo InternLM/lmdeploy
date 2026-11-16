@@ -231,7 +231,12 @@ def fused_recurrent_gated_delta_rule_fwd(
     BK, BV = triton.next_power_of_2(K), min(triton.next_power_of_2(V), 32)
     NK, NV = triton.cdiv(K, BK), triton.cdiv(V, BV)
     assert NK == 1, 'NK > 1 is not supported yet'
-    num_stages = 3
+    # Triton Ascend maps num_stages=1 to disabled automatic multi-buffering.
+    # AscendNPU-IR 042c923d rotates sync IDs and yielded state buffers at
+    # different loop levels, corrupting saved states used by MTP rollback.
+    # Upstream 05f2adcf is included in 2.0.0. Keep circular state single-buffered
+    # for older compilers too; corrected multi-buffering is not uniformly faster.
+    num_stages = 1 if cache_seqlens_rb is not None else 3
     num_warps = 1
 
     o = q.new_empty(NK, *v.shape)

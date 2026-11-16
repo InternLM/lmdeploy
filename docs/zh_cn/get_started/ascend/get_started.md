@@ -28,6 +28,55 @@ python tools/ascend/check_runtime.py --require-kernels
 尚未在此后端上验证。使用容器时，可通过 `docker/Dockerfile_ascend_a3` 构建当前源码，
 其 CANN/PyTorch 组合需要与宿主驱动及运行时匹配。
 
+### GDN/MTP 状态正确性与编译器升级
+
+circular GDN 状态路径默认使用 `num_stages=1`，其他 recurrent 路径保留
+`num_stages=3`。AscendNPU-IR 1.2.0 的 `042c923d` 构建在自动多缓冲时可能写错
+FP32 中间状态，而当前输出仍然正确。MTP 后续读取这些状态后，贪婪采样的 target
+logits 和生成 token 会在重复运行间出现差异。单缓冲保护受影响编译器上的这条路径，
+新编译器也沿用这一默认值；正确的多缓冲并非在所有已测形状下都更快。
+
+上游修复 [`05f2adcf`](https://github.com/Ascend/AscendNPU-IR/commit/05f2adcf3db366377f7c5e6f5bb9bd3c61c36b3e)
+已进入 AscendNPU-IR 2.0.0（`efb71415`），由官方 Triton-Ascend 3.2.2.post2 wheel
+捆绑交付。已有兼容 A3 原生运行环境可以选择以下升级配置：
+
+```bash
+python -m pip install --no-deps -r requirements/ascend_triton_npuir2.txt \
+    --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi
+```
+
+请在拥有独立包文件的隔离环境执行。此配置只更新 Triton 及其编译器组件，保留已有
+运行依赖；不要与 `requirements/ascend_kernels.txt` 中的旧 Triton 版本约束在同一次
+安装中混用。实测升级环境为 Python 3.12.13、Torch 2.10.0+cpu、torch_npu
+2.10.0.post4、CANN 9.1.0。这是定向编译器更新的验证，不等于全新依赖解析安装，
+也不等于现有 CANN 8.5 Docker 配方与新编译器的组合已经通过。
+[官方推荐组合](https://ascendnpu-ir.gitcode.com/en/introduction/quick_start/version_compatibility.html)
+为 NPUIR 2.0.0 与 CANN 9.2.0；该完整运行时/驱动升级尚未实测。
+
+Triton 优先选择自己捆绑的编译器。升级后应检查实际执行路径和构建号，仅查看
+`triton.__version__` 不足以确认：
+
+```python
+import subprocess
+from triton.backends.ascend.utils import _get_npucompiler_path
+
+compiler, compiler_env = _get_npucompiler_path()
+print(compiler)
+subprocess.run([compiler, '--version'], env=compiler_env, check=True)
+```
+
+在 A3 上执行状态回归：
+
+```bash
+python -m pytest -q --run-ascend-hardware \
+    tests/pytorch/ascend/hardware/test_gdn_state_writeback.py
+```
+
+测试覆盖 Q=1/2/4 的 eager/graph 模式，每次重放恢复初始状态，并将所有保存的状态与
+CPU 递推参考比较。[完整调查报告](https://github.com/silencelamb/lmdeploy/blob/docs/ascend-a3-validation-20261114/docs/zh_cn/advance/ascend_a3_validation/mtp_ray_investigation_20261116.md)
+记录了编译器 IR、固定版本、MTP 对照、随形状变化的性能和未覆盖范围。算子及 target
+主干计时不能替代端到端服务吞吐验收。
+
 ## 旧版预构建镜像
 
 > \[!IMPORTANT\]

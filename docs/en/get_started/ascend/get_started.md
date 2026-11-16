@@ -34,6 +34,62 @@ migration targets A3; A2 and Atlas 300I Duo have not been validated with this
 backend. Build the current A3 checkout with `docker/Dockerfile_ascend_a3` when
 using containers. Its CANN/PyTorch recipe must match the host driver and runtime.
 
+### GDN/MTP state correctness and compiler updates
+
+The circular GDN state path uses `num_stages=1`; other recurrent paths retain
+`num_stages=3`. AscendNPU-IR 1.2.0 build `042c923d` can corrupt intermediate
+FP32 state writes with automatic multibuffering, even when the current output
+is correct. MTP later reads those saved states, causing greedy target logits
+and generated tokens to differ across runs. Single buffering protects this
+path on the affected compiler and remains the default on newer compilers:
+correct multibuffering was not faster for every tested shape.
+
+Upstream fix [`05f2adcf`](https://github.com/Ascend/AscendNPU-IR/commit/05f2adcf3db366377f7c5e6f5bb9bd3c61c36b3e)
+is included in AscendNPU-IR 2.0.0 (`efb71415`), shipped in the official
+Triton-Ascend 3.2.2.post2 wheel. For an existing compatible native A3 runtime,
+the optional update profile is:
+
+```bash
+python -m pip install --no-deps -r requirements/ascend_triton_npuir2.txt \
+    --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi
+```
+
+Apply this in an independent environment with its own package files. It updates
+Triton and its compiler bundle while retaining the existing runtime dependencies;
+it is not a second requirements file to combine with the older Triton pin in
+`requirements/ascend_kernels.txt` in one installation. The validated update used
+Python 3.12.13, Torch 2.10.0+cpu, torch_npu 2.10.0.post4 and CANN 9.1.0. This is a
+targeted compiler-update result, not certification of a fresh dependency solve
+or the existing CANN 8.5 Docker recipe with the new compiler. The
+[official recommended pairing](https://ascendnpu-ir.gitcode.com/en/introduction/quick_start/version_compatibility.html)
+is NPUIR 2.0.0 with CANN 9.2.0; that complete runtime/driver update was not tested.
+
+Triton prefers its bundled compiler over PATH. Check the executable actually
+selected after the update, rather than only `triton.__version__`:
+
+```python
+import subprocess
+from triton.backends.ascend.utils import _get_npucompiler_path
+
+compiler, compiler_env = _get_npucompiler_path()
+print(compiler)
+subprocess.run([compiler, '--version'], env=compiler_env, check=True)
+```
+
+Run the state regression on A3 with:
+
+```bash
+python -m pytest -q --run-ascend-hardware \
+    tests/pytorch/ascend/hardware/test_gdn_state_writeback.py
+```
+
+The test checks every saved state against a CPU recurrence for Q=1/2/4 in eager
+and graph modes, restoring the initial state on every replay. The
+[investigation report](https://github.com/silencelamb/lmdeploy/blob/docs/ascend-a3-validation-20261114/docs/zh_cn/advance/ascend_a3_validation/mtp_ray_investigation_20261116.md)
+records the compiler IR, fixed versions, MTP comparisons, shape-dependent
+performance and remaining coverage. Operator and target-backbone timings do
+not establish end-to-end serving throughput.
+
 ## Legacy prebuilt images
 
 > \[!IMPORTANT\]
