@@ -157,3 +157,48 @@ def test_text_parts_keep_string_template_merging(hf_media_template, monkeypatch,
     result = asyncio.run(processor.get_prompt_input(messages, do_preprocess=mode != 'no-preprocess', **kwargs))
 
     assert result['prompt'] == 'hello\nworld'
+
+
+@pytest.mark.parametrize('override_kind', ['inline', 'named'])
+@pytest.mark.parametrize('texts', [['hel', 'lo'], ['say </th', 'ink> now']])
+def test_glm5_request_template_override_keeps_string_content(hf_media_template, override_kind, texts):
+    template = hf_media_template()
+    override = "{{ '<|user|>' + messages[0].content }}"
+    if override_kind == 'named':
+        template.tokenizer.chat_template = {'default': template.tokenizer.chat_template, 'legacy': override}
+        override = 'legacy'
+    encoder = SimpleNamespace(encode=lambda prompt, add_bos: list(prompt.encode('utf-8')))
+    processor = MultimodalProcessor(encoder, template)
+    messages = [{'role': 'user', 'content': [{'type': 'text', 'text': text} for text in texts]}]
+    kwargs = {'chat_template': override, 'reasoning_effort': 'high'}
+    original_messages, original_kwargs = copy.deepcopy((messages, kwargs))
+
+    result = asyncio.run(processor.get_prompt_input(messages, do_preprocess=True, chat_template_kwargs=kwargs))
+
+    expected = '<|user|>' + '\n'.join(texts)
+    assert result['prompt'] == expected
+    assert result['input_ids'] == list(expected.encode('utf-8'))
+    assert messages == original_messages
+    assert kwargs == original_kwargs
+    # An override applies only to its own request; default rendering still
+    # receives the adjacent text parts on a reused processor.
+    default = asyncio.run(processor.get_prompt_input(messages, do_preprocess=True))
+    assert default['prompt'] == template.messages2prompt(messages)
+    assert ''.join(texts) in default['prompt']
+
+
+def test_glm5_null_template_override_keeps_default_parts(hf_media_template):
+    template = hf_media_template()
+    encoder = SimpleNamespace(encode=lambda prompt, add_bos: list(prompt.encode('utf-8')))
+    processor = MultimodalProcessor(encoder, template)
+    messages = [{'role': 'user', 'content': [
+        {'type': 'text', 'text': 'say </th'}, {'type': 'text', 'text': 'ink> now'},
+    ]}]
+
+    result = asyncio.run(processor.get_prompt_input(
+        messages, do_preprocess=True, chat_template_kwargs={'chat_template': None}))
+
+    expected = template.messages2prompt(messages)
+    assert result['prompt'] == expected
+    assert result['input_ids'] == list(expected.encode('utf-8'))
+    assert 'say </think> now' in result['prompt']

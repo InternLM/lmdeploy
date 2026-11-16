@@ -406,12 +406,14 @@ class MultimodalProcessor:
                 chat_template = MODELS.module_dict[adapter_name]()
         else:
             chat_template = BaseChatTemplate()
+        chat_template_kwargs = dict(chat_template_kwargs or {})
         if isinstance(prompt, list):
             # GLM-5.3 renders adjacent text parts without a separator. Preserve
-            # them for its tokenizer/template, including literals spanning parts.
-            preserve_parts = isinstance(chat_template, HFChatTemplate) and chat_template.is_glm5_next
+            # them for its default tokenizer/template. Explicit request-level
+            # overrides retain the existing string-content input contract.
+            preserve_parts = (isinstance(chat_template, HFChatTemplate) and chat_template.is_glm5_next
+                              and chat_template_kwargs.get('chat_template') is None)
             prompt = [self.merge_message_content(msg, preserve_content_parts=preserve_parts) for msg in prompt]
-        chat_template_kwargs = dict(chat_template_kwargs or {})
         template_reasoning_effort = reasoning_effort
         if template_reasoning_effort is None:
             template_reasoning_effort = chat_template_kwargs.pop('reasoning_effort', None)
