@@ -19,18 +19,22 @@ python3.12 -m venv .venv-ascend
 source .venv-ascend/bin/activate
 export TORCH_DEVICE_BACKEND_AUTOLOAD=0
 A3_WHEEL_DIR=$(mktemp -d)
-python -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
+python -I -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
     --index-url https://download.pytorch.org/whl/cpu \
     -c requirements/ascend_a3_constraints.txt torch torchvision
-python -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
+python -I -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
     --index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
     -r requirements/ascend_kernels.txt
-LMDEPLOY_TARGET_DEVICE=ascend python -m pip install --index-url https://pypi.org/simple \
+LMDEPLOY_TARGET_DEVICE=ascend python -I -m pip install --index-url https://pypi.org/simple \
     --find-links "$A3_WHEEL_DIR" -c requirements/ascend_a3_constraints.txt \
     -r requirements/ascend_kernels.txt . pyarrow
-python -m pip check
+python -I -m pip check
 python tools/ascend/check_runtime.py --require-kernels
 ```
+
+The isolated-mode `pip check` checks the application venv. CANN-bundled optional
+profiler tools have separate Python dependencies; their SDK metadata is not part
+of this application check. Runtime checks keep the CANN environment paths.
 
 Run these commands from the repository root. CANN, torch_npu and Triton-Ascend
 remain required. The GDN prefill/L2Norm kernels are bundled with source provenance

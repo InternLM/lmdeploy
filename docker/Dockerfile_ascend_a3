@@ -24,18 +24,18 @@ ENV HCCL_CONNECT_TIMEOUT=7200 \
 COPY . /opt/lmdeploy
 WORKDIR /opt/lmdeploy
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip download --no-deps --only-binary=:all: \
+    python -I -m pip download --no-deps --only-binary=:all: \
         --dest /tmp/ascend-wheels --index-url https://download.pytorch.org/whl/cpu \
         -c requirements/ascend_a3_constraints.txt \
         torch torchvision && \
-    python -m pip download --no-deps --only-binary=:all: \
+    python -I -m pip download --no-deps --only-binary=:all: \
         --dest /tmp/ascend-wheels \
         --index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
         -r requirements/ascend_kernels.txt && \
-    python -m pip install --index-url https://pypi.org/simple \
+    python -I -m pip install --index-url https://pypi.org/simple \
         --find-links /tmp/ascend-wheels \
         -c requirements/ascend_a3_constraints.txt \
         -r requirements/ascend_kernels.txt . pyarrow && \
-    python -m pip check && \
-    python -c "import importlib.util; assert importlib.util.find_spec('dlinfer') is None; assert importlib.util.find_spec('triton_ascend_kernels') is None; import lmdeploy, numpy, pandas, pyarrow, ray" && \
+    python -I -m pip check && \
+    (cd /tmp && python -c "import importlib.util; assert importlib.util.find_spec('dlinfer') is None; assert importlib.util.find_spec('triton_ascend_kernels') is None; import lmdeploy, numpy, pandas, pyarrow, ray") && \
     rm -rf /tmp/ascend-wheels

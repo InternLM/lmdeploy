@@ -15,18 +15,21 @@ python3.12 -m venv .venv-ascend
 source .venv-ascend/bin/activate
 export TORCH_DEVICE_BACKEND_AUTOLOAD=0
 A3_WHEEL_DIR=$(mktemp -d)
-python -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
+python -I -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
     --index-url https://download.pytorch.org/whl/cpu \
     -c requirements/ascend_a3_constraints.txt torch torchvision
-python -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
+python -I -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
     --index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
     -r requirements/ascend_kernels.txt
-LMDEPLOY_TARGET_DEVICE=ascend python -m pip install --index-url https://pypi.org/simple \
+LMDEPLOY_TARGET_DEVICE=ascend python -I -m pip install --index-url https://pypi.org/simple \
     --find-links "$A3_WHEEL_DIR" -c requirements/ascend_a3_constraints.txt \
     -r requirements/ascend_kernels.txt . pyarrow
-python -m pip check
+python -I -m pip check
 python tools/ascend/check_runtime.py --require-kernels
 ```
+
+`python -I -m pip check` 仅检查应用 venv。CANN 自带的可选 profiler 工具另有
+Python 依赖，其 SDK 元数据不计入应用检查；运行时检查仍保留完整 CANN 环境路径。
 
 在仓库根目录执行这些命令。CANN、torch_npu 和 Triton-Ascend 仍是运行依赖；
 GDN prefill/L2Norm 已连同来源记录和 MIT 许可纳入原生 kernel，无需克隆外部 kernel
