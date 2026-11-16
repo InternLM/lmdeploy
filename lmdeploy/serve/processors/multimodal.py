@@ -29,6 +29,10 @@ MULTIMODAL_TYPES = (
 )
 
 
+class UnsupportedMultimodalInputError(ValueError):
+    """The requested media modality is unavailable on this model."""
+
+
 class MultimodalProcessor:
     """Processor for handling prompt preprocessing, message content merging,
     and multimodal processing."""
@@ -269,7 +273,7 @@ class MultimodalProcessor:
             has_multimodal_input = self._has_multimodal_input(prompt)
 
             if has_multimodal_input and self.vl_encoder is None:
-                raise ValueError('Multimodal input is not supported by this model.')
+                raise UnsupportedMultimodalInputError('Multimodal input is not supported by this model.')
 
             # If no multimodal input, use text-only processing
             if not has_multimodal_input:

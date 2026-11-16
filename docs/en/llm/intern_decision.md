@@ -236,6 +236,9 @@ Numbers in the JSON body must be finite, including nested state, instructions an
 (`NaN`, `Infinity`, `-Infinity`) and overflow such as `1e400` return 400 before engine work. The same rule applies
 to the JSON `request` part of multipart uploads. Quoted strings such as `"NaN"` remain valid content.
 
+For both decision endpoints, unexpected tokenizer, preprocessing or scoring failures return 500, with details
+kept in the server log. Explicit input errors retain their 4xx status, and engine unavailability returns 503.
+
 For multipart uploads, send the JSON `request` part first, with `Content-Type: application/json`, and reference
 each image part exactly once through `assets.<ref>.part`. File format can be omitted and is inferred from its bytes:
 

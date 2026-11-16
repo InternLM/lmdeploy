@@ -209,6 +209,9 @@ JSON 请求体中的数值必须有限，包括 state、instructions 和 criteri
 非有限字面量（`NaN`、`Infinity`、`-Infinity`）及溢出的 `1e400` 会在进入引擎前返回 400；
 multipart 的 JSON `request` 部分同样适用。带引号的 `"NaN"` 等字符串仍是合法内容。
 
+两个决策端点遇到 tokenizer、预处理或评分的非预期内部故障时返回 500，详细原因只记入服务端日志。
+明确的输入错误保留对应 4xx 状态；引擎不可用时返回 503。
+
 使用 multipart 上传时，第一个部分必须是名为 `request`、内容类型为 `application/json` 的请求数据；
 图片资源通过 `part` 引用各自独立的文件部分。文件内容优先于 `data_base64`；省略 `format` 时根据文件内容推断格式。
 
