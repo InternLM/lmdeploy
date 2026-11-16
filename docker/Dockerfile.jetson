@@ -1,5 +1,8 @@
 # Base images
 FROM nvcr.io/nvidia/l4t-base:r36.2.0
+# The Jetson Torch wheel links cuDSS SONAME 0. The unversioned cudss
+# metapackage now selects SONAME 1, so keep the compatible runtime explicit.
+ARG CUDSS_VERSION=0.8.0.10-1
 ENV CUDA_VER=12.6 \
     PYTHON_VERSION=3.10 \
     PATH=/opt/py3/bin:/root/.local/bin:/usr/local/cuda/bin:${PATH}
@@ -16,7 +19,8 @@ RUN --mount=type=cache,target=/root/.cache \
     rm -rf *.deb *.deb.* && \
     apt update -y && \
     apt-get install -y --no-install-recommends \
-        cuda-toolkit-${CUDA_SUFFIX} cuda-compat-${CUDA_SUFFIX} libcudnn9-cuda-12 libcusparselt0 cudss \
+        cuda-toolkit-${CUDA_SUFFIX} cuda-compat-${CUDA_SUFFIX} libcudnn9-cuda-12 libcusparselt0 \
+        libcudss0-cuda-12=${CUDSS_VERSION} \
         git libopenblas-dev python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv && \
     apt-get clean -y && \
     rm -rf /var/lib/apt/lists/* && \
