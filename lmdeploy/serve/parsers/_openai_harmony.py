@@ -45,21 +45,23 @@ class GptOssResponseParser(ResponseParser):
     tool_parser_cls = object()  # API server checks `is not None` for tool support.
     supports_required_tool_choice = True
 
+    @classmethod
+    def render_tools(cls, request: ChatCompletionRequest) -> list[dict] | None:
+        """GPT-OSS templates read `tool.function`, so keep the wrappers."""
+        if request.tools is None or request.tool_choice == 'none':
+            return None
+        if getattr(request.tool_choice, 'type', None) == 'function':
+            # ToolChoice (type='function'): keep only the selected tool.
+            return [
+                item.model_dump() for item in request.tools
+                if item.function.name == request.tool_choice.function.name
+            ]
+        # auto/required/allowed_tools: keep all tools.
+        return [item.model_dump() for item in request.tools]
+
     def __init__(self, request: ChatCompletionRequest):
         if hasattr(request, 'tools') and hasattr(request, 'tool_choice'):
-            # GPT-OSS templates expect full tool wrappers.
-            if request.tools is None or request.tool_choice == 'none':
-                rendered_tools = None
-            elif getattr(request.tool_choice, 'type', None) == 'function':
-                # ToolChoice (type='function'): keep only the selected tool.
-                rendered_tools = [
-                    item.model_dump() for item in request.tools
-                    if item.function.name == request.tool_choice.function.name
-                ]
-            else:
-                # auto/required/allowed_tools: keep all tools.
-                rendered_tools = [item.model_dump() for item in request.tools]
-            self.request = request.model_copy(update={'tools': rendered_tools})
+            self.request = request.model_copy(update={'tools': type(self).render_tools(request)})
         else:
             # Unit tests may inject a lightweight sentinel request object.
             self.request = request

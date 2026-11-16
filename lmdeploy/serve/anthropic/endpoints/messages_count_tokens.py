@@ -13,7 +13,9 @@ from ..adapter import (
     chat_template_kwargs_from_thinking,
     count_input_tokens,
     get_model_list,
+    render_count_tools,
     to_lmdeploy_messages,
+    to_openai_tools,
 )
 from ..errors import create_error_response
 from ..protocol import CountTokensRequest, CountTokensResponse
@@ -44,9 +46,12 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
 
         try:
             messages = to_lmdeploy_messages(request, merge_inline_system=merge_inline_system)
+            tools = render_count_tools(getattr(server_context, 'response_parser_cls', None),
+                                       to_openai_tools(request.tools))
             input_tokens = count_input_tokens(
                 server_context.async_engine,
                 messages,
+                tools=tools,
                 chat_template_kwargs=chat_template_kwargs_from_thinking(request.thinking))
         except (ValueError, AssertionError) as err:
             # chat templates validate message shapes with assert; e.g. deepseek
