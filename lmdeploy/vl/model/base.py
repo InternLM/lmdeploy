@@ -220,7 +220,7 @@ class VisionModel(ABC):
 
                 collected_mm_items[current_modality][attr_name] = value
 
-        # get input_ids, expand multimodal tokens only when we receive input ids from /generate endpoint
+        # Expand embedded /generate IDs and IDs produced directly by chat templates.
         if isinstance(input_prompt, str):
             input_ids = processor_outputs['input_ids'].flatten()
         else:
@@ -269,19 +269,23 @@ class VisionModel(ABC):
 
         When the messages already carry embedded token ids (from the
         ``/generate`` endpoint), extract and return them directly.
-        Otherwise, render the messages through *chat_template* to produce a
-        plain-text prompt string.
+        Otherwise, ask *chat_template* for token IDs before falling back to
+        a plain-text prompt. Direct IDs preserve sanitized content literals
+        when media placeholders are expanded.
 
         Args:
             messages: Preprocessed message list.
             chat_template: Chat template used to render a text prompt.
             tools: Optional tools forwarded to chat template rendering.
-            chat_template_kwargs: Extra kwargs forwarded to ``messages2prompt``.
+            chat_template_kwargs: Extra kwargs forwarded to chat template methods.
         Returns:
-            A list of token ids when input_ids are embedded, otherwise a str.
+            Embedded or template-produced token IDs, otherwise a prompt string.
         """
         if VisionModel.has_input_ids(messages):
             return messages[0]['content'][0]['text']
+        input_ids = chat_template.messages2input_ids(messages, tools=tools, **(chat_template_kwargs or {}))
+        if input_ids is not None:
+            return input_ids
         return chat_template.messages2prompt(messages, tools=tools, **(chat_template_kwargs or {}))
 
     def forward(self, messages: list[dict], max_batch_size: int = 1) -> list[dict]:

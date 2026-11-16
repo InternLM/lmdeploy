@@ -6,6 +6,7 @@ import uuid
 from typing import Literal
 
 from mmengine import Registry
+from packaging.version import Version
 
 from lmdeploy.archs import get_model_arch
 from lmdeploy.utils import get_logger
@@ -117,6 +118,10 @@ class BaseChatTemplate:
     def prepare_multimodal_messages(self, messages: list[dict]) -> list[dict]:
         """Prepare message order before rendering and collecting media."""
         return messages
+
+    def messages2input_ids(self, messages: str | list[dict], **kwargs) -> list[int] | None:
+        """Optionally encode messages directly; None uses the string path."""
+        return None
 
     def __init__(self,
                  system='',
@@ -770,6 +775,7 @@ class HFChatTemplate(BaseChatTemplate):
         self.model_path = model_path
         try:
             from transformers import AutoProcessor, AutoTokenizer
+            from transformers import __version__ as transformers_version
             self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=trust_remote_code)
 
             # Some tokenizers do not have chat_template, in this case try to get chat_template from processor
@@ -794,6 +800,7 @@ class HFChatTemplate(BaseChatTemplate):
             self.is_gpt_oss = arch == 'GptOssForCausalLM'
             # GLM-5.3-Flash's multimodal architecture, not the text-only GLM-5.3.
             self.is_glm5_next = arch == 'Glm5NextForConditionalGeneration'
+            self._sanitize_control_tokens = self.is_glm5_next and Version(transformers_version) >= Version('5.20.0')
             if self.is_gpt_oss:
                 self.stop_words.append('<|call|>')
         except Exception as e:
@@ -841,6 +848,22 @@ class HFChatTemplate(BaseChatTemplate):
         return self.messages2prompt(messages, **kwargs)
 
     def messages2prompt(self, messages, **kwargs):
+        return self._apply_chat_template(messages, tokenize=False, **kwargs)
+
+    def messages2input_ids(self, messages: str | list[dict], **kwargs) -> list[int] | None:
+        """Use HF control-token sanitization for GLM-5.3-Flash on Transformers
+        >= 5.20.0.
+
+        Keep multimodal content structured so the template's media placeholders remain control IDs. Downstream
+        preprocessors must expand these IDs directly, without decoding and re-encoding the prompt. This follows HF's
+        sanitization semantics, including its handling of string values rather than dictionary keys.
+        """
+        if not self._sanitize_control_tokens:
+            return None
+        kwargs.update(tokenize=True, return_dict=False, return_tensors=None, sanitize_control_tokens=True)
+        return self._apply_chat_template(messages, **kwargs)
+
+    def _apply_chat_template(self, messages: str | list[dict], tokenize: bool, **kwargs) -> str | list[int]:
         if isinstance(messages, str):
             messages = [{'role': 'user', 'content': messages}]
         assert all(isinstance(m, dict) and 'role' in m and 'content' in m for m in messages), \
@@ -854,19 +877,24 @@ class HFChatTemplate(BaseChatTemplate):
             kwargs.pop('reasoning_effort')
         add_generation_prompt = messages[-1]['role'] != 'assistant'
         prompt = self.tokenizer.apply_chat_template(messages,
-                                                    tokenize=False,
+                                                    tokenize=tokenize,
                                                     add_generation_prompt=add_generation_prompt,
                                                     **kwargs)
         if messages[-1]['role'] == 'assistant' and len(self.assistant_end) > 0:
-            prompt = prompt[:-len(self.assistant_end)]  # prefix of response to let the model complete the response
-        if self.is_gpt_oss and not kwargs.get('tools'):
+            assistant_end = (self.tokenizer.encode(self.assistant_end, add_special_tokens=False)
+                             if tokenize else self.assistant_end)
+            if tokenize and (not assistant_end or prompt[-len(assistant_end):] != assistant_end):
+                raise ValueError('The assistant suffix must end at a token boundary for sanitized prefill.')
+            prompt = prompt[:-len(assistant_end)]  # prefix of response to let the model complete the response
+        if not tokenize and self.is_gpt_oss and not kwargs.get('tools'):
             # for gpt-oss model, remove this seems more conducive to instruction following.
             prompt = prompt.replace('commentary, ', '', 1)
-        if (self.is_glm5_next and add_generation_prompt and kwargs.get('enable_thinking') is False
-                and prompt.endswith('<think>')):
+        if self.is_glm5_next and add_generation_prompt and kwargs.get('enable_thinking') is False:
             # Early GLM-5.3 templates unconditionally open a thinking block.
             # Prefill its closing tag so disabled thinking starts at the answer.
-            prompt += '</think>'
+            think_start = self.tokenizer.encode('<think>', add_special_tokens=False) if tokenize else '<think>'
+            if think_start and prompt[-len(think_start):] == think_start:
+                prompt += self.tokenizer.encode('</think>', add_special_tokens=False) if tokenize else '</think>'
         return prompt
 
     def _user_instruction(self):
