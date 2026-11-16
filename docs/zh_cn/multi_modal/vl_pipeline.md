@@ -141,6 +141,10 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
+对于 GLM-5，`VisionConfig(image_cache_max_bytes=...)` 可按字节设置图片预处理缓存预算。显式配置优先于环境变量 `LMDEPLOY_IMAGE_CACHE_MAX_BYTES`；未显式配置时，环境变量默认为每个 frontend 进程 4 GiB（`4294967296` 字节）。设置为 `0` 可关闭缓存。8 个 frontend 的缓存预算合计为 32 GiB，按需分配，并非启动时立即占满。缓存条目数还受 256 条或进程 FD 软限制的四分之一约束，取两者较小值。
+
+缓存预算不限制在途请求持有的内存。容器的 `/dev/shm` 应为缓存图片、并发请求张量及其他共享内存使用者预留空间。共享内存不足时，图片预处理会回退到普通 CPU tensor 和 RPC 字节序列化，关闭缓存时也支持该回退。请求可以继续执行，但会增加数据复制和普通 CPU 内存开销。
+
 ### 获取生成 token 的 logits
 
 ```python

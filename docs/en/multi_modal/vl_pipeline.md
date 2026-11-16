@@ -141,6 +141,10 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
+For GLM-5, `VisionConfig(image_cache_max_bytes=...)` sets the image preprocessing cache budget in bytes. An explicit value overrides `LMDEPLOY_IMAGE_CACHE_MAX_BYTES`; otherwise, the environment variable defaults to 4 GiB (`4294967296` bytes) per frontend process. Set it to `0` to disable caching. Eight frontends therefore have a combined 32 GiB cache budget, allocated on demand. Entries are also limited to 256 or one quarter of the process FD soft limit, whichever is smaller.
+
+This budget does not limit memory retained by in-flight requests. Size the container's `/dev/shm` for cached images, concurrent request tensors, and other shared-memory users. If shared memory fills up, image preprocessing falls back to ordinary CPU tensors and RPC byte serialization, including when caching is disabled. Requests can continue, but fallback increases copying and ordinary CPU memory usage.
+
 ### Output logits for generated tokens
 
 ```python

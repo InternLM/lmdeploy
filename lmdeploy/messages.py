@@ -902,10 +902,11 @@ class VisionConfig:
         thread_safe: Specifies whether the engine instance is
             thread-safe. Please set it to True when using the pipeline
             in a multi-threaded environment.
-        image_cache_max_bytes: Per-process budget for supported image
+        image_cache_max_bytes: Per-frontend-process budget for supported image
             preprocessing caches. Zero disables reuse. Currently used by GLM-5.
             None uses ``LMDEPLOY_IMAGE_CACHE_MAX_BYTES`` set before startup,
-            which defaults to 2 GiB.
+            which defaults to 4 GiB. Explicit values override the environment.
+            This limits retained cache entries, not in-flight request memory.
             Cached images are also limited to 256 entries or one quarter of
             the process FD soft limit, whichever is smaller.
     """

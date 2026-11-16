@@ -1,10 +1,15 @@
 import asyncio
 import inspect
 import multiprocessing as mp
+import os
+import pickle
 from contextlib import suppress
+from multiprocessing import resource_sharer
+from types import SimpleNamespace
 
 import pytest
 import torch
+import zmq
 
 from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.pytorch.engine.mp_engine.base import MPEngine
@@ -283,6 +288,89 @@ async def _async_test_zmq_pending_rpc_wakes_on_backend_death():
 
 def test_zmq_pending_rpc_wakes_on_backend_death():
     asyncio.run(_async_test_zmq_pending_rpc_wakes_on_backend_death())
+
+
+@pytest.mark.parametrize('failure', ['pickle', 'send', 'server_death'])
+def test_zmq_failed_shared_tensor_requests_release_fds(failure):
+    from lmdeploy.pytorch.engine.mp_engine.zmq_rpc import AsyncRPCClient, _RequestPickler, _RPCServerLiveness
+
+    async def run():
+        pixels = torch.ones(16).share_memory_()
+        # Start the process-wide FD sharer before measuring request resources.
+        pickle.loads(_RequestPickler.dumps(pixels, []))
+        await asyncio.sleep(0.01)
+        initial_fds = len(os.listdir('/proc/self/fd'))
+        initial_handles = set(resource_sharer._resource_sharer._cache)
+        for _ in range(20):
+            client = AsyncRPCClient.__new__(AsyncRPCClient)
+            client.pending = {}
+            client._server_liveness = _RPCServerLiveness(client.pending)
+            client._try_start_listen = lambda: None
+
+            def send(data):
+                sent = asyncio.get_running_loop().create_future()
+                if failure == 'send':
+                    sent.set_exception(zmq.ZMQError(zmq.ENOTSOCK))
+                else:
+                    sent.set_result(None)
+                    client._mark_server_dead('test backend dead', log=False)
+                return sent
+
+            client.async_socket = SimpleNamespace(send=send)
+            args = (pixels, lambda: None) if failure == 'pickle' else (pixels,)
+            with pytest.raises((AttributeError, zmq.ZMQError, RuntimeError)):
+                await client.async_call('shared_tensor', *args)
+            await asyncio.sleep(0)
+            assert client.pending == {}
+            assert set(resource_sharer._resource_sharer._cache) == initial_handles
+        assert len(os.listdir('/proc/self/fd')) == initial_fds
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('cancel_during', ['send', 'reply'])
+def test_zmq_cancel_preserves_unreceived_shared_tensor_handles(cancel_during):
+    from lmdeploy.pytorch.engine.mp_engine.zmq_rpc import AsyncRPCClient, _RPCServerLiveness
+
+    async def run():
+        client = AsyncRPCClient.__new__(AsyncRPCClient)
+        client.pending = {}
+        client._server_liveness = _RPCServerLiveness(client.pending)
+        client._try_start_listen = lambda: None
+        sent = asyncio.get_running_loop().create_future()
+        queued = asyncio.Event()
+        payloads = []
+
+        def send(data):
+            payloads.append(data)
+            queued.set()
+            return sent
+
+        client.async_socket = SimpleNamespace(send=send)
+        pixels = torch.zeros(16).share_memory_()
+        initial_handles = set(resource_sharer._resource_sharer._cache)
+        task = asyncio.create_task(client.async_call('shared_tensor', pixels))
+        await queued.wait()
+        if cancel_during == 'reply':
+            sent.set_result(None)
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert len(client.pending) == 1
+        assert len(resource_sharer._resource_sharer._cache) == len(initial_handles) + 1
+
+        request = pickle.loads(payloads.pop())  # The receiver attaches after cancellation.
+        request['args'][0].add_(1)
+        assert torch.all(pixels == 1)
+        if cancel_during == 'send':
+            sent.set_result(None)
+        client._set_reply(dict(request_id=request['request_id'], success=True, result=None))
+        await asyncio.sleep(0)
+        assert client.pending == {}
+        assert set(resource_sharer._resource_sharer._cache) == initial_handles
+
+    asyncio.run(run())
 
 
 async def _async_test_zmq_get_stream_output_after_drop_is_idempotent():

@@ -11,6 +11,7 @@ import torch
 from transformers import AutoProcessor, AutoTokenizer
 
 from lmdeploy.pytorch.multimodal.data_type import get_image_mrope_pos_ids, make_multimodal_content_hash
+from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.media.image import EncodedImage
 from lmdeploy.vl.model.base import (
@@ -23,6 +24,8 @@ from lmdeploy.vl.model.preprocess_utils import (
     get_expanded_mm_items,
     get_override_size,
 )
+
+logger = get_logger('lmdeploy')
 
 
 def _processor_kwargs(config: dict[str, Any]) -> dict[str, Any]:
@@ -231,6 +234,7 @@ class GLM5NextVisionModel(VisionModel):
                                        (mm_processor_kwargs or {}).get('image'), modality='image')
         image_kwargs = {'size': image_size} if image_size is not None else {}
         processed = []
+        share_pixels = True
         for image in images:
             key = self.image_cache.key(image, self.mm_feature_dtype, image_size)
             item = self.image_cache.get(key)
@@ -243,7 +247,17 @@ class GLM5NextVisionModel(VisionModel):
                 content_hash = make_multimodal_content_hash(pixels, meta, get_image_mrope_pos_ids(grid))
                 # Cache and in-flight requests share this CPU storage. The
                 # local engine RPC transfers its handle rather than its bytes.
-                pixels.share_memory_()
+                if share_pixels:
+                    try:
+                        pixels.share_memory_()
+                    except RuntimeError as error:
+                        # PyTorch can report "Success (0)" for a failed shm allocation.
+                        if 'unable to allocate shared memory(shm)' not in str(error):
+                            raise
+                        share_pixels = False
+                        logger.warning('Image shared-memory allocation failed (%s); using ordinary CPU tensors for '
+                                       'the remaining images in this request. Increase /dev/shm to retain '
+                                       'shared-memory IPC.', error)
                 item = ProcessedImage(pixels, grid, content_hash)
                 self.image_cache.put(key, item)
                 # Keep cold temporary storage bounded to a single image.

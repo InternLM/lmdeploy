@@ -10,7 +10,7 @@ import torch
 from PIL import Image
 
 from lmdeploy.pytorch.models.qwen3_vl import Qwen3VLInputProcessor
-from lmdeploy.pytorch.multimodal.data_type import make_multimodal_content_hash
+from lmdeploy.pytorch.multimodal.data_type import get_image_mrope_pos_ids, make_multimodal_content_hash
 from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.media.image import EncodedImage
 from lmdeploy.vl.model.glm5_next import GLM5NextVisionModel
@@ -77,6 +77,54 @@ def test_palette_image_cache_key_includes_transparency():
     assert transparent.tobytes() == image.tobytes()
     assert ImageProcessorCache.key(transparent, torch.bfloat16, None) != opaque_key
     assert ImageProcessorCache.key(image.copy(), torch.bfloat16, None) == opaque_key
+
+
+@pytest.mark.parametrize('error', [
+    'unable to allocate shared memory(shm): No space left on device (28)',
+    'unable to allocate shared memory(shm): Success (0)',
+    'unexpected allocation failure',
+])
+def test_glm_images_without_cache_handle_shared_memory_exhaustion(monkeypatch, error):
+    class ImageProcessor:
+        merge_size = 2
+        size = {'shortest_edge': 4, 'longest_edge': 16}
+
+        def __call__(self, images, **kwargs):
+            value = images[0].getpixel((0, 0))[0]
+            return dict(pixel_values=torch.full((4, 3), float(value)), image_grid_thw=torch.tensor([[1, 2, 2]]))
+
+    model = GLM5NextVisionModel.__new__(GLM5NextVisionModel)
+    model.backend = 'pytorch'
+    model.mm_feature_dtype = torch.bfloat16
+    model.image_token_id = 9
+    model.processor = SimpleNamespace(image_processor=ImageProcessor())
+    model.image_cache = ImageProcessorCache(0)
+    share = torch.Tensor.share_memory_
+    allocations = 0
+
+    def limited_shm(tensor):
+        nonlocal allocations
+        allocations += 1
+        if allocations >= 3:
+            raise RuntimeError(error)
+        return share(tensor)
+
+    monkeypatch.setattr(torch.Tensor, 'share_memory_', limited_shm)
+    images = [Image.new('RGB', (2, 2), (value, 0, 0)) for value in range(1, 5)]
+    if error == 'unexpected allocation failure':
+        with pytest.raises(RuntimeError, match=error):
+            model._preprocess_images(images, [9] * 4, None)
+        return
+    output = model._preprocess_images(images, [9] * 4, None)
+    assert allocations == 3  # Do not retry a full shm for every remaining image.
+    assert model.image_cache.current_bytes == 0
+    assert output['input_ids'] == [9] * 4
+    assert [item['pixel_values'].is_shared() for item in output['multimodal']] == [True, True, False, False]
+    for value, item in enumerate(output['multimodal'], 1):
+        assert torch.all(item['pixel_values'] == value)
+        assert item['content_hash'] == make_multimodal_content_hash(
+            item['pixel_values'], dict(grid_thw=item['image_grid_thw'], image_token_id=9),
+            get_image_mrope_pos_ids(item['image_grid_thw']))
 
 
 @pytest.mark.parametrize('palette', [False, True])
