@@ -100,6 +100,12 @@ class ImageEncoder:
             if max_bytes < 0:
                 raise ValueError('image_cache_max_bytes must be non-negative')
             self.model.image_cache.max_bytes = max_bytes
+            # Match Engine.from_pretrained's frontend-to-engine transport,
+            # independently of the engine's distributed executor backend.
+            self.model.image_cache.share_memory = (backend == 'pytorch'
+                                                   and backend_config is not None
+                                                   and backend_config.enable_mp_engine
+                                                   and backend_config.mp_engine_backend == 'mp')
         self.max_batch_size = vision_config.max_batch_size
         self.executor = ThreadPoolExecutor(max_workers=1)
         self._uses_new_preprocess = self._is_new_preprocess_api(self.model)
