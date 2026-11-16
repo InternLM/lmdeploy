@@ -99,7 +99,8 @@ def test_glm_images_without_cache_handle_shared_memory_exhaustion(monkeypatch, e
     model.image_token_id = 9
     model.processor = SimpleNamespace(image_processor=ImageProcessor())
     model.image_cache = ImageProcessorCache(0)
-    share = torch.Tensor.share_memory_
+    # Allocate before patching so PyTorch internals cannot affect the call count.
+    shared_pixels = [torch.empty((4, 3), dtype=torch.bfloat16).share_memory_() for _ in range(2)]
     allocations = 0
 
     def limited_shm(tensor):
@@ -107,7 +108,9 @@ def test_glm_images_without_cache_handle_shared_memory_exhaustion(monkeypatch, e
         allocations += 1
         if allocations >= 3:
             raise RuntimeError(error)
-        return share(tensor)
+        shared = shared_pixels[allocations - 1]
+        shared.copy_(tensor)
+        return tensor.set_(shared)
 
     monkeypatch.setattr(torch.Tensor, 'share_memory_', limited_shm)
     images = [Image.new('RGB', (2, 2), (value, 0, 0)) for value in range(1, 5)]
