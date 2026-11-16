@@ -40,6 +40,8 @@ _MAX_SCHEMA_LITERAL_WORK = 65536
 _SchemaType = str | frozenset[str] | None
 # Governing type(s), nullability, and declared enum/const candidates.
 _SchemaCoercion = tuple[_SchemaType, bool, tuple[Any, ...] | None]
+# A shared schema node can occur under different embedded schema resources.
+_SchemaCacheKey = tuple[int, int]
 
 # Other assertion keywords may distinguish branches that share these coercion
 # constraints. Their presence makes a successful partial match inconclusive.
@@ -621,12 +623,15 @@ class XmlToolParser(ToolParser):
         return None
 
     @staticmethod
-    def _lookup_local_ref(ref: Any, root_schema: dict[str, Any] | None) -> dict[str, Any] | bool | None:
-        """Resolve one local JSON pointer (``#/$defs/...``) to its target.
+    def _lookup_local_ref(ref: Any, root_schema: dict[str, Any] | None,
+                          ) -> tuple[dict[str, Any] | bool, dict[str, Any] | None] | None:
+        """Resolve a local JSON pointer to its target and enclosing resource.
 
         Pointer tokens are unescaped per RFC 6901 first (``~1`` decodes to ``/``,
         ``~0`` to ``~``). Returns ``None`` for external pointers, missing targets, and
-        anything that does not land on an object or boolean schema.
+        anything that does not land on an object or boolean schema. A pointer can
+        cross an embedded ``$id`` resource before reaching its target; subsequent
+        fragment references must use that resource rather than the caller's root.
         """
         if not isinstance(ref, str) or not ref.startswith('#/'):
             return None
@@ -637,7 +642,9 @@ class XmlToolParser(ToolParser):
             if not isinstance(target, dict) or part not in target:
                 return None
             target = target[part]
-        return target if isinstance(target, (dict, bool)) else None
+            if isinstance(target, dict) and isinstance(target.get('$id'), str):
+                root_schema = target
+        return (target, root_schema) if isinstance(target, (dict, bool)) else None
 
     @classmethod
     def _resolve_schema_coercion(cls, param_schema: dict[str, Any] | None,
@@ -657,6 +664,9 @@ class XmlToolParser(ToolParser):
         schema's own ``type``/``enum``/``const`` narrows the referenced target instead of
         being dropped.
 
+        Each ``$id`` starts an embedded schema resource for fragment lookups.
+        Both the node and its resource participate in memoization keys.
+
         Shared budgets bound node visits and literal processing, including enum unions
         and intersections. A depth budget also bounds ``$ref`` cycles and nested literal
         values. Exhausting a work budget degrades to the string-preserving fallback
@@ -665,7 +675,7 @@ class XmlToolParser(ToolParser):
         """
         if not isinstance(param_schema, dict):
             return None, False, None
-        cache: dict[int, _SchemaCoercion] = {}
+        cache: dict[_SchemaCacheKey, _SchemaCoercion] = {}
         if budget is None:
             budget = _SchemaResolutionBudget(_MAX_SCHEMA_RESOLVE_VISITS, _MAX_SCHEMA_LITERAL_WORK)
         try:
@@ -678,12 +688,15 @@ class XmlToolParser(ToolParser):
     def _resolve_schema_impl(cls, schema: dict[str, Any] | bool | None,
                              root_schema: dict[str, Any] | None,
                              depth: int,
-                             cache: dict[int, _SchemaCoercion],
+                             cache: dict[_SchemaCacheKey, _SchemaCoercion],
                              budget: _SchemaResolutionBudget) -> _SchemaCoercion:
         """Resolve one schema node under the shared memo and work budgets."""
         if not isinstance(schema, (dict, bool)):
             return None, False, None
-        cached = cache.get(id(schema))
+        if isinstance(schema, dict) and isinstance(schema.get('$id'), str):
+            root_schema = schema
+        key = id(schema), id(root_schema)
+        cached = cache.get(key)
         if cached is not None:
             return cached
         budget.visits -= 1
@@ -701,12 +714,12 @@ class XmlToolParser(ToolParser):
             result = (None, True, None) if schema else (frozenset(), False, ())
         else:
             result = cls._resolve_schema_node(schema, root_schema, depth, cache, budget)
-        cache[id(schema)] = result
+        cache[key] = result
         return result
 
     @classmethod
     def _resolve_schema_node(cls, schema: dict[str, Any], root_schema: dict[str, Any] | None,
-                             depth: int, cache: dict[int, _SchemaCoercion],
+                             depth: int, cache: dict[_SchemaCacheKey, _SchemaCoercion],
                              budget: _SchemaResolutionBudget) -> _SchemaCoercion:
         """Interpret one schema node, merging its ``$ref`` target and siblings.
 
@@ -718,15 +731,16 @@ class XmlToolParser(ToolParser):
         ref = schema.get('$ref')
         if not isinstance(ref, str):
             return own if own is not None else (None, True, None)
-        target = cls._lookup_local_ref(ref, root_schema)
-        if target is None:
+        resolved_ref = cls._lookup_local_ref(ref, root_schema)
+        if resolved_ref is None:
             if own is not None:
                 # Constraints beside an unresolvable ``$ref`` still govern.
                 return own
             logger.debug('unresolvable $ref %s in tool schema; coercing arguments as raw '
                          'strings', ref)
             return 'string', False, None
-        target_result = cls._resolve_schema_impl(target, root_schema, depth + 1, cache, budget)
+        target, target_root = resolved_ref
+        target_result = cls._resolve_schema_impl(target, target_root, depth + 1, cache, budget)
         if own is None:
             return target_result
         return cls._intersect_coercion(own, target_result, budget)
@@ -761,7 +775,7 @@ class XmlToolParser(ToolParser):
     @classmethod
     def _resolve_local_schema(cls, schema: dict[str, Any] | None,
                               root_schema: dict[str, Any] | None,
-                              depth: int, cache: dict[int, _SchemaCoercion],
+                              depth: int, cache: dict[_SchemaCacheKey, _SchemaCoercion],
                               budget: _SchemaResolutionBudget) -> _SchemaCoercion | None:
         """Resolve a schema's own constraints, ignoring its ``$ref`` keyword.
 
@@ -857,7 +871,7 @@ class XmlToolParser(ToolParser):
 
     @classmethod
     def _match_schema_value(cls, value: Any, schema: Any, root_schema: dict[str, Any] | None,
-                            depth: int, cache: dict[int, bool | None],
+                            depth: int, cache: dict[_SchemaCacheKey, bool | None],
                             budget: _SchemaResolutionBudget) -> bool | None:
         """Match one candidate under the remaining resolution budget.
 
@@ -868,7 +882,9 @@ class XmlToolParser(ToolParser):
         budget.visits -= 1
         if budget.visits < 0 or depth >= _MAX_SCHEMA_RESOLVE_DEPTH:
             raise _SchemaResolutionExhausted('branch matching work/depth budget')
-        key = id(schema)
+        if isinstance(schema, dict) and isinstance(schema.get('$id'), str):
+            root_schema = schema
+        key = id(schema), id(root_schema)
         if key in cache:
             return cache[key]
         cache[key] = None
@@ -883,7 +899,7 @@ class XmlToolParser(ToolParser):
 
     @classmethod
     def _match_schema_value_impl(cls, value: Any, schema: dict[str, Any], root_schema: dict[str, Any] | None,
-                                 depth: int, cache: dict[int, bool | None],
+                                 depth: int, cache: dict[_SchemaCacheKey, bool | None],
                                  budget: _SchemaResolutionBudget) -> bool | None:
         """Check the original branch structure instead of its flattened hint.
 
@@ -904,9 +920,11 @@ class XmlToolParser(ToolParser):
 
         uncertain = any(key not in _COERCION_SCHEMA_KEYS for key in schema)
         if isinstance(schema.get('$ref'), str):
-            target = cls._lookup_local_ref(schema['$ref'], root_schema)
-            match = (cls._match_schema_value(value, target, root_schema, depth + 1, cache, budget)
-                     if target is not None else None)
+            resolved_ref = cls._lookup_local_ref(schema['$ref'], root_schema)
+            match = None
+            if resolved_ref is not None:
+                target, target_root = resolved_ref
+                match = cls._match_schema_value(value, target, target_root, depth + 1, cache, budget)
             if match is False:
                 return False
             uncertain |= match is None
@@ -959,7 +977,9 @@ class XmlToolParser(ToolParser):
                 parsed_val = raw_value
             if isinstance(parsed_val, bool):
                 return original
-            if isinstance(parsed_val, int):
+            # JSON Schema integer includes finite numbers with a zero
+            # fractional part, regardless of decimal or exponent spelling.
+            if isinstance(parsed_val, int) or (isinstance(parsed_val, float) and parsed_val.is_integer()):
                 return parsed_val
             return original
 
@@ -1039,24 +1059,34 @@ class XmlToolParser(ToolParser):
             return raw_value
         budget = _SchemaResolutionBudget(_MAX_SCHEMA_RESOLVE_VISITS, _MAX_SCHEMA_LITERAL_WORK)
         schema_type, allows_null, literals = self._resolve_schema_coercion(schema, root_schema, budget=budget)
-        if raw_value.strip().lower() == 'null':
-            # Models emit a bare ``null`` routinely for optional parameters;
-            # keep it as the string unless the schema really accepts null.
-            if not allows_null:
-                return raw_value
-            value = None
-        elif schema_type is None or isinstance(schema_type, frozenset):
-            value = self._coerce_json_value(raw_value)
-            if isinstance(schema_type, frozenset):
-                # Keep the existing best-effort decoding of quoted strings even
-                # when neither interpretation satisfies the schema.
-                if not self._value_matches_type(value, schema_type) and not isinstance(value, str):
-                    return raw_value
-        else:
-            value = self._coerce_value(raw_value, schema_type)
         try:
+            stripped = raw_value.strip()
+            if stripped.lower() == 'null':
+                # Lowercase null is the JSON literal. Other spellings can be
+                # distinct string choices, e.g. enum: ["NULL", null]. Preserve
+                # them unless the string interpretation is ruled out.
+                if not allows_null:
+                    return raw_value
+                if (stripped != 'null'
+                        and self._match_schema_value(raw_value, schema, root_schema, 0, {}, budget) is not False):
+                    return raw_value
+                value = None
+            elif schema_type is None or isinstance(schema_type, frozenset):
+                value = self._coerce_json_value(raw_value)
+                if isinstance(schema_type, frozenset):
+                    # Keep best-effort quoted-string decoding even when neither
+                    # interpretation satisfies the schema.
+                    if not self._value_matches_type(value, schema_type) and not isinstance(value, str):
+                        return raw_value
+            else:
+                value = self._coerce_value(raw_value, schema_type)
             if budget.has_combinators and value != raw_value:
                 match = self._match_schema_value(value, schema, root_schema, 0, {}, budget)
+                if match is None:
+                    # Prefer a proved-valid string over an inconclusive native
+                    # candidate. Fresh candidate memoization shares the budget.
+                    if self._match_schema_value(raw_value, schema, root_schema, 0, {}, budget) is True:
+                        return raw_value
                 if match is False:
                     # Preserve quoted-string decoding when both interpretations
                     # are invalid, but prefer a possibly valid raw string. Each

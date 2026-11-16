@@ -17,13 +17,15 @@ SIBLING_UNIONS = {'anyOf': [{'type': 'string'}, {'type': 'integer'}],
                  'oneOf': [{'const': '42'}, {'const': '43'}]}
 
 
-def _parse(parser_cls, schema, raw_value, stream, tool_choice, defs=None):
+def _parse(parser_cls, schema, raw_value, stream, tool_choice, defs=None, root_id=None):
     class Parser(BaseResponseParser):
         tool_parser_cls = parser_cls
         reasoning_parser_cls = None
 
     parameters = {'type': 'object', 'properties': {'value': schema}, 'required': ['value'],
                   '$defs': defs or {'One': {'const': 1}, 'Int': {'type': 'integer'}}}
+    if root_id is not None:
+        parameters['$id'] = root_id
     request = ChatCompletionRequest(
         model='schema-test', messages=[{'role': 'user', 'content': 'submit'}], stream=stream,
         tools=[{'type': 'function', 'function': {'name': 'submit', 'parameters': parameters}}],
