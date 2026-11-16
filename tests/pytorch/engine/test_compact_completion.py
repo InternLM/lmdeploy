@@ -6,6 +6,7 @@ scheduler admission/plan binding is separate.
 """
 import asyncio
 import pickle
+import threading
 from collections import deque
 from contextlib import nullcontext
 from types import SimpleNamespace
@@ -444,6 +445,10 @@ def test_decode_input_retirement_waits_for_pending_worker_event(monkeypatch, can
     owner.release_reference(checkpoint)
     access = owner.submit_decode((bank,))
     ready = False
+    released = threading.Event()
+
+    def synchronize():
+        assert released.wait(5)
 
     def wait():
         assert ready
@@ -452,7 +457,7 @@ def test_decode_input_retirement_waits_for_pending_worker_event(monkeypatch, can
     agent._out_que = asyncio.Queue()
     agent.out_stream = None
     agent._release_completed_h2d_transfers = lambda: None
-    event = SimpleNamespace(query=lambda: ready, wait=wait)
+    event = SimpleNamespace(query=lambda: ready, wait=wait, synchronize=synchronize)
     agent._out_que.put_nowait((BatchedOutputs(torch.tensor([7]), None,
                                              ssm_state_access_id=access.access_id), event))
     monkeypatch.setattr(torch.cuda, 'stream', lambda _: nullcontext())
@@ -475,12 +480,15 @@ def test_decode_input_retirement_waits_for_pending_worker_event(monkeypatch, can
     async def exercise():
         nonlocal ready
         task = asyncio.create_task(loop._main_loop_get_outputs([object()], packet))
-        await asyncio.sleep(0)
-        assert not task.done() and not access.finished
-        assert ref.active == (not cancel)
-        assert ref.unit_id in owner._units
-        ready = True
-        await task
+        try:
+            await asyncio.sleep(0)
+            assert not task.done() and not access.finished
+            assert ref.active == (not cancel)
+            assert ref.unit_id in owner._units
+        finally:
+            ready = True
+            released.set()
+            await task
 
     asyncio.run(exercise())
     assert access.finished and not ref.active
