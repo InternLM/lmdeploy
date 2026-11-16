@@ -2,7 +2,9 @@
 """Adapt XGrammar's GLM XML schema to the parser's token-ID boundaries."""
 from __future__ import annotations
 
+import json
 import re
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -68,14 +70,6 @@ def _tokenize_xml_schema(schema: dict | bool, ids: dict[str, int]):
 def build_named_tool_format(tools: list[Tool], choice: ToolChoice, *, reasoning: bool,
                             tokenizer: PreTrainedTokenizerBase) -> dict:
     """Require one named GLM call with token-delimited, schema-guided XML."""
-    from xgrammar.structural_tag import (
-        AnyTokensFormat,
-        ConstStringFormat,
-        SequenceFormat,
-        StructuralTag,
-        TokenFormat,
-    )
-
     from .glm47_tool_parser import Glm47ToolParser
 
     functions = [tool.function for tool in tools if tool.function.name == choice.function.name]
@@ -86,18 +80,40 @@ def build_named_tool_format(tools: list[Tool], choice: ToolChoice, *, reasoning:
     needed = spellings if reasoning else Glm47ToolParser.token_id_terminals
     if any(tag not in vocab for tag in needed):
         raise ValueError('GLM named tools require dedicated control token IDs')
-    ids = {tag: vocab[tag] for tag in spellings if tag in vocab}
+    token_ids = tuple((tag, vocab[tag]) for tag in spellings if tag in vocab)
     function = functions[0]
     schema = function.parameters if function.parameters is not None else True
+    # Property order is significant to XGrammar's default XML schema mode.
+    # Snapshot the schema instead of retaining mutable request objects.
+    schema_json = json.dumps(schema, ensure_ascii=False, separators=(',', ':'))
+    serialized = _cached_named_tool_format(function.name, schema_json, reasoning, token_ids)
+    # Each request owns its format, including nested lists and dictionaries.
+    return json.loads(serialized)
+
+
+@lru_cache(maxsize=128)
+def _cached_named_tool_format(name: str, schema_json: str, reasoning: bool,
+                              token_ids: tuple[tuple[str, int], ...]) -> str:
+    """Cache schema lowering and format construction as immutable JSON."""
+    from xgrammar.structural_tag import (
+        AnyTokensFormat,
+        ConstStringFormat,
+        SequenceFormat,
+        StructuralTag,
+        TokenFormat,
+    )
+
+    ids = dict(token_ids)
+    schema = json.loads(schema_json)
     elements = []
     if reasoning:
         elements.extend([AnyTokensFormat(exclude_tokens=list(ids.values())), TokenFormat(token=ids['</think>'])])
     elements.extend([
-        TokenFormat(token=ids['<tool_call>']), ConstStringFormat(value=function.name),
+        TokenFormat(token=ids['<tool_call>']), ConstStringFormat(value=name),
         _tokenize_xml_schema(schema, ids), TokenFormat(token=ids['</tool_call>']),
     ])
     result = StructuralTag(format=SequenceFormat(elements=elements)).model_dump(mode='json')
     # Reserve these IDs in the compiler too: constrained value rules use text
     # matching, which must never consume the same IDs as XML boundaries.
     result['_token_id_only'] = list(ids.values())
-    return result
+    return json.dumps(result, ensure_ascii=False, separators=(',', ':'))

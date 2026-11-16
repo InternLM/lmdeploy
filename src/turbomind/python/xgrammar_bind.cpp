@@ -70,6 +70,19 @@ std::vector<py::bytes> TokenizerInfo_GetDecodedVocab(const TokenizerInfo& tokeni
     return py_result;
 }
 
+TokenizerInfo TokenizerInfo_WithTokenIdOnly(const TokenizerInfo& tokenizer, const std::vector<int>& token_ids)
+{
+    auto vocab = tokenizer.GetDecodedVocab();
+    for (int id : token_ids) {
+        if (id < 0 || id >= static_cast<int>(vocab.size())) {
+            throw std::invalid_argument("Invalid protocol token ID: " + std::to_string(id));
+        }
+        vocab[id] = std::string(1, '\xff');
+    }
+    return TokenizerInfo(
+        vocab, VocabType::RAW, tokenizer.GetVocabSize(), tokenizer.GetStopTokenIds(), tokenizer.GetAddPrefixSpace());
+}
+
 }  // namespace
 
 namespace turbomind::python {
@@ -100,6 +113,8 @@ void bind_xgrammar(py::module_& m)
         .def_property_readonly("decoded_vocab", &TokenizerInfo_GetDecodedVocab)
         .def_property_readonly("stop_token_ids", &TokenizerInfo::GetStopTokenIds)
         .def_property_readonly("special_token_ids", &TokenizerInfo::GetSpecialTokenIds)
+
+        .def("with_token_id_only", &TokenizerInfo_WithTokenIdOnly, py::call_guard<py::gil_scoped_release>())
 
         .def("dump_metadata", &TokenizerInfo::DumpMetadata)
 

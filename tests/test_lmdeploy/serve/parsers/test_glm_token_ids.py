@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import gc
 import json
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -221,14 +223,15 @@ def named_grammar_context(vocabulary):
 
     v = vocabulary
     stop_id = v.ctl('<|endoftext|>')[0]
-    compiler = xgr.GrammarCompiler(xgr.TokenizerInfo.from_huggingface(v.hf, stop_token_ids=[stop_id]))
+    info = xgr.TokenizerInfo.from_huggingface(v.hf, stop_token_ids=[stop_id])
+    compiler = xgr.GrammarCompiler(info)
     tools = copy.deepcopy(TOOLS)
     tools[0]['function']['parameters']['required'] = ['text']
 
     def build(*, thinking=False, request_tools=tools):
         parser = make_parser(v, thinking=thinking, request_tools=request_tools,
                              choice={'type': 'function', 'function': {'name': 'get_weather'}})
-        grammar = compile_response_format(compiler, parser.request.response_format)
+        grammar = compile_response_format(compiler, parser.request.response_format, tokenizer_info=info, tokenizer=v.hf)
         return parser, grammar
 
     def accepts(grammar, ids):
@@ -414,8 +417,152 @@ def test_turbomind_grammar_vocab_preserves_zero_bytes(value):
 
     if _tm is None:
         pytest.skip('TurboMind extension is not built')
-    info = _tm.TokenizerInfo([value, b'<eos>'], 0, vocab_size=2, stop_token_ids=[1], add_prefix_space=False)
-    assert info.decoded_vocab == [value, b'<eos>']
+    vocab = [value, b'<control>', b'<eos>']
+    info = _tm.TokenizerInfo(vocab, 0, vocab_size=4, stop_token_ids=[2], add_prefix_space=True)
+    assert info.decoded_vocab == vocab
+    clone = info.with_token_id_only([1])
+    assert clone.decoded_vocab == [value, b'\xff', b'<eos>']
+    assert info.decoded_vocab == vocab
+    assert clone.vocab_size == 4
+    assert clone.stop_token_ids == [2]
+    assert clone.add_prefix_space is True
+    for invalid in (-1, 3):
+        with pytest.raises(ValueError, match='Invalid protocol token ID'):
+            info.with_token_id_only([invalid])
+
+
+def test_named_format_cache_reuses_work_and_isolates_requests(vocabulary, named_grammar_context, monkeypatch):
+    from lmdeploy.serve.parsers.tool_parser import glm47_named_constraints as constraints
+
+    constraints._cached_named_tool_format.cache_clear()
+    lower = constraints._tokenize_xml_schema
+    calls = []
+
+    def counted(schema, ids):
+        calls.append(copy.deepcopy(schema))
+        return lower(schema, ids)
+
+    monkeypatch.setattr(constraints, '_tokenize_xml_schema', counted)
+    tools = copy.deepcopy(named_grammar_context.tools)
+    tools[0]['function']['parameters']['properties']['text']['const'] = 'first'
+    original = copy.deepcopy(tools)
+    first, _ = named_grammar_context.build(request_tools=tools)
+    expected = copy.deepcopy(first.request.response_format)
+    first.request.response_format['format']['elements'].clear()
+    first.request.response_format['_token_id_only'].clear()
+    second, _ = named_grammar_context.build(request_tools=tools)
+    assert second.request.response_format == expected
+    assert tools == original
+    assert len(calls) == 1
+
+    # Mutable caller schemas must produce a different grammar after a change.
+    tools[0]['function']['parameters']['properties']['text']['const'] = 'second'
+    _, grammar = named_grammar_context.build(request_tools=tools)
+    assert named_grammar_context.accepts(grammar, _named_xml_ids(vocabulary, 'second'))
+    assert not named_grammar_context.accepts(grammar, _named_xml_ids(vocabulary, 'first'))
+    assert len(calls) == 2
+    # A previously cached choice must not bypass duplicate-name validation.
+    with pytest.raises(ValueError):
+        named_grammar_context.build(request_tools=tools + copy.deepcopy(tools))
+
+
+def test_named_format_cache_preserves_name_thinking_order_and_token_ids(vocabulary):
+    import xgrammar as xgr
+
+    from lmdeploy.serve.parsers.tool_parser.glm47_named_constraints import _cached_named_tool_format
+
+    _cached_named_tool_format.cache_clear()
+    shifted = _make_vocabulary(_SPECIAL_TOKENS,
+                               added_tokens=_SPECIAL_TOKENS | _ORDINARY_ADDED_TOKENS | {'!padding'})
+    for v in (vocabulary, shifted):
+        eos = v.ctl('<|endoftext|>')[0]
+        compiler = xgr.GrammarCompiler(xgr.TokenizerInfo.from_huggingface(v.hf, stop_token_ids=[eos]))
+        for name in ('get_weather', 'lookup'):
+            for thinking in (False, True):
+                for order in (('first', 'second'), ('second', 'first')):
+                    tools = [{'type': 'function', 'function': {'name': name, 'parameters': {
+                        'type': 'object', 'properties': {key: {'type': 'string'} for key in order},
+                        'required': ['first', 'second']}}}]
+                    parser = make_parser(v, thinking=thinking, request_tools=tools,
+                                         choice={'type': 'function', 'function': {'name': name}})
+                    grammar = compile_response_format(compiler, parser.request.response_format, tokenizer=v.hf)
+
+                    def accepts(keys):
+                        ids = v.enc('Checking.') + v.ctl('</think>') if thinking else []
+                        ids += v.ctl('<tool_call>') + v.enc(name)
+                        for key in keys:
+                            ids += (v.ctl('<arg_key>') + v.enc(key) + v.ctl('</arg_key>')
+                                    + v.ctl('<arg_value>') + v.enc('value') + v.ctl('</arg_value>'))
+                        ids += v.ctl('</tool_call>') + [eos]
+                        matcher = xgr.GrammarMatcher(grammar)
+                        return all(matcher.accept_token(token_id) for token_id in ids)
+
+                    assert accepts(order), (name, thinking, order)
+                    assert not accepts(tuple(reversed(order))), (name, thinking, order)
+
+
+def test_token_id_compiler_bulk_and_fallback_preserve_vocabulary(vocabulary):
+    import xgrammar as xgr
+
+    from lmdeploy._guided_decoding import _CompilerIdentity, _token_id_only_compiler
+
+    v = vocabulary
+    info = xgr.TokenizerInfo.from_huggingface(
+        v.hf, vocab_size=len(v.hf) + 8, stop_token_ids=v.ctl('<|endoftext|>') + v.ctl('<|observation|>'))
+    original = info.decoded_vocab
+    token_ids = tuple(v.ctl(tag)[0] for tag in CONTROL_TAGS)
+    expected = list(original)
+    for token_id in token_ids:
+        expected[token_id] = b'\xff'
+    for tokenizer in (None, v.hf):
+        compiler = xgr.GrammarCompiler(info)
+        private = _token_id_only_compiler(_CompilerIdentity(compiler, info, tokenizer), token_ids)
+        cloned = private.compile_regex('').tokenizer_info
+        assert cloned.decoded_vocab == expected
+        assert cloned.stop_token_ids == info.stop_token_ids
+        assert cloned.vocab_size == info.vocab_size
+        assert cloned.add_prefix_space == info.add_prefix_space
+    assert info.decoded_vocab == original
+
+
+def test_token_id_compiler_does_not_retain_tokenizer():
+    import xgrammar as xgr
+
+    from lmdeploy._guided_decoding import _CompilerIdentity, _token_id_only_compiler
+
+    v = _make_vocabulary(_SPECIAL_TOKENS)
+    info = xgr.TokenizerInfo.from_huggingface(v.hf, stop_token_ids=v.ctl('<|endoftext|>'))
+    original = info.decoded_vocab
+    token_id = v.ctl('</arg_value>')[0]
+    reference = weakref.ref(v.hf)
+    identity = _CompilerIdentity(xgr.GrammarCompiler(info), info, v.hf)
+    _token_id_only_compiler(identity, (token_id,))
+    del v
+    gc.collect()
+    assert reference() is None
+    # After eviction, metadata alone must still support rebuilding the policy.
+    _token_id_only_compiler.cache_clear()
+    private = _token_id_only_compiler(identity, (token_id,))
+    expected = list(original)
+    expected[token_id] = b'\xff'
+    assert private.compile_regex('').tokenizer_info.decoded_vocab == expected
+
+
+@pytest.mark.parametrize('vocab_type', ['RAW', 'BYTE_FALLBACK'])
+def test_token_id_compiler_uses_metadata_for_other_vocab_types(vocab_type):
+    import xgrammar as xgr
+
+    from lmdeploy._guided_decoding import _CompilerIdentity, _token_id_only_compiler
+
+    class Tokenizer:
+        def get_vocab(self):
+            raise AssertionError('Only byte-level vocabularies use the encoded-vocab shortcut')
+
+    vocab = [b'<eos>', b'<control>', b'\x00' if vocab_type == 'RAW' else b'<0x00>']
+    info = xgr.TokenizerInfo(vocab, vocab_type=getattr(xgr.VocabType, vocab_type), stop_token_ids=[0])
+    tokenizer = Tokenizer()
+    private = _token_id_only_compiler(_CompilerIdentity(xgr.GrammarCompiler(info), info, tokenizer), (1,))
+    assert private.compile_regex('').tokenizer_info.decoded_vocab == [b'<eos>', b'\xff', b'\x00']
 
 
 @pytest.mark.parametrize('wrapped', [False, True])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import weakref
 from functools import lru_cache
 from typing import Any
 
@@ -93,9 +94,14 @@ def ensure_response_format_compilable(response_format: dict[str, Any]) -> None:
 class _CompilerIdentity:
     """Cache by compiler identity even for unhashable XGrammar wrappers."""
 
-    def __init__(self, compiler, tokenizer_info):
+    def __init__(self, compiler, tokenizer_info, tokenizer=None):
         self.compiler = compiler
         self.tokenizer_info = tokenizer_info
+        # The cached compiler must not keep a model's HF tokenizer alive.
+        try:
+            self.tokenizer_ref = weakref.ref(tokenizer) if tokenizer is not None else None
+        except TypeError:
+            self.tokenizer_ref = None
 
     def __hash__(self):
         return id(self.compiler)
@@ -118,24 +124,46 @@ def _token_id_only_compiler(identity: _CompilerIdentity, token_ids: tuple[int, .
         # Python XGrammar exposes tokenizer metadata on a compiled grammar.
         # TurboMind supplies its metadata explicitly through the same API.
         tokenizer_info = compiler.compile_regex('').tokenizer_info
-    vocab = list(tokenizer_info.decoded_vocab)
+    vocab_size = tokenizer_info.vocab_size
     for token_id in token_ids:
-        if not isinstance(token_id, int) or not 0 <= token_id < len(vocab):
+        if not isinstance(token_id, int) or not 0 <= token_id < vocab_size:
+            raise ValueError(f'Invalid protocol token ID: {token_id!r}')
+    clone = getattr(tokenizer_info, 'with_token_id_only', None)
+    if clone is not None:
+        # TurboMind can copy and patch the vocabulary entirely in C++.
+        return type(compiler)(clone(token_ids))
+    metadata = json.loads(tokenizer_info.dump_metadata())
+    tokenizer = identity.tokenizer_ref() if identity.tokenizer_ref is not None else None
+    if metadata['vocab_type'] == 2 and tokenizer is not None:  # BYTE_LEVEL
+        # GLM's immutable engine tokenizer supplies the same encoded vocabulary
+        # used to build tokenizer_info. Its Rust-backed bulk getter avoids one
+        # Python/FFI call per decoded entry. Preserve model padding and metadata.
+        vocab = [''] * vocab_size
+        for token, token_id in tokenizer.get_vocab().items():
+            if 0 <= token_id < vocab_size:
+                vocab[token_id] = token
+        # In byte-level encoding U+00FF represents the single byte 0xff.
+        replacement = '\u00ff'
+    else:
+        vocab = list(tokenizer_info.decoded_vocab)
+        metadata['vocab_type'] = 0  # RAW: vocab is already decoded to bytes.
+        replacement = b'\xff'
+    for token_id in token_ids:
+        if token_id >= len(vocab):
             raise ValueError(f'Invalid protocol token ID: {token_id!r}')
         # 0xff cannot occur in UTF-8 text. An empty entry would instead mark
         # the ID as padding, which XGrammar rejects even in Token(id) rules.
-        vocab[token_id] = b'\xff'
-    metadata = json.loads(tokenizer_info.dump_metadata())
-    metadata['vocab_type'] = 0  # RAW: vocab is already decoded to bytes.
+        vocab[token_id] = replacement
     info = type(tokenizer_info).from_vocab_and_metadata(vocab, json.dumps(metadata))
     return type(compiler)(info)
 
 
-def compile_response_format(compiler, response_format: dict[str, Any], *, tokenizer_info=None):
+def compile_response_format(compiler, response_format: dict[str, Any], *, tokenizer_info=None, tokenizer=None):
     """Compile one public or internal response format with XGrammar.
 
     Structural tags retain XGrammar's native shape. Internal token-ID policy is applied here before compilation; native
-    backends supply tokenizer metadata, while Python XGrammar can expose it through a compiled grammar.
+    backends supply tokenizer metadata, while Python XGrammar can expose it through a compiled grammar. If supplied,
+    tokenizer must be the immutable tokenizer used to construct that metadata.
     """
     schema_type, source = _grammar_source(response_format)
     if schema_type == 'json_schema':
@@ -145,6 +173,6 @@ def compile_response_format(compiler, response_format: dict[str, Any], *, tokeni
     if schema_type == 'structural_tag':
         token_ids = tuple(response_format.get('_token_id_only', ()))
         if token_ids:
-            compiler = _token_id_only_compiler(_CompilerIdentity(compiler, tokenizer_info), token_ids)
+            compiler = _token_id_only_compiler(_CompilerIdentity(compiler, tokenizer_info, tokenizer), token_ids)
         return compiler.compile_structural_tag(source)
     raise ValueError(f'unsupported format type: {schema_type}')

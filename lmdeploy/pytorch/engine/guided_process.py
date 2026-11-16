@@ -41,6 +41,7 @@ class GuidedDecodingManager:
             tokenizer_info = xgr.TokenizerInfo.from_huggingface(
                 tokenizer, vocab_size=vocab_size, stop_token_ids=stop_token_ids)
         self.tokenizer_info = tokenizer_info
+        self.tokenizer = tokenizer
         self.compiler = xgr.GrammarCompiler(tokenizer_info)
         self.vocab_size = vocab_size
         self.processors: dict[int, dict[int, xgr.GrammarMatcher]] = {}
@@ -64,7 +65,8 @@ class GuidedDecodingManager:
                 processor = session_dict[seq_id]
                 return processor
 
-        compiled = compile_response_format(self.compiler, response_format, tokenizer_info=self.tokenizer_info)
+        compiled = compile_response_format(
+            self.compiler, response_format, tokenizer_info=self.tokenizer_info, tokenizer=self.tokenizer)
 
         processor = xgr.GrammarMatcher(compiled)
         self.processors.setdefault(session_id, {})[seq_id] = processor
