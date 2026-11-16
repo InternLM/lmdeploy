@@ -4,6 +4,7 @@ vocabulary."""
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 from tokenizers import AddedToken, Tokenizer, decoders, models, normalizers, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
+from lmdeploy._guided_decoding import compile_response_format
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.chat_runner import ChatRunner
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
@@ -211,6 +213,134 @@ def test_named_call_cannot_complete_with_only_literal_tokens(vocabulary, stream,
         calls = asyncio.run(run())
         assert len(calls) == 1 and calls[0].function.name == 'get_weather'
     assert len(removed) == 1
+
+
+@pytest.fixture(scope='module')
+def named_grammar_context(vocabulary):
+    import xgrammar as xgr
+
+    v = vocabulary
+    stop_id = v.ctl('<|endoftext|>')[0]
+    compiler = xgr.GrammarCompiler(xgr.TokenizerInfo.from_huggingface(v.hf, stop_token_ids=[stop_id]))
+    tools = copy.deepcopy(TOOLS)
+    tools[0]['function']['parameters']['required'] = ['text']
+
+    def build(*, thinking=False, request_tools=tools):
+        parser = make_parser(v, thinking=thinking, request_tools=request_tools,
+                             choice={'type': 'function', 'function': {'name': 'get_weather'}})
+        grammar = compile_response_format(compiler, parser.request.response_format)
+        return parser, grammar
+
+    def accepts(grammar, ids):
+        matcher = xgr.GrammarMatcher(grammar)
+        return all(matcher.accept_token(token_id) for token_id in [*ids, stop_id])
+
+    return SimpleNamespace(build=build, accepts=accepts, tools=tools)
+
+
+def _named_xml_ids(v, value='hello'):
+    return (v.ctl('<tool_call>') + v.enc('get_weather') + v.ctl('<arg_key>') + v.enc('text')
+            + v.ctl('</arg_key>') + v.ctl('<arg_value>') + v.enc(value)
+            + v.ctl('</arg_value>') + v.ctl('</tool_call>'))
+
+
+@pytest.mark.parametrize('tag', [*Glm47ToolParser.token_id_terminals, '</think>'])
+def test_named_grammar_rejects_literal_boundary(vocabulary, named_grammar_context, tag):
+    v, context = vocabulary, named_grammar_context
+    _, grammar = context.build(thinking=True)
+    ids = v.enc('Checking.') + v.ctl('</think>') + _named_xml_ids(v)
+    assert context.accepts(grammar, ids)
+    boundary = ids.index(v.ctl(tag)[0])
+    ids[boundary:boundary + 1] = v.enc(tag)
+    assert not context.accepts(grammar, ids)
+
+
+@pytest.mark.parametrize('tag', CONTROL_TAGS)
+@pytest.mark.parametrize('stream', [False, True])
+def test_named_grammar_preserves_literal_arguments(vocabulary, named_grammar_context, tag, stream):
+    v, context = vocabulary, named_grammar_context
+    value = 'A 🧑 ' + tag + ' B'
+    ids = _named_xml_ids(v, value)
+    parser, grammar = context.build()
+    assert context.accepts(grammar, ids)
+    config = GenerationConfig()
+    parser.bind_generation_config(config)
+    removed = []
+
+    async def generate():
+        for text, part, final in native_chunks(v, ids, 1):
+            yield SimpleNamespace(response=text, token_ids=part, finish_reason='stop' if final else None,
+                                   input_token_len=1, generate_token_len=len(ids), cached_tokens=0,
+                                   logprobs=None, routed_experts=None, cache_block_ids=None)
+
+    async def run():
+        runner = ChatRunner(parser.request, parser, config, object(), generate(),
+                            SimpleNamespace(remove=removed.append))
+        if stream:
+            chunks = [chunk async for chunk in runner.stream()]
+            assert chunks[-1].finish_reason == 'tool_calls'
+            return parser.tool_parser.build_tool_calls([
+                call for chunk in chunks for call in chunk.delta_message.tool_calls or []])
+        result = await runner.collect()
+        assert result.finish_reason == 'tool_calls'
+        return result.tool_calls
+
+    calls = asyncio.run(run())
+    assert len(calls) == 1
+    assert json.loads(calls[0].function.arguments) == {'text': value}
+    assert len(removed) == 1
+
+
+@pytest.mark.parametrize('property_schema,valid,invalid', [
+    ({'type': 'string', 'const': '</arg_value>'}, '</arg_value>', 'other'),
+    ({'type': 'string', 'enum': ['<arg_key>', '</arg_key>']}, '<arg_key>', '<tool_call>'),
+    ({'type': 'string', 'pattern': r'^<arg_key>.*</arg_key><arg_value>.*</arg_value>$'},
+     '<arg_key>key</arg_key><arg_value>value</arg_value>', 'other'),
+    ({'type': 'integer', 'minimum': 3}, '42', '2'),
+    ({'type': 'boolean'}, 'true', '1'),
+    ({'type': 'array', 'items': {'type': 'integer'}}, '[1,2]', '["x"]'),
+    ({'type': 'object', 'properties': {'value': {'type': 'string', 'const': '</arg_value>'}}, 'required': ['value']},
+     '{"value":"</arg_value>"}', '{}'),
+])
+def test_named_grammar_keeps_value_schema(vocabulary, named_grammar_context, property_schema, valid, invalid):
+    context = named_grammar_context
+    tools = copy.deepcopy(context.tools)
+    tools[0]['function']['parameters']['properties']['text'] = property_schema
+    _, grammar = context.build(request_tools=tools)
+    assert context.accepts(grammar, _named_xml_ids(vocabulary, valid))
+    assert not context.accepts(grammar, _named_xml_ids(vocabulary, invalid))
+
+
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_named_grammar_keeps_required_and_optional_fields(vocabulary, named_grammar_context, wrapped):
+    v, context = vocabulary, named_grammar_context
+    tools = copy.deepcopy(context.tools)
+    schema = tools[0]['function']['parameters']
+    schema['properties']['extra'] = {'type': 'string'}
+    if wrapped:
+        tools[0]['function']['parameters'] = {'$defs': {'args': schema}, '$ref': '#/$defs/args'}
+    _, grammar = context.build(request_tools=tools)
+    required = _named_xml_ids(v)
+    extra = (v.ctl('<arg_key>') + v.enc('extra') + v.ctl('</arg_key>') + v.ctl('<arg_value>')
+             + v.enc('</arg_value>') + v.ctl('</arg_value>'))
+    assert context.accepts(grammar, required)
+    assert context.accepts(grammar, required[:-1] + extra + required[-1:])
+    assert not context.accepts(grammar, [])
+    assert not context.accepts(grammar, v.enc('Hello'))
+    assert not context.accepts(grammar, required + required)
+    assert not context.accepts(grammar, v.ctl('<tool_call>') + v.enc('get_weather') + v.ctl('</tool_call>'))
+    assert not context.accepts(grammar, required[:-1] + required[1:])
+
+
+@pytest.mark.parametrize('schema', [None, {}, {'type': 'object', 'additionalProperties': True}])
+def test_named_grammar_keeps_open_schemas(vocabulary, named_grammar_context, schema):
+    context = named_grammar_context
+    tools = copy.deepcopy(context.tools)
+    tools[0]['function']['parameters'] = schema
+    _, grammar = context.build(request_tools=tools)
+    assert context.accepts(grammar, _named_xml_ids(vocabulary, 'hello </arg_value>'))
+    assert context.accepts(grammar, vocabulary.ctl('<tool_call>') + vocabulary.enc('get_weather')
+                           + vocabulary.ctl('</tool_call>'))
 
 
 @pytest.mark.parametrize('skip', [False, True])

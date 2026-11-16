@@ -128,7 +128,8 @@ class ToolParser:
 
     @classmethod
     def build_named_response_format(cls, tools: list[Tool], tool_choice: ToolChoice,
-                                    *, reasoning: bool) -> dict[str, Any]:
+                                    *, reasoning: bool,
+                                    tokenizer: PreTrainedTokenizerBase | None = None) -> dict[str, Any]:
         """Force exactly one call to the selected function."""
         return cls._build_tool_choice_response_format(
             tools, tool_choice=tool_choice.model_dump(mode='json'), reasoning=reasoning)

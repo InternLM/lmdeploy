@@ -149,6 +149,22 @@ def test_runner_forwards_parser_adjusted_response_format_to_engine():
     assert context.async_engine.preprocess_kwargs['gen_config'].response_format == response_format
 
 
+@pytest.mark.parametrize('error', [
+    RequestError(ErrorCode.INVALID_REQUEST, 'Invalid grammar'), asyncio.CancelledError(),
+])
+def test_runner_prepare_failure_releases_owned_session(error):
+    context = _FakeServerContext(_Parser)
+
+    async def preprocess(*args, **kwargs):
+        raise error
+
+    context.async_engine.preprocess = preprocess
+    with pytest.raises(type(error)) as raised:
+        asyncio.run(ChatRunner.prepare(context, _request()))
+    assert raised.value is error
+    assert context.session_manager.removed == [context.session_manager.session]
+
+
 def test_runner_normalizes_string_stop_word_for_engine():
     context = _FakeServerContext(_Parser)
 

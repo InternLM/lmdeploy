@@ -386,7 +386,8 @@ class BaseResponseParser(ResponseParser):
         if mandatory_tool_choice:
             if isinstance(request.tool_choice, ToolChoice):
                 required_response_format = self.tool_parser.build_named_response_format(
-                    request.tools or [], request.tool_choice, reasoning=self.reasoning_enabled)
+                    request.tools or [], request.tool_choice, reasoning=self.reasoning_enabled,
+                    tokenizer=type(self).tokenizer)
             else:
                 required_response_format = self.tool_parser.build_required_response_format(
                     request.tools or [], reasoning=self.reasoning_enabled)

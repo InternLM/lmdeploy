@@ -73,6 +73,8 @@ tool_choice = {'type': 'function', 'function': {'name': 'get_current_weather'}}
 
 将此值作为上面请求的 `tool_choice` 参数。函数必须在 `tools` 中恰好匹配一项，且配置的解析器必须支持具名工具语法，否则服务返回 HTTP 400。语法约束不允许只输出普通回答或调用其他函数。与 `required` 一样，此约束优先于 `response_format`，会保留已开启的调用前思考；若在调用完成前耗尽 token 预算，仍返回 `finish_reason="length"`。
 
+对于 GLM，工具调用和参数边界必须使用专用控制 token ID。参数值中以普通 token 编码的同名标签仍保留为字面量文本。
+
 如果生成结果无法解析为指定调用，正常结束时会报告服务端错误，不会将普通文本作为成功回答返回。调用方指定的停止串或耗尽的 token 预算仍可中断调用。
 
 设置 `tool_choice="auto"` 时，由模型自行决定是否调用工具。例如，即使提供了工具，问候语也可能得到普通文本回复，并返回 `finish_reason="stop"`。

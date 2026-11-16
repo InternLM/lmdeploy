@@ -73,6 +73,8 @@ tool_choice = {'type': 'function', 'function': {'name': 'get_current_weather'}}
 
 Pass this value as `tool_choice` in the request above. The function must match exactly one entry in `tools`, and the configured parser must support a named-tool grammar; otherwise the server returns HTTP 400. The grammar excludes plain-text-only answers and calls to other functions. Like `required`, it takes precedence over `response_format`, preserves enabled reasoning before the call, and still permits `finish_reason="length"` if the token budget is exhausted before completion.
 
+For GLM, tool and argument boundaries require dedicated control token IDs. The same tag spellings encoded as ordinary tokens inside argument values remain literal text.
+
 If generated output cannot be parsed into the selected call, normal completion reports a server error instead of a successful text answer. An explicit caller stop sequence or an exhausted token budget may still interrupt the call.
 
 With `tool_choice="auto"`, the model decides whether to call a tool. For example, a greeting may produce a text reply with `finish_reason="stop"`, even when tools are supplied.
