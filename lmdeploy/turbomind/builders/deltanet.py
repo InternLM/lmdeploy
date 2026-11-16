@@ -82,6 +82,10 @@ class DeltaNetBuilder(Builder):
         q, k, v = split_qkv(in_proj_qkv,
                             num_k_heads=self.config.num_k_heads,
                             num_v_heads=self.config.num_v_heads)
+        # The SM75 NVFP4 kernel uses a row-major packed B (align.y = 1), so the
+        # fused GDN projection (whose per-shard N can be unaligned, e.g. 27B
+        # 16480 / 2 = 8240) runs directly on the 4-bit kernel — no dequant
+        # fallback needed.
         q, k, v, z, b, a = dequant_mixed(q, k, v, in_proj_z, in_proj_b, in_proj_a,
                                          dtype=self._ctx.dtype)
         fused = fuse_gdn(q, k, v, z, b, a, tp=self.tp.size)
