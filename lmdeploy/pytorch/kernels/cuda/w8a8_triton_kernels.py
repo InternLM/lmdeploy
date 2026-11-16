@@ -8,6 +8,12 @@ from triton.language.extra import libdevice
 from ..default.w8a8_kernels import per_channel_quant
 
 tl_round = libdevice.round
+# Most AMD GPUs have 64 KB of LDS. 3 stages of the tiles below need 96 KB.
+# The autotuner skips the configs that do not fit.
+_ROCM_LINEAR_CONFIGS = [
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 128}, num_stages=2, num_warps=8),
+    triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 128}, num_stages=2, num_warps=8),
+] if getattr(torch.version, 'hip', None) is not None else []
 
 
 @triton.autotune(
@@ -22,7 +28,7 @@ tl_round = libdevice.round
             'BLOCK_N': 128,
             'BLOCK_K': 128,
         }, num_stages=3, num_warps=8)
-    ],
+    ] + _ROCM_LINEAR_CONFIGS,
     key=['N', 'K'],
 )
 @triton.jit(do_not_specialize=['M'])
@@ -101,7 +107,7 @@ def _linear(
             'BLOCK_N': 128,
             'BLOCK_K': 128,
         }, num_stages=3, num_warps=8)
-    ],
+    ] + _ROCM_LINEAR_CONFIGS,
     key=['N', 'K'],
 )
 @triton.jit(do_not_specialize=['M'])
