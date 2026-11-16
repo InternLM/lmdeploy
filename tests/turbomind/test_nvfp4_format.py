@@ -117,3 +117,25 @@ def test_nvfp4_dequant_preserves_bias():
 
     out = fmt.dequant({'weight': codes, 'scales': scales, 'bias': bias}, torch.float32)
     assert torch.equal(out['bias'], bias)
+
+
+def test_nvfp4_converter_mapping():
+    from lmdeploy.turbomind.converter import (
+        _DEFAULT_GROUP_SIZES,
+        _SUPPORTED_GROUP_SIZES,
+        _build_quantized_formats,
+    )
+
+    formats = _build_quantized_formats('nvfp4', 16)
+    assert len(formats) == 1
+    assert isinstance(formats[0], NVFP4Format)
+    assert formats[0].block_in == 16
+
+    default_formats = _build_quantized_formats('nvfp4', None)
+    assert default_formats[0].block_in == 16
+
+    assert _DEFAULT_GROUP_SIZES['nvfp4'] == 16
+    assert _SUPPORTED_GROUP_SIZES['nvfp4'] == frozenset({16})
+
+    with pytest.raises(ValueError, match='unknown model_format'):
+        _build_quantized_formats('not-a-format', None)
