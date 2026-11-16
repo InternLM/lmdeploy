@@ -48,6 +48,7 @@ class VLAsyncEngine(AsyncEngine):
                          allowed_media_domains=allowed_media_domains,
                          **kwargs)
         # Update prompt_processor to support multimodal processing
+        self.prompt_processor.close()
         self.prompt_processor = MultimodalProcessor(self.tokenizer,
                                                     self.chat_template,
                                                     vl_encoder=self.vl_encoder,

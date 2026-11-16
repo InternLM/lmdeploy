@@ -307,8 +307,10 @@ class HuggingFaceTokenizer:
             if skip_special_tokens and new_tokens and new_tokens[0] in tokenizer.all_special_ids:
                 read_offset = read_offset + 1  # skip special token
 
-        output_tokens = prev_tokens + new_tokens
+        # This request owns prev_tokens; avoid copying the entire history on
+        # every output chunk, especially for long prompts.
         prev_tokens += new_tokens
+        output_tokens = prev_tokens
         prefix_text = self._convert_tokens_to_string_with_added_encoders(
             tokenizer,
             output_tokens[prefix_offset:read_offset],

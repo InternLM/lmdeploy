@@ -209,6 +209,7 @@ class AsyncEngine:
         self._idle_schedule_start_time: float | None = None
 
     def close(self):
+        self.prompt_processor.close()
         self.session_mgr.clear()
         self.engine.close()
 

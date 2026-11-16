@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Any, Literal
 
 import PIL
@@ -53,6 +55,12 @@ class MultimodalProcessor:
         self.vl_encoder = vl_encoder
         self.backend = backend
         self.allowed_media_domains = allowed_media_domains
+        self._text_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='lmdeploy-text')
+        self._text_slot = asyncio.Semaphore(1)
+
+    def close(self):
+        """Finish submitted text preprocessing and release its worker thread."""
+        self._text_executor.shutdown(wait=True, cancel_futures=True)
 
     @staticmethod
     def merge_message_content(msg: dict) -> dict:
@@ -386,7 +394,29 @@ class MultimodalProcessor:
                 has_multimodal_input = True
         return has_multimodal_input
 
-    async def _get_text_prompt_input(self,
+    async def _get_text_prompt_input(self, **kwargs):
+        # Keep at most one job in the executor. Waiting requests remain
+        # cancellable without retaining their prompts in its unbounded queue.
+        await self._text_slot.acquire()
+        try:
+            future = asyncio.get_running_loop().run_in_executor(
+                self._text_executor, partial(self._process_text_prompt_input, **kwargs))
+        except BaseException:
+            self._text_slot.release()
+            raise
+
+        def on_done(future):
+            self._text_slot.release()
+            # The caller may have disconnected while the worker was running.
+            if not future.cancelled():
+                future.exception()
+
+        future.add_done_callback(on_done)
+        # Cancelling a request cannot stop a running thread. Release the slot
+        # only when the worker finishes, even if the request has already exited.
+        return await asyncio.shield(future)
+
+    def _process_text_prompt_input(self,
                                      prompt: str | list[dict],
                                      do_preprocess: bool,
                                      adapter_name: str,
