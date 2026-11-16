@@ -61,8 +61,7 @@ class MultimodalProcessor:
         self._prompt_slot = asyncio.Semaphore(1)
 
     def close(self):
-        """Finish submitted prompt processing and release its worker
-        thread."""
+        """Finish submitted prompt processing and release its worker thread."""
         self._prompt_executor.shutdown(wait=True, cancel_futures=True)
 
     @staticmethod
