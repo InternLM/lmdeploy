@@ -89,6 +89,7 @@ class PreprocessedRequest:
     gen_config: GenerationConfig
     adapter_name: str | None
     consumed: bool = False
+    abort_version: int = 0
 
 
 # class AsyncEngine(LogitsMixin):
@@ -267,15 +268,14 @@ class AsyncEngine:
             metrics_processor.stat_loggers = self.stat_loggers
 
     def _if_session_stale(self, session: Session,
-                                   input_token_len: int) -> GenOut | None:
-        """If ``session.epoch`` was stamped by api_server and
-        ``stop_all_session`` ran since then (the engine epoch changed), drop
-        the session."""
+                                   input_token_len: int, abort_version: int) -> GenOut | None:
+        """Drop work invalidated by a global or per-session abort."""
         epoch = session.epoch
-        if epoch is None or epoch == self.epoch:
+        if session.abort_version == abort_version and (epoch is None or epoch == self.epoch):
             return None
         logger.info(f'[generate] drop stale session {session.session_id} '
-                    f'(session.epoch={epoch}, async_engine.epoch={self.epoch})')
+                    f'(session.epoch={epoch}, async_engine.epoch={self.epoch}, '
+                    f'abort_version={abort_version}->{session.abort_version})')
         return GenOut(response='',
                       input_token_len=input_token_len,
                       generate_token_len=0,
@@ -536,6 +536,7 @@ class AsyncEngine:
                 raise RequestError(
                     ErrorCode.REQUEST_CONFLICT,
                     f'Session {session.session_id} already has an active request.')
+            abort_version = session.abort_version
 
             chat_template_kwargs = chat_template_kwargs or {}
             if self.arch == 'Glm5NextForConditionalGeneration':
@@ -612,7 +613,8 @@ class AsyncEngine:
                                        inputs=prompt_input,
                                        input_token_len=input_len,
                                        gen_config=gen_config,
-                                       adapter_name=adapter_name)
+                                       adapter_name=adapter_name,
+                                       abort_version=abort_version)
         except (asyncio.CancelledError, GeneratorExit):
             metrics_processor.increase_total_requests()
             metrics_processor.increase_failed_requests('cancel')
@@ -685,7 +687,7 @@ class AsyncEngine:
         stop_ids = []
         if not gen_config.ignore_eos:
             stop_ids = gen_config.stop_token_ids or []
-        stale = self._if_session_stale(session, input_len)
+        stale = self._if_session_stale(session, input_len, request.abort_version)
         if stale is not None:
             metrics_processor.increase_failed_requests('abort')
             remove_session_once()
@@ -694,16 +696,11 @@ class AsyncEngine:
         session._remove_on_request_exit = True
         runtime_error = None
         async with session.request_handle() as handle:
-            if session.epoch is not None and session.epoch != self.epoch:
-                logger.info(f'[generate] session {session_id} got aborted before starting inference, '
-                               f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
+            stale = self._if_session_stale(session, input_len, request.abort_version)
+            if stale is not None:
                 metrics_processor.increase_failed_requests('abort')
                 remove_session_once()
-                yield GenOut(response='',
-                             input_token_len=input_len,
-                             generate_token_len=0,
-                             finish_reason='abort',
-                             token_ids=[])
+                yield stale
                 return
             token_ids = input_ids.copy()
             output_len, gen_len = 0, 0

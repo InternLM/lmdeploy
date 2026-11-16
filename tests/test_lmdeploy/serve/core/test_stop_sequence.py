@@ -51,7 +51,7 @@ def test_engine_and_runner_preserve_actual_stop_sequence(stream, include_stop, t
             yield EngineOutput(ResponseType.FINISH, [terminal])
         yield generate()
 
-    session = SimpleNamespace(session_id=0, epoch=None, request_handle=request_handle)
+    session = SimpleNamespace(session_id=0, epoch=None, abort_version=0, request_handle=request_handle)
     session_manager = SimpleNamespace(remove=lambda session: None)
     engine = AsyncEngine.__new__(AsyncEngine)
     engine.session_mgr = session_manager

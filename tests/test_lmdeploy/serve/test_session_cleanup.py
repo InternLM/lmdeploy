@@ -258,7 +258,7 @@ async def _run_input_logprob_outputs(engine_outputs,
         SimpleNamespace(create_instance=lambda: handle), 1)
     engine.session_len = 4096
     engine._determine_gen_config = lambda input_ids, gen_config=None: gen_config
-    engine._if_session_stale = lambda session, input_len: None
+    engine.epoch = 0
     engine.backend = 'pytorch'
     engine.backend_config = SimpleNamespace(
         role=EngineRole.Hybrid,

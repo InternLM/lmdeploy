@@ -26,6 +26,9 @@ class Session:
         # Set by api_server to AsyncEngine.epoch when a request binds a session;
         # generate() drops work if stop_all_session() bumped epoch after bind.
         self.epoch: int | None = None
+        # Requests snapshot this version before preprocessing so aborts also
+        # invalidate work that has not acquired an inference handle yet.
+        self.abort_version = 0
         # event to wait for the session to be active
         self._active: asyncio.Event | None = None
         self._handle = None  # inference instance
@@ -112,6 +115,7 @@ class Session:
     async def async_abort(self):
         """Abort the session."""
         logger.debug(f'[session] Aborting session {self.session_id}, epoch={self.epoch}')
+        self.abort_version += 1
         if self._handle is not None:
             await self._handle.async_cancel(self.session_id)
 
