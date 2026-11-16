@@ -323,7 +323,8 @@ def test_zmq_failed_shared_tensor_requests_release_fds(failure):
             await asyncio.sleep(0)
             assert client.pending == {}
             assert set(resource_sharer._resource_sharer._cache) == initial_handles
-        assert len(os.listdir('/proc/self/fd')) == initial_fds
+        # Background cleanup may close other FDs while requests are failing.
+        assert len(os.listdir('/proc/self/fd')) <= initial_fds
 
     asyncio.run(run())
 
