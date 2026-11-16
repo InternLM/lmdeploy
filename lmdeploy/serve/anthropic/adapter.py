@@ -8,8 +8,8 @@ from typing import Any, TypeVar
 
 import shortuuid
 
-from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
-from lmdeploy.serve.parsers.tool_parser.tool_parser import dump_tool_schemas
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool, ToolChoice, ToolChoiceFuncName
+from lmdeploy.serve.parsers.tool_parser.tool_parser import dump_tools
 
 from .protocol import (
     ContentBlockParam,
@@ -451,18 +451,37 @@ def chat_template_kwargs_from_thinking(thinking: ThinkingConfig | None) -> dict[
     return {'enable_thinking': thinking.type != 'disabled'}
 
 
+def render_count_tools(response_parser_cls, tools: list[Tool] | None) -> list[dict] | None:
+    """Render tools the way this model's generation path renders them.
+
+    Templates disagree on the shape they expect: most read the dumped
+    function schema, GPT-OSS reads the full `type`/`function` wrapper. The
+    parser class owns that choice for generation, so counting asks it too
+    instead of guessing.
+    """
+
+    if not tools:
+        return None
+    request = ChatCompletionRequest(model='', messages=[], tools=tools)
+    # no parser configured, or a lightweight stub injected by a test
+    render = getattr(response_parser_cls, 'render_tools', None)
+    if render is None:
+        return dump_tools(request).tools
+    return render(request)
+
+
 def count_input_tokens(async_engine,
                        messages: list[dict[str, str]],
-                       tools: list[Tool] | None = None,
+                       tools: list[dict] | None = None,
                        chat_template_kwargs: dict | None = None) -> int:
     """Approximate Anthropic token counting using LMDeploy
     tokenizer/template."""
 
     # Tool schemas are rendered into the prompt by the chat template, so a
     # count that leaves them out is not the count the same request produces.
-    # Templates are fed the same dumped schemas the generation path renders.
+    # `tools` arrives in the model-specific shape `render_count_tools` builds.
     prompt = async_engine.chat_template.messages2prompt(messages,
-                                                        tools=dump_tool_schemas(tools),
+                                                        tools=tools,
                                                         **(chat_template_kwargs or {}))
     token_ids = async_engine.tokenizer.encode(prompt, add_bos=True)
     return len(token_ids)

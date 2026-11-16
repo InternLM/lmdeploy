@@ -216,6 +216,18 @@ class ResponseParser:
     ) -> None:
         pass
 
+    @classmethod
+    def render_tools(cls, request: ChatCompletionRequest) -> list[dict] | None:
+        """Return the tools in the shape this model's chat template reads.
+
+        Generation renders tools through the parser, so anything that has to
+        reproduce a generation prompt - token counting - must ask the parser
+        too, or the two prompts diverge.
+        """
+        from .tool_parser.tool_parser import dump_tools
+
+        return dump_tools(request).tools
+
     def __init__(self, request: ChatCompletionRequest):
         self.request = request
         self.reasoning_tokens = None

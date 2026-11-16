@@ -36,19 +36,8 @@ class _ToolCallParts:
     arguments: list[str] = field(default_factory=list)
 
 
-def dump_tool_schemas(tools: list[Tool] | None) -> list[dict] | None:
-    """Dump tools to a list of dicts to fit jinja chat template.
-
-    ``apply_chat_template`` accepts a JSON schema or a callable, so protocol
-    objects have to be dumped before a template ever sees them.
-    """
-    if tools is None:
-        return None
-    return [item.function.model_dump() for item in tools]
-
-
 def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
-    """Dump request tools to fit jinja chat template."""
+    """Dump tools to a list of dicts to fit jinja chat template."""
     from lmdeploy.serve.openai.protocol import AllowedToolChoice
 
     if isinstance(request.tool_choice, AllowedToolChoice):
@@ -68,17 +57,19 @@ def dump_tools(request: ChatCompletionRequest) -> ChatCompletionRequest:
         if missing:
             raise ValueError(f'Allowed tool(s) not found in request.tools: {missing}')
 
-        tools = dump_tool_schemas([item for item in request.tools if item.function.name in allowed_names])
+        tools = [item.function.model_dump() for item in request.tools if item.function.name in allowed_names]
         return request.model_copy(update={'tools': tools})
 
     if not request.tools:
         return request.model_copy(update={'tools': None})
 
     if not isinstance(request.tool_choice, str):
-        tools = dump_tool_schemas(
-            [item for item in request.tools if item.function.name == request.tool_choice.function.name])
+        tools = [
+            item.function.model_dump() for item in request.tools
+            if item.function.name == request.tool_choice.function.name
+        ]
     else:
-        tools = dump_tool_schemas(request.tools)
+        tools = [item.function.model_dump() for item in request.tools]
     return request.model_copy(update={'tools': tools})
 
 
