@@ -10,7 +10,7 @@ from typing import Any
 
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.generation_config import build_generation_config
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage, ToolChoice
 from lmdeploy.serve.utils.request_cleanup import cleanup_result_generators
 
 from .exceptions import ErrorCode, RequestError
@@ -93,6 +93,11 @@ class ChatRunner:
         parser_cls = server_context.response_parser_cls
 
         try:
+            if isinstance(request.tool_choice, ToolChoice):
+                name = request.tool_choice.function.name
+                matches = sum(tool.function.name == name for tool in request.tools or [])
+                if matches != 1:
+                    raise ValueError(f'Named tool_choice {name!r} must match exactly one declared tool.')
             if request.tool_choice == 'required' and not parser_cls.supports_required_tool_choice:
                 raise ValueError(
                     f'Response parser {parser_cls.__name__!r} does not support `tool_choice="required"`.')
@@ -112,24 +117,31 @@ class ChatRunner:
 
         engine_messages = None if options.input_ids is not None else parsed_request.messages
         session = server_context.create_session(parsed_request.session_id)
-        preprocessed = await server_context.async_engine.preprocess(
-            engine_messages,
-            session,
-            gen_config=gen_config,
-            tools=parsed_request.tools,
-            reasoning_effort=parsed_request.reasoning_effort,
-            do_preprocess=options.do_preprocess,
-            adapter_name=adapter_name,
-            chat_template_kwargs=_chat_template_kwargs_from_request(parsed_request),
-            input_ids=options.input_ids,
-            media_io_kwargs=parsed_request.media_io_kwargs,
-            mm_processor_kwargs=parsed_request.mm_processor_kwargs,
-            **options.preprocess_kwargs,
-        )
-        if getattr(response_parser, 'requires_output_chunks', False):
-            response_parser.bind_generation_config(preprocessed.gen_config)
-        prompt_token_ids = list(preprocessed.inputs['input_ids']) if parsed_request.return_token_ids else None
-        result_generator = server_context.async_engine.generate(preprocessed, stream_response=True)
+        try:
+            preprocessed = await server_context.async_engine.preprocess(
+                engine_messages,
+                session,
+                gen_config=gen_config,
+                tools=parsed_request.tools,
+                reasoning_effort=parsed_request.reasoning_effort,
+                do_preprocess=options.do_preprocess,
+                adapter_name=adapter_name,
+                chat_template_kwargs=_chat_template_kwargs_from_request(parsed_request),
+                input_ids=options.input_ids,
+                media_io_kwargs=parsed_request.media_io_kwargs,
+                mm_processor_kwargs=parsed_request.mm_processor_kwargs,
+                **options.preprocess_kwargs,
+            )
+            if getattr(response_parser, 'requires_output_chunks', False):
+                response_parser.bind_generation_config(preprocessed.gen_config)
+            prompt_token_ids = list(preprocessed.inputs['input_ids']) if parsed_request.return_token_ids else None
+            result_generator = server_context.async_engine.generate(preprocessed, stream_response=True)
+        except BaseException:
+            # This runner owns the newly created API session even if engine
+            # preprocessing fails before it takes ownership (e.g. grammar
+            # compilation). Also release it on cancellation during preparation.
+            server_context.session_manager.remove(session)
+            raise
         return cls(
             request=parsed_request,
             response_parser=response_parser,
@@ -160,6 +172,7 @@ class ChatRunner:
         """Yield parser-normalized streaming chunks and clean up the
         session."""
         streaming_tools = False
+        named_calls: dict[int, str] | None = {} if isinstance(self.request.tool_choice, ToolChoice) else None
         return_token_metadata = bool(
             self.request.return_token_ids
             or self.request.logprobs
@@ -200,6 +213,12 @@ class ChatRunner:
 
                     is_last_delta = delta_index == len(stream_deltas) - 1
                     finish_reason = res.finish_reason if is_last_delta else None
+                    if named_calls is not None:
+                        for call in delta_message.tool_calls or []:
+                            if call.function is not None and call.function.name:
+                                named_calls[call.index] = call.function.name
+                        self._validate_named_tool_output(
+                            list(named_calls.values()), finish_reason, getattr(res, 'stop_sequence', None))
                     if (
                             self.request.tool_choice != 'none'
                             and self.response_parser.tool_parser is not None
@@ -269,6 +288,11 @@ class ChatRunner:
         except Exception as err:
             raise RequestError(ErrorCode.INVALID_REQUEST, f'Failed to parse output: {err}') from err
 
+        if isinstance(self.request.tool_choice, ToolChoice):
+            names = [call['function']['name'] if isinstance(call, dict) else call.function.name
+                     for call in tool_calls or []]
+            self._validate_named_tool_output(names, final_res.finish_reason, getattr(final_res, 'stop_sequence', None))
+
         return ChatResult(
             text=text,
             tool_calls=tool_calls,
@@ -285,6 +309,19 @@ class ChatRunner:
             reasoning_tokens=self.response_parser.reasoning_tokens,
             stop_sequence=getattr(final_res, 'stop_sequence', None),
         )
+
+    def _validate_named_tool_output(self, names: list[str], finish_reason: str | None,
+                                    stop_sequence: str | None) -> None:
+        """Do not report successful named generation without its parsed
+        call."""
+        tool_choice = self.request.tool_choice
+        assert isinstance(tool_choice, ToolChoice)
+        name = tool_choice.function.name
+        invalid_calls = len(names) > 1 or any(generated != name for generated in names)
+        missing_call = finish_reason in ('stop', 'tool_calls') and stop_sequence is None and not names
+        if invalid_calls or missing_call:
+            raise RequestError(ErrorCode.INTERNAL_ERROR,
+                               f'Generated output did not contain exactly one call to the named tool {name!r}.')
 
 
 def _build_runner_generation_config(

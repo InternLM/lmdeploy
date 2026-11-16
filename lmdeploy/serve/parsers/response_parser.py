@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from mmengine import Registry
 
-from lmdeploy.serve.openai.protocol import DeltaMessage
+from lmdeploy.serve.openai.protocol import DeltaMessage, ToolChoice
 from lmdeploy.utils import get_logger
 
 from .token_id_buffer import ControlSpan, LocatedText, ParseBuffer
@@ -335,13 +335,15 @@ class BaseResponseParser(ResponseParser):
     def __init__(self, request: ChatCompletionRequest):
         rcls = type(self).reasoning_parser_cls
         tcls = type(self).tool_parser_cls
+        named_tool_choice = isinstance(request.tool_choice, ToolChoice)
+        mandatory_tool_choice = request.tool_choice == 'required' or named_tool_choice
         response_format = request.response_format
         format_type = (response_format.get('type') if isinstance(response_format, dict)
                        else getattr(response_format, 'type', None))
         # These grammars constrain the entire generated sequence, including
-        # its first token. Required tools instead use a tagged grammar below.
+        # its first token. Mandatory tool choices use a tagged grammar below.
         self._literal_output = (format_type in ('json_object', 'json_schema', 'regex_schema')
-                                and request.tool_choice != 'required')
+                                and not mandatory_tool_choice)
         if self._literal_output:
             template_kwargs = dict(request.chat_template_kwargs or {})
             template_kwargs['enable_thinking'] = False
@@ -374,14 +376,21 @@ class BaseResponseParser(ResponseParser):
         else:
             if request.tool_choice == 'required':
                 raise ValueError('`tool_choice="required"` requires a configured tool-call parser.')
+            if named_tool_choice:
+                raise ValueError('A named tool_choice requires a configured tool-call parser.')
             from .tool_parser.tool_parser import dump_tools
 
             self.request = dump_tools(request)
 
         self.request = normalize_chat_request(self.request)
-        if request.tool_choice == 'required':
-            required_response_format = self.tool_parser.build_required_response_format(
-                request.tools or [], reasoning=self.reasoning_enabled)
+        if mandatory_tool_choice:
+            if isinstance(request.tool_choice, ToolChoice):
+                required_response_format = self.tool_parser.build_named_response_format(
+                    request.tools or [], request.tool_choice, reasoning=self.reasoning_enabled,
+                    tokenizer=type(self).tokenizer)
+            else:
+                required_response_format = self.tool_parser.build_required_response_format(
+                    request.tools or [], reasoning=self.reasoning_enabled)
             # Internal structural tags override client response_format because
             # an engine can apply only one guided-decoding constraint.
             self.request = self.request.model_copy(update={'response_format': required_response_format})
