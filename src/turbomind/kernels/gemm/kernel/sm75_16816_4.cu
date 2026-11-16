@@ -52,6 +52,10 @@ constexpr auto nvfp4_packer =
 // Dense NVFP4: E2M1 weights (B) + per-group-16 half scales (V), flat layout.
 const Family nvfp4{13, 190, kHalf, kHalf, 16, 8, 1, 1, true, false, supports_nvfp4, nvfp4_packer};
 
+// Grouped NVFP4 (MoE experts): blocked A (group_axis = 0), same E2M1 packed-B +
+// per-group-16 half scales. Reuses the dense NVFP4 packer (row-major B).
+const Family nvfp4_g{14, 189, kHalf, kHalf, 16, 8, 1, 1, true, true, supports_nvfp4, nvfp4_packer};
+
 // NVCC requires defaults on the template-template parameter.
 template<template<class Config_,
                   int   Stages,
@@ -126,6 +130,7 @@ using U4_D_128 = Config_U4_d<128>;
 using U4_G_128 = Config_U4_g<128>;
 using MXFP4    = Config_MXF4;
 using NVFP4    = Config_NVFP4;
+using NVFP4_G  = Config_NVFP4_g;
 
 Registrar reg[]{
     {u4_d_32, register_u4_d<U4_D_32::Type>},
@@ -136,6 +141,9 @@ Registrar reg[]{
     // Dense NVFP4 reuses the dense u4 tiling (flat, group_axis = -1), which
     // covers the full decode/prefill M range.
     {nvfp4, register_u4_d<NVFP4::Type>},
+    // Grouped NVFP4 reuses the grouped u4 tiling (blocked A, group_axis = 0)
+    // for MoE expert FFNs.
+    {nvfp4_g, register_u4_g<NVFP4_G::Type>},
 };
 }  // namespace
 
