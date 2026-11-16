@@ -1520,3 +1520,37 @@ def test_count_tokens_keeps_assistant_reasoning_structured():
     lm_messages = to_lmdeploy_messages(CountTokensRequest(model='fake-model', messages=messages))
     assert lm_messages[-1]['reasoning_content'] == 'let me think'
     assert lm_messages[-1]['content'] == 'hello!'
+
+
+def test_count_tokens_keeps_assistant_tool_calls_structured():
+    """Regression (PR review): with thinking enabled, a history ending in an
+    assistant message with tool_use blocks (and no thinking text) used to be
+    rejected by deepseek-style templates -- the count path flattened the
+    blocks into ``[tool_use ...]`` text and dropped ``tool_calls``.
+    """
+    import json
+
+    from lmdeploy.model import DeepseekV32ChatTemplate
+    from lmdeploy.serve.anthropic.adapter import to_lmdeploy_messages
+
+    context = _FakeServerContext(chat_template=DeepseekV32ChatTemplate())
+    client = _make_client(server_context=context)
+    messages = [
+        {'role': 'user', 'content': 'weather?'},
+        {'role': 'assistant', 'content': [
+            {'type': 'text', 'text': 'checking'},
+            {'type': 'tool_use', 'id': 't1', 'name': 'get_weather',
+             'input': {'city': 'Beijing'}},
+        ]},
+    ]
+
+    response = _post_count_tokens(client, messages=messages, thinking={'type': 'enabled'})
+
+    assert response.status_code == 200, response.text
+    assert response.json()['input_tokens'] > 0
+
+    lm_messages = to_lmdeploy_messages(CountTokensRequest(model='fake-model', messages=messages))
+    (tool_call, ) = lm_messages[-1]['tool_calls']
+    assert tool_call['function']['name'] == 'get_weather'
+    assert json.loads(tool_call['function']['arguments']) == {'city': 'Beijing'}
+    assert lm_messages[-1]['content'] == 'checking'

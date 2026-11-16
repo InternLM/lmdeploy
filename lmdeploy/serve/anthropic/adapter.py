@@ -152,17 +152,11 @@ def _text_from_blocks(blocks: list[ContentBlockParam | dict[str, Any]], field_na
             text = block.get('text')
             content = block.get('content')
             tool_use_id = block.get('tool_use_id')
-            tool_name = block.get('name')
-            tool_input = block.get('input')
-            thinking = block.get('thinking')
         else:
             block_type = block.type
             text = block.text
             content = block.content
             tool_use_id = block.tool_use_id
-            tool_name = block.name
-            tool_input = block.input
-            thinking = block.thinking
         if block_type == 'text':
             if text is None:
                 raise ValueError(f'Missing `text` in `{field_name}` content block at index {idx}.')
@@ -171,8 +165,9 @@ def _text_from_blocks(blocks: list[ContentBlockParam | dict[str, Any]], field_na
             result_text = _text_from_block_content(content, field_name=f'{field_name}[{idx}].content')
             out.append(f'\n[tool_result id={tool_use_id or ""}]\n{result_text}\n[/tool_result]\n')
         elif block_type == 'tool_use':
-            tool_payload = _stringify_block_value(tool_input)
-            out.append(f'\n[tool_use name={tool_name or ""}]\n{tool_payload}\n[/tool_use]\n')
+            # assistant tool calls ride on ``tool_calls`` (see
+            # ``to_lmdeploy_messages``), never flattened into the content
+            pass
         elif block_type in ('thinking', 'redacted_thinking'):
             # assistant reasoning rides on ``reasoning_content`` (see
             # ``to_lmdeploy_messages``), never flattened into the content
@@ -206,6 +201,25 @@ def _reasoning_from_blocks(blocks: list[ContentBlockParam | dict[str, Any]]) -> 
             if thinking:
                 parts.append(thinking)
     return ''.join(parts) or None
+
+
+def _tool_calls_from_blocks(blocks: list[ContentBlockParam | dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """Build OpenAI-style tool calls from ``tool_use`` blocks, mirroring the
+    generation path."""
+
+    tool_calls = []
+    for block in blocks:
+        if _block_get(block, 'type') == 'tool_use':
+            tool_calls.append(
+                dict(
+                    id=_block_get(block, 'id') or f'call_{shortuuid.random()}',
+                    type='function',
+                    function=dict(
+                        name=_block_get(block, 'name') or '',
+                        arguments=json.dumps(_block_get(block, 'input') or {}),
+                    ),
+                ))
+    return tool_calls or None
 
 
 def _convert_image_source_to_url(source: Any) -> str:
@@ -408,10 +422,13 @@ def to_lmdeploy_messages(
         lm_message = dict(role=message.role, content=content)
         if message.role == 'assistant' and isinstance(message.content, list):
             # structured like the generation path; thinking-mode templates
-            # (deepseek) require reasoning_content on assistant turns
+            # (deepseek) require reasoning_content/tool_calls on assistant turns
             reasoning = _reasoning_from_blocks(message.content)
             if reasoning:
                 lm_message['reasoning_content'] = reasoning
+            tool_calls = _tool_calls_from_blocks(message.content)
+            if tool_calls:
+                lm_message['tool_calls'] = tool_calls
         lm_messages.append(lm_message)
     if merge_inline_system:
         return _merge_system_messages(lm_messages)
