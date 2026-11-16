@@ -254,10 +254,13 @@ def test_scoring_uses_final_marker_positions(images):
     for answer in expected.values():
         answer.pop('source')
         answer.pop('decision')
+        answer.pop('confidence')
         if answer['type'] == 'noul':
-            answer.pop('confidence')
             answer.pop('probabilities')
-    assert result['answers'] == expected
+    actual = copy.deepcopy(result['answers'])
+    for answer in actual.values():
+        answer.pop('confidence', None)
+    assert actual == expected
     assert result['usage']['input_tokens'] == prepared.input_token_len
     assert set(result) == {'model', 'answers', 'usage'}
     assert result['usage']['output_tokens'] == len(compile_row(

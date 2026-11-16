@@ -213,6 +213,12 @@ Choice 和 noul 问题仍使用对象形式的 criteria。
 超过大小限制返回 413。该端点不接受旧的 `images` 字段。
 
 响应包含 `model`、`answers` 和 `usage`；评分答案的 `legend` 保留原始 JSON 值和图片引用。
+Systemone 的 confidence 从温度校准后的概率按固定的
+[TypeSafe 公式](https://docs.typesafe.ai/confidence#how-confidence-is-calculated)计算：Choice 衡量最大概率超出均匀分布的程度，
+Score 衡量概率相对最可能等级的加权距离。均匀分布的 confidence 为 0，概率集中在单个结果时为 1。
+本地约定单选项或单刻度也返回 1；Noul 没有 confidence 字段。
+此响应转换不改变概率、score 数值或 `/v1/decisions` 的 confidence。
+
 `usage.input_tokens` 包含视觉 token。`usage.output_tokens` 统计 assistant 答案骨架分词后的 token 数，
 其中包含决策标记，不表示实际生成的 token 数。图片仅作为输入依据，不随响应返回。
 

@@ -40,6 +40,23 @@ from lmdeploy.serve.parsers.decision_assets import (
 TASK_NAME = 'intern-decision'
 
 
+def _systemone_confidence(answer: dict) -> float:
+    probabilities = list(answer['probabilities'].values())
+    count = len(probabilities)
+    if count == 1:
+        return 1.0
+    maximum = max(probabilities)
+    if answer['type'] == 'choice':
+        confidence = (maximum - 1 / count) / (1 - 1 / count)
+    else:
+        # Score probabilities follow the zero-based criteria array order.
+        mode = probabilities.index(maximum)
+        spread = sum(probability * abs(index - mode) for index, probability in enumerate(probabilities))
+        uniform_spread = sum(abs(index - (count - 1) / 2) for index in range(count)) / count
+        confidence = 1 - spread / uniform_spread
+    return max(0.0, min(1.0, confidence))
+
+
 @dataclass(frozen=True)
 class DecisionInput:
     """Engine input compiled from one decision request."""
@@ -359,6 +376,8 @@ class DecisionParser:
         for name, answer in answers.items():
             answer.pop('source')
             answer.pop('decision')
+            if answer['type'] in ('choice', 'score'):
+                answer['confidence'] = _systemone_confidence(answer)
             if answer['type'] == 'noul':
                 answer.pop('probabilities')
                 answer.pop('confidence')

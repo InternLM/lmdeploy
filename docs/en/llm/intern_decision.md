@@ -248,6 +248,13 @@ to `/v1/systemone`; the `/v1/decisions` image contract is preserved.
 
 Responses contain `model`, `answers` and `usage`. A `noul` answer contains `type` and `noul`; choice and score
 answers include probabilities and confidence. Score legends preserve the original JSON values and image references.
+Systemone confidence is computed from the calibrated probabilities using the fixed
+[TypeSafe formulas](https://docs.typesafe.ai/confidence#how-confidence-is-calculated): choice measures the top
+probability above a uniform distribution; score measures probability-weighted distance from the most likely level.
+Uniform distributions have confidence 0 and single-outcome distributions have confidence 1. A single-option or
+single-level question also returns 1 as a local boundary convention. Noul has no confidence field.
+This response conversion does not change probabilities, scores, or the confidence returned by `/v1/decisions`.
+
 `usage.input_tokens` includes expanded visual tokens; `usage.output_tokens` counts the tokenized assistant skeleton,
 including its decision markers, rather than generated tokens. Images are input evidence and are not returned.
 

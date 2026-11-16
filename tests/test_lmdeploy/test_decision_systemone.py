@@ -5,6 +5,7 @@ engine."""
 import base64
 import copy
 import json
+import math
 import threading
 from io import BytesIO
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from test_decision_service import FakeEngine, config
 
+from lmdeploy.intern_decision_encoding import ANSWER_SYMBOLS
 from lmdeploy.serve.openai.api_server import ServerContext, validation_exception_handler
 from lmdeploy.serve.openai.decision_protocol import SystemoneRequest
 from lmdeploy.serve.openai.endpoints import create_openai_router
@@ -68,7 +70,7 @@ class SystemoneEngine(FakeEngine):
 def service():
     context = ServerContext()
     context.async_engine = SystemoneEngine()
-    context.decision_context = config()
+    context.decision_context = config(symbol_ids={symbol: index + 32 for index, symbol in enumerate(ANSWER_SYMBOLS)})
     app = FastAPI()
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.include_router(create_openai_router(context))
@@ -122,6 +124,43 @@ def test_unknown_fields_are_accepted_without_changing_engine_input(service, monk
     assert baseline.status_code == response.status_code == 200
     assert response.json()['answers'] == baseline.json()['answers']
     assert observed[0] == observed[1]
+
+
+@pytest.mark.parametrize(('kind', 'logits', 'expected'), [
+    ('choice', [0.0], 1.0),
+    ('score', [0.0], 1.0),
+    ('choice', [0.0, 0.0, 0.0], 0.0),
+    ('score', [0.0, 0.0, 0.0], 0.0),
+    ('choice', [1000.0, 0.0, 0.0], 1.0),
+    ('score', [1000.0, 0.0, 0.0], 1.0),
+    ('choice', [math.log(3), 0.0], 0.5),
+    ('choice', [math.log(6), math.log(3), 0.0], 0.4),
+    ('choice', [0.0] * 62, 0.0),
+    ('score', [-1000.0, math.log(.57), math.log(.43)], 0.355),
+    ('score', [math.log(.5), -1000.0, math.log(.5)], 0.0),
+    ('score', [-1000.0] * 2 + [math.log(.2)] + [-1000.0] * 8 + [math.log(.8)], 0.4),
+])
+def test_confidence_uses_the_calibrated_distribution(service, monkeypatch, kind, logits, expected):
+    client, engine = service
+    original = engine.generate
+
+    async def scores(request, stream_response=True):
+        async for output in original(request, stream_response=stream_response):
+            row = {index + 32: value * config().temperature for index, value in enumerate(logits)}
+            output.logprobs = [row.copy() for _ in output.logprobs]
+            yield output
+
+    monkeypatch.setattr(engine, 'generate', scores)
+    criteria = [str(index) for index in range(len(logits))]
+    if kind == 'choice':
+        criteria = {label: label for label in criteria}
+    response = client.post('/v1/systemone', json=dict(state='text', questions={
+        'q': dict(type=kind, instructions='Decide.', criteria=criteria),
+    }))
+    assert response.status_code == 200, response.text
+    answer = response.json()['answers']['q']
+    assert answer['confidence'] == pytest.approx(expected, abs=2e-7)
+    assert sum(answer['probabilities'].values()) == pytest.approx(1.0)
 
 
 def test_nested_references_keep_order_keys_and_original_response_values(service):
