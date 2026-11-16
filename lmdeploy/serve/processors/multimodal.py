@@ -59,7 +59,8 @@ class MultimodalProcessor:
         self._text_slot = asyncio.Semaphore(1)
 
     def close(self):
-        """Finish submitted text preprocessing and release its worker thread."""
+        """Finish submitted text preprocessing and release its worker
+        thread."""
         self._text_executor.shutdown(wait=True, cancel_futures=True)
 
     @staticmethod
