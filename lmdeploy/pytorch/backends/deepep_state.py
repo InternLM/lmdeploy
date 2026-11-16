@@ -9,18 +9,9 @@ class DeepEPState:
     def __init__(self):
         """Initialize DeepEP state."""
         self._enabled = False
-        self.low_latency_prefill_tokens = 0
 
-    def enable(self, low_latency_prefill_tokens: int = 0):
-        """Register a layer's safe prefill capacity; unsupported layers opt
-        out.
-
-        All layers share the forward's communication mode, so the least capable layer determines whether small prefills
-        can use low latency.
-        """
-        if self._enabled:
-            low_latency_prefill_tokens = min(self.low_latency_prefill_tokens, low_latency_prefill_tokens)
-        self.low_latency_prefill_tokens = low_latency_prefill_tokens
+    def enable(self):
+        """Mark DeepEP as enabled."""
         self._enabled = True
 
     def enabled(self):
