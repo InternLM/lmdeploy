@@ -11,21 +11,32 @@ Here is the [supported model list](../../supported_models/supported_models.md#py
 The current A3 PyTorch backend is implemented inside LMDeploy and does not
 require dlinfer. Use a separate Python environment without dlinfer installed.
 Load the CANN and NNAL/ATB environment scripts for your installation first.
-The following source-install recipe uses the PyTorch versions in
+The following CANN 9.1.0 / Python 3.12 source-install profile matches
 [`Dockerfile_ascend_a3`](../../../../docker/Dockerfile_ascend_a3):
 
 ```bash
-python3.11 -m venv .venv-ascend
+python3.12 -m venv .venv-ascend
 source .venv-ascend/bin/activate
-python -m pip install torch==2.9.0 torch-npu==2.9.0 torchvision==0.24.0
-python -m pip install -r requirements/ascend_kernels.txt
-LMDEPLOY_TARGET_DEVICE=ascend python -m pip install .
+export TORCH_DEVICE_BACKEND_AUTOLOAD=0
+A3_WHEEL_DIR=$(mktemp -d)
+python -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
+    --index-url https://download.pytorch.org/whl/cpu \
+    -c requirements/ascend_a3_constraints.txt torch torchvision
+python -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
+    --index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
+    -r requirements/ascend_kernels.txt
+LMDEPLOY_TARGET_DEVICE=ascend python -m pip install --index-url https://pypi.org/simple \
+    --find-links "$A3_WHEEL_DIR" -c requirements/ascend_a3_constraints.txt \
+    -r requirements/ascend_kernels.txt . pyarrow
+python -m pip check
 python tools/ascend/check_runtime.py --require-kernels
 ```
 
-Run these commands from the repository root. CANN, torch_npu, Triton Ascend,
-and the external `triton-ascend-kernels` library remain required; pin the latter
-to a revision compatible with your environment. Keep `device_type="ascend"`
+Run these commands from the repository root. CANN, torch_npu and Triton-Ascend
+remain required. The GDN prefill/L2Norm kernels are bundled with source provenance
+and their MIT license; no external kernel repository checkout is needed. The
+image uses an isolated application venv with Torch 2.10.0+cpu, torch_npu
+2.10.0.post4, torchvision 0.25.0+cpu and Triton-Ascend 3.2.2.post2. Keep `device_type="ascend"`
 or `--device ascend` in inference commands. Graph mode uses `torch.npu.NPUGraph`;
 use `eager_mode=True` or `--eager-mode` to disable it.
 
@@ -54,15 +65,14 @@ python -m pip install --no-deps -r requirements/ascend_triton_npuir2.txt \
     --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi
 ```
 
-Apply this in an independent environment with its own package files. It updates
-Triton and its compiler bundle while retaining the existing runtime dependencies;
-it is not a second requirements file to combine with the older Triton pin in
-`requirements/ascend_kernels.txt` in one installation. The validated update used
-Python 3.12.13, Torch 2.10.0+cpu, torch_npu 2.10.0.post4 and CANN 9.1.0. This is a
-targeted compiler-update result, not certification of a fresh dependency solve
-or the existing CANN 8.5 Docker recipe with the new compiler. The
-[official recommended pairing](https://ascendnpu-ir.gitcode.com/en/introduction/quick_start/version_compatibility.html)
-is NPUIR 2.0.0 with CANN 9.2.0; that complete runtime/driver update was not tested.
+Apply this in an independent environment with its own package files. New
+installations already select this compiler through `requirements/ascend_kernels.txt`.
+The component-update checks used Python 3.12.13, Torch 2.10.0+cpu,
+torch_npu 2.10.0.post4 and CANN 9.1.0. The Dockerfile now uses the official
+`9.1.0-a3-openeuler24.03-py3.12` image and the matching pinned dependency profile.
+The [official preferred NPUIR pairing](https://ascendnpu-ir.gitcode.com/en/introduction/quick_start/version_compatibility.html)
+is NPUIR 2.0.0 with CANN 9.2.0; here the tested compiler update is used with the
+existing CANN 9.1.0 runtime. This does not upgrade the host driver or firmware.
 
 Triton prefers its bundled compiler over PATH. Check the executable actually
 selected after the update, rather than only `triton.__version__`:

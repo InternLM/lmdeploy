@@ -7,8 +7,9 @@
 # mypy: ignore-errors
 
 import torch
-from triton_ascend_kernels.attention.fla import chunk_gated_delta_rule_fwd
-from triton_ascend_kernels.norm.l2norm import l2norm_fwd
+
+from .prefill import chunk_gated_delta_rule_fwd
+from .prefill.l2norm import l2norm_fwd
 
 
 def chunk_gated_delta_rule(
@@ -26,7 +27,7 @@ def chunk_gated_delta_rule(
 ):
     r"""
     Inference-only chunk gated delta rule (no autograd wrapper).
-    Kernel: triton_ascend_kernels.attention.fla.chunk_gated_delta_rule_fwd
+    Kernel: lmdeploy.pytorch.kernels.ascend.triton_ops.fla.prefill.chunk_gated_delta_rule_fwd
 
     Args:
         q: queries  `[B, T, H, K]`.

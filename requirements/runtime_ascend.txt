@@ -15,7 +15,7 @@ prometheus_client
 psutil
 pyyaml
 scipy
-torch>=2.8.0,<2.10.0
-torch-npu>=2.8.0.post1,<2.10.0
-torchvision>=0.23.0,<0.25.0
+torch>=2.8.0,<2.11.0
+torch-npu>=2.8.0.post1,<2.11.0
+torchvision>=0.23.0,<0.26.0
 tornado

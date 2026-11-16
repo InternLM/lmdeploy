@@ -1,3 +1,3 @@
-# Optional Triton/compiler update for an existing compatible native A3 runtime.
-# Install with --no-deps; see the Ascend guide for the tested stack and scope.
+# Triton/compiler version used by the CANN 9.1 native A3 installation.
+# This wheel includes AscendNPU-IR 2.0.0 (efb71415).
 triton-ascend==3.2.2.post2

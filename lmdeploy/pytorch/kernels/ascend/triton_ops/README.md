@@ -75,7 +75,7 @@ Implements the core linear attention operation for prefill phase using chunked p
 - Processes sequences in chunks for parallelism
 
 **Wrapper Role**:
-`fla/chunk.py` is a thin wrapper that handles input validation, dtype conversion (to bfloat16), optional Q/K L2 normalization (`use_qk_l2norm_in_kernel`) via `triton_ascend_kernels.norm.l2norm.l2norm_fwd`, and delegates to `triton_ascend_kernels.attention.fla.chunk_gated_delta_rule_fwd`.
+`fla/chunk.py` is a thin wrapper that handles input validation, dtype conversion (to bfloat16), optional Q/K L2 normalization (`use_qk_l2norm_in_kernel`) via the bundled `fla.prefill.l2norm.l2norm_fwd`, and delegates to `fla.prefill.chunk.chunk_gated_delta_rule_fwd`.
 
 ______________________________________________________________________
 
@@ -85,7 +85,7 @@ ______________________________________________________________________
 
 **Source**:
 
-- Adapted from: https://github.com/vllm-project/vllm-ascend/blob/main/vllm_ascend/ops/triton/fla/sigmoid_gating.py
+- Migration source: https://github.com/DeepLink-org/dlinfer/blob/3b9096341a41e9d067104a39d914e47ca2d7ec50/dlinfer/vendor/ascend/triton_ops/fla/sigmoid_gating.py
 - Original: https://github.com/fla-org/flash-linear-attention (MIT)
 - Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
 
@@ -122,7 +122,7 @@ ______________________________________________________________________
 **Source**:
 
 - Adapted from: https://github.com/vllm-project/vllm-ascend/blob/main/vllm_ascend/ops/triton/fla/layernorm_guard.py
-- Original: https://github.com/fla-org/flash-linear-attention/blob/main/fla/modules/layernorm_gated.py
+- Original: https://github.com/fla-org/flash-linear-attention/blob/9c8e42e762fce087c27b673af4922795d9edb85e/fla/modules/fused_norm_gate.py
 
 **Purpose**:
 Implements RMSNorm (Root Mean Square Normalization) with optional SiLU (`silu`/`swish`) or sigmoid gating.
@@ -175,7 +175,7 @@ Input tokens
     ↓
 [Causal Conv1D] ← causal_conv1d_fn
     ↓
-[Linear Attention] ← chunk_gated_delta_rule (triton_ascend_kernels)
+[Linear Attention] ← chunk_gated_delta_rule (bundled GDN prefill)
     ↓
 [Gated RMSNorm] ← RMSNormGated → rmsnorm_fn
     ↓
@@ -200,54 +200,37 @@ ______________________________________________________________________
 
 ## External Dependencies
 
-| Package                 | Usage                                                          |
-| ----------------------- | -------------------------------------------------------------- |
-| `triton`                | Kernel DSL and JIT compilation                                 |
-| `triton_ascend_kernels` | Official Ascend-optimized kernels (prefill attention, L2 norm) |
-| `torch`                 | Tensor operations, NPU device management                       |
-| `torch_npu`             | Ascend NPU backend for PyTorch                                 |
+| Package     | Usage                                    |
+| ----------- | ---------------------------------------- |
+| `triton`    | Kernel DSL and JIT compilation           |
+| `torch`     | Tensor operations, NPU device management |
+| `torch_npu` | Ascend NPU backend for PyTorch           |
 
 ______________________________________________________________________
 
 ## Installation
 
-### Installing `triton-ascend-kernels`
+### Installing the native Ascend kernels
 
-The core attention kernels (`chunk_gated_delta_rule_fwd`, `l2norm_fwd`) are provided by the official `triton-ascend-kernels` package.
+The GDN prefill and L2Norm implementations are included under
+[`fla/prefill`](fla/prefill/README.md), with their fixed source revision and MIT
+license. No build-time GitCode checkout or external `triton-ascend-kernels`
+installation is required.
 
-**LMDeploy runtime requirements**:
-
-Use `requirements/runtime_ascend.txt` and `requirements/ascend_kernels.txt`
-from the repository root. The native backend requires matching torch/torch_npu
-major.minor versions, torch >= 2.8.0, torch_npu >= 2.8.0.post1, and
-`torch.npu.NPUGraph.update` (`backends/ascend/version.py:23`). The old 2.6
-installation recipe is not supported by this checkout. Record the actual
-`triton-ascend-kernels` Git commit in the A3 validation environment; the imported
-chunk/L2Norm kernels are an external dependency, not code supplied by dlinfer.
-
-See the [Ascend installation guide](../../../../../docs/en/get_started/ascend/get_started.md#native-a3-installation).
-
-**Install from source**:
-
-```bash
-git clone https://gitcode.com/Ascend/triton-ascend-kernels.git
-cd triton-ascend-kernels
-pip install -e .
-```
-
-**Verify installation**:
+Use `requirements/runtime_ascend.txt`, `requirements/ascend_kernels.txt`, and the
+CANN 9.1 A3 constraints from the repository root. The native backend requires
+matching Torch/TorchNPU major.minor versions and `torch.npu.NPUGraph.update`.
+See the [Ascend installation guide](../../../../../docs/en/get_started/ascend/get_started.md#native-a3-installation)
+for the complete CPU-PyTorch/TorchNPU/Triton version combination.
 
 ```python
-from triton_ascend_kernels.attention.fla import chunk_gated_delta_rule_fwd
-from triton_ascend_kernels.norm.l2norm import l2norm_fwd
-
-print("triton-ascend-kernels installed successfully!")
+from lmdeploy.pytorch.kernels.ascend.triton_ops.fla.prefill import chunk_gated_delta_rule_fwd
+from lmdeploy.pytorch.kernels.ascend.triton_ops.fla.prefill.l2norm import l2norm_fwd
 ```
-
-For more details, see: https://gitcode.com/Ascend/triton-ascend-kernels
 
 ______________________________________________________________________
 
 ## License
 
-All kernels are Apache-2.0 licensed. Original sources are attributed in individual file headers.
+Kernels retain the licenses and source attribution in their file headers. The
+bundled GDN prefill/L2Norm slice is covered by its [MIT license](fla/prefill/LICENSE).

@@ -1,3 +1,2 @@
-# Optional GDN and Triton rejection kernels, matching the source fork's runtime.
-triton-ascend==3.2.0
-triton-ascend-kernels @ git+https://gitcode.com/Ascend/triton-ascend-kernels.git@master
+# Compiler for native Ascend kernels. GDN prefill/L2Norm sources are bundled.
+-r ascend_triton_npuir2.txt

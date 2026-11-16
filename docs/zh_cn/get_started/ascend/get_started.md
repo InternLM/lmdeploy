@@ -7,20 +7,31 @@
 ## A3 原生后端安装
 
 当前 A3 PyTorch 后端由 LMDeploy 内部实现，无需 dlinfer。请使用未安装 dlinfer 的独立
-Python 环境，并先加载当前安装的 CANN 和 NNAL/ATB 环境脚本。以下源码安装示例沿用
-[`Dockerfile_ascend_a3`](../../../../docker/Dockerfile_ascend_a3) 的 PyTorch 版本：
+Python 环境，并先加载 CANN 9.1.0 和匹配的 NNAL/ATB 环境脚本。以下 Python 3.12
+源码安装配置与 [`Dockerfile_ascend_a3`](../../../../docker/Dockerfile_ascend_a3) 保持一致：
 
 ```bash
-python3.11 -m venv .venv-ascend
+python3.12 -m venv .venv-ascend
 source .venv-ascend/bin/activate
-python -m pip install torch==2.9.0 torch-npu==2.9.0 torchvision==0.24.0
-python -m pip install -r requirements/ascend_kernels.txt
-LMDEPLOY_TARGET_DEVICE=ascend python -m pip install .
+export TORCH_DEVICE_BACKEND_AUTOLOAD=0
+A3_WHEEL_DIR=$(mktemp -d)
+python -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
+    --index-url https://download.pytorch.org/whl/cpu \
+    -c requirements/ascend_a3_constraints.txt torch torchvision
+python -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
+    --index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
+    -r requirements/ascend_kernels.txt
+LMDEPLOY_TARGET_DEVICE=ascend python -m pip install --index-url https://pypi.org/simple \
+    --find-links "$A3_WHEEL_DIR" -c requirements/ascend_a3_constraints.txt \
+    -r requirements/ascend_kernels.txt . pyarrow
+python -m pip check
 python tools/ascend/check_runtime.py --require-kernels
 ```
 
-在仓库根目录执行这些命令。CANN、torch_npu、Triton Ascend 和外部
-`triton-ascend-kernels` 仍是运行依赖；请将后者固定在与环境兼容的 revision。
+在仓库根目录执行这些命令。CANN、torch_npu 和 Triton-Ascend 仍是运行依赖；
+GDN prefill/L2Norm 已连同来源记录和 MIT 许可纳入原生 kernel，无需克隆外部 kernel
+仓库。镜像在独立应用 venv 中固定 Torch 2.10.0+cpu、torch_npu 2.10.0.post4、
+torchvision 0.25.0+cpu 和 Triton-Ascend 3.2.2.post2。
 推理入口继续使用 `device_type="ascend"` 或 `--device ascend`。图模式通过
 `torch.npu.NPUGraph` 执行，可使用 `eager_mode=True` 或 `--eager-mode` 关闭。
 
@@ -45,13 +56,13 @@ python -m pip install --no-deps -r requirements/ascend_triton_npuir2.txt \
     --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi
 ```
 
-请在拥有独立包文件的隔离环境执行。此配置只更新 Triton 及其编译器组件，保留已有
-运行依赖；不要与 `requirements/ascend_kernels.txt` 中的旧 Triton 版本约束在同一次
-安装中混用。实测升级环境为 Python 3.12.13、Torch 2.10.0+cpu、torch_npu
-2.10.0.post4、CANN 9.1.0。这是定向编译器更新的验证，不等于全新依赖解析安装，
-也不等于现有 CANN 8.5 Docker 配方与新编译器的组合已经通过。
-[官方推荐组合](https://ascendnpu-ir.gitcode.com/en/introduction/quick_start/version_compatibility.html)
-为 NPUIR 2.0.0 与 CANN 9.2.0；该完整运行时/驱动升级尚未实测。
+请在拥有独立包文件的隔离环境执行。全新安装通过 `requirements/ascend_kernels.txt`
+已经选择这一编译器。组件升级实测环境为 Python 3.12.13、Torch 2.10.0+cpu、
+torch_npu 2.10.0.post4、CANN 9.1.0。Dockerfile 现在使用官方
+`9.1.0-a3-openeuler24.03-py3.12` 基础镜像和匹配的固定依赖配置。
+[官方优先推荐的 NPUIR 配套](https://ascendnpu-ir.gitcode.com/en/introduction/quick_start/version_compatibility.html)
+为 NPUIR 2.0.0 与 CANN 9.2.0；这里使用的是经过验证的编译器组件更新，CANN 运行时
+继续保持 9.1.0，也不会升级宿主机驱动或固件。
 
 Triton 优先选择自己捆绑的编译器。升级后应检查实际执行路径和构建号，仅查看
 `triton.__version__` 不足以确认：
