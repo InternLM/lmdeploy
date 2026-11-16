@@ -54,6 +54,8 @@ ______________________________________________________________________
 
 Image loading and encoding apply valid EXIF orientation before mode conversion or processing, including direct PIL image inputs. Applied orientation tags are removed so processing the result again does not rotate it twice; the caller's PIL image is not modified. Images without EXIF orientation retain their existing behavior. Invalid orientation metadata is ignored without hiding pixel-decoding errors. If you rotate pixels yourself, remove or reset the old orientation tag before passing the image to LMDeploy.
 
+Decoding and orientation normalization of caller-owned PIL images are serialized because messages or requests can share one lazy decoder. Independently loaded URL/file/base64 images still decode in parallel. Do not mutate or close a PIL image while a request is using it.
+
 This corrects the previous behavior for EXIF orientations 2–8 across models; it does not change pixel/token budget units or video frame sampling. Base64 JPEG video frames use the same image decoder and also inherit orientation normalization; this does not establish training/serving video preprocessing equivalence.
 
 <details>
@@ -597,6 +599,10 @@ For native GLM-5.3-Flash processors, use **token budgets**, not pixel budgets:
 The same token-budget names can control video spatial processing under `video`. Overrides are request-local and do not change the shared processor defaults. A single bound can be supplied; the other bound uses the processor default. Bounds must be positive integers with minimum no greater than maximum.
 
 Native GLM processors do not use the generic `size` contract: `min_pixels`, `max_pixels`, and `size` are rejected rather than silently ignored. Qwen and the older GLM-4V compatibility processor retain the pixel-budget syntax shown below; the compatibility processor does not support native GLM token-budget overrides. XTuner's GLM tokenizer currently names its token-valued configuration `min_pixels/max_pixels`; map those values to the explicit `min_image_tokens/max_image_tokens` request keys instead of copying the names.
+
+`patch_size`, `temporal_patch_size`, and `merge_size` describe the loaded vision model's fixed geometry, not request-level preprocessing choices. Matching values are removed before calling the processor. Native token-budget processors reject mismatches; size-based processors ignore them with a warning to preserve the previously ignored-field behavior. Other supported budget and normalization options remain request-local.
+
+Processor output controls `return_tensors` and `return_metadata` are frontend-owned. Values under `mm_processor_kwargs.image/video` are ignored with a warning: LMDeploy keeps PyTorch tensor outputs and the processor's required video-metadata defaults. These options cannot select another output format or disable metadata needed to expand video tokens.
 
 ### Video sampling and backward compatibility
 

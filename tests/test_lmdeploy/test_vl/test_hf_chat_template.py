@@ -218,6 +218,102 @@ class TestGLM5NextProcessorCompatibility:
         model.hf_config = SimpleNamespace(image_token_id=42, video_token_id=43)
         return model
 
+    @pytest.fixture(params=['native', 'compat'])
+    def real_model(self, model, monkeypatch, request):
+        from tokenizers import Tokenizer
+        from tokenizers.models import WordLevel
+        from transformers import PreTrainedTokenizerFast
+
+        from lmdeploy.vl.model import glm5_next
+
+        family = 'glm5_next' if request.param == 'native' else 'glm4v'
+        image_module = pytest.importorskip(f'transformers.models.{family}.image_processing_{family}')
+        video_module = pytest.importorskip(f'transformers.models.{family}.video_processing_{family}')
+        processor_module = pytest.importorskip(f'transformers.models.{family}.processing_{family}')
+        prefix = 'Glm5Next' if request.param == 'native' else 'Glm4v'
+        special = ['<|image|>', '<|video|>', '<|begin_of_image|>', '<|end_of_image|>',
+                   '<|begin_of_video|>', '<|end_of_video|>']
+        vocab = {f'word_{i}': i for i in range(42)}
+        vocab.update({token: i for i, token in enumerate(special, 42)})
+        tokenizer = PreTrainedTokenizerFast(tokenizer_object=Tokenizer(WordLevel(vocab, unk_token='word_0')),
+                                           unk_token='word_0', pad_token='word_0', additional_special_tokens=special)
+        processor = getattr(processor_module, prefix + 'Processor')(
+            image_processor=getattr(image_module, prefix + 'ImageProcessor')(),
+            video_processor=getattr(video_module, prefix + 'VideoProcessor')(), tokenizer=tokenizer)
+        monkeypatch.setattr(glm5_next.AutoProcessor, 'from_pretrained', lambda *a, **k: processor)
+        model.build_preprocessor()
+        assert model._shared_video_token
+        return model
+
+    @pytest.mark.parametrize('raw', [False, True])
+    @pytest.mark.parametrize('mixed', [False, True])
+    def test_shared_video_options_keep_processor_contract(self, real_model, monkeypatch, raw, mixed):
+        from copy import deepcopy
+
+        import numpy as np
+        import torch
+        from PIL import Image
+
+        model = real_model
+        y, x = np.indices((112, 112))
+        image = Image.fromarray(np.stack([x * 2, y * 2, (x + y) % 256], axis=-1).astype(np.uint8))
+        frames = np.stack([np.asarray(image)] * 4)
+        metadata = dict(total_num_frames=64, fps=8.0, duration=8.0, frames_indices=[0, 21, 42, 63])
+        before_metadata = deepcopy(metadata)
+        items = ([dict(type='image', data=image)] if mixed else []) + [
+            dict(type='video', data=frames, video_metadata=metadata)]
+        if raw:
+            prompt = ([1, model.image_token_id, 2] if mixed else [1]) + [model.input_video_token_id, 3]
+        else:
+            prompt = (f'<|begin_of_image|>{model.image_token}<|end_of_image|>' if mixed else '')
+            prompt += f'<|begin_of_video|>{model.video_token}<|end_of_video|>'
+        prompt = (([1, model.image_token_id, 2] if mixed else [1]) + [model.input_video_token_id, 3]
+                  if raw else (f'<|begin_of_image|>{model.image_token}<|end_of_image|>' if mixed else '')
+                  + f'<|begin_of_video|>{model.video_token}<|end_of_video|>')
+        native = hasattr(model.processor.image_processor, 'min_image_tokens')
+        budget = ({'min_image_tokens': 64, 'max_image_tokens': 64} if native else
+                  {'min_pixels': 64 * 1568, 'max_pixels': 64 * 1568})
+        options = {'image': {**budget, 'return_tensors': 'np'},
+                   'video': {**budget, 'return_metadata': False, 'return_tensors': 'np',
+                             'fps': 99, 'do_sample_frames': True, 'video_metadata': [{'fps': 999}]}}
+        before_options = deepcopy(options)
+        defaults = [(p.patch_size, p.temporal_patch_size, p.merge_size) for p in
+                    (model.processor.image_processor, model.processor.video_processor)]
+        sample = Mock(side_effect=AssertionError('Frames must not be sampled again'))
+        monkeypatch.setattr(model.processor.video_processor, 'sample_frames', sample)
+        frame_builder = Mock(wraps=model.processor.replace_frame_token_id)
+        monkeypatch.setattr(model.processor, 'replace_frame_token_id', frame_builder)
+        result = model.preprocess([dict(role='user', content=items)], prompt, options)
+        timestamps = [call.args[0] for call in frame_builder.call_args_list]
+        assert timestamps and timestamps == [0.0, 5.25] * (len(timestamps) // 2)
+        expected_size = (budget if native else
+                         {'size': {'shortest_edge': budget['min_pixels'], 'longest_edge': budget['max_pixels']}})
+        expected = model.processor(text=[prompt if isinstance(prompt, str) else ''],
+                                   images=[image] if mixed else None, videos=[frames], return_tensors='pt',
+                                   images_kwargs=expected_size,
+                                   videos_kwargs={**expected_size, 'return_metadata': True,
+                                                  'video_metadata': [deepcopy(before_metadata)],
+                                                  'do_sample_frames': False, 'do_resize': True})
+        for key in ('pixel_values', 'pixel_values_videos'):
+            if key in expected:
+                actual = torch.cat([item[key] for item in result['multimodal'] if key in item])
+                torch.testing.assert_close(actual, expected[key], rtol=0, atol=0)
+        if not raw:
+            assert result['input_ids'] == expected['input_ids'].flatten().tolist()
+        else:
+            image_ids = (model.processor.tokenizer.encode(model.processor.replace_image_token(expected, 0),
+                                                          add_special_tokens=False) if mixed else [])
+            from transformers.video_utils import VideoMetadata
+
+            video_inputs = {**expected, 'video_metadata': [VideoMetadata(**before_metadata)]}
+            video_ids = model.processor.tokenizer.encode(model.processor.replace_video_token(video_inputs, 0),
+                                                         add_special_tokens=False)
+            assert result['input_ids'] == ([1] + image_ids + [2] if mixed else [1]) + video_ids + [3]
+        assert options == before_options and metadata == before_metadata
+        assert defaults == [(p.patch_size, p.temporal_patch_size, p.merge_size) for p in
+                            (model.processor.image_processor, model.processor.video_processor)]
+        sample.assert_not_called()
+
     def test_native_image_overrides_reach_processor(self, model):
         import torch
 

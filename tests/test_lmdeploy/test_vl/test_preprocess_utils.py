@@ -32,6 +32,34 @@ def test_processor_kwargs_native_token_budgets(options):
     assert vars(processor) == {'min_image_tokens': 16, 'max_image_tokens': 8000}
 
 
+@pytest.mark.parametrize('modality', ['image', 'video'])
+@pytest.mark.parametrize('key,value', [('patch_size', 16), ('temporal_patch_size', 1), ('merge_size', 1)])
+def test_processor_kwargs_protect_native_model_geometry(modality, key, value):
+    processor = SimpleNamespace(min_image_tokens=16, max_image_tokens=8000,
+                                patch_size=14, temporal_patch_size=2, merge_size=2)
+    with pytest.raises(ValueError, match=key):
+        get_processor_kwargs(processor, {key: value}, modality)
+    assert get_processor_kwargs(processor, {key: getattr(processor, key)}, modality) == {}
+
+
+@pytest.mark.parametrize('modality', ['image', 'video'])
+def test_processor_kwargs_preserve_legacy_ignored_geometry(modality):
+    processor = SimpleNamespace(size={'shortest_edge': 64, 'longest_edge': 1024},
+                                patch_size=14, temporal_patch_size=2, merge_size=2)
+    options = {'merge_size': [1, 2], 'patch_size': 16, 'temporal_patch_size': 1, 'do_normalize': False}
+    assert get_processor_kwargs(processor, options, modality) == {'do_normalize': False}
+    assert options['merge_size'] == [1, 2] and processor.merge_size == 2
+
+
+@pytest.mark.parametrize('modality', ['image', 'video'])
+def test_processor_kwargs_reserve_frontend_output_controls(modality):
+    processor = SimpleNamespace(size={'shortest_edge': 64, 'longest_edge': 1024})
+    options = {'return_tensors': 'np', 'return_metadata': False, 'max_pixels': 256}
+    assert get_processor_kwargs(processor, options, modality) == {
+        'size': {'shortest_edge': 64, 'longest_edge': 256}}
+    assert options == {'return_tensors': 'np', 'return_metadata': False, 'max_pixels': 256}
+
+
 @pytest.mark.parametrize('options', [
     {'min_pixels': 64}, {'max_pixels': 64}, {'size': {'longest_edge': 64}},
     {'min_image_tokens': 0}, {'max_image_tokens': True}, {'max_image_tokens': None},

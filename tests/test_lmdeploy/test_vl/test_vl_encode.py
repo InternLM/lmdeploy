@@ -31,6 +31,19 @@ def test_image_encode_decode():
     assert img1.tobytes() == img2.tobytes()
 
 
+def test_owned_image_bytes_do_not_wait_for_shared_pil():
+    from concurrent.futures import ThreadPoolExecutor
+
+    from lmdeploy.vl.media.image import ImageMediaIO, _shared_pil_lock
+
+    buffer = BytesIO()
+    Image.new('RGB', (56, 112), 'red').save(buffer, format='PNG')
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with _shared_pil_lock:
+            image = pool.submit(ImageMediaIO().load_bytes, buffer.getvalue()).result(timeout=5)
+    assert image.size == (56, 112) and image.getpixel((0, 0)) == (255, 0, 0)
+
+
 def test_video_encode_decode():
     # url = 'https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4'
     url = 'https://raw.githubusercontent.com/CUHKSZzxy/Online-Data/main/clip_3_removed.mp4'

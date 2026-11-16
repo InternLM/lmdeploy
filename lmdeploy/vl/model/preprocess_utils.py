@@ -66,6 +66,12 @@ def get_processor_kwargs(processor, options: dict[str, Any] | None = None, modal
     if not isinstance(options, dict):
         raise ValueError(f'mm_processor_kwargs.{modality} must be an object.')
     kwargs = deepcopy(options)
+    frontend_keys = {'return_tensors', 'return_metadata'} & kwargs.keys()
+    if frontend_keys:
+        logger.warning('[%s] Ignoring frontend-owned processor output options: %s.',
+                       modality, ', '.join(sorted(frontend_keys)))
+        for key in frontend_keys:
+            kwargs.pop(key)
     if modality == 'video':
         loader_keys = {'fps', 'num_frames', 'min_frames', 'max_frames', 'do_sample_frames', 'video_metadata'}
         ignored = loader_keys & kwargs.keys()
@@ -80,6 +86,16 @@ def get_processor_kwargs(processor, options: dict[str, Any] | None = None, modal
     token_keys = ('min_image_tokens', 'max_image_tokens')
     pixel_keys = ('min_pixels', 'max_pixels')
     native_tokens = all(hasattr(processor, key) for key in token_keys)
+    for key in ('patch_size', 'temporal_patch_size', 'merge_size'):
+        if key not in kwargs:
+            continue
+        value = kwargs.pop(key)
+        expected = getattr(processor, key, None)
+        if type(value) is not int or value != expected:
+            if native_tokens:
+                raise ValueError(f'[{modality}] {key} is fixed at {expected}; '
+                                 'request options cannot change model geometry.')
+            logger.warning('[%s] Ignoring model-owned %s override; keeping %s.', modality, key, expected)
     if native_tokens:
         if any(key in kwargs for key in (*pixel_keys, 'size')):
             raise ValueError('This processor uses token budgets; use min_image_tokens/max_image_tokens, '

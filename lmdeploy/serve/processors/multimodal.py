@@ -193,7 +193,8 @@ class MultimodalProcessor:
             else:
                 raise NotImplementedError(f'unknown type: {item_type}')
 
-            if modality == Modality.IMAGE and isinstance(data, PIL.Image.Image):
+            # URL/path images are request-owned and already normalized by ImageMediaIO.
+            if modality == Modality.IMAGE and isinstance(data_src, PIL.Image.Image):
                 data = apply_exif_orientation(data)
             out_message['content'].append({'type': modality.value, 'data': data, **item_params})
 
