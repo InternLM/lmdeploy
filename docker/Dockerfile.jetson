@@ -7,6 +7,7 @@ ENV CUDA_VER=12.6 \
     PYTHON_VERSION=3.10 \
     PATH=/opt/py3/bin:/root/.local/bin:/usr/local/cuda/bin:${PATH}
 
+# The cuDSS runtime package does not register its versioned library directory.
 RUN --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/tmp/download \
     export CUDA_SUFFIX=$(echo $CUDA_VER | sed 's/\./-/g') && \
@@ -22,6 +23,8 @@ RUN --mount=type=cache,target=/root/.cache \
         cuda-toolkit-${CUDA_SUFFIX} cuda-compat-${CUDA_SUFFIX} libcudnn9-cuda-12 libcusparselt0 \
         libcudss0-cuda-12=${CUDSS_VERSION} \
         git libopenblas-dev python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv && \
+    echo "/usr/lib/aarch64-linux-gnu/libcudss/${CUDA_VER%%.*}" > /etc/ld.so.conf.d/cudss.conf && \
+    ldconfig && \
     apt-get clean -y && \
     rm -rf /var/lib/apt/lists/* && \
     python${PYTHON_VERSION} -m venv /opt/py3 && \
