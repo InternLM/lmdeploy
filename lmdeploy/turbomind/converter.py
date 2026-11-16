@@ -19,6 +19,7 @@ from .weight_format import (
     FP8Format,
     GPTQFormat,
     MXFP4Format,
+    NVFP4Format,
     TrivialFormat,
     WeightFormat,
     WeightFormatResolver,
@@ -41,6 +42,8 @@ def _build_quantized_formats(model_format: str | None, group_size: int | None) -
         formats.append(FP8Format(block_out=128))
     elif model_format == 'mxfp4':
         formats.append(MXFP4Format())
+    elif model_format == 'nvfp4':
+        formats.append(NVFP4Format(block_in=group_size or 16))
     else:
         raise ValueError(f'unknown model_format: {model_format!r}')
     return formats
@@ -93,6 +96,7 @@ _DEFAULT_GROUP_SIZES = {
     'compressed-tensors': 128,
     'fp8': 128,
     'mxfp4': 32,
+    'nvfp4': 16,
 }
 
 _SUPPORTED_GROUP_SIZES = {
@@ -101,6 +105,7 @@ _SUPPORTED_GROUP_SIZES = {
     'compressed-tensors': frozenset({32, 128}),
     'fp8': frozenset({128}),
     'mxfp4': frozenset({32}),
+    'nvfp4': frozenset({16}),
 }
 
 
@@ -188,6 +193,7 @@ def get_tm_config(model_path,
             f'mismatched quant group size: user input "{group_size}" '
             f'vs model quant_config "{_group_size}"')
 
+        _model_format = quant_method
         if quant_method == 'awq':
             assert version == 'gemm', f'unsupported quant config: {quant_config}'
         elif quant_method == 'gptq':
@@ -199,20 +205,29 @@ def get_tm_config(model_path,
             _group_size = 32
         elif quant_method == 'compressed-tensors':
             _format = quant_config['config_groups']['group_0']['format']
-            assert _format == 'pack-quantized', (
-                'compressed-tensors only supports pack-quantized format, '
-                f'but got {_format}')
             _weights = quant_config['config_groups']['group_0']['weights']
             _group_size = _weights['group_size']
             _num_bits = _weights['num_bits']
             _type = _weights['type']
-            assert _num_bits == 4 and _type == 'int', (
-                'pack-quantized requires 4-bit int, '
-                f'but got {_num_bits}-bit {_type}')
+            if _format == 'pack-quantized':
+                assert _num_bits == 4 and _type == 'int', (
+                    'pack-quantized requires 4-bit int, '
+                    f'but got {_num_bits}-bit {_type}')
+            elif _format == 'nvfp4-pack-quantized':
+                assert _num_bits == 4 and _type == 'float', (
+                    'nvfp4-pack-quantized requires 4-bit float, '
+                    f'but got {_num_bits}-bit {_type}')
+                assert _group_size == 16, (
+                    f'nvfp4-pack-quantized requires group_size 16, got {_group_size}')
+                _model_format = 'nvfp4'
+            else:
+                assert 0, (
+                    'compressed-tensors only supports `pack-quantized` and '
+                    f'`nvfp4-pack-quantized`, but got {_format}')
         else:
             assert 0, f'unsupported quant_config: {quant_config}'
 
-        engine_config.model_format = quant_method
+        engine_config.model_format = _model_format
         group_size = _group_size
 
     group_size = _validate_quant_group_size(engine_config.model_format, group_size)
