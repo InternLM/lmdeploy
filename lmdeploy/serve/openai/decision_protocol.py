@@ -1,7 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Systemone and OpenAI Decisions HTTP request/response schemas."""
 import json
-import math
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
@@ -54,16 +53,7 @@ class SystemoneChoiceQuestion(_SystemoneQuestion):
 
 class SystemoneScoreQuestion(_SystemoneQuestion):
     type: Literal['score']
-    criteria: list[_SystemoneContent] | dict[str, _SystemoneContent] = Field(min_length=1, max_length=62)
-
-    @field_validator('criteria')
-    @classmethod
-    def numeric_levels(cls, value):
-        if isinstance(value, dict):
-            numbers = [float(key) for key in value]
-            if not all(math.isfinite(n) for n in numbers) or len(set(numbers)) != len(numbers):
-                raise ValueError('Level keys must be distinct finite numeric strings.')
-        return value
+    criteria: list[_SystemoneContent] = Field(min_length=1, max_length=62)
 
 
 class SystemoneNoulQuestion(_SystemoneQuestion):

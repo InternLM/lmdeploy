@@ -224,6 +224,10 @@ the maximum of eight image occurrences. Images are static PNG/JPEG files, at mos
 dimensions between 280 and 1568 pixels. Base64 must be canonical padded standard Base64 without a data URL prefix.
 The HTTP body is limited to 32 MiB. URLs and local paths are not accepted by this endpoint.
 
+For a `score` question, `criteria` must be an ordered array; objects, including numeric-keyed maps, return 422.
+The score is the probability-weighted mean of the zero-based array positions. Labels such as `"1"` through `"10"`
+do not change those positions to a one-based scale. Choice and noul questions retain their object criteria.
+
 For multipart uploads, send the JSON `request` part first, with `Content-Type: application/json`, and reference
 each image part exactly once through `assets.<ref>.part`. File format can be omitted and is inferred from its bytes:
 

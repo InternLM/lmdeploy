@@ -83,6 +83,28 @@ def validate(row):
     return parsed
 
 
+@pytest.mark.parametrize('criteria', [{'0': 'Calm', '1': 'Angry'}, {'low': 'Calm', 'high': 'Angry'}])
+def test_score_maps_are_rejected_before_engine_work(service, criteria):
+    client, engine = service
+    response = client.post('/v1/systemone', json=dict(state='text', questions={
+        'anger': dict(type='score', instructions='How frustrated?', criteria=criteria),
+    }))
+    assert response.status_code == 422
+    assert response.json()['error']['details'][0]['field'] == 'questions.anger.criteria'
+    assert not engine.requests and engine.session_mgr.count == 0
+
+
+def test_score_array_uses_zero_based_positions(service):
+    client, _ = service
+    response = client.post('/v1/systemone', json=dict(state='text', questions={
+        'anger': dict(type='score', instructions='How frustrated?', criteria=['1', '2', '3']),
+    }))
+    assert response.status_code == 200
+    answer = response.json()['answers']['anger']
+    assert answer['legend'] == {'0': '1', '1': '2', '2': '3'}
+    assert answer['score'] == pytest.approx(sum(int(i) * p for i, p in answer['probabilities'].items()))
+
+
 def test_nested_references_keep_order_keys_and_original_response_values(service):
     row = body()
     row['assets']['blue-ref'] = asset('blue')
