@@ -9,7 +9,7 @@ import pytest
 
 from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage, DeltaToolCall
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage, DeltaToolCall, ToolCall
 
 
 class _FakeSession:
@@ -229,6 +229,47 @@ def test_runner_stream_chunks_preserve_metadata():
     assert chunks[0].routed_experts == [[1]]
     assert chunks[0].reasoning_tokens == 2
     assert context.async_engine.generator_closed is True
+    assert context.session_manager.removed == [context.session_manager.session]
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('names,finish_reason,stop_sequence,valid', [
+    ([], 'stop', None, False),
+    (['search'], 'stop', None, True),
+    (['other'], 'stop', None, False),
+    (['search', 'search'], 'stop', None, False),
+    ([], 'length', None, True),
+    ([], 'stop', 'caller-stop', True),
+])
+def test_named_output_validation_preserves_interruption(stream, names, finish_reason, stop_sequence, valid):
+    class Parser(_Parser):
+        def stream_chunk(self, delta_text, delta_token_ids, **kwargs):
+            calls = [DeltaToolCall(index=i, id=f'call-{i}', type='function',
+                                   function=dict(name=name, arguments='{}')) for i, name in enumerate(names)]
+            return [(DeltaMessage(role='assistant', content='answer' if not calls else None,
+                                  tool_calls=calls or None), bool(calls))]
+
+        def parse_complete(self, text, token_ids=None, **kwargs):
+            return text, [ToolCall(function=dict(name=name, arguments='{}')) for name in names], None
+
+    context = _FakeServerContext(Parser)
+    context.async_engine.outputs[0].finish_reason = finish_reason
+    context.async_engine.outputs[0].stop_sequence = stop_sequence
+
+    async def run():
+        runner = await ChatRunner.prepare(context, _request(
+            tools=_tools(), tool_choice={'type': 'function', 'function': {'name': 'search'}}))
+        if stream:
+            return [chunk async for chunk in runner.stream()][-1].finish_reason
+        return (await runner.collect()).finish_reason
+
+    if valid:
+        assert asyncio.run(run()) == ('tool_calls' if names else finish_reason)
+    else:
+        with pytest.raises(RequestError) as error:
+            asyncio.run(run())
+        assert error.value.code == ErrorCode.INTERNAL_ERROR
+    assert context.async_engine.generator_closed
     assert context.session_manager.removed == [context.session_manager.session]
 
 

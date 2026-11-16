@@ -3,6 +3,7 @@
 vocabulary."""
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -11,6 +12,8 @@ from tokenizers import AddedToken, Tokenizer, decoders, models, normalizers, pre
 from transformers import PreTrainedTokenizerFast
 
 from lmdeploy.messages import GenerationConfig
+from lmdeploy.serve.core.chat_runner import ChatRunner
+from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser, _resolve_token_id_terminals
@@ -172,6 +175,42 @@ def test_literal_tool_call_is_content_even_with_declared_tool(vocabulary, comple
     text = '<tool_call>get_weather</tool_call>'
     parser = make_parser(vocabulary, thinking=False)
     assert parsed(parser, native_chunks(vocabulary, vocabulary.enc(text), batch), complete) == (text, '', [])
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('literal', [False, True])
+def test_named_call_cannot_complete_with_only_literal_tokens(vocabulary, stream, literal):
+    v = vocabulary
+    text = '<tool_call>get_weather</tool_call>'
+    ids = (v.enc(text) if literal else v.ctl('<tool_call>') + v.enc('get_weather') + v.ctl('</tool_call>'))
+    parser = make_parser(v, thinking=False, choice={'type': 'function', 'function': {'name': 'get_weather'}})
+    config = GenerationConfig()
+    parser.bind_generation_config(config)
+    removed = []
+
+    async def generate():
+        for text, part, final in native_chunks(v, ids, 1):
+            yield SimpleNamespace(response=text, token_ids=part, finish_reason='stop' if final else None,
+                                   input_token_len=1, generate_token_len=len(ids), cached_tokens=0,
+                                   logprobs=None, routed_experts=None, cache_block_ids=None)
+
+    async def run():
+        runner = ChatRunner(parser.request, parser, config, object(), generate(),
+                            SimpleNamespace(remove=removed.append))
+        if stream:
+            chunks = [chunk async for chunk in runner.stream()]
+            calls = [t for chunk in chunks for t in chunk.delta_message.tool_calls or []]
+            return parser.tool_parser.build_tool_calls(calls)
+        return (await runner.collect()).tool_calls
+
+    if literal:
+        with pytest.raises(RequestError) as error:
+            asyncio.run(run())
+        assert error.value.code == ErrorCode.INTERNAL_ERROR
+    else:
+        calls = asyncio.run(run())
+        assert len(calls) == 1 and calls[0].function.name == 'get_weather'
+    assert len(removed) == 1
 
 
 @pytest.mark.parametrize('skip', [False, True])
