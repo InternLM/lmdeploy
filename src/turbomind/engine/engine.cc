@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <thread>
 
@@ -15,6 +16,7 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/engine/engine.h"
+#include "src/turbomind/engine/model.h"
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/engine/scheduler.h"
@@ -22,9 +24,12 @@
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/logger.h"
 #include "src/turbomind/core/scope.h"
+#include "src/turbomind/kernels/sampling_topp_kernels.h"
 #include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/llama/context_token_resource.h"
 #include "src/turbomind/models/llama/llama_params.h"
+#include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/speculative/speculative_model.h"
 #include "src/turbomind/models/vision_model.h"
 #include "src/turbomind/utils/cuda_utils.h"
 #include "src/turbomind/utils/metrics.h"
@@ -61,16 +66,16 @@ struct Engine::Impl {
 
     struct State;
 
-    Impl(EngineParam                  param,
-         ObjectAllocator              alloc,
-         CacheRegistry                cache_registry,
-         LanguageModel                model,
-         std::unique_ptr<VisionModel> vision_model,
-         Context&                     ctx,
-         Gateway&                     gateway,
-         int                          device_id,
-         int                          queue_id,
-         int                          phases);
+    Impl(EngineParam                       param,
+         CacheRegistry                     cache_registry,
+         std::unique_ptr<LanguageModel>    model,
+         std::unique_ptr<VisionModel>      vision_model,
+         std::unique_ptr<SpeculativeModel> spec_model,
+         Context&                          ctx,
+         Gateway&                          gateway,
+         int                               device_id,
+         int                               queue_id,
+         int                               phases);
 
     void InternalThreadEntry();
 
@@ -95,18 +100,11 @@ struct Engine::Impl {
     // Initialize batch data from engine-local sequence state
     void Setup(BatchData& d);
 
-    // Sync vars from batch output to engine-local sequence state
+    // Sync vars from batch output to engine-local sequence state. Host batch
+    // operations (add, setup, fetch, update, del) run on this thread through
+    // the component container's generic fanout; device operations are the
+    // executor's device-bracket steps.
     void Update(BatchData& d, std::vector<Signal>& signals);
-
-    void Run(BatchOp op, int phase, Ref<TensorMap> env)
-    {
-        // Vision sub-graph runs first so its env outputs (image embeddings,
-        // mrope tensors) are visible to the language model in the same pass.
-        if (vision_model_) {
-            vision_model_->Run(op, phase, env);
-        }
-        model_.Run(op, phase, env);
-    }
 
     void Start()
     {
@@ -146,14 +144,20 @@ struct Engine::Impl {
     int& is_warm_up_;
 
     ObjectAllocator object_allocator_;
-    Scheduler       scheduler_;
+
+    Buffer_<uint8_t> symm_buf_;
+
+    // The served model, constructed once here at the composition root. It
+    // owns the target, vision, and speculative models; the executor drives it
+    // by reference.
+    Model model_;
+
+    std::unique_ptr<Scheduler> scheduler_;
 
     Queue<unique_ptr<BatchData>> inbound_;
     Queue<unique_ptr<BatchData>> outbound_;
 
-    LanguageModel                model_;
-    std::unique_ptr<VisionModel> vision_model_;  // null for text-only checkpoints
-    ModelExecutor                executor_;
+    ModelExecutor executor_;
 
     std::thread internal_thread_;
 
@@ -208,23 +212,23 @@ Engine::Impl::~Impl()
     for (auto& state : states_) {
         for (auto& cache : state.rc) {
             if (cache) {
-                scheduler_.Release(*cache);
+                scheduler_->Release(*cache);
                 cache.reset();
             }
         }
     }
 }
 
-Engine::Impl::Impl(EngineParam                  param,
-                   ObjectAllocator              alloc,
-                   CacheRegistry                cache_registry,
-                   LanguageModel                model,
-                   std::unique_ptr<VisionModel> vision_model,
-                   Context&                     ctx,
-                   Gateway&                     gateway,
-                   int                          device_id,
-                   int                          queue_id,
-                   int                          phases):
+Engine::Impl::Impl(EngineParam                       param,
+                   CacheRegistry                     cache_registry,
+                   std::unique_ptr<LanguageModel>    model,
+                   std::unique_ptr<VisionModel>      vision_model,
+                   std::unique_ptr<SpeculativeModel> spec_model,
+                   Context&                          ctx,
+                   Gateway&                          gateway,
+                   int                               device_id,
+                   int                               queue_id,
+                   int                               phases):
     param_{param},
     gateway_{gateway},
     tp_group_{ctx.comm.h_tp_group},
@@ -236,25 +240,85 @@ Engine::Impl::Impl(EngineParam                  param,
     queue_id_{queue_id},
     async_{phases > 1},
     is_warm_up_{*ctx.is_warm_up},
-    object_allocator_{std::move(alloc)},
-    scheduler_{object_allocator_,
-               std::move(cache_registry),
-               param_.cache_block_seq_len * param_.attn_cp_size,
-               param_.enable_prefix_caching,
-               param_.cache_prompt,
-               param_.cache_prompt_boundary_skip,
-               param_.cache_generation,
-               is_warm_up_},
-    model_{std::move(model)},
-    vision_model_{std::move(vision_model)}
+    model_{std::move(model), std::move(vision_model), std::move(spec_model), param_, ctx, phases}
 {
-    states_.emplace_back();
+    const double cache_ratio = param_.cache_max_block_count;
+    TM_CHECK_GT(cache_ratio, 0.) << "object-cache path expects 0 < cache_max_block_count < 1";
+    TM_CHECK_LT(cache_ratio, 1.) << "object-cache path no longer accepts cache_max_block_count as a block count";
 
+    states_.emplace_back();
     for (int i = 0; i < phases; ++i) {
         data_.emplace_back();
     }
 
-    executor_ = ModelExecutor{model_, vision_model_.get(), ctx, device_id_, outbound_, inbound_};
+    executor_ = ModelExecutor{model_, param_, ctx, device_id_, outbound_, inbound_};
+
+    const ModelWeight& target_weights             = model_.target->weights();
+    const int          max_verification_positions = param_.spec_method.empty() ? 1 : param_.spec_num_draft_tokens + 1;
+    const int          max_logits_rows            = param_.max_batch_size * max_verification_positions;
+
+    if (ctx.comm.d_comm) {
+        const int model_tp_size = ctx.comm.h_tp_group->n_ranks();
+        TM_CHECK(param_.max_forward_token_num % model_tp_size == 0);
+
+        const core::ssize_t bytes = std::max(
+            byte_size(target_weights.data_type,
+                      core::ssize_t(param_.max_forward_token_num) * param_.attn_dp_size * target_weights.hidden_units),
+            byte_size(target_weights.data_type, core::ssize_t(max_logits_rows) * target_weights.vocab_size_padded));
+
+        auto symm_alloc = GetSymmAllocator(ctx.comm.d_comm);
+        symm_buf_       = {bytes, symm_alloc};
+    }
+
+    core::Context::stream().Sync();
+
+    size_t free_after_workspaces{}, total_bytes{};
+    cudaMemGetInfo(&free_after_workspaces, &total_bytes);
+    free_after_workspaces = AllReduce(ctx.comm.h_tp_group, free_after_workspaces, comm::RedOp::kMin);
+
+    size_t transient_verification_bytes{};
+    if (model_.spec) {
+        const size_t vocab_items = static_cast<size_t>(max_logits_rows) * target_weights.vocab_size_padded;
+        const size_t target_head_bytes =
+            model_.target->logits_use_workspace() ? 0 : byte_size(target_weights.data_type, vocab_items);
+
+        transient_verification_bytes = target_head_bytes + vocab_items * sizeof(float) + vocab_items * sizeof(int)
+                                       + GetTopPSortWorkspaceBytes(max_logits_rows,
+                                                                   target_weights.vocab_size,
+                                                                   target_weights.vocab_size_padded,
+                                                                   core::Context::stream().handle());
+        transient_verification_bytes +=
+            model_.target->SpeculativeStateJournalBytes(param_.max_batch_size, max_verification_positions);
+    }
+
+    TM_CHECK_GE(free_after_workspaces, transient_verification_bytes)
+        << "insufficient free memory for transient verification storage";
+    const size_t cacheable_bytes = free_after_workspaces - transient_verification_bytes;
+    const size_t cache_bytes     = static_cast<size_t>(static_cast<double>(cacheable_bytes) * cache_ratio);
+
+    TM_LOG_INFO("Object cache memory: free after model, components, executor, and shared scratch allocation {:.2f} MB, "
+                "transient verification reservation {:.2f} MB",
+                free_after_workspaces / (1024. * 1024.),
+                transient_verification_bytes / (1024. * 1024.));
+    TM_LOG_INFO("Object cache budget: {:.2f} MB from cacheable {:.2f} MB and ratio {:.3f}",
+                cache_bytes / (1024. * 1024.),
+                cacheable_bytes / (1024. * 1024.),
+                cache_ratio);
+
+    Buffer cache_region{static_cast<core::ssize_t>(cache_bytes), data_type_v<int8_t>, core::Context::device_alloc()};
+    object_allocator_ = ObjectAllocator{std::move(cache_region)};
+    cache_registry.RegisterObjectIds(object_allocator_);
+
+    scheduler_ = std::make_unique<Scheduler>(object_allocator_,
+                                             std::move(cache_registry),
+                                             param_.cache_block_seq_len * param_.attn_cp_size,
+                                             param_.enable_prefix_caching,
+                                             param_.cache_prompt,
+                                             param_.cache_prompt_boundary_skip,
+                                             param_.cache_generation,
+                                             param_.session_len,
+                                             model_.spec ? &model_.spec->policy() : nullptr,
+                                             is_warm_up_);
 
     UpdateScheduleMetrics();
 
@@ -327,9 +391,10 @@ void Engine::Impl::Interrupt(Sequence& c)
 {
     Sequence*          p = &c;
     Buffer_<Sequence*> rs{&p, 1, kCPU};
-    Run(BatchOp::kDel, -1, TensorMap{{"requests", rs}});
+    TensorMap          env{{"requests", rs}};
+    model_.Run(BatchOp::kDel, -1, env);
 
-    scheduler_.Release(c);
+    scheduler_->Release(c);
 }
 
 void Engine::Impl::Retire(State& s)
@@ -357,7 +422,7 @@ void Engine::Impl::Cancel(vector<int>& indices, vector<Signal>& signals)
         c->is_canceled = true;
         c->retiring    = true;
         c->done        = true;
-        signals.push_back([r = c->req, l = c->seq_len] { UpdateState(*r, Request::kCancel, l); });
+        signals.push_back(MakeRequestSignal(c->req, Request::kCancel, c->seq_len));
     }
 }
 
@@ -371,7 +436,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
     for (const auto& r : rs) {
 
         if (r->ec) {
-            signals.push_back([r] { UpdateState(*r, r->ec, 0); });
+            signals.push_back(MakeRequestSignal(r, r->ec, 0));
             continue;
         }
 
@@ -379,7 +444,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         const int   input_len = input_ids.shape(0);
 
         if (input_len > param_.session_len) {
-            signals.push_back([r] { UpdateState(*r, Request::kTooLong, 0); });
+            signals.push_back(MakeRequestSignal(r, Request::kTooLong, 0));
             continue;
         }
 
@@ -415,18 +480,17 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
     }
 
     // This includes checks from all modules handling `Add` operation
-    Run(BatchOp::kAdd, -1, TensorMap{{"requests", buf}});
+    TensorMap env{{"requests", buf}};
+    model_.Run(BatchOp::kAdd, -1, env);
 
     for (auto& x : incoming) {
         if (x->status == 0) {
-            scheduler_.AdmitPrompt(*x);
+            scheduler_->AdmitPrompt(*x);
             s.rc.push_back(std::move(x));
         }
         else {
             Interrupt(*x);
-            signals.push_back([r = x->req, ec = x->status] {  //
-                UpdateState(*r, ec, 0);
-            });
+            signals.push_back(MakeRequestSignal(x->req, x->status, 0));
         }
     }
 }
@@ -439,9 +503,7 @@ void Engine::Impl::Schedule()
     vector<Sequence*> eligible;
 
     vector<int> was_active;
-    vector<int> context_length;
     vector<int> orignal_idxs;
-    vector<int> inflight_input_len;
 
     for (int i = 0; i < s.size(); ++i) {
         auto& p = s.rc[i];
@@ -452,18 +514,20 @@ void Engine::Impl::Schedule()
         if (!c.retiring) {
             eligible.push_back(&c);
             was_active.push_back(c.is_active);
-            context_length.push_back(c.seq_len + c.inflight_new_tokens /* plus draft tokens */);
-            inflight_input_len.push_back(c.inflight_input_len);
             orignal_idxs.push_back(i);
-            c.input_len = c.history_len = 0;
         }
     }
 
     ScheduleResources resources;
     resources.Add<ForwardTokenResource>(param_.max_forward_token_num);
-    resources.Add<ContextTokenResource>(param_.max_context_token_num);
+    // A speculative row is charged its absolute key_capacity_end, which runs up
+    // to two proposal windows past the last sequence position; keep the context
+    // budget above that so near-limit rounds stay admissible.
+    const int context_headroom =
+        model_.spec ? 2 * model_.spec->policy().Extent(RoundRequest{0, param_.session_len}).query_rows : 0;
+    resources.Add<ContextTokenResource>(param_.max_context_token_num + context_headroom);
 
-    scheduler_.Schedule(eligible, resources);
+    scheduler_->Schedule(eligible, resources);
 
     vector<int> idxs(eligible.size());
     std::iota(idxs.begin(), idxs.end(), 0);
@@ -475,22 +539,17 @@ void Engine::Impl::Schedule()
     // FailStalledHeadOfLine, called after Schedule() returns, where request
     // lifecycle and signal emission live (see README forward-progress).
 
-    if (is_warm_up_) {
-        // Avoid extra iteration for warm up request in async mode (force inactivate)
-        active = {active.begin(), std::stable_partition(active.begin(), active.end(), [&](int i) {
-                      return inflight_input_len[i] == 0;
-                  })};
-    }
-
     subrange inactive{active.end(), idxs.end()};
 
     for (auto i : active) {
         eligible[i]->is_active = true;
     }
     for (auto i : inactive) {
-        eligible[i]->is_active   = false;
-        eligible[i]->input_len   = 0;
-        eligible[i]->history_len = 0;
+        Sequence& c = *eligible[i];
+        c.is_active = false;
+        if (c.inflight == 0) {
+            c.submitted.reset();
+        }
     }
 
     subrange existing{active.begin(),
@@ -505,18 +564,13 @@ void Engine::Impl::Schedule()
     // |<----------- active ----------->|<------- inactive ----->|
 
     for (auto i : swap_in) {
-        eligible[i]->autoregres = {};
-        eligible[i]->generating = {};
-    }
-
-    for (auto i : swap_in) {
         auto& c = *eligible[i];
         if (!param_.enable_metrics || c.first_schedule_recorded || !c.req->metrics) {
             continue;
         }
         c.first_schedule_recorded = true;
 
-        const int64_t cached_tokens = std::clamp<int64_t>(c.history_len, 0, c.prompt_len);
+        const int64_t cached_tokens = std::clamp<int64_t>(c.submitted->history_len, 0, c.prompt_len);
         if (!is_warm_up_ && param_.enable_prefix_caching) {
             prefix_query_tokens_ += c.prompt_len;
             prefix_hit_tokens_ += cached_tokens;
@@ -528,20 +582,15 @@ void Engine::Impl::Schedule()
         m.scheduled_time.compare_exchange_strong(expected, RequestMetrics::timestamp(), std::memory_order_relaxed);
     }
 
-    for (auto i : existing) {
-        auto& c      = *eligible[i];
-        c.autoregres = c.generating && c.input_len == 1;
-    }
+    auto extension_end = std::stable_partition(
+        active.begin(), active.end(), [&](int i) { return eligible[i]->submitted->is_extension_candidate(); });
 
-    for (auto i : active) {
-        auto& c      = *eligible[i];
-        c.generating = c.resume_len + c.inflight_input_len + c.input_len == c.seq_len + c.inflight_new_tokens;
-    }
+    // Speculative rows precede bootstrap rows inside the extension prefix; decoder
+    // partitions rely on the speculative rows forming a leading run.
+    std::stable_partition(
+        active.begin(), extension_end, [&](int i) { return eligible[i]->submitted->is_verification_row(); });
 
-    // move partially prefilled sequences to the back
-    subrange partial{
-        std::stable_partition(active.begin(), active.end(), [&](int i) { return eligible[i]->generating; }),
-        active.end()};
+    std::stable_partition(extension_end, active.end(), [&](int i) { return eligible[i]->submitted->generating; });
 
     // dbg(inv);
 
@@ -608,7 +657,7 @@ void Engine::Impl::FailStalledHeadOfLine(std::vector<Signal>& signals)
 
     victim->retiring = true;
     victim->done     = true;
-    signals.push_back([r = victim->req] { UpdateState(*r, Request::kOutOfMemory, 0); });
+    signals.push_back(MakeRequestSignal(victim->req, Request::kOutOfMemory, 0));
 }
 
 void Engine::Impl::Setup(BatchData& d)
@@ -616,8 +665,9 @@ void Engine::Impl::Setup(BatchData& d)
     TM_FUNCTION_SCOPE();
     auto& s = states_.at(0);
 
-    d.bs0 = s.bs0;
-    d.bsz = s.active;
+    d.bs0      = s.bs0;
+    d.bsz      = s.active;
+    d.symm_buf = symm_buf_;
 
     d.perm = {d.bsz, kCPU};
     std::copy_n(s.perm.data(), d.bsz, d.perm.data());
@@ -625,16 +675,18 @@ void Engine::Impl::Setup(BatchData& d)
     BatchCopy copy{};
 
     Buffer_<Sequence*> rs{s.active, kCPU};
+    d.submitted_frontier_reanchor.resize(d.bsz);
     for (int i = 0; i < s.active; ++i) {
         auto* c = TM_CHECK_NOTNULL(s.rc[i].get());
         ++c->inflight;
-        rs[i] = c;
+        rs[i]                            = c;
+        d.submitted_frontier_reanchor[i] = c->submitted->frontier_reanchor;
     }
 
     d.restore_copies.clear();
     d.publish_copies.clear();
     {
-        const ObjectAllocator& alloc   = scheduler_.allocator();
+        const ObjectAllocator& alloc   = scheduler_->allocator();
         auto                   resolve = [&](std::vector<CacheCopy>& in, std::vector<ResolvedCopy>& out) {
             for (const auto& [src, dst] : in) {
                 const CacheBlock& cs = *TM_CHECK_NOTNULL(src);
@@ -659,7 +711,7 @@ void Engine::Impl::Setup(BatchData& d)
 
     TensorMap env{{"requests", rs}, {"batch", d.buf()}, {"copy", copy.buf()}};
 
-    Run(BatchOp::kSetup, d.phase, env);
+    model_.Run(BatchOp::kSetup, d.phase, env);
 
     // dbg(copy);
     copy.Run();
@@ -682,19 +734,38 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
     TensorMap env{{"batch", b.buf()}, {"copy", copy.buf()}};
 
     // Copy outputs to host buffers
-    Run(BatchOp::kFetch, b.phase, env);
+    model_.Run(BatchOp::kFetch, b.phase, env);
 
     copy.Run();
 
     core::Context::stream().Sync();
 
     //
-    Run(BatchOp::kUpdate, b.phase, env);
+    model_.Run(BatchOp::kUpdate, b.phase, env);
 
     Buffer_<bool> finished        = env.at("finished").buffer();
     Buffer_<bool> generating      = env.at("generating").buffer();
-    Buffer_<int>  output_ids      = env.at("output_ids").buffer();
     Buffer_<int>  sequence_length = env.at("sequence_length").buffer();
+
+    Buffer_<int> output_ids;
+    Buffer_<int> selected_span_ids;
+    Buffer_<int> accept_len;
+
+    const bool speculative_engine = model_.spec != nullptr;
+    const int  K                  = speculative_engine ? model_.spec->policy().max_proposals() + 1 : 0;
+
+    if (speculative_engine) {
+        selected_span_ids = env.at("selected_span_ids").buffer();
+        accept_len        = env.at("accept_len").buffer();
+    }
+    else {
+        output_ids = env.at("output_ids").buffer();
+    }
+
+    Buffer_<int> accepted_draft_count;
+    if (const Tensor* tensor = env.try_("accepted_draft_count")) {
+        accepted_draft_count = Buffer_<int>{tensor->buffer()};
+    }
 
     env = {};
 
@@ -709,27 +780,59 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
     for (int i = 0; i < s.size(); ++i) {
         int j = perm[i];
         if (j < b.bsz) {
-            auto& c      = *TM_CHECK_NOTNULL(s.rc[i]);
-            c.filled_len = generating[j] ? sequence_length[j] - 1 : sequence_length[j];
+            auto& c                                = *TM_CHECK_NOTNULL(s.rc[i]);
+            c.filled_len                           = generating[j] ? sequence_length[j] - 1 : sequence_length[j];
+            const bool completed_frontier_reanchor = b.submitted_frontier_reanchor[j];
+            if (speculative_engine && completed_frontier_reanchor && scheduler_->registry().has_checkpoint()
+                && c.inflight == 1) {
+                c.frontier_pos = c.filled_len;
+            }
             if (c.retiring) {
                 continue;
             }
             if (generating[j]) {
-                c.token_ids[c.seq_len] = output_ids[j];
-                c.seq_len              = sequence_length[j];
+                if (speculative_engine) {
+                    const int committed = accept_len[j];
+                    std::copy_n(selected_span_ids.data() + j * K, committed, c.token_ids + c.seq_len);
+                }
+                else {
+                    c.token_ids[c.seq_len] = output_ids[j];
+                }
+
+                c.seq_len = sequence_length[j];
+
                 if (int new_tokens = c.seq_len - c.tokens.size(); TM_LIKELY(new_tokens)) {
                     c.tokens.insert(c.tokens.end(), c.token_ids + c.seq_len - new_tokens, c.token_ids + c.seq_len);
                 }
+
+                if (accepted_draft_count) {
+                    const int accepted = accepted_draft_count[j];
+                    const int k        = model_.spec->policy().max_proposals();
+
+                    if (accepted >= 0 && param_.model_tp_rank == 0 && c.req->metrics) {
+                        auto&            metrics = *c.req->metrics;
+                        std::scoped_lock lock(metrics.spec_mutex);
+
+                        ++metrics.num_drafts;
+                        metrics.num_draft_tokens += k;
+                        metrics.num_accepted_tokens += accepted;
+
+                        for (int pos = 0; pos < accepted; ++pos) {
+                            ++metrics.num_accepted_tokens_per_pos[pos];
+                        }
+                    }
+                }
+
                 if (TM_UNLIKELY(finished[j])) {
                     if (!c.is_canceled) {
-                        scheduler_.Finalize(c);
+                        scheduler_->Finalize(c);
                     }
-                    signals.push_back([r = c.req, l = c.seq_len] { UpdateState(*r, Request::kFinish, l); });
+                    signals.push_back(MakeRequestSignal(c.req, Request::kFinish, c.seq_len));
                     c.retiring = true;
                     c.done     = true;
                 }
                 else if (TM_LIKELY(c.req->stream_output)) {
-                    signals.push_back([r = c.req, l = c.seq_len] { UpdateState(*r, Request::kOk, l); });
+                    signals.push_back(MakeRequestSignal(c.req, Request::kOk, c.seq_len));
                 }
             }
         }
@@ -744,8 +847,9 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
         for (int i = 0; i < size; ++i) {
             auto& c = *s.rc[i];
             if (i < s.active) {
-                c.inflight_input_len  = c.input_len;
-                c.inflight_new_tokens = c.generating;
+                const SubmittedRow& row = *c.submitted;
+                c.inflight_input_len    = row.inflight_input_delta;
+                c.inflight_new_tokens   = row.inflight_new_delta;
             }
             else {
                 // Just got swaped-out
@@ -884,25 +988,25 @@ Engine::Engine()                  = default;
 Engine::Engine(Engine&&) noexcept = default;
 Engine& Engine::operator=(Engine&&) noexcept = default;
 
-Engine::Engine(EngineParam                  param,
-               ObjectAllocator              alloc,
-               CacheRegistry                cache_registry,
-               LanguageModel                model,
-               std::unique_ptr<VisionModel> vision_model,
-               Context&                     ctx,
-               Gateway&                     gateway,
-               int                          device_id,
-               int                          dp_rank,
-               int                          phases):
+Engine::Engine(EngineParam                       param,
+               CacheRegistry                     cache_registry,
+               std::unique_ptr<LanguageModel>    model,
+               std::unique_ptr<VisionModel>      vision_model,
+               std::unique_ptr<SpeculativeModel> spec_model,
+               Context&                          ctx,
+               Gateway&                          gateway,
+               int                               device_id,
+               int                               queue_id,
+               int                               phases):
     impl_{std::make_unique<Impl>(param,
-                                 std::move(alloc),
                                  std::move(cache_registry),
                                  std::move(model),
                                  std::move(vision_model),
+                                 std::move(spec_model),
                                  ctx,
                                  gateway,
                                  device_id,
-                                 dp_rank,
+                                 queue_id,
                                  phases)}
 {
 }

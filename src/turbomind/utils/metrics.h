@@ -3,7 +3,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <mutex>
 #include <ostream>
+#include <vector>
 
 namespace turbomind {
 
@@ -20,9 +22,22 @@ struct ScheduleMetrics {
 };
 
 struct RequestMetrics {
+    explicit RequestMetrics(int speculative_tokens = 0):
+        num_accepted_tokens_per_pos(static_cast<size_t>(speculative_tokens))
+    {
+    }
+
     std::atomic<int64_t> enqueue_time{};    // when a request is enqued
     std::atomic<int64_t> scheduled_time{};  // when a request is scheduled for inference
     std::atomic<int64_t> cached_tokens{};   // prompt tokens skipped at first admission
+
+    std::mutex spec_mutex;
+
+    int64_t num_drafts{};
+    int64_t num_draft_tokens{};
+    int64_t num_accepted_tokens{};
+
+    std::vector<int64_t> num_accepted_tokens_per_pos;
 
     static int64_t timestamp()
     {

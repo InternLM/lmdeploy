@@ -1,0 +1,87 @@
+import torch
+
+from lmdeploy.turbomind import _tm
+
+
+def run_verification_attention(
+    *,
+    prefix_k,
+    prefix_v,
+    prefix_offsets,
+    packed_qkv,
+    q_bias,
+    output,
+    cache_storage,
+    block_ptrs,
+    block_ptr_offsets,
+    q_offsets,
+    k_offsets,
+    finished,
+    partial_o,
+    partial_ml,
+    query_head_count,
+    kv_head_count,
+    head_dim,
+    block_len,
+    max_query_length,
+    max_key_length,
+    window_size=0,
+    requested_max_split_count=128,
+    rope_type=0,
+    rope_dim=0,
+    rope_base=1_000_000.0,
+    rope_factor=1.0,
+    mrope_mode=0,
+    mrope_section=(0, 0, 0),
+    mrope_position_ids=None,
+    mrope_position_delta=None,
+    mrope_length=None,
+):
+    device = packed_qkv.device
+    if mrope_position_ids is None:
+        mrope_position_ids = torch.empty((0, ),
+                                         dtype=torch.int32,
+                                         device=device)
+        mrope_position_delta = torch.empty((0, ),
+                                           dtype=torch.int32,
+                                           device=device)
+        mrope_length = torch.empty((0, ), dtype=torch.int32, device=device)
+    return _tm.verification_attention(
+        prefix_k,
+        prefix_v,
+        prefix_offsets,
+        max(
+            int(prefix_offsets[i + 1] - prefix_offsets[i])
+            for i in range(prefix_offsets.numel() - 1)),
+        packed_qkv,
+        q_bias,
+        output,
+        cache_storage,
+        block_ptrs,
+        block_ptr_offsets,
+        q_offsets,
+        k_offsets,
+        finished,
+        partial_o,
+        partial_ml,
+        query_head_count,
+        kv_head_count,
+        head_dim,
+        block_len,
+        max_query_length,
+        max_key_length,
+        window_size,
+        requested_max_split_count,
+        rope_type,
+        rope_dim,
+        rope_base,
+        rope_factor,
+        mrope_mode,
+        mrope_section[0],
+        mrope_section[1],
+        mrope_section[2],
+        mrope_position_ids,
+        mrope_position_delta,
+        mrope_length,
+        torch.cuda.current_stream(device).cuda_stream,
+    )

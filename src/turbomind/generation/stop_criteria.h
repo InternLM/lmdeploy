@@ -32,6 +32,13 @@ public:
 
     void Forward(int phase, TensorMap& env);
 
+    void ForwardSpeculative(int                  phase,
+                            const Buffer_<int*>& token_ids_ptrs,
+                            const Buffer_<int>&  entry_sequence_length,
+                            Buffer_<int>         accept_len,
+                            Buffer_<bool>        finished,
+                            TensorMap&           env);
+
 private:
     std::vector<std::shared_ptr<StopCriteriaData>> data_;
 

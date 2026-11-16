@@ -69,23 +69,56 @@ void StopCriteria::Forward(int phase, TensorMap& env)
 
     auto stream = core::Context::stream().handle();
 
-    if (auto& stop_words = d.stop_words_ten) {
-        TM_CHECK_EQ(stop_words.ndim(), 3);  // [batch, 2, len]
-        size_t stop_words_len = stop_words.shape(2);
-        TM_SCOPE_CALL(invokeStopWordsCriterion_v2((const int**)token_ids_ptrs.data(),
-                                                  sequence_length.data(),
-                                                  stop_words.data(),
-                                                  finished.data(),
-                                                  stop_words_len,
-                                                  batch_size,
-                                                  stream));
+    const int* stop_words       = nullptr;
+    int        stop_words_width = 0;
+
+    if (d.stop_words_ten) {
+        stop_words       = d.stop_words_ten.data();
+        stop_words_width = static_cast<int>(d.stop_words_ten.shape(2));
     }
 
-    TM_SCOPE_CALL(invokeLengthCriterion_v2(finished.data(),  //
-                                           sequence_length.data(),
-                                           d.max_seq_len.data(),
-                                           batch_size,
-                                           stream));
+    TM_SCOPE_CALL(invokeStopCriteria(reinterpret_cast<const int* const*>(token_ids_ptrs.data()),
+                                     sequence_length.data(),
+                                     stop_words,
+                                     stop_words_width,
+                                     d.max_seq_len.data(),
+                                     finished.data(),
+                                     batch_size,
+                                     stream));
+}
+
+void StopCriteria::ForwardSpeculative(int                  phase,
+                                      const Buffer_<int*>& token_ids_ptrs,
+                                      const Buffer_<int>&  entry_sequence_length,
+                                      Buffer_<int>         accept_len,
+                                      Buffer_<bool>        finished,
+                                      TensorMap&           env)
+{
+    TM_FUNCTION_SCOPE();
+    auto& d = *data_.at(phase);
+
+    const int batch_size = token_ids_ptrs.size();
+    auto      stream     = core::Context::stream().handle();
+
+    const int* stop_words       = nullptr;
+    int        stop_words_width = 0;
+
+    if (d.stop_words_ten) {
+        stop_words       = d.stop_words_ten.data();
+        stop_words_width = static_cast<int>(d.stop_words_ten.shape(2));
+    }
+
+    static_cast<void>(env);
+
+    invokeStopCriteria(reinterpret_cast<const int* const*>(token_ids_ptrs.data()),
+                       entry_sequence_length.data(),
+                       accept_len.data(),
+                       stop_words,
+                       stop_words_width,
+                       d.max_seq_len.data(),
+                       finished.data(),
+                       batch_size,
+                       stream);
 }
 
 }  // namespace turbomind
