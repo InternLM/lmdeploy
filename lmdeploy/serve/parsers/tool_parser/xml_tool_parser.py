@@ -2,16 +2,151 @@
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from json.encoder import encode_basestring
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from lmdeploy.serve.openai.protocol import DeltaToolCall
+from lmdeploy.utils import get_logger
 
 from .tool_parser import ToolParser
 
 if TYPE_CHECKING:
     from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+
+
+logger = get_logger('lmdeploy')
+
+# Unified depth budget for schema resolution across ``$ref`` chains and union
+# nesting. Hostile or accidental cycles in request-provided tool schemas must
+# degrade to the string-preserving fallback instead of raising RecursionError
+# after a full generation turn.
+_MAX_SCHEMA_RESOLVE_DEPTH = 32
+
+# Total node-visit budget for one schema resolution. Depth alone cannot bound
+# the work: unions whose branches share ``$ref`` targets re-expand every path,
+# so a compact schema can otherwise cost path-count work inside the serving
+# loop.
+_MAX_SCHEMA_RESOLVE_VISITS = 4096
+
+# Shared across literal collection, union, intersection, and final matching,
+# including nested JSON values. Memoizing nodes alone cannot bound result sizes.
+_MAX_SCHEMA_LITERAL_WORK = 65536
+
+# A mixed type constraint retains its allowed non-null types. Only ``None``
+# means unconstrained; an empty set permits no non-null JSON type.
+_SchemaType = str | frozenset[str] | None
+# Governing type(s), nullability, and declared enum/const candidates.
+_SchemaCoercion = tuple[_SchemaType, bool, tuple[Any, ...] | None]
+# A shared schema node can occur under different embedded schema resources.
+_SchemaCacheKey = tuple[int, int]
+
+# Other assertion keywords may distinguish branches that share these coercion
+# constraints. Their presence makes a successful partial match inconclusive.
+_COERCION_SCHEMA_KEYS = frozenset({
+    'type', 'const', 'enum', '$ref', 'allOf', 'anyOf', 'oneOf',
+    '$schema', '$id', '$anchor', '$defs', 'definitions', '$comment',
+    'title', 'description', 'default', 'examples', 'deprecated', 'readOnly', 'writeOnly',
+})
+
+
+class _SchemaResolutionExhausted(Exception):
+    """Raised when schema resolution exceeds a shared work budget."""
+
+
+@dataclass
+class _SchemaResolutionBudget:
+    visits: int
+    literal_work: int
+    has_combinators: bool = False
+
+    def literal_key(self, value: Any, depth: int = 0) -> Any:
+        """Build a bounded JSON equality key, distinguishing booleans from
+        numbers."""
+        self.literal_work -= 1
+        if self.literal_work < 0 or depth >= _MAX_SCHEMA_RESOLVE_DEPTH:
+            raise _SchemaResolutionExhausted('literal work/depth budget')
+        if isinstance(value, list):
+            return list, tuple(self.literal_key(item, depth + 1) for item in value)
+        if isinstance(value, dict):
+            return dict, frozenset((key, self.literal_key(item, depth + 1)) for key, item in value.items())
+        if isinstance(value, bool):
+            return bool, value
+        if isinstance(value, (int, float)):
+            if isinstance(value, float) and not math.isfinite(value):
+                raise _SchemaResolutionExhausted('non-finite literal')
+            # JSON numbers compare equal across the integer/float boundary.
+            # Use text keys so adversarial integers cannot force hash collisions.
+            number = int(value) if isinstance(value, float) and value.is_integer() else value
+            return float, str(number)
+        if value is None or isinstance(value, str):
+            return type(value), value
+        raise _SchemaResolutionExhausted('non-JSON literal')
+
+    def unique_literals(self, values: Iterable[Any]) -> tuple[Any, ...]:
+        """Deduplicate while consuming the iterator, before allocating an
+        expanded tuple."""
+        unique = {}
+        for value in values:
+            unique.setdefault(self.literal_key(value), value)
+        return tuple(unique.values())
+
+
+def _non_null_schema_types(schema_type: str | frozenset[str]) -> set[str]:
+    """Expand JSON number to include integer when combining type
+    constraints."""
+    types = {schema_type} if isinstance(schema_type, str) else set(schema_type)
+    types.discard('null')
+    if 'number' in types:
+        types.add('integer')
+    return types
+
+
+def _compact_schema_types(types: set[str]) -> str | frozenset[str]:
+    """Keep one governing type where possible, otherwise retain the allowed
+    set."""
+    types = types - {'null'}
+    if 'number' in types:
+        types.discard('integer')
+    return next(iter(types)) if len(types) == 1 else frozenset(types)
+
+
+def _loads_strict_json(text: str) -> Any:
+    """Parse ``text`` as strict JSON, rejecting the ``NaN``/``Infinity``
+    extensions ``json.loads`` accepts by default.
+
+    A coerced non-finite float would reach ``arguments`` and make the whole
+    payload unparseable for strict JSON clients. The hook raises
+    ``ValueError`` so callers fall back to the raw string form.
+    """
+
+    def _reject_constant(token: str) -> Any:
+        raise ValueError(f'non-standard JSON constant: {token}')
+
+    return json.loads(text, parse_constant=_reject_constant)
+
+
+def _is_strict_json_value(value: Any) -> bool:
+    """Return whether ``value`` serializes to strict JSON (no non-finite
+    floats, at any nesting depth)."""
+
+    # Iterative on purpose: model output can nest deeply enough that a
+    # recursive walk would itself raise RecursionError.
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                return False
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return True
 
 
 XmlParsePhase = Literal['function', 'arg_start', 'arg_name', 'arg_value', 'done']
@@ -98,6 +233,7 @@ class XmlToolParser(ToolParser):
     def __init__(self):
         super().__init__()
         self._function_param_schemas: dict[str, dict[str, dict[str, Any]]] = {}
+        self._function_root_schemas: dict[str, dict[str, Any]] = {}
         self._has_emitted_json_start = False
         self._json_closed = False
         self._emitted_arg_count = 0
@@ -107,7 +243,15 @@ class XmlToolParser(ToolParser):
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Cache parameter schemas and apply common tool request
         adjustments."""
-        self._function_param_schemas = self._build_function_param_schemas(request)
+        built = self._build_function_param_schemas(request)
+        if (not isinstance(built, tuple) or len(built) != 2
+                or not all(isinstance(entry, dict) for entry in built)):
+            # Overrides predating the two-map return value must not silently
+            # poison schema lookups with unpacked mapping keys.
+            logger.warning('ignoring invalid _build_function_param_schemas result: '
+                           'expected (param schemas, root schemas) dicts')
+            built = {}, {}
+        self._function_param_schemas, self._function_root_schemas = built
         return super().adjust_request(request)
 
     def begin_tool_block(self) -> None:
@@ -276,12 +420,15 @@ class XmlToolParser(ToolParser):
             self._payload_closed = True
         return consumed
 
-    def _build_function_param_schemas(self, request: ChatCompletionRequest) -> dict[str, dict[str, dict[str, Any]]]:
-        """Build function->parameter schema map from request tools."""
+    def _build_function_param_schemas(
+            self, request: ChatCompletionRequest
+    ) -> tuple[dict[str, dict[str, dict[str, Any]]], dict[str, dict[str, Any]]]:
+        """Build function->parameter and function->root schema maps."""
         if not request.tools:
-            return {}
+            return {}, {}
 
         out: dict[str, dict[str, dict[str, Any]]] = {}
+        roots: dict[str, dict[str, Any]] = {}
         for tool in request.tools:
             parameters = tool.function.parameters
             if not isinstance(parameters, dict):
@@ -293,7 +440,8 @@ class XmlToolParser(ToolParser):
             param_schemas = {name: schema for name, schema in properties.items() if isinstance(schema, dict)}
             if param_schemas:
                 out[tool.function.name] = param_schemas
-        return out
+                roots[tool.function.name] = parameters
+        return out, roots
 
     def _consume_arg_delta(self, raw: str, json_fragments: list[str]) -> None:
         """Buffer typed or quoted values and stream plain string fragments.
@@ -334,8 +482,11 @@ class XmlToolParser(ToolParser):
                 text = text[1:]
 
         param_schema = self._get_param_schema(self._state.func_name, arg_name)
-        schema_type = self._get_schema_type(param_schema)
-        if param_schema is not None and schema_type != 'string':
+        schema_type, allows_null, _ = self._resolve_schema_coercion(
+            param_schema, self._get_function_root_schema(self._state.func_name))
+        # A nullable schema must buffer: the bare word ``null`` can only be
+        # recognized once the value is complete, so it cannot stream raw.
+        if param_schema is not None and (schema_type != 'string' or allows_null):
             arg_state.mode = 'buffered'
             return
         if text.lstrip().startswith('"'):
@@ -393,7 +544,8 @@ class XmlToolParser(ToolParser):
             raw_value = self._normalize_complete_value(raw_value)
             func_name = self._state.func_name
             schema = self._get_param_schema(func_name, arg_name)
-            value = self._coerce_arg_value(raw_value, schema)
+            root_schema = self._get_function_root_schema(func_name)
+            value = self._coerce_arg_value(raw_value, schema, root_schema)
             self._append_completed_arg(json_fragments, arg_name, value)
         self._state.arg_name = None
         self._arg_state = _XmlArgState()
@@ -441,31 +593,365 @@ class XmlToolParser(ToolParser):
         param_schema = self._function_param_schemas.get(func_name, {}).get(param_name)
         return param_schema if isinstance(param_schema, dict) else None
 
-    @staticmethod
-    def _get_schema_type(schema: dict[str, Any] | None) -> str | None:
-        """Return the effective JSON type from an optional parameter schema."""
-        return XmlToolParser._resolve_schema_type(schema) if schema is not None else None
+    def _get_function_root_schema(self, func_name: str | None) -> dict[str, Any] | None:
+        """Return the full parameters schema holding ``$defs`` for a
+        function."""
+        root_schema = self._function_root_schemas.get(func_name)
+        return root_schema if isinstance(root_schema, dict) else None
 
     def _stable_arg_value_end(self, payload: str, start: int) -> int:
         """Return the stable value end using token-aligned marker prefixes."""
         return self._stable_prefix_end(payload, self.arg_value_close_prefixes, start)
 
     @staticmethod
-    def _resolve_schema_type(param_schema: dict[str, Any]) -> str | None:
-        """Resolve a scalar or nullable-list JSON Schema ``type`` value."""
-        # TODO: Fully support union and nullable schemas, preserving all allowed types
-        # in streaming decisions and value coercion.
-        schema_type = param_schema.get('type')
-        if isinstance(schema_type, str):
-            return schema_type
-        if isinstance(schema_type, list):
-            for item in schema_type:
-                if isinstance(item, str) and item != 'null':
-                    return item
-            for item in schema_type:
-                if isinstance(item, str):
-                    return item
+    def _json_type_of(value: Any) -> str | None:
+        """Map a Python value to its JSON Schema type name."""
+        if isinstance(value, bool):
+            return 'boolean'
+        if isinstance(value, int):
+            return 'integer'
+        if isinstance(value, float):
+            return 'number'
+        if isinstance(value, str):
+            return 'string'
+        if value is None:
+            return 'null'
+        if isinstance(value, list):
+            return 'array'
+        if isinstance(value, dict):
+            return 'object'
         return None
+
+    @staticmethod
+    def _lookup_local_ref(ref: Any, root_schema: dict[str, Any] | None,
+                          ) -> tuple[dict[str, Any] | bool, dict[str, Any] | None] | None:
+        """Resolve a local JSON pointer to its target and enclosing resource.
+
+        Pointer tokens are unescaped per RFC 6901 first (``~1`` decodes to ``/``,
+        ``~0`` to ``~``). Returns ``None`` for external pointers, missing targets, and
+        anything that does not land on an object or boolean schema. A pointer can
+        cross an embedded ``$id`` resource before reaching its target; subsequent
+        fragment references must use that resource rather than the caller's root.
+        """
+        if not isinstance(ref, str) or not ref.startswith('#/'):
+            return None
+        target: Any = root_schema if isinstance(root_schema, dict) else None
+        for token in ref[2:].split('/'):
+            # RFC 6901: decode pointer escapes, ``~1`` before ``~0``.
+            part = token.replace('~1', '/').replace('~0', '~')
+            if not isinstance(target, dict) or part not in target:
+                return None
+            target = target[part]
+            if isinstance(target, dict) and isinstance(target.get('$id'), str):
+                root_schema = target
+        return (target, root_schema) if isinstance(target, (dict, bool)) else None
+
+    @classmethod
+    def _resolve_schema_coercion(cls, param_schema: dict[str, Any] | None,
+                                 root_schema: dict[str, Any] | None = None,
+                                 *, budget: _SchemaResolutionBudget | None = None,
+                                 ) -> _SchemaCoercion:
+        """Resolve the effective JSON type, nullability, and literals of a
+        schema.
+
+        Returns ``(schema_type, allows_null, literals)``. ``schema_type`` is a single
+        type, a set of allowed non-null types for mixed schemas, or ``None`` for
+        unconstrained schemas. ``literals`` carries the declared ``enum``/``const`` values when present, so
+        coercion keeps the interpretation that actually matches one of them.
+
+        ``$ref`` pointers are resolved one hop at a time against ``root_schema`` and merged
+        with the constraints declared beside every hop (Draft 2020-12): a referencing
+        schema's own ``type``/``enum``/``const`` narrows the referenced target instead of
+        being dropped.
+
+        Each ``$id`` starts an embedded schema resource for fragment lookups.
+        Both the node and its resource participate in memoization keys.
+
+        Shared budgets bound node visits and literal processing, including enum unions
+        and intersections. A depth budget also bounds ``$ref`` cycles and nested literal
+        values. Exhausting a work budget degrades to the string-preserving fallback
+        (logged), as does an unresolvable ``$ref``: raw values are kept instead of guessing
+        a JSON type or using a partially collected enum.
+        """
+        if not isinstance(param_schema, dict):
+            return None, False, None
+        cache: dict[_SchemaCacheKey, _SchemaCoercion] = {}
+        if budget is None:
+            budget = _SchemaResolutionBudget(_MAX_SCHEMA_RESOLVE_VISITS, _MAX_SCHEMA_LITERAL_WORK)
+        try:
+            return cls._resolve_schema_impl(param_schema, root_schema, 0, cache, budget)
+        except _SchemaResolutionExhausted as exc:
+            logger.debug('tool schema resolution stopped (%s); coercing arguments as raw strings', exc)
+            return 'string', False, None
+
+    @classmethod
+    def _resolve_schema_impl(cls, schema: dict[str, Any] | bool | None,
+                             root_schema: dict[str, Any] | None,
+                             depth: int,
+                             cache: dict[_SchemaCacheKey, _SchemaCoercion],
+                             budget: _SchemaResolutionBudget) -> _SchemaCoercion:
+        """Resolve one schema node under the shared memo and work budgets."""
+        if not isinstance(schema, (dict, bool)):
+            return None, False, None
+        if isinstance(schema, dict) and isinstance(schema.get('$id'), str):
+            root_schema = schema
+        key = id(schema), id(root_schema)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        budget.visits -= 1
+        if budget.visits < 0:
+            raise _SchemaResolutionExhausted('node-visit budget')
+        if depth >= _MAX_SCHEMA_RESOLVE_DEPTH:
+            logger.debug('tool schema resolution exceeded %d levels; coercing arguments as '
+                         'raw strings', _MAX_SCHEMA_RESOLVE_DEPTH)
+            # A budget-exhausted ``$ref`` chain degrades like an unresolvable
+            # one; exhausted union nesting keeps the JSON-value fallback.
+            if isinstance(schema, dict) and isinstance(schema.get('$ref'), str):
+                return 'string', False, None
+            return None, False, None
+        if isinstance(schema, bool):
+            result = (None, True, None) if schema else (frozenset(), False, ())
+        else:
+            result = cls._resolve_schema_node(schema, root_schema, depth, cache, budget)
+        cache[key] = result
+        return result
+
+    @classmethod
+    def _resolve_schema_node(cls, schema: dict[str, Any], root_schema: dict[str, Any] | None,
+                             depth: int, cache: dict[_SchemaCacheKey, _SchemaCoercion],
+                             budget: _SchemaResolutionBudget) -> _SchemaCoercion:
+        """Interpret one schema node, merging its ``$ref`` target and siblings.
+
+        The referenced target and every constraint declared beside the ``$ref`` both
+        apply, so they are intersected hop by hop instead of following the pointer chain
+        to the end and losing the intermediate layers.
+        """
+        own = cls._resolve_local_schema(schema, root_schema, depth, cache, budget)
+        ref = schema.get('$ref')
+        if not isinstance(ref, str):
+            return own if own is not None else (None, True, None)
+        resolved_ref = cls._lookup_local_ref(ref, root_schema)
+        if resolved_ref is None:
+            if own is not None:
+                # Constraints beside an unresolvable ``$ref`` still govern.
+                return own
+            logger.debug('unresolvable $ref %s in tool schema; coercing arguments as raw '
+                         'strings', ref)
+            return 'string', False, None
+        target, target_root = resolved_ref
+        target_result = cls._resolve_schema_impl(target, target_root, depth + 1, cache, budget)
+        if own is None:
+            return target_result
+        return cls._intersect_coercion(own, target_result, budget)
+
+    @classmethod
+    def _intersect_coercion(cls, left: _SchemaCoercion, right: _SchemaCoercion,
+                            budget: _SchemaResolutionBudget) -> _SchemaCoercion:
+        """Intersect two resolved constraints: a value must satisfy both.
+
+        An unconstrained side (``None`` type) adopts the other side's types. Otherwise
+        intersect the allowed types, including the integer subset of number. Null
+        needs both sides' permission; literals survive when both sides declare them.
+        """
+        left_type, left_nullable, left_literals = left
+        right_type, right_nullable, right_literals = right
+        if left_type is None:
+            schema_type = right_type
+        elif right_type is None or left_type == right_type:
+            schema_type = left_type
+        else:
+            schema_type = _compact_schema_types(_non_null_schema_types(left_type)
+                                                & _non_null_schema_types(right_type))
+        literals: tuple[Any, ...] | None
+        if left_literals is not None and right_literals is not None:
+            right_keys = {budget.literal_key(literal) for literal in right_literals}
+            literals = tuple(literal for literal in left_literals
+                             if budget.literal_key(literal) in right_keys)
+        else:
+            literals = left_literals if left_literals is not None else right_literals
+        return schema_type, left_nullable and right_nullable, literals
+
+    @classmethod
+    def _resolve_local_schema(cls, schema: dict[str, Any] | None,
+                              root_schema: dict[str, Any] | None,
+                              depth: int, cache: dict[_SchemaCacheKey, _SchemaCoercion],
+                              budget: _SchemaResolutionBudget) -> _SchemaCoercion | None:
+        """Resolve a schema's own constraints, ignoring its ``$ref`` keyword.
+
+        ``type``, ``enum``/``const``, and the composition keywords
+        (``anyOf``/``oneOf``/``allOf``) apply at the same time, so their resolved
+        constraints are intersected instead of letting whichever keyword is checked
+        first win. Union branches and ``allOf`` members resolve through
+        ``_resolve_schema_impl`` so ``$ref`` pointers and their own siblings are
+        still honored.
+
+        Returns ``None`` when the schema declares none of these keywords, so a
+        ``$ref``-only schema can adopt its target's constraints untouched — a
+        declared mixed union is a real constraint, not the same as declaring
+        nothing.
+        """
+        if not isinstance(schema, dict):
+            return None
+
+        result: _SchemaCoercion | None = None
+
+        schema_type = schema.get('type')
+        if isinstance(schema_type, str):
+            result = schema_type, schema_type == 'null', None
+        elif isinstance(schema_type, list):
+            types = {item for item in schema_type if isinstance(item, str)}
+            nullable = 'null' in types
+            result = _compact_schema_types(types), nullable, None
+
+        if 'const' in schema:
+            const_type = cls._json_type_of(schema['const'])
+            constraint = const_type, const_type == 'null', budget.unique_literals((schema['const'], ))
+            result = constraint if result is None else cls._intersect_coercion(result, constraint, budget)
+        elif isinstance(schema.get('enum'), list):
+            values = budget.unique_literals(schema['enum'])
+            # Equal integer/float literals may deduplicate, but retain their
+            # original type information for coercion (e.g. enum: [1, 1.0]).
+            value_types = {cls._json_type_of(value) for value in schema['enum']}
+            nullable = 'null' in value_types
+            constraint = _compact_schema_types(value_types), nullable, values
+            result = constraint if result is None else cls._intersect_coercion(result, constraint, budget)
+
+        # Sibling applicators all constrain the value. The flattened result is
+        # only a coercion hint; final matching retains branch-local constraints
+        # and the distinction between anyOf and oneOf.
+        for keyword in ('anyOf', 'oneOf'):
+            union = schema.get(keyword)
+            if not isinstance(union, list):
+                continue
+            budget.has_combinators = True
+            resolved = [cls._resolve_schema_impl(branch, root_schema, depth + 1, cache, budget)
+                        for branch in union if isinstance(branch, (dict, bool))]
+            if resolved:
+                # Combine allowed types rather than treating a mixed union as
+                # unconstrained. A truly unconstrained branch still permits any type.
+                nullable = any(t == 'null' or allows_null for t, allows_null, _ in resolved)
+                union_type = None
+                if all(t is not None for t, _, _ in resolved):
+                    types = set().union(*(_non_null_schema_types(t) for t, _, _ in resolved))
+                    union_type = _compact_schema_types(types)
+                literals = None
+                if all(l is not None for _, _, l in resolved):
+                    literals = budget.unique_literals(value for _, _, values in resolved for value in values)
+                constraint = union_type, nullable, literals
+                result = constraint if result is None else cls._intersect_coercion(result, constraint, budget)
+
+        if isinstance(schema.get('allOf'), list):
+            resolved = [cls._resolve_schema_impl(member, root_schema, depth + 1, cache, budget)
+                        for member in schema['allOf'] if isinstance(member, (dict, bool))]
+            if resolved:
+                # Every ``allOf`` member constrains the same value.
+                merged = resolved[0]
+                for member_result in resolved[1:]:
+                    merged = cls._intersect_coercion(merged, member_result, budget)
+                result = merged if result is None else cls._intersect_coercion(result, merged, budget)
+
+        if result is not None:
+            return result
+        if isinstance(schema.get('properties'), dict):
+            return 'object', False, None
+        if schema.get('items') is not None:
+            return 'array', False, None
+        return None
+
+    @classmethod
+    def _value_matches_type(cls, value: Any, schema_type: str | list[str] | frozenset[str]) -> bool:
+        """Check JSON types, including integral floats without conflating
+        booleans."""
+        types = (schema_type,) if isinstance(schema_type, str) else schema_type
+        value_type = cls._json_type_of(value)
+        return (value_type in types
+                or (value_type == 'integer' and 'number' in types)
+                or (value_type == 'number' and 'integer' in types and value.is_integer()))
+
+    @classmethod
+    def _match_schema_value(cls, value: Any, schema: Any, root_schema: dict[str, Any] | None,
+                            depth: int, cache: dict[_SchemaCacheKey, bool | None],
+                            budget: _SchemaResolutionBudget) -> bool | None:
+        """Match one candidate under the remaining resolution budget.
+
+        Cache entries belong to this candidate only. ``None`` means inconclusive,
+        including a recursive reference currently being evaluated. Shared targets
+        are evaluated once, but repeated oneOf branches still count separately.
+        """
+        budget.visits -= 1
+        if budget.visits < 0 or depth >= _MAX_SCHEMA_RESOLVE_DEPTH:
+            raise _SchemaResolutionExhausted('branch matching work/depth budget')
+        if isinstance(schema, dict) and isinstance(schema.get('$id'), str):
+            root_schema = schema
+        key = id(schema), id(root_schema)
+        if key in cache:
+            return cache[key]
+        cache[key] = None
+        if isinstance(schema, bool):
+            result = schema
+        elif isinstance(schema, dict):
+            result = cls._match_schema_value_impl(value, schema, root_schema, depth, cache, budget)
+        else:
+            result = None
+        cache[key] = result
+        return result
+
+    @classmethod
+    def _match_schema_value_impl(cls, value: Any, schema: dict[str, Any], root_schema: dict[str, Any] | None,
+                                 depth: int, cache: dict[_SchemaCacheKey, bool | None],
+                                 budget: _SchemaResolutionBudget) -> bool | None:
+        """Check the original branch structure instead of its flattened hint.
+
+        This is a coercion check, not a general JSON Schema validator. Assertions
+        outside the supported type/literal/applicator vocabulary yield an unknown
+        match: e.g. object properties may distinguish two object-typed branches.
+        Rejecting oneOf overlap requires two definite matches, not two guesses.
+        """
+        schema_type = schema.get('type')
+        if isinstance(schema_type, (str, list)) and not cls._value_matches_type(value, schema_type):
+            return False
+        if 'const' in schema and budget.literal_key(value) != budget.literal_key(schema['const']):
+            return False
+        if isinstance(schema.get('enum'), list):
+            value_key = budget.literal_key(value)
+            if not any(value_key == budget.literal_key(literal) for literal in schema['enum']):
+                return False
+
+        uncertain = any(key not in _COERCION_SCHEMA_KEYS for key in schema)
+        if isinstance(schema.get('$ref'), str):
+            resolved_ref = cls._lookup_local_ref(schema['$ref'], root_schema)
+            match = None
+            if resolved_ref is not None:
+                target, target_root = resolved_ref
+                match = cls._match_schema_value(value, target, target_root, depth + 1, cache, budget)
+            if match is False:
+                return False
+            uncertain |= match is None
+
+        for keyword in ('allOf', 'anyOf', 'oneOf'):
+            branches = schema.get(keyword)
+            if not isinstance(branches, list):
+                continue
+            matched = 0
+            unknown = False
+            for branch in branches:
+                match = cls._match_schema_value(value, branch, root_schema, depth + 1, cache, budget)
+                if match is None:
+                    unknown = True
+                elif match:
+                    matched += 1
+                elif keyword == 'allOf':
+                    return False
+                if keyword == 'anyOf' and matched:
+                    unknown = False
+                    break
+                if keyword == 'oneOf' and matched > 1:
+                    return False
+            if keyword != 'allOf' and not matched and not unknown:
+                return False
+            uncertain |= unknown
+        return None if uncertain else True
 
     @staticmethod
     def _coerce_value(raw_value: str, schema_type: str | None) -> Any:
@@ -479,30 +965,32 @@ class XmlToolParser(ToolParser):
             if not raw_value.startswith('"'):
                 return original
             try:
-                parsed_val = json.loads(raw_value)
+                parsed_val = _loads_strict_json(raw_value)
                 return parsed_val if isinstance(parsed_val, str) else original
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
                 return original
 
         if schema_type == 'integer':
             try:
-                parsed_val = json.loads(raw_value)
-            except json.JSONDecodeError:
+                parsed_val = _loads_strict_json(raw_value)
+            except (ValueError, RecursionError):
                 parsed_val = raw_value
             if isinstance(parsed_val, bool):
                 return original
-            if isinstance(parsed_val, int):
+            # JSON Schema integer includes finite numbers with a zero
+            # fractional part, regardless of decimal or exponent spelling.
+            if isinstance(parsed_val, int) or (isinstance(parsed_val, float) and parsed_val.is_integer()):
                 return parsed_val
             return original
 
         if schema_type == 'number':
             try:
-                parsed_val = json.loads(raw_value)
-            except json.JSONDecodeError:
+                parsed_val = _loads_strict_json(raw_value)
+            except (ValueError, RecursionError):
                 parsed_val = raw_value
             if isinstance(parsed_val, bool):
                 return original
-            if isinstance(parsed_val, (int, float)):
+            if isinstance(parsed_val, (int, float)) and _is_strict_json_value(parsed_val):
                 return parsed_val
             return original
 
@@ -519,22 +1007,100 @@ class XmlToolParser(ToolParser):
 
         if schema_type == 'array':
             try:
-                parsed_val = json.loads(raw_value)
-            except json.JSONDecodeError:
+                parsed_val = _loads_strict_json(raw_value)
+            except (ValueError, RecursionError):
                 return original
-            return parsed_val if isinstance(parsed_val, list) else original
+            if isinstance(parsed_val, list) and _is_strict_json_value(parsed_val):
+                return parsed_val
+            return original
 
         if schema_type == 'object':
             try:
-                parsed_val = json.loads(raw_value)
-            except json.JSONDecodeError:
+                parsed_val = _loads_strict_json(raw_value)
+            except (ValueError, RecursionError):
                 return original
-            return parsed_val if isinstance(parsed_val, dict) else original
+            if isinstance(parsed_val, dict) and _is_strict_json_value(parsed_val):
+                return parsed_val
+            return original
 
         return original
 
-    def _coerce_arg_value(self, raw_value: Any, schema: dict[str, Any] | None) -> Any:
+    @staticmethod
+    def _coerce_json_value(raw_value: str) -> Any:
+        """Coerce a complete raw value whose schema declares no single JSON
+        type.
+
+        Quoted values decode as strings, other valid JSON keeps its native type, and
+        anything unparseable or non-strict (``NaN``, ``Infinity``) keeps its original
+        string form. The caller checks mixed schemas' allowed types before accepting
+        the candidate.
+        """
+        original = raw_value
+        raw_value = raw_value.strip()
+        if not raw_value:
+            return original
+        if raw_value.startswith('"'):
+            try:
+                return _loads_strict_json(raw_value)
+            except (ValueError, RecursionError):
+                return original
+        try:
+            parsed_val = _loads_strict_json(raw_value)
+        except (ValueError, RecursionError):
+            return original
+        return parsed_val if _is_strict_json_value(parsed_val) else original
+
+    def _coerce_arg_value(self, raw_value: Any, schema: dict[str, Any] | None,
+                          root_schema: dict[str, Any] | None = None) -> Any:
         """Apply schema-aware coercion to one argument value."""
         if not isinstance(raw_value, str):
             return raw_value
-        return self._coerce_value(raw_value, self._get_schema_type(schema)) if schema is not None else raw_value
+        if schema is None:
+            return raw_value
+        budget = _SchemaResolutionBudget(_MAX_SCHEMA_RESOLVE_VISITS, _MAX_SCHEMA_LITERAL_WORK)
+        schema_type, allows_null, literals = self._resolve_schema_coercion(schema, root_schema, budget=budget)
+        try:
+            stripped = raw_value.strip()
+            if stripped.lower() == 'null':
+                # Lowercase null is the JSON literal. Other spellings can be
+                # distinct string choices, e.g. enum: ["NULL", null]. Preserve
+                # them unless the string interpretation is ruled out.
+                if not allows_null:
+                    return raw_value
+                if (stripped != 'null'
+                        and self._match_schema_value(raw_value, schema, root_schema, 0, {}, budget) is not False):
+                    return raw_value
+                value = None
+            elif schema_type is None or isinstance(schema_type, frozenset):
+                value = self._coerce_json_value(raw_value)
+                if isinstance(schema_type, frozenset):
+                    # Keep best-effort quoted-string decoding even when neither
+                    # interpretation satisfies the schema.
+                    if not self._value_matches_type(value, schema_type) and not isinstance(value, str):
+                        return raw_value
+            else:
+                value = self._coerce_value(raw_value, schema_type)
+            if budget.has_combinators and value != raw_value:
+                match = self._match_schema_value(value, schema, root_schema, 0, {}, budget)
+                if match is None:
+                    # Prefer a proved-valid string over an inconclusive native
+                    # candidate. Fresh candidate memoization shares the budget.
+                    if self._match_schema_value(raw_value, schema, root_schema, 0, {}, budget) is True:
+                        return raw_value
+                if match is False:
+                    # Preserve quoted-string decoding when both interpretations
+                    # are invalid, but prefer a possibly valid raw string. Each
+                    # candidate needs its own cache while sharing the work budget.
+                    if (not isinstance(value, str)
+                            or self._match_schema_value(raw_value, schema, root_schema, 0, {}, budget) is not False):
+                        return raw_value
+            if literals is None:
+                return value
+            value_key = budget.literal_key(value)
+            if any(value_key == budget.literal_key(literal) for literal in literals):
+                return value
+        except _SchemaResolutionExhausted as exc:
+            logger.debug('tool argument constraint matching stopped (%s); keeping the raw string', exc)
+        # The coerced form is not one of the declared literals; the raw string
+        # itself may still be (``enum: ['true', 1]`` with a bare ``true``).
+        return raw_value
