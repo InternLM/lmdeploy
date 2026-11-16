@@ -1525,9 +1525,8 @@ def test_count_tokens_keeps_assistant_reasoning_structured():
 def test_count_tokens_keeps_assistant_tool_calls_structured():
     """Regression (PR review): with thinking enabled, a history ending in an
     assistant message with tool_use blocks (and no thinking text) used to be
-    rejected by deepseek-style templates -- the count path flattened the
-    blocks into ``[tool_use ...]`` text and dropped ``tool_calls``.
-    """
+    rejected by deepseek-style templates -- the count path flattened the blocks
+    into ``[tool_use ...]`` text and dropped ``tool_calls``."""
     import json
 
     from lmdeploy.model import DeepseekV32ChatTemplate
