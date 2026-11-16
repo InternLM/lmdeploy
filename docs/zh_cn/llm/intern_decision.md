@@ -205,6 +205,10 @@ Choice 和 noul 问题仍使用对象形式的 criteria。
 未知顶层请求字段会被接受后忽略，不会下传给引擎；`seed` 不提供随机种子控制，`x_trace_id` 不提供追踪功能。
 已知字段仍执行严格校验；已移除的 `images` 字段仍返回 422，并提示使用 `assets`。
 
+JSON 请求体中的数值必须有限，包括 state、instructions 和 criteria 内的嵌套数值。
+非有限字面量（`NaN`、`Infinity`、`-Infinity`）及溢出的 `1e400` 会在进入引擎前返回 400；
+multipart 的 JSON `request` 部分同样适用。带引号的 `"NaN"` 等字符串仍是合法内容。
+
 使用 multipart 上传时，第一个部分必须是名为 `request`、内容类型为 `application/json` 的请求数据；
 图片资源通过 `part` 引用各自独立的文件部分。文件内容优先于 `data_base64`；省略 `format` 时根据文件内容推断格式。
 

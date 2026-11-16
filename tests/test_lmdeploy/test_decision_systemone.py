@@ -163,6 +163,37 @@ def test_confidence_uses_the_calibrated_distribution(service, monkeypatch, kind,
     assert sum(answer['probabilities'].values()) == pytest.approx(1.0)
 
 
+@pytest.mark.parametrize('literal', ['NaN', 'Infinity', '-Infinity', '1e400'])
+@pytest.mark.parametrize('location', ['state', 'instructions', 'criteria', 'multipart'])
+def test_non_finite_json_numbers_return_400_before_engine_work(service, literal, location):
+    client, engine = service
+    question = dict(type='score', instructions='Score.', criteria=['Low', 'High'])
+    row = dict(state='text', questions={'q': question})
+    nested = {'nested': ['NONFINITE']}
+    if location in ('state', 'multipart'):
+        row['state'] = nested
+    elif location == 'instructions':
+        question['instructions'] = nested
+    else:
+        question['criteria'][0] = nested
+    raw = json.dumps(row).replace('"NONFINITE"', literal)
+    if location == 'multipart':
+        response = client.post('/v1/systemone', files={'request': ('request.json', raw, 'application/json')})
+    else:
+        response = client.post('/v1/systemone', content=raw, headers={'Content-Type': 'application/json'})
+    assert response.status_code == 400
+    assert 'Non-finite' in response.json()['error']
+    assert not engine.requests and engine.session_mgr.count == 0
+
+
+def test_finite_numbers_and_non_finite_strings_remain_valid(service):
+    client, _ = service
+    row = dict(state={'large': 1e308, 'labels': ['NaN', 'Infinity']}, questions={
+        'q': dict(type='noul', instructions='Is large finite?'),
+    })
+    assert client.post('/v1/systemone', json=row).status_code == 200
+
+
 def test_nested_references_keep_order_keys_and_original_response_values(service):
     row = body()
     row['assets']['blue-ref'] = asset('blue')

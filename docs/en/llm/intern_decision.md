@@ -232,6 +232,10 @@ Unknown top-level request fields are accepted and then ignored. They are not for
 `seed` does not control randomness, and `x_trace_id` does not enable tracing. Known fields remain strictly validated;
 the removed `images` field still returns 422, with guidance to use `assets`.
 
+Numbers in the JSON body must be finite, including nested state, instructions and criteria. Non-finite literals
+(`NaN`, `Infinity`, `-Infinity`) and overflow such as `1e400` return 400 before engine work. The same rule applies
+to the JSON `request` part of multipart uploads. Quoted strings such as `"NaN"` remain valid content.
+
 For multipart uploads, send the JSON `request` part first, with `Content-Type: application/json`, and reference
 each image part exactly once through `assets.<ref>.part`. File format can be omitted and is inferred from its bytes:
 

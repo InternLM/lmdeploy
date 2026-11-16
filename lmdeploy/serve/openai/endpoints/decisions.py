@@ -134,7 +134,10 @@ class _SystemoneRoute(_DecisionRoute):
                             body = json.loads(raw)
                         except (ValueError, UnicodeError, RecursionError):
                             raise AssetError('Malformed JSON request body.') from None
-                    return json.dumps(body).encode('utf-8')
+                    try:
+                        return json.dumps(body, allow_nan=False).encode('utf-8')
+                    except ValueError:
+                        raise AssetError('Non-finite numbers are not allowed in the request body.') from None
 
                 request._body = await asyncio.to_thread(normalize)
                 request.scope['headers'] = [(key, value) for key, value in request.scope['headers']
