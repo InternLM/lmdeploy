@@ -11,8 +11,8 @@
 namespace turbomind::attention {
 
 constexpr int kHeadDim = 256;
-constexpr int kCTA_Q   = 64;
-constexpr int kCTA_S   = 64;
+constexpr int kCTA_Q   = 128;
+constexpr int kCTA_S   = 32;
 constexpr int kWARP_Q  = 16;
 constexpr int kStages  = 2;
 
