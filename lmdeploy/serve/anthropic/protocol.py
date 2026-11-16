@@ -384,6 +384,7 @@ class CountTokensRequest(BaseModel):
     messages: list[MessageParam]
     system: str | list[ContentBlockParam] | None = None
     tools: list[ToolParam] | None = None
+    thinking: ThinkingConfig | None = None
 
     @field_validator('messages')
     @classmethod

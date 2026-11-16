@@ -211,7 +211,8 @@ async def _stream_choice(
             buffer += chunk.decode() if isinstance(chunk, bytes) else chunk
             while '\n\n' in buffer:
                 event, buffer = buffer.split('\n\n', 1)
-                for line in event.splitlines():
+                # Unicode separators inside JSON strings are not SSE line breaks.
+                for line in event.split('\n'):
                     if not line.startswith('data: '):
                         continue
                     data = line.removeprefix('data: ')
@@ -320,7 +321,7 @@ async def _collate_streams(
                     break
 
             for payload in _batch_stream_payloads(payloads):
-                yield f'data: {json.dumps(payload)}\n\n'
+                yield f'data: {json.dumps(payload, ensure_ascii=False)}\n\n'
             if stream_error is not None:
                 raise stream_error
         if include_usage and len(usages) == len(tasks):
@@ -333,7 +334,7 @@ async def _collate_streams(
                 'choices': [],
                 'usage': _aggregate_usage(ordered_usages).model_dump(),
             }
-            yield f'data: {json.dumps(usage_response)}\n\n'
+            yield f'data: {json.dumps(usage_response, ensure_ascii=False)}\n\n'
         yield 'data: [DONE]\n\n'
     finally:
         stopping.set()
