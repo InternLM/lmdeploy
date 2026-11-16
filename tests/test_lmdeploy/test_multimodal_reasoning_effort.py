@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import Mock
 
 import pytest
 from PIL import Image
@@ -47,8 +47,8 @@ def test_multimodal_reasoning_effort(hf_media_template, backend, new_preprocess,
         _uses_new_preprocess=new_preprocess,
         model=SimpleNamespace(get_input_prompt=render, _turbomind_native_vision=True),
         preprocess=preprocess,
-        wrap_for_pytorch=AsyncMock(side_effect=render),
-        wrap_for_turbomind=AsyncMock(side_effect=render),
+        wrap_for_pytorch=Mock(side_effect=render),
+        wrap_for_turbomind=Mock(side_effect=render),
     )
     processor = MultimodalProcessor(None, template, vl_encoder=encoder, backend=backend)
     messages = [dict(role='user', content=[
@@ -56,8 +56,11 @@ def test_multimodal_reasoning_effort(hf_media_template, backend, new_preprocess,
         dict(type='text', text='describe'),
     ])]
 
-    result = _run_async(processor.get_prompt_input(
-        messages, do_preprocess=True, reasoning_effort=effort, chat_template_kwargs=template_kwargs))
+    try:
+        result = _run_async(processor.get_prompt_input(
+            messages, do_preprocess=True, reasoning_effort=effort, chat_template_kwargs=template_kwargs))
+    finally:
+        processor.close()
 
     assert f'Reasoning Effort: {expected}' in result
     assert template_kwargs == original_kwargs

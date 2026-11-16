@@ -60,8 +60,8 @@ def test_cancellation_keeps_executor_bounded(processor, monkeypatch, fail_cancel
         calls = []
         unhandled = []
         loop.set_exception_handler(lambda loop, context: unhandled.append(context))
-        submit = Mock(wraps=processor._text_executor.submit)
-        monkeypatch.setattr(processor._text_executor, 'submit', submit)
+        submit = Mock(wraps=processor._prompt_executor.submit)
+        monkeypatch.setattr(processor._prompt_executor, 'submit', submit)
 
         def encode(prompt, **kwargs):
             calls.append(prompt)
@@ -121,7 +121,9 @@ def test_worker_exception_releases_slot(processor):
 def test_text_template_options_and_inputs_are_preserved(processor, hf_media_template,
                                                        effort, template_effort, expected):
     processor.chat_template = hf_media_template()
-    messages = [dict(role='user', content=[dict(type='text', text='hello'), dict(type='text', text='world')])]
+    # Separators between structured parts belong to the model's template.
+    # A newline inside one part must survive both string and structured input.
+    messages = [dict(role='user', content=[dict(type='text', text='hello\nworld')])]
     original_messages = deepcopy(messages)
     kwargs = {'reasoning_effort': template_effort}
     original_kwargs = dict(kwargs)
@@ -132,6 +134,14 @@ def test_text_template_options_and_inputs_are_preserved(processor, hf_media_temp
     assert result['input_ids'] == list(result['prompt'].encode())
     assert messages == original_messages
     assert kwargs == original_kwargs
+
+
+def test_string_template_merges_text_parts_with_newlines(processor):
+    messages = [dict(role='user', content=[dict(type='text', text='hello'), dict(type='text', text='world')])]
+    original_messages = deepcopy(messages)
+    result = asyncio.run(processor.get_prompt_input(messages, do_preprocess=True))
+    assert result['prompt'] == 'hello\nworld'
+    assert messages == original_messages
 
 
 def test_engine_close_releases_text_worker(processor):

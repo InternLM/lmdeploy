@@ -55,13 +55,15 @@ class MultimodalProcessor:
         self.vl_encoder = vl_encoder
         self.backend = backend
         self.allowed_media_domains = allowed_media_domains
-        self._text_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='lmdeploy-text')
-        self._text_slot = asyncio.Semaphore(1)
+        # Text and multimodal prompts share the template and tokenizer. Keep
+        # their rendering and tokenization on the same worker.
+        self._prompt_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='lmdeploy-prompt')
+        self._prompt_slot = asyncio.Semaphore(1)
 
     def close(self):
-        """Finish submitted text preprocessing and release its worker
+        """Finish submitted prompt processing and release its worker
         thread."""
-        self._text_executor.shutdown(wait=True, cancel_futures=True)
+        self._prompt_executor.shutdown(wait=True, cancel_futures=True)
 
     @staticmethod
     def merge_message_content(msg: dict) -> dict:
@@ -260,7 +262,8 @@ class MultimodalProcessor:
         """
         # Handle string input
         if isinstance(prompt, str):
-            return await self._get_text_prompt_input(prompt=prompt,
+            return await self._run_prompt_processing(self._process_text_prompt_input,
+                                                     prompt=prompt,
                                                      do_preprocess=do_preprocess,
                                                      adapter_name=adapter_name,
                                                      tools=tools,
@@ -278,7 +281,8 @@ class MultimodalProcessor:
 
             # If no multimodal input, use text-only processing
             if not has_multimodal_input:
-                return await self._get_text_prompt_input(prompt=prompt,
+                return await self._run_prompt_processing(self._process_text_prompt_input,
+                                                         prompt=prompt,
                                                          do_preprocess=do_preprocess,
                                                          adapter_name=adapter_name,
                                                          tools=tools,
@@ -395,19 +399,19 @@ class MultimodalProcessor:
                 has_multimodal_input = True
         return has_multimodal_input
 
-    async def _get_text_prompt_input(self, **kwargs):
+    async def _run_prompt_processing(self, func, *args, **kwargs):
         # Keep at most one job in the executor. Waiting requests remain
         # cancellable without retaining their prompts in its unbounded queue.
-        await self._text_slot.acquire()
+        await self._prompt_slot.acquire()
         try:
             future = asyncio.get_running_loop().run_in_executor(
-                self._text_executor, partial(self._process_text_prompt_input, **kwargs))
+                self._prompt_executor, partial(func, *args, **kwargs))
         except BaseException:
-            self._text_slot.release()
+            self._prompt_slot.release()
             raise
 
         def on_done(future):
-            self._text_slot.release()
+            self._prompt_slot.release()
             # The caller may have disconnected while the worker was running.
             if not future.cancelled():
                 future.exception()
@@ -453,6 +457,17 @@ class MultimodalProcessor:
         input_ids = self.tokenizer.encode(prompt, add_bos=True)
         return {'prompt': prompt, 'input_ids': input_ids}
 
+    def _prepare_multimodal_prompt(self, messages, chat_template, tools, chat_template_kwargs):
+        """Order media and render the prompt on the shared prompt worker."""
+        messages = chat_template.prepare_multimodal_messages(messages)
+        input_prompt = None
+        if self.vl_encoder._uses_new_preprocess:
+            input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
+                                                                 chat_template=chat_template,
+                                                                 tools=tools,
+                                                                 chat_template_kwargs=chat_template_kwargs)
+        return messages, input_prompt
+
     async def _get_multimodal_prompt_input(self,
                                            messages: list[dict],
                                            do_preprocess: bool,
@@ -474,14 +489,11 @@ class MultimodalProcessor:
         messages = await self.async_parse_multimodal_item(messages,
                                                           media_io_kwargs,
                                                           allowed_media_domains=self.allowed_media_domains)
-        messages = chat_template.prepare_multimodal_messages(messages)
+        messages, input_prompt = await self._run_prompt_processing(
+            self._prepare_multimodal_prompt, messages, chat_template, tools, chat_template_kwargs)
 
         if self.backend == 'turbomind':
             if self.vl_encoder._uses_new_preprocess:
-                input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
-                                                                      chat_template=chat_template,
-                                                                      tools=tools,
-                                                                      chat_template_kwargs=chat_template_kwargs)
                 results = await self.vl_encoder.preprocess(messages,
                                                            input_prompt=input_prompt,
                                                            mm_processor_kwargs=mm_processor_kwargs)
@@ -489,27 +501,25 @@ class MultimodalProcessor:
                 results = await self.vl_encoder.preprocess(messages, mm_processor_kwargs=mm_processor_kwargs)
                 if not self.vl_encoder.model._turbomind_native_vision:
                     results = await self.vl_encoder.async_infer(results)
-                results = await self.vl_encoder.wrap_for_turbomind(messages=results,
-                                                                chat_template=chat_template,
-                                                                tokenizer=self.tokenizer,
-                                                                tools=tools,
-                                                                chat_template_kwargs=chat_template_kwargs)
+                results = await self._run_prompt_processing(self.vl_encoder.wrap_for_turbomind,
+                                                            messages=results,
+                                                            chat_template=chat_template,
+                                                            tokenizer=self.tokenizer,
+                                                            tools=tools,
+                                                            chat_template_kwargs=chat_template_kwargs)
         elif self.backend == 'pytorch':
             if self.vl_encoder._uses_new_preprocess:
-                input_prompt = self.vl_encoder.model.get_input_prompt(messages=messages,
-                                                                      chat_template=chat_template,
-                                                                      tools=tools,
-                                                                      chat_template_kwargs=chat_template_kwargs)
                 results = await self.vl_encoder.preprocess(messages,
                                                            input_prompt=input_prompt,
                                                            mm_processor_kwargs=mm_processor_kwargs)
             else:
                 results = await self.vl_encoder.preprocess(messages,
                                                            mm_processor_kwargs=mm_processor_kwargs)
-                results = await self.vl_encoder.wrap_for_pytorch(messages=results,
-                                                                 chat_template=chat_template,
-                                                                 tokenizer=self.tokenizer,
-                                                                 tools=tools,
-                                                                 chat_template_kwargs=chat_template_kwargs)
+                results = await self._run_prompt_processing(self.vl_encoder.wrap_for_pytorch,
+                                                            messages=results,
+                                                            chat_template=chat_template,
+                                                            tokenizer=self.tokenizer,
+                                                            tools=tools,
+                                                            chat_template_kwargs=chat_template_kwargs)
 
         return results

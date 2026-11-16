@@ -134,7 +134,7 @@ class ImageEncoder:
         outputs = await future
         return outputs
 
-    async def wrap_for_pytorch(
+    def wrap_for_pytorch(
         self,
         messages: list[dict],
         chat_template,
@@ -142,7 +142,8 @@ class ImageEncoder:
         tools: list[object] | None = None,
         chat_template_kwargs: dict | None = None,
     ) -> list[dict]:
-        """
+        """Pack results on the caller's prompt worker, including tokenization.
+
         Args:
             messages (list[dict]): a list of message, which is supposed to be
                 the output of `preprocess`
@@ -175,7 +176,7 @@ class ImageEncoder:
                 messages[i]['preprocess'] = None
         return result
 
-    async def wrap_for_turbomind(
+    def wrap_for_turbomind(
         self,
         messages: list[dict],
         chat_template,
@@ -183,7 +184,8 @@ class ImageEncoder:
         tools: list[object] | None = None,
         chat_template_kwargs: dict | None = None,
     ) -> dict:
-        """
+        """Pack results on the caller's prompt worker, including tokenization.
+
         Args:
             messages (list[dict]): a list of message, which is supposed to be
                 the output of `async_infer`
@@ -201,11 +203,11 @@ class ImageEncoder:
                     }
         """
         if self.model._turbomind_native_vision:
-            return await self.wrap_for_pytorch(messages,
-                                               chat_template,
-                                               tokenizer,
-                                               tools=tools,
-                                               chat_template_kwargs=chat_template_kwargs)
+            return self.wrap_for_pytorch(messages,
+                                         chat_template,
+                                         tokenizer,
+                                         tools=tools,
+                                         chat_template_kwargs=chat_template_kwargs)
 
         result = self.model.to_turbomind(messages,
                                          chat_template,
