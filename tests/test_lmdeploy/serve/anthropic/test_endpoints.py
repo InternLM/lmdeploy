@@ -102,6 +102,24 @@ class _SystemFirstChatTemplate(_FakeChatTemplate):
         return '\n'.join(parts)
 
 
+class _ThinkingChatTemplate(_FakeChatTemplate):
+    """Renders a suffix per ``enable_thinking``, like Qwen-style templates that
+    open or close the ``<think>`` block of the assistant turn.
+
+    The template default (no kwarg) keeps thinking on; disabling adds one
+    extra token, mirroring the closed ``</think>`` prefix.
+    """
+
+    def messages2prompt(self, messages, **kwargs):
+        prompt = super().messages2prompt(messages)
+        enable_thinking = kwargs.get('enable_thinking')
+        if enable_thinking is None:
+            return f'{prompt} <think>'
+        if enable_thinking:
+            return f'{prompt} <think>'
+        return f'{prompt} <think> </think>'
+
+
 class _FakeEngine:
 
     def __init__(
@@ -1442,3 +1460,96 @@ def test_http_tool_result_images_keep_their_ids_and_content_order(stream):
                                       dict(type='image_url', image_url=dict(url=f'https://example.com/{identifier}.png')),
                                       dict(type='text', text='after')]
     assert len(context.session_mgr.removed) == 1
+
+
+def test_count_tokens_applies_thinking_switch_like_generation():
+    """count_tokens must apply the request's ``thinking`` config through the
+    same chat template switch the messages endpoint uses, so the count never
+    drifts from the generated usage (regression: a thinking default change on
+    /v1/messages left count_tokens counting the other suffix)."""
+    context = _FakeServerContext(chat_template=_ThinkingChatTemplate())
+    client = _make_client(server_context=context)
+
+    default_count = _post_count_tokens(client).json()['input_tokens']
+    enabled_count = _post_count_tokens(client, thinking={'type': 'enabled'}).json()['input_tokens']
+    disabled_count = _post_count_tokens(client, thinking={'type': 'disabled'}).json()['input_tokens']
+
+    assert enabled_count == default_count  # template default keeps thinking on
+    assert disabled_count == default_count + 1  # closing the think block adds a token
+
+    # lockstep: for every thinking state, the messages endpoint hands the
+    # engine the same switch that count_tokens applied to the template
+    expected_kwargs = [
+        (None, None),
+        ({'type': 'enabled'}, {'enable_thinking': True}),
+        ({'type': 'disabled'}, {'enable_thinking': False}),
+    ]
+    for thinking, expected in expected_kwargs:
+        context.async_engine.preprocess_calls.clear()
+        response = _post_messages(client, thinking=thinking)
+        assert response.status_code == 200, response.text
+        (_, kwargs), = context.async_engine.preprocess_calls
+        assert kwargs['chat_template_kwargs'] == expected
+
+
+def test_count_tokens_keeps_assistant_reasoning_structured():
+    """Regression (PR review): with thinking enabled, a history ending in an
+    assistant message with thinking+text blocks used to 500 on deepseek-style
+    templates -- the count path flattened the thinking block into plain text,
+    losing ``reasoning_content``, and the template's structural assert escaped
+    the endpoint's ``except ValueError``.
+    """
+    from lmdeploy.model import DeepseekV32ChatTemplate
+    from lmdeploy.serve.anthropic.adapter import to_lmdeploy_messages
+
+    context = _FakeServerContext(chat_template=DeepseekV32ChatTemplate())
+    client = _make_client(server_context=context)
+    messages = [
+        {'role': 'user', 'content': 'hi'},
+        {'role': 'assistant', 'content': [
+            {'type': 'thinking', 'thinking': 'let me think', 'signature': 'sig'},
+            {'type': 'text', 'text': 'hello!'},
+        ]},
+    ]
+
+    response = _post_count_tokens(client, messages=messages, thinking={'type': 'enabled'})
+
+    assert response.status_code == 200, response.text
+    assert response.json()['input_tokens'] > 0
+
+    lm_messages = to_lmdeploy_messages(CountTokensRequest(model='fake-model', messages=messages))
+    assert lm_messages[-1]['reasoning_content'] == 'let me think'
+    assert lm_messages[-1]['content'] == 'hello!'
+
+
+def test_count_tokens_keeps_assistant_tool_calls_structured():
+    """Regression (PR review): with thinking enabled, a history ending in an
+    assistant message with tool_use blocks (and no thinking text) used to be
+    rejected by deepseek-style templates -- the count path flattened the blocks
+    into ``[tool_use ...]`` text and dropped ``tool_calls``."""
+    import json
+
+    from lmdeploy.model import DeepseekV32ChatTemplate
+    from lmdeploy.serve.anthropic.adapter import to_lmdeploy_messages
+
+    context = _FakeServerContext(chat_template=DeepseekV32ChatTemplate())
+    client = _make_client(server_context=context)
+    messages = [
+        {'role': 'user', 'content': 'weather?'},
+        {'role': 'assistant', 'content': [
+            {'type': 'text', 'text': 'checking'},
+            {'type': 'tool_use', 'id': 't1', 'name': 'get_weather',
+             'input': {'city': 'Beijing'}},
+        ]},
+    ]
+
+    response = _post_count_tokens(client, messages=messages, thinking={'type': 'enabled'})
+
+    assert response.status_code == 200, response.text
+    assert response.json()['input_tokens'] > 0
+
+    lm_messages = to_lmdeploy_messages(CountTokensRequest(model='fake-model', messages=messages))
+    (tool_call, ) = lm_messages[-1]['tool_calls']
+    assert tool_call['function']['name'] == 'get_weather'
+    assert json.loads(tool_call['function']['arguments']) == {'city': 'Beijing'}
+    assert lm_messages[-1]['content'] == 'checking'
