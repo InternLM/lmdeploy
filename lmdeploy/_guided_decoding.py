@@ -56,7 +56,9 @@ def _grammar_source(response_format: dict[str, Any]) -> tuple[str, str]:
         schema = json.dumps({'type': 'object', 'additionalProperties': True})
         return 'json_schema', schema
     if schema_type == 'structural_tag':
-        return schema_type, json.dumps(response_format, ensure_ascii=False)
+        # Internal compiler policy is separate from XGrammar's tag schema.
+        tag = {key: value for key, value in response_format.items() if key != '_token_id_only'}
+        return schema_type, json.dumps(tag, ensure_ascii=False)
     if schema_type == 'text':
         return schema_type, ''
     raise ValueError(f'unsupported format type: {schema_type}')
@@ -88,10 +90,52 @@ def ensure_response_format_compilable(response_format: dict[str, Any]) -> None:
         raise ValueError(f'Unsupported response format: {err}') from err
 
 
-def compile_response_format(compiler, response_format: dict[str, Any]):
+class _CompilerIdentity:
+    """Cache by compiler identity even for unhashable XGrammar wrappers."""
+
+    def __init__(self, compiler, tokenizer_info):
+        self.compiler = compiler
+        self.tokenizer_info = tokenizer_info
+
+    def __hash__(self):
+        return id(self.compiler)
+
+    def __eq__(self, other):
+        return isinstance(other, _CompilerIdentity) and self.compiler is other.compiler
+
+
+@lru_cache(maxsize=8)
+def _token_id_only_compiler(identity: _CompilerIdentity, token_ids: tuple[int, ...]):
+    """Reserve protocol IDs for atomic Token/ExcludeToken grammar terminals.
+
+    XGrammar also tries each token's decoded bytes against text rules. A GLM closing ID must not match a
+    const/enum/regex inside an argument. Use a private compiler vocabulary whose reserved entries cannot match UTF-8
+    text, while keeping their numeric IDs available to atomic terminals. The actual tokenizer, engine token IDs and
+    other compilers are unchanged.
+    """
+    compiler, tokenizer_info = identity.compiler, identity.tokenizer_info
+    if tokenizer_info is None:
+        # Python XGrammar exposes tokenizer metadata on a compiled grammar.
+        # TurboMind supplies its metadata explicitly through the same API.
+        tokenizer_info = compiler.compile_regex('').tokenizer_info
+    vocab = list(tokenizer_info.decoded_vocab)
+    for token_id in token_ids:
+        if not isinstance(token_id, int) or not 0 <= token_id < len(vocab):
+            raise ValueError(f'Invalid protocol token ID: {token_id!r}')
+        # 0xff cannot occur in UTF-8 text. An empty entry would instead mark
+        # the ID as padding, which XGrammar rejects even in Token(id) rules.
+        vocab[token_id] = b'\xff'
+    metadata = json.loads(tokenizer_info.dump_metadata())
+    metadata['vocab_type'] = 0  # RAW: vocab is already decoded to bytes.
+    info = type(tokenizer_info).from_vocab_and_metadata(vocab, json.dumps(metadata))
+    return type(compiler)(info)
+
+
+def compile_response_format(compiler, response_format: dict[str, Any], *, tokenizer_info=None):
     """Compile one public or internal response format with XGrammar.
 
-    Structural-tag formats use XGrammar's native top-level shape.
+    Structural tags retain XGrammar's native shape. Internal token-ID policy is applied here before compilation; native
+    backends supply tokenizer metadata, while Python XGrammar can expose it through a compiled grammar.
     """
     schema_type, source = _grammar_source(response_format)
     if schema_type == 'json_schema':
@@ -99,5 +143,8 @@ def compile_response_format(compiler, response_format: dict[str, Any]):
     if schema_type == 'regex_schema':
         return compiler.compile_regex(source)
     if schema_type == 'structural_tag':
+        token_ids = tuple(response_format.get('_token_id_only', ()))
+        if token_ids:
+            compiler = _token_id_only_compiler(_CompilerIdentity(compiler, tokenizer_info), token_ids)
         return compiler.compile_structural_tag(source)
     raise ValueError(f'unsupported format type: {schema_type}')

@@ -311,6 +311,113 @@ def test_named_grammar_keeps_value_schema(vocabulary, named_grammar_context, pro
     assert not context.accepts(grammar, _named_xml_ids(vocabulary, invalid))
 
 
+@pytest.mark.parametrize('constraint', ['const', 'enum', 'pattern'])
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('tag,container', [
+    *((tag, 'scalar') for tag in CONTROL_TAGS), ('</arg_value>', 'object'), ('</arg_value>', 'array'),
+])
+def test_named_constrained_value_rejects_control_token(
+    vocabulary, named_grammar_context, constraint, stream, tag, container,
+):
+    import xgrammar as xgr
+
+    v, context = vocabulary, named_grammar_context
+    value = f'left{tag}right'
+    restriction = {'const': value, 'enum': [value, 'other'], 'pattern': '^left.*right$'}[constraint]
+    tools = copy.deepcopy(context.tools)
+    schema = {'type': 'string', constraint: restriction}
+    prefix_text, suffix_text, expected = 'left', 'right', value
+    if container == 'object':
+        schema = {'type': 'object', 'properties': {'value': schema}, 'required': ['value']}
+        prefix_text, suffix_text, expected = '{"value":"left', 'right"}', {'value': value}
+    elif container == 'array':
+        schema = {'type': 'array', 'items': schema}
+        prefix_text, suffix_text, expected = '["left', 'right"]', [value]
+    tools[0]['function']['parameters']['properties']['text'] = schema
+    parser, grammar = context.build(request_tools=tools)
+    prefix = _named_xml_ids(v, prefix_text)[:-2]
+    suffix = v.enc(suffix_text) + v.ctl('</arg_value>') + v.ctl('</tool_call>')
+    ordinary = prefix + v.enc(tag) + suffix
+    assert context.accepts(grammar, ordinary)
+
+    matcher = xgr.GrammarMatcher(grammar)
+    assert all(matcher.accept_token(token_id) for token_id in prefix)
+    control_id = v.ctl(tag)[0]
+    mask = xgr.allocate_token_bitmask(1, grammar.tokenizer_info.vocab_size)
+    matcher.fill_next_token_bitmask(mask)
+    assert not (int(mask[0, control_id // 32]) & (1 << (control_id % 32)))
+    assert not matcher.accept_token(control_id)
+    assert not context.accepts(grammar, prefix + [control_id] + suffix)
+
+    parser.bind_generation_config(GenerationConfig())
+    removed = []
+
+    async def generate():
+        for text, part, final in native_chunks(v, ordinary, 1):
+            yield SimpleNamespace(response=text, token_ids=part, finish_reason='stop' if final else None,
+                                   input_token_len=1, generate_token_len=len(ordinary), cached_tokens=0,
+                                   logprobs=None, routed_experts=None, cache_block_ids=None)
+
+    async def run():
+        runner = ChatRunner(parser.request, parser, GenerationConfig(), object(), generate(),
+                            SimpleNamespace(remove=removed.append))
+        if stream:
+            chunks = [chunk async for chunk in runner.stream()]
+            assert chunks[-1].finish_reason == 'tool_calls'
+            return parser.tool_parser.build_tool_calls([
+                call for chunk in chunks for call in chunk.delta_message.tool_calls or []])
+        result = await runner.collect()
+        assert result.finish_reason == 'tool_calls'
+        return result.tool_calls
+
+    calls = asyncio.run(run())
+    assert len(calls) == 1
+    assert json.loads(calls[0].function.arguments) == {'text': expected}
+    assert len(removed) == 1
+
+
+def test_named_mask_policy_does_not_change_shared_compiler(vocabulary, named_grammar_context):
+    from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
+
+    v, context = vocabulary, named_grammar_context
+    manager = GuidedDecodingManager(v.hf, len(v.hf), stop_token_ids=v.ctl('<|endoftext|>'))
+    vocab_before = list(manager.tokenizer_info.decoded_vocab)
+    tools = copy.deepcopy(context.tools)
+    tools[0]['function']['parameters']['properties']['text']['const'] = 'left</arg_value>right'
+    parser, _ = context.build(request_tools=tools)
+    response_format = copy.deepcopy(parser.request.response_format)
+    prefix = _named_xml_ids(v, 'left')[:-2]
+    # The real manager must use the compiler policy for each named request.
+    for session_id in (1, 2):
+        matcher = manager.get_processor(session_id, 1, response_format)
+        assert all(matcher.accept_token(token_id) for token_id in prefix)
+        mask = manager.allocate_batched_bitmap(1)
+        manager.fill_bitmap(matcher, mask, 0)
+        token_id = v.ctl('</arg_value>')[0]
+        assert not (int(mask[0, token_id // 32]) & (1 << (token_id % 32)))
+        assert not matcher.accept_token(token_id)
+        rest = v.enc('</arg_value>right') + v.ctl('</arg_value>') + v.ctl('</tool_call>')
+        assert all(matcher.accept_token(token_id) for token_id in rest + v.ctl('<|endoftext|>'))
+        manager.remove_processor(session_id)
+    # Untagged output retains its original text semantics, including tokens
+    # whose spelling happens to be a protocol marker.
+    matcher = manager.get_processor(3, 1, {'type': 'regex_schema', 'regex_schema': 'left</arg_value>right'})
+    ids = v.enc('left') + v.ctl('</arg_value>') + v.enc('right') + v.ctl('<|endoftext|>')
+    assert all(matcher.accept_token(token_id) for token_id in ids)
+    assert manager.tokenizer_info.decoded_vocab == vocab_before
+    assert parser.request.response_format == response_format
+
+
+@pytest.mark.parametrize('value', [b'\x00', b'a\x00b', b'prefix\x00'])
+def test_turbomind_grammar_vocab_preserves_zero_bytes(value):
+    from lmdeploy.turbomind import _tm
+
+    if _tm is None:
+        pytest.skip('TurboMind extension is not built')
+    info = _tm.TokenizerInfo([value, b'<eos>'], 0, vocab_size=2, stop_token_ids=[1], add_prefix_space=False)
+    assert info.decoded_vocab == [value, b'<eos>']
+
+
 @pytest.mark.parametrize('wrapped', [False, True])
 def test_named_grammar_keeps_required_and_optional_fields(vocabulary, named_grammar_context, wrapped):
     v, context = vocabulary, named_grammar_context

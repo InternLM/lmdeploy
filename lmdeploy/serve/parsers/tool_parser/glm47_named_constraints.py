@@ -96,4 +96,8 @@ def build_named_tool_format(tools: list[Tool], choice: ToolChoice, *, reasoning:
         TokenFormat(token=ids['<tool_call>']), ConstStringFormat(value=function.name),
         _tokenize_xml_schema(schema, ids), TokenFormat(token=ids['</tool_call>']),
     ])
-    return StructuralTag(format=SequenceFormat(elements=elements)).model_dump(mode='json')
+    result = StructuralTag(format=SequenceFormat(elements=elements)).model_dump(mode='json')
+    # Reserve these IDs in the compiler too: constrained value rules use text
+    # matching, which must never consume the same IDs as XML boundaries.
+    result['_token_id_only'] = list(ids.values())
+    return result

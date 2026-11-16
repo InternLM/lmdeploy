@@ -65,7 +65,7 @@ std::vector<py::bytes> TokenizerInfo_GetDecodedVocab(const TokenizerInfo& tokeni
     std::vector<py::bytes> py_result;
     py_result.reserve(decoded_vocab.size());
     for (const auto& item : decoded_vocab) {
-        py_result.emplace_back(py::bytes(item.c_str()));
+        py_result.emplace_back(py::bytes(item.data(), item.size()));
     }
     return py_result;
 }

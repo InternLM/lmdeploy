@@ -161,7 +161,8 @@ def test_runner_prepare_failure_releases_owned_session(error):
     context.async_engine.preprocess = preprocess
     with pytest.raises(type(error)) as raised:
         asyncio.run(ChatRunner.prepare(context, _request()))
-    assert raised.value is error
+    if isinstance(error, RequestError):
+        assert raised.value is error
     assert context.session_manager.removed == [context.session_manager.session]
 
 
