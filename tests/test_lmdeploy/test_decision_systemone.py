@@ -105,6 +105,25 @@ def test_score_array_uses_zero_based_positions(service):
     assert answer['score'] == pytest.approx(sum(int(i) * p for i, p in answer['probabilities'].items()))
 
 
+def test_unknown_fields_are_accepted_without_changing_engine_input(service, monkeypatch):
+    client, engine = service
+    observed = []
+    original = engine.preprocess
+
+    async def capture(messages, session, **kwargs):
+        observed.append(copy.deepcopy(messages))
+        assert 'seed' not in kwargs and 'x_trace_id' not in kwargs
+        return await original(messages, session, **kwargs)
+
+    monkeypatch.setattr(engine, 'preprocess', capture)
+    row = dict(state='text', questions={'q': dict(type='noul', instructions='Refund?')})
+    baseline = client.post('/v1/systemone', json=row)
+    response = client.post('/v1/systemone', json={**row, 'seed': 7, 'x_trace_id': 'trace', 'future_option': {'x': 1}})
+    assert baseline.status_code == response.status_code == 200
+    assert response.json()['answers'] == baseline.json()['answers']
+    assert observed[0] == observed[1]
+
+
 def test_nested_references_keep_order_keys_and_original_response_values(service):
     row = body()
     row['assets']['blue-ref'] = asset('blue')

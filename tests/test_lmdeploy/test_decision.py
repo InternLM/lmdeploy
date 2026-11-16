@@ -77,7 +77,6 @@ def test_logprob_extra_token_ids_requires_input_logprobs():
     {'questions': {'q': {'type': 'score', 'criteria': {'x': 'not a number'}}}},
     {'questions': {f'q{i}': {'type': 'noul'} for i in range(17)}},
     {'state': float('nan')},
-    {'unknown': 1},
     {'images': None},
     {'images': 123},
     {'images': [123]},
@@ -88,10 +87,11 @@ def test_invalid_request(change):
         SystemoneRequest.model_validate({'state': {}, 'questions': QUESTIONS, **change})
 
 
-@pytest.mark.parametrize('field', ['targets', 'answer', 'id'])
-def test_legacy_training_metadata_is_rejected(field):
-    with pytest.raises(ValueError):
-        SystemoneRequest.model_validate({'state': 'text', 'questions': QUESTIONS, field: 1})
+@pytest.mark.parametrize('field', ['targets', 'answer', 'id', 'unknown', 'seed', 'x_trace_id'])
+def test_unknown_request_metadata_is_ignored(field):
+    baseline = {'state': 'text', 'questions': QUESTIONS}
+    parsed = SystemoneRequest.model_validate({**baseline, field: 1})
+    assert parsed.model_dump() == SystemoneRequest.model_validate(baseline).model_dump()
 
 
 @pytest.mark.parametrize('legacy', [

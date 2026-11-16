@@ -228,6 +228,10 @@ For a `score` question, `criteria` must be an ordered array; objects, including 
 The score is the probability-weighted mean of the zero-based array positions. Labels such as `"1"` through `"10"`
 do not change those positions to a one-based scale. Choice and noul questions retain their object criteria.
 
+Unknown top-level request fields are accepted and then ignored. They are not forwarded to the engine:
+`seed` does not control randomness, and `x_trace_id` does not enable tracing. Known fields remain strictly validated;
+the removed `images` field still returns 422, with guidance to use `assets`.
+
 For multipart uploads, send the JSON `request` part first, with `Content-Type: application/json`, and reference
 each image part exactly once through `assets.<ref>.part`. File format can be omitted and is inferred from its bytes:
 

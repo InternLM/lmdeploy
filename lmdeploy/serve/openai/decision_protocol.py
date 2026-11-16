@@ -86,7 +86,7 @@ class SystemoneRequest(BaseModel):
     """Systemone assets protocol; model identity is checked against the loaded
     engine."""
 
-    model_config = ConfigDict(strict=True, extra='forbid', allow_inf_nan=False)
+    model_config = ConfigDict(strict=True, extra='ignore', allow_inf_nan=False)
     state: _SystemoneContent
     questions: dict[_SystemoneName, Annotated[
         SystemoneChoiceQuestion | SystemoneScoreQuestion | SystemoneNoulQuestion,
@@ -94,6 +94,14 @@ class SystemoneRequest(BaseModel):
     ]] = Field(min_length=1, max_length=MAX_QUESTIONS)
     assets: dict[str, ImageAsset] | None = None
     model: str = ''
+
+    @model_validator(mode='before')
+    @classmethod
+    def reject_removed_images(cls, value):
+        if isinstance(value, dict) and 'images' in value:
+            raise ValidationError.from_exception_data(cls.__name__, [dict(
+                type='extra_forbidden', loc=('images',), input=value['images'])])
+        return value
 
 
 class SystemoneResponse(BaseModel):
