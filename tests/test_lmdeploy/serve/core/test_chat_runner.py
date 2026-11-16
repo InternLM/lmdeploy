@@ -379,7 +379,8 @@ def test_legacy_parser_does_not_receive_new_keywords():
 
 @pytest.mark.parametrize('stream', [False, True])
 @pytest.mark.parametrize('stop_sequence', [None, 'END'])
-def test_runner_preserves_stop_sequence_with_token_id_parser(stream, stop_sequence):
+@pytest.mark.parametrize('tool_choice', ['auto', 'none'])
+def test_runner_preserves_stop_sequence_with_token_id_parser(stream, stop_sequence, tool_choice):
     call = DeltaToolCall(index=0, id='call_search', function={'name': 'search', 'arguments': '{}'})
 
     class StrictParser(_Parser):
@@ -395,7 +396,7 @@ def test_runner_preserves_stop_sequence_with_token_id_parser(stream, stop_sequen
 
     engine = _FakeEngine()
     engine.outputs[0].stop_sequence = stop_sequence
-    parser = StrictParser(_request(tools=_tools()))
+    parser = StrictParser(_request(tools=_tools(), tool_choice=tool_choice))
 
     async def run():
         runner = ChatRunner(parser.request, parser, None, engine.session_mgr.session,
@@ -407,7 +408,7 @@ def test_runner_preserves_stop_sequence_with_token_id_parser(stream, stop_sequen
         else:
             result = await runner.collect()
             assert result.tool_calls == [call]
-        assert result.finish_reason == ('stop' if stop_sequence is not None else 'tool_calls')
+        assert result.finish_reason == ('stop' if stop_sequence is not None or tool_choice == 'none' else 'tool_calls')
         assert result.stop_sequence == stop_sequence
         assert runner._closed and engine.generator_closed
         assert engine.session_mgr.removed == [engine.session_mgr.session]

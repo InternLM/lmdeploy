@@ -2,6 +2,7 @@
 """Shared fakes for ``/v1/chat/completions`` handler tests."""
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -191,3 +192,41 @@ def chat_endpoint():
 @pytest.fixture
 def fake_raw_request():
     return FakeRawRequest()
+
+
+@pytest.fixture
+def chat_client(chat_endpoint):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    _, context = chat_endpoint
+    app = FastAPI()
+    register(app, context)
+    with TestClient(app) as client:
+        yield client
+
+
+@pytest.fixture
+def rendered_prompts(chat_endpoint, hf_media_template, monkeypatch):
+    _, context = chat_endpoint
+    template = hf_media_template()
+    context.async_engine.chat_template = template
+    original_preprocess = context.async_engine.preprocess
+    prompts = []
+
+    async def preprocess(messages, session, **kwargs):
+        prompts.append(template.messages2prompt(messages, tools=kwargs.get('tools'),
+                                               **(kwargs.get('chat_template_kwargs') or {})))
+        return await original_preprocess(messages, session, **kwargs)
+
+    monkeypatch.setattr(context.async_engine, 'preprocess', preprocess)
+    return prompts
+
+
+@pytest.fixture
+def sse_events():
+    def parse(response):
+        return [json.loads(line[6:]) for line in response.text.splitlines()
+                if line.startswith('data: ') and line != 'data: [DONE]']
+
+    return parse
