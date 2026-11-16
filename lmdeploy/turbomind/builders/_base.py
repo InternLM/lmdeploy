@@ -341,8 +341,13 @@ class Builder:
         packed = {k: fmt.pack(t, k) for k, t in linear.tensors.items()}
         tensors = {k: p.tensor for k, p in packed.items()}
 
+        # ``global_scale`` is per-tensor (1 element) and must never be split;
+        # INPUT-side bias is likewise not split (only rank 0 carries it).
         kind_split_dims = {
-            kind: None if (kind == 'bias' and split_side == SplitSide.INPUT) else split_dim for kind in tensors
+            kind: None
+            if (kind == 'global_scale' or (kind == 'bias' and split_side == SplitSide.INPUT))
+            else split_dim
+            for kind in tensors
         }
 
         if tp > 1 and split_dim is not None:
