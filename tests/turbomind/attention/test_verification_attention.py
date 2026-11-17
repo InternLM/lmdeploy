@@ -14,14 +14,25 @@ def _supports_verification_attention():
     properties = torch.cuda.get_device_properties(torch.cuda.current_device())
     optin_shared_memory = getattr(properties, 'shared_memory_per_block_optin',
                                   properties.shared_memory_per_block)
-    return (hasattr(_tm, 'verification_attention')
-            and properties.major == 9
-            and optin_shared_memory >= 112 * 1024)
+    if not hasattr(_tm, 'verification_attention'):
+        return False
+    if properties.major == 9:
+        return optin_shared_memory >= 112 * 1024
+    if properties.major == 7 and properties.minor == 5:
+        return True
+    return False
+
+
+def _is_sm75():
+    if not torch.cuda.is_available():
+        return False
+    properties = torch.cuda.get_device_properties(torch.cuda.current_device())
+    return properties.major == 7 and properties.minor == 5
 
 
 pytestmark = pytest.mark.skipif(
     not _supports_verification_attention(),
-    reason='verification attention requires SM90 and 112 KiB opt-in shared memory')
+    reason='verification attention requires SM90 or SM75')
 
 
 def _rotate(x,
@@ -145,7 +156,8 @@ def _make_case(*,
                rope_dim=0,
                mrope_mode=0,
                mrope_section=(0, 0, 0),
-               requested_splits=128):
+               requested_splits=128,
+               quant_policy=0):
     return dict(dtype=dtype,
                 d=d,
                 p=p,
@@ -160,13 +172,17 @@ def _make_case(*,
                 rope_factor=1.,
                 mrope_mode=mrope_mode,
                 mrope_section=mrope_section,
-                requested_splits=requested_splits)
+                requested_splits=requested_splits,
+                quant_policy=quant_policy)
 
 
 def _run(case, finished=None):
     torch.manual_seed(91)
     device = torch.device('cuda')
     dtype = case['dtype']
+    if _is_sm75():
+        # SM75 has no bf16 tensor-core path for verification attention.
+        dtype = torch.float16
     b = len(case['histories'])
     d, p, hq, hk = case['d'], case['p'], case['hq'], case['hk']
     sum_history = sum(case['histories'])
@@ -268,6 +284,7 @@ def _run(case, finished=None):
         max_key_length=max_key_length,
         window_size=case['window'],
         requested_max_split_count=case['requested_splits'],
+        quant_policy=case['quant_policy'],
         rope_type=case['rope_type'],
         rope_dim=case['rope_dim'],
         rope_base=case['rope_base'],
@@ -291,6 +308,8 @@ def _run(case, finished=None):
     _make_case(dtype=torch.float16, d=256, p=4, hq=16, window=129),
 ])
 def test_verification_attention(case):
+    if _is_sm75() and case['p'] > 8:
+        pytest.skip('SM75 production verification uses max_query_length <= 8')
     output, reference, _, _, split_count = _run(case)
     if case['d'] == 128:
         sm_count = torch.cuda.get_device_properties(
@@ -299,7 +318,24 @@ def test_verification_attention(case):
         assert split_count == expected_split_count
     else:
         assert split_count > 1
-    torch.testing.assert_close(output, reference, rtol=3e-2, atol=3e-2)
+    tol = 8e-2 if case['quant_policy'] else 3e-2
+    torch.testing.assert_close(output, reference, rtol=tol, atol=tol)
+
+
+@pytest.mark.skipif(not _is_sm75(), reason='int4 KV verification is SM75-only')
+@pytest.mark.parametrize('case', [
+    _make_case(d=256,
+               p=8,
+               hq=6,
+               hk=1,
+               histories=(127, 1025, 4097),
+               requested_splits=128,
+               quant_policy=4),
+])
+def test_verification_attention_int4(case):
+    output, reference, _, _, split_count = _run(case)
+    assert split_count > 1
+    torch.testing.assert_close(output, reference, rtol=8e-2, atol=8e-2)
 
 
 def test_finished_request_publishes_neutral_partials():
