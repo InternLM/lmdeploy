@@ -1061,6 +1061,7 @@ PYBIND11_MODULE(_turbomind, m)
     turbomind::bind_moe_gate_v2(m);
     turbomind::python::BindSpeculativeSampling(m);
     turbomind::python::BindDraftCarry(m);
+    turbomind::python::BindDflash2Kernels(m);
     turbomind::python::BindTargetHiddenProjection(m);
     turbomind::python::BindSpeculativeSequence(m);
     turbomind::python::BindVerificationAttention(m);

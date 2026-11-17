@@ -20,6 +20,7 @@ pybind11_add_module(${PROJECT_NAME}
     ../kernels/gemm/moe_gate_python_bind.cpp
     ../kernels/speculative_sampling_python_bind.cpp
     ../kernels/draft_carry_python_bind.cpp
+    ../kernels/dflash2/dflash2_python_bind.cpp
     ../models/speculative/eagle3/target_hidden_projection_python_bind.cpp
     ../kernels/speculative_sequence_python_bind.cpp
     ../kernels/attention/verification/python_bind.cpp)
@@ -27,6 +28,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     turbomind
     speculative_sampling_kernels
     draft_carry_kernels
+    dflash2_kernels
     target_hidden_projection_kernels
     speculative_sequence_kernels
     verification_attention

@@ -96,6 +96,15 @@ set_property(TARGET draft_carry_kernels
 target_link_libraries(draft_carry_kernels PRIVATE
     core)
 
+add_library(dflash2_kernels STATIC
+    dflash2/dflash2_kernels.cu)
+set_property(TARGET dflash2_kernels
+    PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET dflash2_kernels
+    PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(dflash2_kernels PRIVATE
+    core)
+
 add_library(speculative_sequence_kernels STATIC
     speculative_sequence_kernels.cu)
 set_property(TARGET speculative_sequence_kernels
