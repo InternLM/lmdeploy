@@ -268,6 +268,11 @@ class ChatCompletionRequest(BaseModel):
         default=False,
         description=('Whether to return MoE routed expert indices in the response.'),
     )
+    routed_experts_start_len: int = Field(
+        default=0, ge=0, strict=True,
+        validation_alias=AliasChoices('routed_experts_start_len', AliasPath('extra_body', 'routed_experts_start_len')),
+        description='Absolute start position of returned routing rows; does not limit prefix caching.',
+    )
 
 
 class FunctionCall(BaseModel):
@@ -626,6 +631,7 @@ class GenerateReqInput(BaseModel):
     spaces_between_special_tokens: bool | None = True
     include_stop_str_in_output: bool | None = False
     return_routed_experts: bool | None = False
+    routed_experts_start_len: int = Field(default=0, ge=0, strict=True)
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     # kwargs for media IO
