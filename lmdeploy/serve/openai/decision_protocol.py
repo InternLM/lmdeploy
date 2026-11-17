@@ -18,8 +18,8 @@ from pydantic import (
 from lmdeploy.intern_decision_encoding import ANSWER_SYMBOLS
 from lmdeploy.serve.parsers.decision_assets import ImageAsset
 
-# Question-count limit inherited from the upstream Intern-Decision request validation.
-MAX_QUESTIONS = 16
+# Keep multi-question requests bounded while allowing larger batches.
+MAX_QUESTIONS = 32
 
 
 # Systemone schemas follow intern-decision-inference a8fe089/request_validation.py.

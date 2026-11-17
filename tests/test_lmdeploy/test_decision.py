@@ -75,7 +75,6 @@ def test_logprob_extra_token_ids_requires_input_logprobs():
     {'questions': {'q': {'type': 'rank'}}},
     {'questions': {'q': {'type': 'choice', 'criteria': ['a']}}},
     {'questions': {'q': {'type': 'score', 'criteria': {'x': 'not a number'}}}},
-    {'questions': {f'q{i}': {'type': 'noul'} for i in range(17)}},
     {'state': float('nan')},
     {'images': None},
     {'images': 123},
