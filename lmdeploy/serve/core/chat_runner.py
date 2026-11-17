@@ -25,6 +25,10 @@ class ChatRunnerOptions:
     adapter_name: str | None = None
     gen_config_kwargs: dict[str, Any] = field(default_factory=dict)
     preprocess_kwargs: dict[str, Any] = field(default_factory=dict)
+    # Match stop sequences against visible (post-reasoning) text at the
+    # serving layer. Engine token matching would fire inside the thinking
+    # phase of reasoning models and yield no visible text at all.
+    stop_on_visible_text: bool = False
 
 
 @dataclass
@@ -78,6 +82,7 @@ class ChatRunner:
     session_manager: Any
     prompt_text: str | None = None
     prompt_token_ids: list[int] | None = None
+    stop_sequences: list[str] | None = None
     _closed: bool = False
 
     @classmethod
@@ -106,6 +111,10 @@ class ChatRunner:
             server_context,
             options.gen_config_kwargs,
         )
+        stop_sequences = None
+        if options.stop_on_visible_text:
+            stop_sequences = list(gen_config.stop_words or []) or None
+            gen_config.stop_words = None
         adapter_name = options.adapter_name
         if adapter_name is None and parsed_request.model != server_context.async_engine.model_name:
             adapter_name = parsed_request.model
@@ -139,6 +148,7 @@ class ChatRunner:
             session_manager=server_context.session_manager,
             prompt_text=preprocessed.inputs.get('prompt') if parsed_request.return_prompt_text else None,
             prompt_token_ids=prompt_token_ids,
+            stop_sequences=stop_sequences,
         )
 
     async def close(self) -> None:
@@ -160,6 +170,8 @@ class ChatRunner:
         """Yield parser-normalized streaming chunks and clean up the
         session."""
         streaming_tools = False
+        visible_text = ''
+        stop_word = None
         return_token_metadata = bool(
             self.request.return_token_ids
             or self.request.logprobs
@@ -198,12 +210,26 @@ class ChatRunner:
                     if tool_emitted:
                         streaming_tools = True
 
-                    is_last_delta = delta_index == len(stream_deltas) - 1
+                    stopped_early = False
+                    if self.stop_sequences and delta_message.content:
+                        visible_text += delta_message.content
+                        match = _find_stop_match(visible_text, self.stop_sequences)
+                        if match is not None:
+                            stopped_early = True
+                            stop_word = match[1]
+                            keep = match[0] + (len(stop_word) if self.request.include_stop_str_in_output else 0)
+                            emitted_before = len(visible_text) - len(delta_message.content)
+                            delta_message.content = visible_text[:keep][emitted_before:]
+
+                    is_last_delta = stopped_early or delta_index == len(stream_deltas) - 1
                     finish_reason = res.finish_reason if is_last_delta else None
+                    if stopped_early:
+                        finish_reason = 'stop'
                     if (
                             self.request.tool_choice != 'none'
                             and self.response_parser.tool_parser is not None
                             and finish_reason == 'stop'
+                            and not stopped_early
                             and getattr(res, 'stop_sequence', None) is None
                             and streaming_tools):
                         finish_reason = 'tool_calls'
@@ -221,8 +247,11 @@ class ChatRunner:
                         cache_block_ids=res.cache_block_ids,
                         reasoning_tokens=self.response_parser.reasoning_tokens,
                         is_last_delta=is_last_delta,
-                        stop_sequence=getattr(res, 'stop_sequence', None) if is_last_delta else None,
+                        stop_sequence=(stop_word if stopped_early else
+                                       getattr(res, 'stop_sequence', None)) if is_last_delta else None,
                     )
+                    if stopped_early:
+                        return
         finally:
             await self.close()
 
@@ -268,6 +297,16 @@ class ChatRunner:
                 final_res.finish_reason = 'tool_calls'
         except Exception as err:
             raise RequestError(ErrorCode.INVALID_REQUEST, f'Failed to parse output: {err}') from err
+
+        # shortcut: non-stream runs to the natural end, only visible text is
+        # cut back; upgrade to an incremental abort if long tails matter.
+        if self.stop_sequences:
+            match = _find_stop_match(text, self.stop_sequences)
+            if match is not None:
+                keep = match[0] + (len(match[1]) if self.request.include_stop_str_in_output else 0)
+                text = text[:keep]
+                final_res.finish_reason = 'stop'
+                final_res.stop_sequence = match[1]
 
         return ChatResult(
             text=text,
@@ -326,6 +365,19 @@ def _normalize_runner_gen_config_kwargs(
     elif {'logprobs', 'top_logprobs', 'return_logprob'} & request.model_fields_set:
         gen_config_kwargs['logprobs'] = None
     return gen_config_kwargs
+
+
+def _find_stop_match(text: str | None, stop_sequences: list[str]) -> tuple[int, str] | None:
+    """Earliest stop-sequence occurrence in visible text; longest wins ties."""
+    best: tuple[int, str] | None = None
+    if not text:
+        return None
+    for word in stop_sequences:
+        pos = text.find(word)
+        if pos >= 0 and (best is None or pos < best[0]
+                         or (pos == best[0] and len(word) > len(best[1]))):
+            best = (pos, word)
+    return best
 
 
 def _chat_template_kwargs_from_request(request: ChatCompletionRequest) -> dict | None:

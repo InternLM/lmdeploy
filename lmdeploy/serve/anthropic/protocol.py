@@ -94,11 +94,7 @@ class ToolChoiceToolParam(BaseModel):
 ToolChoiceParam = ToolChoiceAutoParam | ToolChoiceAnyParam | ToolChoiceToolParam
 
 
-class ThinkingConfig(BaseModel):
-    """Thinking mode; separate ``budget_tokens`` enforcement is unsupported."""
-
-    type: Literal['enabled', 'disabled', 'adaptive']
-    budget_tokens: int | None = Field(default=None, gt=0)
+from lmdeploy.serve.openai.protocol import ThinkingConfig as ThinkingConfig
 
 
 class MessagesRequest(BaseModel):
