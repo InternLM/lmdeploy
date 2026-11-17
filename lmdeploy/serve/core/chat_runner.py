@@ -130,7 +130,8 @@ class ChatRunner:
             if multi_token_words:
                 gen_config.stop_words = engine_words or None
                 content_stop = ChatContentStop(multi_token_words, gen_config.include_stop_str_in_output,
-                                               response_parser.preview_stop_text)
+                                               response_parser.preview_stop_text,
+                                               getattr(response_parser, 'resolve_content_separator', None))
         adapter_name = options.adapter_name
         if adapter_name is None and parsed_request.model != server_context.async_engine.model_name:
             adapter_name = parsed_request.model

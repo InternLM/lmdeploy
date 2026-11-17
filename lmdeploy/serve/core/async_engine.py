@@ -37,7 +37,7 @@ from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 from lmdeploy.vl.media.base import MediaInputError
 
-from .content_stop import ChatContentStop
+from .content_stop import BufferedEngineStream, ChatContentStop
 from .exceptions import ErrorCode, RequestError, SafeRunException
 
 logger = get_logger('lmdeploy')
@@ -757,6 +757,11 @@ class AsyncEngine:
                 # We use this as default outputs in case the async_stream_infer of the Engine yields empty generator.
                 outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
 
+                read_ahead = None
+                resolve_separator = content_stop.resolve_separator if content_stop else None
+                if resolve_separator is not None:
+                    read_ahead = BufferedEngineStream(gen)
+                    gen = read_ahead
                 async for outputs in gen:
                     req_metrics = outputs.req_metrics
                     cached_tokens = req_metrics.cached_tokens if req_metrics is not None else 0
@@ -777,12 +782,18 @@ class AsyncEngine:
                         if (content_stop is not None and visible_len > 1
                                 and (state.prev_tokens is None or state.read_offset != len(state.prev_tokens)
                                      or not content_stop.can_skip_token_steps(outputs.token_ids[:visible_len]))):
-                            for index in range(visible_len):
-                                yield decode_batch(outputs, slice(index, index + 1))
-                                if content_stop.matched:
-                                    break
+                            steps = (slice(i, i + 1) for i in range(visible_len))
                         else:
-                            yield decode_batch(outputs, slice(None, -1) if hit_stop_token else None)
+                            steps = (slice(None, -1) if hit_stop_token else None,)
+                        for rows in steps:
+                            out = decode_batch(outputs, rows)
+                            if (resolve_separator is not None and read_ahead is not None and out.response
+                                    and not out.response.strip('\n')):
+                                following = read_ahead.following_ids(outputs, gen_len - before_batch, stop_ids)
+                                await resolve_separator(following)
+                            yield out
+                            if content_stop is not None and content_stop.matched:
+                                break
 
                         if content_stop is None or not content_stop.matched or outputs.status == ResponseType.CANCEL:
                             continue

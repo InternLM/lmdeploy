@@ -2,6 +2,7 @@
 """Replay the Sage2.1 O12 generation through the OpenAI chat endpoint on
 CPU."""
 import json
+import logging
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -30,20 +31,27 @@ def _replay_tokenizer():
              'Ġme': 752, 'Ġelse': 770, 'The': 785, 'Ġuser': 1196, 'Ġline': 1555, 'Ġoutput': 2550,
              'Ġnothing': 4302, 'Ġwants': 6801, 'Ġexactly': 6896, 'Ġ"</': 8989, '-text': 9342, 'Ġtail': 9782,
              'think': 26779, 'ĠSTOP': 45268, 'STOP': 50336, '_HERE': 80891}
+    vocab.update({'Ċ': 198, 'X': 55, 'lookup': 20973, 'Berlin': 93615})
     tags = {'<think>': 154841, '</think>': 154842, '<tool_call>': 154843, '</tool_call>': 154844,
             '<arg_key>': 154847, '</arg_key>': 154848, '<arg_value>': 154849, '</arg_value>': 154850}
     backend = FastTokenizer(models.WordLevel({**vocab, **tags}, unk_token='[UNK]'))
-    backend.pre_tokenizer = pre_tokenizers.Split('_', behavior='merged_with_next')
+    backend.pre_tokenizer = pre_tokenizers.Sequence([
+        pre_tokenizers.Split('_', behavior='merged_with_next'),
+        pre_tokenizers.Split('\n', behavior='isolated'),
+        pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=False),
+    ])
     backend.decoder = decoders.ByteLevel()
     backend.add_tokens([AddedToken(tag, normalized=False) for tag in tags])
     hf = PreTrainedTokenizerFast(tokenizer_object=backend, clean_up_tokenization_spaces=False)
     tokenizer = object.__new__(Tokenizer)
     tokenizer.model = object.__new__(HuggingFaceTokenizer)
     tokenizer.model.model = hf
+    tokenizer.logger = logging.getLogger('lmdeploy')
+    tokenizer.model._indexes_tokens_deque = [('Berlin', [93615])]
     return tokenizer
 
 
-def _replay_app(context):
+def _replay_app(context, outputs=None):
     tokenizer = _replay_tokenizer()
 
     class Parser(BaseResponseParser):
@@ -64,6 +72,7 @@ def _replay_app(context):
         yield SimpleNamespace(async_cancel=cancel)
 
     async def preprocess(messages, session, gen_config, **kwargs):
+        gen_config.convert_stop_bad_words_to_ids(tokenizer)
         session.epoch = None
         session.request_handle = request_handle
         return PreprocessedRequest(session=session, inputs={'input_ids': [785]}, input_token_len=1,
@@ -72,6 +81,10 @@ def _replay_app(context):
     @asynccontextmanager
     async def replay_backend(*args, **kwargs):
         async def batches():
+            if outputs is not None:
+                for output in outputs:
+                    yield output
+                return
             # The answer's STOP and _HERE straddle the last two batches.
             for batch in (OUTPUT_IDS[:22], OUTPUT_IDS[22:27], OUTPUT_IDS[27:]):
                 yield EngineOutput(ResponseType.SUCCESS, batch)
@@ -140,3 +153,70 @@ def test_nonstream_stop_miss_preserves_custom_parse_complete(chat_endpoint):
     assert choice['output_ids'] == OUTPUT_IDS
     assert choice['finish_reason'] == 'length'
     cancel.assert_not_awaited()
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('include', [False, True])
+@pytest.mark.parametrize('split', [False, True], ids=['one-batch', 'split-batches'])
+@pytest.mark.parametrize('suffix, minimum, match', [
+    ([198, 55, 9782], 0, 'content'),
+    ([55, 9782], 6, 'length'),
+    ([93615], 0, 'content'),
+    ([93615], 6, 'native'),
+    ([], 0, 'content'),
+    ([154843, 20973, 154844, 55], 0, 'two_tools'),
+])
+def test_stop_after_tool_preserves_token_boundary(chat_endpoint, stream, include, split, suffix, minimum, match):
+    _, context = chat_endpoint
+    context.engine_config.logprobs_mode = 'raw_logprobs'
+    # </think><tool_call>lookup</tool_call>, followed by two separate newline tokens.
+    start = [154842, 154843, 20973, 154844, 198, 198]
+    groups = [start[:5], start[5:], suffix] if split else [start + suffix]
+    experts = [[[i]] for i in range(len(start + suffix))]
+    context.engine_config.enable_return_routed_experts = True
+    outputs = [
+        EngineOutput(ResponseType.FINISH if i == len(groups) - 1 else ResponseType.SUCCESS, ids,
+                     routed_experts=experts if i == len(groups) - 1 else None,
+                     logprobs=[{token: -0.5} for token in ids])
+        for i, ids in enumerate(groups)
+    ]
+    app, _ = _replay_app(context, outputs)
+    request = dict(model='glm53-flash', messages=[dict(role='user', content='Look it up.')],
+                   tools=[dict(type='function', function=dict(name='lookup', parameters={'type': 'object'}))],
+                   stop=['\n\n', 'Berlin'], min_new_tokens=minimum, max_tokens=32,
+                   include_stop_str_in_output=include, return_token_ids=True, return_logprob=True,
+                   return_routed_experts=True, stream=stream,
+                   stream_options={'include_usage': True} if stream else None)
+    with TestClient(app) as client:
+        response = client.post('/v1/chat/completions', json=request)
+    assert response.status_code == 200, response.text
+    if stream:
+        chunks = [json.loads(line[6:]) for line in response.text.splitlines()
+                  if line.startswith('data: ') and line != 'data: [DONE]']
+        choices = [choice for chunk in chunks for choice in chunk['choices']]
+        usage = chunks[-1]['usage']
+    else:
+        choices = response.json()['choices']
+        usage = response.json()['usage']
+    messages = [choice['delta' if stream else 'message'] for choice in choices]
+    body = ''.join(message.get('content') or '' for message in messages)
+    names = [call['function']['name'] for message in messages for call in message.get('tool_calls') or []
+             if call['function'].get('name')]
+    ids = [token for choice in choices for token in choice.get('output_ids') or []]
+    probs = [entry for choice in choices for entry in choice.get('output_token_logprobs') or []]
+    expected_ids = start
+    if match == 'content':
+        expected_body = '\n\n' if include else ''
+    elif match == 'native':
+        expected_body = '\n\nBerlin' if include else '\n\n'
+        expected_ids = start + suffix if include else start
+    else:
+        expected_body = 'X' if match == 'two_tools' else '\n\nX tail'
+        expected_ids = start + suffix
+    assert body == expected_body
+    assert names == ['lookup'] * (2 if match == 'two_tools' else 1)
+    assert ids == expected_ids
+    assert probs == [[-0.5, token] for token in expected_ids]
+    assert choices[-1]['routed_experts'] == experts[:len(expected_ids)]
+    assert usage['completion_tokens'] == len(expected_ids)
+    assert choices[-1]['finish_reason'] == ('stop' if match in ('native', 'content') else 'length')

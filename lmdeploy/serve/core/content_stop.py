@@ -1,9 +1,50 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Request-local stop strings for parsed assistant content."""
 
-from collections.abc import Callable
+from collections import deque
+from collections.abc import AsyncIterator, Awaitable, Callable
 
+from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.serve.openai.protocol import DeltaMessage
+
+
+class BufferedEngineStream:
+    """Peek at backend tokens without committing them to the response or
+    metrics."""
+
+    def __init__(self, source: AsyncIterator[EngineOutput]):
+        self.source = aiter(source)
+        self.buffer: deque[EngineOutput] = deque()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.buffer:
+            return self.buffer.popleft()
+        return await anext(self.source)
+
+    async def following_ids(self, batch: EngineOutput, offset: int, stop_ids: list[int]) -> AsyncIterator[int | None]:
+        """Yield visible IDs after offset, preserving batch boundaries for
+        normal consumption."""
+        buffered = iter(tuple(self.buffer))
+        while True:
+            if batch.status not in (ResponseType.SUCCESS, ResponseType.FINISH):
+                yield None  # Leave an aborted or failed stream to normal processing.
+                return
+            native_stop = bool(batch.token_ids and batch.token_ids[-1] in stop_ids)
+            end = len(batch.token_ids) - native_stop
+            for index in range(offset, end):
+                yield batch.token_ids[index]
+            if native_stop or batch.status == ResponseType.FINISH:
+                return
+            batch = next(buffered, None)
+            if batch is None:
+                batch = await anext(self.source, None)
+                if batch is None:
+                    return
+                self.buffer.append(batch)
+            offset = 0
 
 
 class ChatContentStop:
@@ -11,7 +52,9 @@ class ChatContentStop:
     parsing."""
 
     def __init__(self, words: list[str], include_stop: bool,
-                 preview_text: Callable[[list[int]], str | None] | None = None):
+                 preview_text: Callable[[list[int]], str | None] | None = None,
+                 resolve_separator: Callable[[AsyncIterator[int | None]], Awaitable[None]] | None = None):
+        self.resolve_separator = resolve_separator if any(word.endswith('\n') for word in words) else None
         self.preview_text = preview_text
         self.words = words
         self.include_stop = include_stop
