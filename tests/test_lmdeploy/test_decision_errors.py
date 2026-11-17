@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Decision error classification through the production routes and
 preprocess."""
+import json
 from types import MethodType, SimpleNamespace
 
 import pytest
@@ -132,6 +133,59 @@ def test_reserved_marker_remains_an_input_error(endpoint):
     response = evaluate(endpoint, ErrorEngine('normal'))
     assert response.status_code == (422 if route == '/v1/systemone' else 400)
     assert 'Reserved' in response.text
+
+
+@pytest.mark.parametrize('location', ['input', 'json_key', 'question_name', 'instructions',
+                                      'text_part', 'choice_value', 'choice_description', 'score_label'])
+@pytest.mark.parametrize('bad', ['\ud800', '\udfff'])
+def test_invalid_unicode_is_rejected_before_preprocessing(endpoint, location, bad):
+    route, payload = endpoint
+    systemone = route == '/v1/systemone'
+    q = payload['questions']['q'] if systemone else payload['questions'][0]
+    if location == 'input':
+        payload['state' if systemone else 'input'] = bad
+    elif location == 'json_key':
+        payload['state' if systemone else 'input'] = ({bad: 'text'} if systemone else [
+            dict(role='user', content=[dict(type='input_json', data={bad: 'text'})])])
+    elif location == 'question_name':
+        if systemone:
+            payload['questions'] = {bad: q}
+        else:
+            q['name'] = bad
+    elif location in ('instructions', 'text_part'):
+        q['instructions'] = bad if systemone or location == 'instructions' else [dict(type='input_text', text=bad)]
+    elif location in ('choice_value', 'choice_description'):
+        value, desc = (bad, 'A') if location == 'choice_value' else ('a', bad)
+        if systemone:
+            payload['questions']['q'] = dict(type='choice', instructions='Pick', criteria={value: desc, 'b': 'B'})
+        else:
+            payload['questions'][0] = dict(type='choice', instructions='Pick', choices=[
+                dict(value=value, description=desc), dict(value='b')])
+    elif systemone:
+        payload['questions']['q'] = dict(type='score', instructions='Rate', criteria=[bad, 'B'])
+    else:
+        payload['questions'][0] = dict(type='score', instructions='Rate', levels=[dict(label=bad), dict(label='B')])
+
+    engine = ErrorEngine('normal')
+    context = ServerContext()
+    context.async_engine = engine
+    context.decision_context = config()
+    app = FastAPI()
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.include_router(create_openai_router(context))
+    with TestClient(app) as client:
+        response = client.post(route, content=json.dumps(payload, ensure_ascii=True).encode(),
+                               headers={'content-type': 'application/json'})
+    assert response.status_code == 422, response.text
+    assert 'valid Unicode' in response.text
+    assert not engine.requests and not engine.session_mgr.sessions
+
+
+def test_valid_supplementary_unicode_is_accepted(endpoint):
+    route, payload = endpoint
+    payload['state' if route == '/v1/systemone' else 'input'] = 'hello 😀'
+    response = evaluate(endpoint, ErrorEngine('normal'))
+    assert response.status_code == 200, response.text
 
 
 @pytest.mark.parametrize('location', [

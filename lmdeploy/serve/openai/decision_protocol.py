@@ -22,6 +22,23 @@ from lmdeploy.serve.parsers.decision_assets import ImageAsset
 MAX_QUESTIONS = 32
 
 
+def _validate_unicode(value):
+    """Reject unpaired surrogates before tokenization or response rendering."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            try:
+                item.encode('utf-8')
+            except UnicodeEncodeError:
+                raise ValueError('Text must contain valid Unicode characters.') from None
+        elif isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            pending.extend(item)
+
+
 # Systemone schemas follow intern-decision-inference a8fe089/request_validation.py.
 def _systemone_content(value):
     text = json.dumps(value, ensure_ascii=False, allow_nan=False)
@@ -101,6 +118,20 @@ class SystemoneRequest(BaseModel):
         if isinstance(value, dict) and 'images' in value:
             raise ValidationError.from_exception_data(cls.__name__, [dict(
                 type='extra_forbidden', loc=('images',), input=value['images'])])
+        return value
+
+    @model_validator(mode='before')
+    @classmethod
+    def valid_unicode(cls, value):
+        if isinstance(value, dict):
+            _validate_unicode({key: value[key] for key in ('state', 'model', 'assets') if key in value})
+            questions = value.get('questions')
+            if isinstance(questions, dict):
+                for name, question in questions.items():
+                    _validate_unicode(name)
+                    if isinstance(question, dict):
+                        _validate_unicode({key: question[key] for key in ('type', 'instructions', 'criteria')
+                                           if key in question})
         return value
 
 
@@ -236,6 +267,12 @@ class OpenAIDecisionRequest(_OpenAIDecisionSchema):
     ]] = Field(min_length=1, max_length=MAX_QUESTIONS)
     # Caller-supplied metadata; excluded from the scoring prompt by the parser.
     safety_identifier: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode='before')
+    @classmethod
+    def valid_unicode(cls, value):
+        _validate_unicode(value)
+        return value
 
     def image_inputs(self):
         """Yield every image occurrence and its wire location in input/question

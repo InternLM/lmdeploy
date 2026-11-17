@@ -5,6 +5,7 @@
 """Real-checkpoint checks of shared preprocessing and read-only metadata."""
 import asyncio
 import base64
+import json
 import os
 from dataclasses import FrozenInstanceError
 from io import BytesIO
@@ -51,6 +52,37 @@ def test_context_is_read_only(checkpoint, preprocessing_engine):
         context.temperature = 1.
     with pytest.raises(TypeError):
         context.symbol_ids['A'] = -1
+
+
+@pytest.mark.parametrize('route', ['/v1/systemone', '/v1/decisions'])
+def test_invalid_unicode_rejected_with_real_tokenizer(checkpoint, preprocessing_engine, route):
+    from fastapi import FastAPI
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.testclient import TestClient
+    from test_decision_errors import ErrorEngine
+
+    from lmdeploy.serve.openai.api_server import ServerContext, validation_exception_handler
+    from lmdeploy.serve.openai.endpoints import create_openai_router
+    from lmdeploy.serve.parsers.decision_parser import create_decision_context
+
+    engine = ErrorEngine('normal')
+    engine.tokenizer = preprocessing_engine.tokenizer
+    context = ServerContext()
+    context.async_engine = engine
+    context.decision_context = create_decision_context(preprocessing_engine, checkpoint)
+    app = FastAPI()
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.include_router(create_openai_router(context))
+    if route == '/v1/systemone':
+        body = dict(state='hello', questions={'q': dict(type='noul', instructions='broken \ud800 text')})
+    else:
+        body = dict(model=engine.model_name, input='hello', questions=[
+            dict(type='predicate', instructions='broken \ud800 text')])
+    with TestClient(app) as client:
+        response = client.post(route, content=json.dumps(body, ensure_ascii=True).encode(),
+                               headers={'content-type': 'application/json'})
+    assert response.status_code == 422, response.text
+    assert not engine.requests and not engine.session_mgr.sessions
 
 
 @pytest.mark.parametrize('route', ['/v1/systemone', '/v1/decisions'])
