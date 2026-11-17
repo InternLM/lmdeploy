@@ -818,4 +818,308 @@ void invokeDflash2Scale(void* t, long long n, float factor, int input_bits, cuda
     }
 }
 
+
+template<typename T>
+__global__ void kv_scatter_int4_kernel(unsigned char* __restrict__ dst_data,
+                                       T* __restrict__ dst_param,
+                                       const T* __restrict__ src,
+                                       const int* __restrict__ base,
+                                       const int* __restrict__ committed,
+                                       int rows,
+                                       int nkv,
+                                       int hd)
+{
+    constexpr int NW = 8;
+    const int lane = threadIdx.x & 31;
+    const int wid  = threadIdx.x >> 5;
+    const long long wh = (long long)blockIdx.x * NW + wid;
+    const long long total = (long long)rows * nkv;
+    if (wh >= total) {
+        return;
+    }
+    const int i = (int)(wh / nkv);
+    const int h = (int)(wh - (long long)i * nkv);
+
+    const int b     = base[0];
+    int       delta = committed[0] - b;
+    if (delta < 0) delta = 0;
+    if (delta > rows) delta = rows;
+    if (b < 0 || i >= delta) {
+        return;
+    }
+
+    const T* srow = src + ((long long)i * nkv + h) * hd;
+    const int d0 = lane;
+    const int d1 = lane + 32;
+    const int d2 = lane + 64;
+    const int d3 = lane + 96;
+    const float x0 = to_f(srow[d0]);
+    const float x1 = to_f(srow[d1]);
+    const float x2 = to_f(srow[d2]);
+    const float x3 = to_f(srow[d3]);
+
+    float mn = fminf(fminf(x0, x1), fminf(x2, x3));
+    float mx = fmaxf(fmaxf(x0, x1), fmaxf(x2, x3));
+    for (int o = 16; o > 0; o >>= 1) {
+        mn = fminf(mn, __shfl_xor_sync(0xffffffffu, mn, o));
+        mx = fmaxf(mx, __shfl_xor_sync(0xffffffffu, mx, o));
+    }
+
+    float scale = (mx - mn) / 15.f;
+    if (!(scale > 0.f)) scale = 1.f;
+    const float zero = mn;
+
+    auto quant4 = [&](float x) {
+        int v = __float2int_rn((x - zero) / scale);
+        v = max(0, min(15, v));
+        return (unsigned)v;
+    };
+
+    const unsigned char b0 = (unsigned char)(quant4(x0) | (quant4(x1) << 4));
+    const unsigned char b1 = (unsigned char)(quant4(x2) | (quant4(x3) << 4));
+
+    const long long row = (long long)(b + i) * nkv + h;
+    unsigned char*  d   = dst_data + row * (hd / 2) + lane * 2;
+    d[0] = b0;
+    d[1] = b1;
+    if (lane == 0) {
+        T* param = dst_param + row * 2;
+        from_f(param[0], scale);
+        from_f(param[1], zero);
+    }
+}
+
+template<typename T>
+__global__ void dflash2_attn_int4_kernel(T* __restrict__ out,
+                                         const T* __restrict__ q,
+                                         const unsigned char* __restrict__ k_ctx_data,
+                                         const T* __restrict__ k_ctx_param,
+                                         const unsigned char* __restrict__ v_ctx_data,
+                                         const T* __restrict__ v_ctx_param,
+                                         const T* __restrict__ k_blk,
+                                         const T* __restrict__ v_blk,
+                                         int  tq,
+                                         int  tc,
+                                         int  nh,
+                                         int  nkv,
+                                         float scale,
+                                         int  window)
+{
+    constexpr int HD = 128;
+    constexpr int ND = HD / 32;
+    constexpr int NW = 8;
+
+    const int bh  = blockIdx.x;
+    const int i   = bh / nh;
+    const int h   = bh - i * nh;
+    const int kvh = h * nkv / nh;
+    const int qpos = tc + i;
+    const int first_ctx = max(0, qpos - window + 1);
+    const int nkeys = tc + tq;
+    const int lane = threadIdx.x & 31;
+    const int wid  = threadIdx.x >> 5;
+
+    const T* qrow = q + ((long long)i * nh + h) * HD;
+    float    qd[ND];
+#pragma unroll
+    for (int k = 0; k < ND; ++k) {
+        qd[k] = to_f(qrow[lane + k * 32]);
+    }
+
+    float m = -CUDART_INF_F, l = 0.f, acc[ND];
+#pragma unroll
+    for (int k = 0; k < ND; ++k) {
+        acc[k] = 0.f;
+    }
+
+    for (int j = first_ctx + wid; j < nkeys; j += NW) {
+        float part = 0.f;
+        if (j < tc) {
+            const long long row = (long long)j * nkv + kvh;
+            const unsigned short pk =
+                *reinterpret_cast<const unsigned short*>(k_ctx_data + row * (HD / 2) + lane * 2);
+            const unsigned short pv =
+                *reinterpret_cast<const unsigned short*>(v_ctx_data + row * (HD / 2) + lane * 2);
+            const float ks = to_f(k_ctx_param[row * 2 + 0]);
+            const float kz = to_f(k_ctx_param[row * 2 + 1]);
+            const float vs = to_f(v_ctx_param[row * 2 + 0]);
+            const float vz = to_f(v_ctx_param[row * 2 + 1]);
+            const float k0 = (float)(pk & 0x0f) * ks + kz;
+            const float k1 = (float)((pk >> 4) & 0x0f) * ks + kz;
+            const float k2 = (float)((pk >> 8) & 0x0f) * ks + kz;
+            const float k3 = (float)((pk >> 12) & 0x0f) * ks + kz;
+            part = qd[0] * k0 + qd[1] * k1 + qd[2] * k2 + qd[3] * k3;
+
+            const float s    = warp_reduce_sum(part) * scale;
+            const float mn   = fmaxf(m, s);
+            const float corr = (m == -CUDART_INF_F) ? 0.f : __expf(m - mn);
+            const float e    = __expf(s - mn);
+            l                = l * corr + e;
+            const float v0 = (float)(pv & 0x0f) * vs + vz;
+            const float v1 = (float)((pv >> 4) & 0x0f) * vs + vz;
+            const float v2 = (float)((pv >> 8) & 0x0f) * vs + vz;
+            const float v3 = (float)((pv >> 12) & 0x0f) * vs + vz;
+            acc[0] = acc[0] * corr + e * v0;
+            acc[1] = acc[1] * corr + e * v1;
+            acc[2] = acc[2] * corr + e * v2;
+            acc[3] = acc[3] * corr + e * v3;
+            m = mn;
+        }
+        else {
+            const T* krow = k_blk + ((long long)(j - tc) * nkv + kvh) * HD;
+            const T* vrow = v_blk + ((long long)(j - tc) * nkv + kvh) * HD;
+#pragma unroll
+            for (int k = 0; k < ND; ++k) {
+                part += qd[k] * to_f(krow[lane + k * 32]);
+            }
+            const float s    = warp_reduce_sum(part) * scale;
+            const float mn   = fmaxf(m, s);
+            const float corr = (m == -CUDART_INF_F) ? 0.f : __expf(m - mn);
+            const float e    = __expf(s - mn);
+            l                = l * corr + e;
+#pragma unroll
+            for (int k = 0; k < ND; ++k) {
+                acc[k] = acc[k] * corr + e * to_f(vrow[lane + k * 32]);
+            }
+            m = mn;
+        }
+    }
+
+    __shared__ float sm[NW];
+    __shared__ float sl[NW];
+    __shared__ float sa[NW][32][ND];
+    if (lane == 0) {
+        sm[wid] = m;
+        sl[wid] = l;
+    }
+#pragma unroll
+    for (int k = 0; k < ND; ++k) {
+        sa[wid][lane][k] = acc[k];
+    }
+    __syncthreads();
+
+    float M = -CUDART_INF_F;
+#pragma unroll
+    for (int w = 0; w < NW; ++w) {
+        M = fmaxf(M, sm[w]);
+    }
+    float L = 0.f, A[ND];
+#pragma unroll
+    for (int k = 0; k < ND; ++k) {
+        A[k] = 0.f;
+    }
+#pragma unroll
+    for (int w = 0; w < NW; ++w) {
+        const float f = __expf(sm[w] - M);
+        L += sl[w] * f;
+#pragma unroll
+        for (int k = 0; k < ND; ++k) {
+            A[k] += sa[w][lane][k] * f;
+        }
+    }
+    T* orow = out + ((long long)i * nh + h) * HD;
+#pragma unroll
+    for (int k = 0; k < ND; ++k) {
+        T r;
+        from_f(r, A[k] / L);
+        orow[lane + k * 32] = r;
+    }
+}
+
+template<typename T>
+void launch_attn_int4(void*        out,
+                      const void*  q,
+                      const void*  k_ctx_data,
+                      const void*  k_ctx_param,
+                      const void*  v_ctx_data,
+                      const void*  v_ctx_param,
+                      const void*  k_blk,
+                      const void*  v_blk,
+                      int          tq,
+                      int          tc,
+                      int          nh,
+                      int          nkv,
+                      int          hd,
+                      float        scale,
+                      int          window,
+                      cudaStream_t stream)
+{
+    TM_CHECK_EQ(hd, 128) << "DFlash2 int4 attention expects head_dim 128";
+    const int grid  = tq * nh;
+    const int block = 256;
+    dflash2_attn_int4_kernel<T><<<grid, block, 0, stream>>>(
+        static_cast<T*>(out),
+        static_cast<const T*>(q),
+        static_cast<const unsigned char*>(k_ctx_data),
+        static_cast<const T*>(k_ctx_param),
+        static_cast<const unsigned char*>(v_ctx_data),
+        static_cast<const T*>(v_ctx_param),
+        static_cast<const T*>(k_blk),
+        static_cast<const T*>(v_blk),
+        tq,
+        tc,
+        nh,
+        nkv,
+        scale,
+        window);
+}
+
+void invokeDflash2AttentionInt4(void*        out,
+                                const void*  q,
+                                const void*  k_ctx_data,
+                                const void*  k_ctx_param,
+                                const void*  v_ctx_data,
+                                const void*  v_ctx_param,
+                                const void*  k_blk,
+                                const void*  v_blk,
+                                int          tq,
+                                int          tc,
+                                int          nh,
+                                int          nkv,
+                                int          hd,
+                                float        scale,
+                                int          window,
+                                int          input_bits,
+                                cudaStream_t stream)
+{
+    if (input_bits == 16) {
+        launch_attn_int4<__half>(out, q, k_ctx_data, k_ctx_param, v_ctx_data, v_ctx_param, k_blk, v_blk, tq, tc, nh,
+                                 nkv, hd, scale, window, stream);
+    }
+    else {
+        TM_CHECK(false) << "DFlash2 int4 attention: unsupported input bits " << input_bits;
+    }
+}
+
+void invokeDflash2KvScatterInt4(void*        dst_data,
+                                void*        dst_param,
+                                const void*  src,
+                                const int*   base,
+                                const int*   committed,
+                                int          rows,
+                                int          nkv,
+                                int          hd,
+                                int          input_bits,
+                                cudaStream_t stream)
+{
+    constexpr int NW = 8;
+    const long long total = (long long)rows * nkv;
+    const int grid = (int)((total + NW - 1) / NW);
+    const int block = NW * 32;
+    if (input_bits == 16) {
+        kv_scatter_int4_kernel<__half><<<grid, block, 0, stream>>>(
+            static_cast<unsigned char*>(dst_data),
+            static_cast<__half*>(dst_param),
+            static_cast<const __half*>(src),
+            base,
+            committed,
+            rows,
+            nkv,
+            hd);
+    }
+    else {
+        TM_CHECK(false) << "DFlash2 kv_scatter int4: unsupported input bits " << input_bits;
+    }
+}
+
 }  // namespace turbomind

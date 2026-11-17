@@ -311,6 +311,10 @@ class TurboMind:
             ec.spec_conv_kernel_size = int(dc.get('conv_kernel_size', 2))
             ec.spec_conv_group_size = int(dc.get('conv_group_size', 16))
             ec.spec_sliding_window = int(getattr(draft_model.cfg, 'sliding_window', 0) or 0)
+            if speculative_config.dflash_ctx_kv_int4 is not None:
+                ec.spec_ctx_kv_int4 = int(speculative_config.dflash_ctx_kv_int4)
+            else:
+                ec.spec_ctx_kv_int4 = int(dc.get('ctx_kv_int4', 0))
 
         logger.info(f'turbomind engine config:\n\n'
                     f'dtype={engine_config.dtype}, state_dtype={state_dtype}, '

@@ -61,7 +61,12 @@ private:
 
     std::vector<Tensor> ctx_k_;
     std::vector<Tensor> ctx_v_;
+    std::vector<Tensor> ctx_k_data_;
+    std::vector<Tensor> ctx_k_param_;
+    std::vector<Tensor> ctx_v_data_;
+    std::vector<Tensor> ctx_v_param_;
     Buffer_<int>        ctx_len_;
+    bool                ctx_kv_int4_{};
 
     void MaterializeContext(const Tensor& context_hidden, const Buffer_<int>& base_dev,
                             const Buffer_<int>& committed_dev, int rows, cudaStream_t stream);

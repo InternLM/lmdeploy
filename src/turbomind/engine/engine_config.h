@@ -39,6 +39,7 @@ struct EngineConfig {
     X(int, spec_conv_kernel_size, 0)                                                                                   \
     X(int, spec_conv_group_size, 0)                                                                                    \
     X(int, spec_sliding_window, 0)                                                                                     \
+    X(int, spec_ctx_kv_int4, 0)                                                                                        \
     X(int, num_tokens_per_iter, 0)                                                                                     \
     X(int, max_prefill_iters, 1)                                                                                       \
     X(int, async_, 0)                                                                                                  \

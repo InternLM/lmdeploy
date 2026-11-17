@@ -76,6 +76,26 @@ void invokeDflash2Attention(void*        out,
                             int          input_bits,
                             cudaStream_t stream);
 
+/// Quantized DFlash2 draft block attention: context K/V are packed int4 with
+/// per-(token,head) scale/zero; block K/V stay in the input dtype.
+void invokeDflash2AttentionInt4(void*        out,
+                                const void*  q,
+                                const void*  k_ctx_data,
+                                const void*  k_ctx_param,
+                                const void*  v_ctx_data,
+                                const void*  v_ctx_param,
+                                const void*  k_blk,
+                                const void*  v_blk,
+                                int          tq,
+                                int          tc,
+                                int          nh,
+                                int          nkv,
+                                int          hd,
+                                float        scale,
+                                int          window,
+                                int          input_bits,
+                                cudaStream_t stream);
+
 /// NeoX-style RoPE applied in place to a [rows, heads, head_dim] tensor.
 void invokeDflash2Rope(void*        x,
                        const int*   positions,
@@ -161,6 +181,21 @@ void invokeDflash2KvScatter(void*        dst,
                             int          per_row,
                             int          input_bits,
                             cudaStream_t stream);
+
+/// Quantize and scatter context K/V rows: dst_data[base[0] + i] = int4(src[i]),
+/// dst_param[...] = (scale, zero), for i < committed[0] - base[0].
+/// `src` is [rows, nkv, hd]; `dst_data` is [max_ctx, nkv, hd/2] (packed);
+/// `dst_param` is [max_ctx, nkv, 2] in the input dtype.
+void invokeDflash2KvScatterInt4(void*        dst_data,
+                                void*        dst_param,
+                                const void*  src,
+                                const int*   base,
+                                const int*   committed,
+                                int          rows,
+                                int          nkv,
+                                int          hd,
+                                int          input_bits,
+                                cudaStream_t stream);
 
 /// In-place `t *= factor` (elementwise, fp16/fp32).
 void invokeDflash2Scale(void*        t,
