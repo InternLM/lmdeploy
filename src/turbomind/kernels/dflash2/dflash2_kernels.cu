@@ -221,7 +221,9 @@ __global__ void residual_norm_kernel(T* __restrict__ out, float* __restrict__ re
     }
 }
 
-/// One block per (query row, query head); thread d owns output channel d.
+/// One block per (query row, query head), 4 warps splitting the key range
+/// (intra-block split-K). Lane owns HD/32 dims; the four warps' online-softmax
+/// partials are combined through shared memory. Deterministic (no atomics).
 template<typename T, int HD>
 __global__ void dflash2_attn_kernel(T* __restrict__ out,
                                     const T* __restrict__ q,
@@ -236,28 +238,36 @@ __global__ void dflash2_attn_kernel(T* __restrict__ out,
                                     float scale,
                                     int  window)
 {
+    constexpr int ND = HD / 32;  // dims owned per lane (4 for HD=128)
+    constexpr int NW = 4;        // warps per block
+
     const int bh  = blockIdx.x;
     const int i   = bh / nh;
     const int h   = bh - i * nh;
-    const int d   = threadIdx.x;
     const int kvh = h * nkv / nh;
     const int qpos = tc + i;
     const int first_ctx = max(0, qpos - window + 1);
     const int nkeys = tc + tq;
+    const int lane = threadIdx.x & 31;
+    const int wid  = threadIdx.x >> 5;
 
     const T* qrow = q + ((long long)i * nh + h) * HD;
+    float    qd[ND];
+#pragma unroll
+    for (int k = 0; k < ND; ++k) {
+        qd[k] = to_f(qrow[lane + k * 32]);
+    }
 
-    __shared__ float sh[32];
+    float m = -CUDART_INF_F, l = 0.f, acc[ND];
+#pragma unroll
+    for (int k = 0; k < ND; ++k) {
+        acc[k] = 0.f;
+    }
 
-    const float qd = to_f(qrow[d]);
-    // Single-pass online softmax: one block-reduce per key (not three passes).
-    float m   = -CUDART_INF_F;
-    float l   = 0.f;
-    float acc = 0.f;
-    for (int j = 0; j < nkeys; ++j) {
-        bool       valid;
-        const T*   krow;
-        const T*   vrow;
+    for (int j = wid; j < nkeys; j += NW) {
+        const T* krow;
+        const T* vrow;
+        bool     valid;
         if (j < tc) {
             valid = j >= first_ctx;
             krow  = k_ctx + ((long long)j * nkv + kvh) * HD;
@@ -269,20 +279,64 @@ __global__ void dflash2_attn_kernel(T* __restrict__ out,
             vrow  = v_blk + ((long long)(j - tc) * nkv + kvh) * HD;
         }
         if (!valid) {
-            continue;  // uniform across d
+            continue;  // uniform within a warp
         }
-        const float s = block_reduce_sum<HD>(qd * to_f(krow[d]), sh) * scale;
-        const float mn = fmaxf(m, s);
+        float part = 0.f;
+#pragma unroll
+        for (int k = 0; k < ND; ++k) {
+            part += qd[k] * to_f(krow[lane + k * 32]);
+        }
+        const float s    = warp_reduce_sum(part) * scale;
+        const float mn   = fmaxf(m, s);
         const float corr = (m == -CUDART_INF_F) ? 0.f : __expf(m - mn);
-        const float e = __expf(s - mn);
-        l   = l * corr + e;
-        acc = acc * corr + e * to_f(vrow[d]);
-        m   = mn;
+        const float e    = __expf(s - mn);
+        l = l * corr + e;
+#pragma unroll
+        for (int k = 0; k < ND; ++k) {
+            acc[k] = acc[k] * corr + e * to_f(vrow[lane + k * 32]);
+        }
+        m = mn;
     }
-    // `m`/`l` are identical across d (same block reduction), so acc/l is the output.
-    T r;
-    from_f(r, acc / l);
-    out[((long long)i * nh + h) * HD + d] = r;
+
+    __shared__ float sm[NW];
+    __shared__ float sl[NW];
+    __shared__ float sa[NW][32][ND];
+    if (lane == 0) {
+        sm[wid] = m;
+        sl[wid] = l;
+    }
+#pragma unroll
+    for (int k = 0; k < ND; ++k) {
+        sa[wid][lane][k] = acc[k];
+    }
+    __syncthreads();
+
+    float M = -CUDART_INF_F;
+#pragma unroll
+    for (int w = 0; w < NW; ++w) {
+        M = fmaxf(M, sm[w]);
+    }
+    float L = 0.f, A[ND];
+#pragma unroll
+    for (int k = 0; k < ND; ++k) {
+        A[k] = 0.f;
+    }
+#pragma unroll
+    for (int w = 0; w < NW; ++w) {
+        const float f = __expf(sm[w] - M);
+        L += sl[w] * f;
+#pragma unroll
+        for (int k = 0; k < ND; ++k) {
+            A[k] += sa[w][lane][k] * f;
+        }
+    }
+    T* orow = out + ((long long)i * nh + h) * HD;
+#pragma unroll
+    for (int k = 0; k < ND; ++k) {
+        T r;
+        from_f(r, A[k] / L);
+        orow[lane + k * 32] = r;
+    }
 }
 
 template<typename T, int HD>
