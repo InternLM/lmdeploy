@@ -5,7 +5,8 @@ from http import HTTPStatus
 
 from fastapi import APIRouter, Depends, Request
 
-from lmdeploy.serve.openai.errors import create_error_response
+from lmdeploy.serve.core.exceptions import RequestError
+from lmdeploy.serve.openai.errors import create_error_response, create_request_error_response
 from lmdeploy.serve.openai.protocol import (
     EmbeddingsRequest,
     EncodeRequest,
@@ -103,7 +104,10 @@ def register(router: APIRouter, server_context) -> None:
             return create_error_response(HTTPStatus.BAD_REQUEST,
                                          'Input must be a string or a list.')
 
-        batch_scores = await async_engine.async_get_reward_score(input_ids)
+        try:
+            batch_scores = await async_engine.async_get_reward_score(input_ids)
+        except RequestError as e:
+            return create_request_error_response(e)
         prompt_tokens = sum(len(ids) for ids in input_ids)
         usage = UsageInfo.build(prompt_tokens=prompt_tokens,
                                 completion_tokens=0,
@@ -146,6 +150,8 @@ def register(router: APIRouter, server_context) -> None:
 
         try:
             ppl = await async_engine.async_get_ppl(input_ids)
+        except RequestError as e:
+            return create_request_error_response(e)
         except ValueError as e:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
 

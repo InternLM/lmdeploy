@@ -453,12 +453,18 @@ class AsyncEngine:
         kwargs.pop('multimodal', None)
 
         async def cleanup_after_exception():
-            # Use asyncio.shield to protect cleanup coroutines from being cancelled.
-            # When a task is in cancelling state, bare `await` raises CancelledError
-            # immediately. shield ensures the inner coroutine runs to completion.
+            # shield protects backend cancellation, but its waiter can still be
+            # cancelled. Keep the handle leased until the same cleanup task ends.
             try:
-                await asyncio.shield(handle.async_cancel(session.session_id))
+                cancel_task = asyncio.create_task(handle.async_cancel(session.session_id))
+                while not cancel_task.done():
+                    try:
+                        await asyncio.shield(cancel_task)
+                    except asyncio.CancelledError:
+                        continue
+                cancel_task.result()
             except asyncio.CancelledError:
+                # The backend cancellation task itself was cancelled.
                 pass
             except Exception:
                 logger.exception(f'[safe_run] session {session.session_id} async_cancel failed.')
@@ -470,11 +476,8 @@ class AsyncEngine:
             logger.info(f'[safe_run] session {session.session_id} cancelled: {type(e).__name__}')
             metrics_processor.increase_failed_requests('cancel')
             await cleanup_after_exception()
-            # Wrap as SafeRunException so that the outer `request_handle` context
-            # manager in `session_manager.py` can distinguish a handled cancellation (caught by
-            # `except SafeRunException: pass`) from an unexpected CancelledError.
-            # Without this, the suppressed exception leaves the task in cancelling
-            # state, causing a second CancelledError at the next await point.
+            # Mark cancellation as handled so request_handle does not send a
+            # second backend cancellation while releasing the handle.
             raise SafeRunException(f'Safe run exception for session {session.session_id}') from e
         except Exception as e:
             logger.exception(f'[safe_run] session {session.session_id} exception caught: {e}')
@@ -943,10 +946,14 @@ class AsyncEngine:
             for task in tasks:
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            if create_sessions:
-                for session in sessions:
-                    self.session_mgr.remove(session)
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                # Cancellation while draining children must still remove the
+                # batch's sessions once their handles have been released.
+                if create_sessions:
+                    for session in sessions:
+                        self.session_mgr.remove(session)
         return logits
 
     async def async_get_ppl(self, input_ids: list[int]) -> float:
