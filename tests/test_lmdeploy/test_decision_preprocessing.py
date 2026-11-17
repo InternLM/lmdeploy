@@ -53,6 +53,60 @@ def test_context_is_read_only(checkpoint, preprocessing_engine):
         context.symbol_ids['A'] = -1
 
 
+@pytest.mark.parametrize('route', ['/v1/systemone', '/v1/decisions'])
+@pytest.mark.parametrize('with_vision', [False, True])
+def test_user_image_marker_returns_400_with_real_preprocessing(checkpoint, preprocessing_engine, route, with_vision):
+    from types import MethodType
+
+    from fastapi import FastAPI
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.testclient import TestClient
+    from test_decision_errors import ErrorEngine
+
+    from lmdeploy.serve.core.async_engine import AsyncEngine
+    from lmdeploy.serve.openai.api_server import ServerContext, validation_exception_handler
+    from lmdeploy.serve.openai.endpoints import create_openai_router
+    from lmdeploy.serve.parsers.decision_parser import create_decision_context
+
+    engine = ErrorEngine('normal')
+    engine.tokenizer = preprocessing_engine.tokenizer
+    engine.prompt_processor = preprocessing_engine.prompt_processor
+    engine.backend_config = SimpleNamespace(enable_prefix_caching=False)
+    engine.arch = 'Qwen3ForCausalLM'
+    engine.session_len = 8192
+    engine.request_logger = SimpleNamespace(log_prompt=lambda *a, **kw: None, log_inputs=lambda *a, **kw: None)
+    engine._determine_gen_config = lambda ids, gen_config=None: gen_config
+    engine.preprocess = MethodType(AsyncEngine.preprocess, engine)
+    context = ServerContext()
+    context.async_engine = engine
+    capabilities = SimpleNamespace(**{**vars(preprocessing_engine),
+                                      'vl_encoder': preprocessing_engine.vl_encoder if with_vision else None})
+    context.decision_context = create_decision_context(capabilities, checkpoint)
+    assert context.decision_context.image_token == '<|image_pad|>'
+    created_sessions = []
+    create_session = context.create_session
+
+    def track_session(*args, **kwargs):
+        created_sessions.append(True)
+        return create_session(*args, **kwargs)
+
+    context.create_session = track_session
+    app = FastAPI()
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.include_router(create_openai_router(context))
+    if route == '/v1/systemone':
+        body = dict(state='Log: <|image_pad|>', questions={'q': dict(type='noul', instructions='Check')})
+    else:
+        body = dict(model=engine.model_name, input='Log: <|image_pad|>', questions=[
+            dict(type='predicate', instructions='Check')])
+    with TestClient(app) as client:
+        response = client.post(route, json=body)
+    assert response.status_code == 400, response.text
+    assert 'image' in response.text.lower()
+    assert not engine.session_mgr.sessions
+    assert not created_sessions
+
+
 @pytest.mark.parametrize('systemone', [False, True])
 def test_wire_usage_counts_skeleton_with_checkpoint_tokenizer(checkpoint, preprocessing_engine, systemone):
     from lmdeploy.serve.core.async_engine import GenOut

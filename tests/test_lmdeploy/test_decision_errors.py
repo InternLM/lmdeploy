@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
-from test_decision_service import MARKER, FakeEngine, config
+from test_decision_service import IMAGE_PAD, MARKER, FakeEngine, config, image_asset
 
 from lmdeploy.serve.core.async_engine import AsyncEngine
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
@@ -63,6 +63,8 @@ class ErrorEngine(FakeEngine):
         prepared = await super().preprocess(*args, **kwargs)
         if self.mode == 'missing_marker':
             prepared.inputs['input_ids'][:] = [token for token in prepared.inputs['input_ids'] if token != MARKER]
+        if self.mode == 'unexpected_image_placeholder':
+            prepared.inputs['input_ids'].insert(1, IMAGE_PAD)
         return prepared
 
     async def generate(self, *args, **kwargs):
@@ -90,11 +92,11 @@ def endpoint(request):
     return route, payload
 
 
-def evaluate(endpoint, engine):
+def evaluate(endpoint, engine, *, decision_context=None):
     route, payload = endpoint
     context = ServerContext()
     context.async_engine = engine
-    context.decision_context = config()
+    context.decision_context = decision_context or config()
     app = FastAPI()
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.include_router(create_openai_router(context))
@@ -105,7 +107,8 @@ def evaluate(endpoint, engine):
 
 
 @pytest.mark.parametrize('mode', [
-    'missing_tokenizer', 'tokenizer_error', 'missing_marker', 'direct_value_error', 'direct_type_error',
+    'missing_tokenizer', 'tokenizer_error', 'missing_marker', 'unexpected_image_placeholder',
+    'direct_value_error', 'direct_type_error',
     'shared_value_error', 'shared_type_error', 'shared_runtime_error', 'shared_missing_ids',
     'no_output', 'generation_value_error',
 ])
@@ -129,3 +132,84 @@ def test_reserved_marker_remains_an_input_error(endpoint):
     response = evaluate(endpoint, ErrorEngine('normal'))
     assert response.status_code == (422 if route == '/v1/systemone' else 400)
     assert 'Reserved' in response.text
+
+
+@pytest.mark.parametrize('location', [
+    'evidence', 'evidence_key', 'question_name', 'instructions', 'split_instructions',
+    'choice_value', 'choice_description', 'score_label',
+])
+def test_user_image_marker_is_an_input_error(endpoint, location):
+    route, payload = endpoint
+    systemone = route == '/v1/systemone'
+    marker = '<|image_pad|>'
+    if location == 'evidence':
+        payload['state' if systemone else 'input'] = f'Log: {marker}'
+    elif location == 'evidence_key':
+        payload['state' if systemone else 'input'] = ({marker: 'text'} if systemone else [
+            dict(role='user', content=[dict(type='input_json', data={marker: 'text'})])])
+    elif location == 'question_name':
+        if systemone:
+            payload['questions'] = {marker: payload['questions']['q']}
+        else:
+            payload['questions'][0]['name'] = marker
+    elif location in ('instructions', 'split_instructions'):
+        question = payload['questions']['q'] if systemone else payload['questions'][0]
+        question['instructions'] = (marker if systemone or location == 'instructions' else [
+            dict(type='input_text', text='<|image_'), dict(type='input_text', text='pad|>')])
+    elif location in ('choice_value', 'choice_description'):
+        if systemone:
+            payload['questions']['q'] = dict(type='choice', instructions='Pick one', criteria={
+                marker if location == 'choice_value' else 'a': marker if location == 'choice_description' else 'A',
+                'b': 'B'})
+        else:
+            payload['questions'][0] = dict(type='choice', instructions='Pick one', choices=[
+                dict(value=marker if location == 'choice_value' else 'a',
+                     description=marker if location == 'choice_description' else 'A'), dict(value='b')])
+    else:
+        if systemone:
+            payload['questions']['q'] = dict(type='score', instructions='Rate', criteria=[marker, 'B'])
+        else:
+            payload['questions'][0] = dict(type='score', instructions='Rate', levels=[
+                dict(label=marker), dict(label='B')])
+    engine = ErrorEngine('normal')
+    response = evaluate(endpoint, engine)
+    assert response.status_code == 400, response.text
+    assert 'Reserved image marker' in response.text
+    assert not engine.requests
+
+
+def test_user_image_marker_with_an_actual_image_is_rejected(endpoint):
+    route, payload = endpoint
+    asset = image_asset()
+    if route == '/v1/systemone':
+        payload.update(state=['photo', '<|image_pad|>'], assets={'photo': asset})
+    else:
+        payload['input'] = [dict(role='user', content=[
+            dict(type='input_image', image_url='data:image/png;base64,' + asset['data_base64']),
+            dict(type='input_text', text='<|image_pad|>')])]
+    engine = ErrorEngine('normal')
+    response = evaluate(endpoint, engine)
+    assert response.status_code == 400, response.text
+    assert not engine.requests
+
+
+def test_image_marker_follows_checkpoint_metadata(endpoint):
+    route, payload = endpoint
+    payload['state' if route == '/v1/systemone' else 'input'] = '<custom-image>'
+    response = evaluate(endpoint, ErrorEngine('normal'), decision_context=config(image_token='<custom-image>'))
+    assert response.status_code == 400, response.text
+
+
+def test_marker_in_unused_metadata_is_ignored(endpoint):
+    route, payload = endpoint
+    payload['ignored' if route == '/v1/systemone' else 'safety_identifier'] = '<|image_pad|>'
+    response = evaluate(endpoint, ErrorEngine('normal'))
+    assert response.status_code == 200, response.text
+
+
+def test_image_marker_used_as_an_asset_reference():
+    endpoint = ('/v1/systemone', dict(state='<|image_pad|>',
+                                     questions={'q': dict(type='noul', instructions='Check')},
+                                     assets={'<|image_pad|>': image_asset()}))
+    response = evaluate(endpoint, ErrorEngine('normal'))
+    assert response.status_code == 200, response.text
