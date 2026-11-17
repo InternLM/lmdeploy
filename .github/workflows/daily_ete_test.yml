@@ -172,7 +172,7 @@ jobs:
     timeout-minutes: 150
     strategy:
       matrix:
-        deps_profile: ['', 'transformers==5.17.0']
+        deps_profile: ['', 'transformers==4.57.6']
     env:
       PYTHONPATH: autotest/coverage_hook:/nvme/qa_test_models/offline_pkg/LLaVA
       MODELSCOPE_CACHE: /nvme/qa_test_models/modelscope_hub
@@ -246,7 +246,7 @@ jobs:
       matrix:
         backend: ${{ fromJSON(inputs.backend || '["turbomind", "pytorch"]')}}
         model: ${{ fromJSON(inputs.model || '["llm", "mllm"]')}}
-        deps_profile: ['', 'transformers==5.17.0']
+        deps_profile: ['', 'transformers==4.57.6']
         function: ${{ fromJSON(inputs.function || '["pipeline","restful","chat"]')}}
         exclude:
           - backend: turbomind
