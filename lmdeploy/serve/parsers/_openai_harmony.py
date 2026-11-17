@@ -45,6 +45,21 @@ class GptOssResponseParser(ResponseParser):
     tool_parser_cls = object()  # API server checks `is not None` for tool support.
     supports_required_tool_choice = True
 
+    @staticmethod
+    def _dump_tool(tool) -> dict:
+        """Dump one tool into the shape GPT-OSS templates read.
+
+        `description` is optional in the protocol, but the templates
+        concatenate it into the namespace comment without a guard, so a tool
+        declared without one has to reach them as an empty string rather than
+        as `None`.
+        """
+        dumped = tool.model_dump()
+        function = dumped.get('function')
+        if isinstance(function, dict) and function.get('description') is None:
+            function['description'] = ''
+        return dumped
+
     @classmethod
     def render_tools(cls, request: ChatCompletionRequest) -> list[dict] | None:
         """GPT-OSS templates read `tool.function`, so keep the wrappers."""
@@ -53,11 +68,11 @@ class GptOssResponseParser(ResponseParser):
         if getattr(request.tool_choice, 'type', None) == 'function':
             # ToolChoice (type='function'): keep only the selected tool.
             return [
-                item.model_dump() for item in request.tools
+                cls._dump_tool(item) for item in request.tools
                 if item.function.name == request.tool_choice.function.name
             ]
         # auto/required/allowed_tools: keep all tools.
-        return [item.model_dump() for item in request.tools]
+        return [cls._dump_tool(item) for item in request.tools]
 
     def __init__(self, request: ChatCompletionRequest):
         if hasattr(request, 'tools') and hasattr(request, 'tool_choice'):
