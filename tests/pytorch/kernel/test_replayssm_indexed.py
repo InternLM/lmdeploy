@@ -225,7 +225,10 @@ def test_conv_boundaries_preserve_packed_neighbors(monkeypatch, spec, history, o
     state = SimpleNamespace(conv_state=runtime[:, layer, :channels],
                             shared_conv_state=shared[:, layer, :channels],
                             cursor=SimpleNamespace(Tmax=spec + 1))
-    meta = _metadata(monkeypatch, [4], [history], [slot], [source], [cp], [offset], spec)
+    meta = _metadata(monkeypatch, [4], [history], [slot], [source], [cp], [4], spec)
+    # Conv supports short offsets independently of the recurrence planner's chunk alignment.
+    meta.ssm_prefill_meta = replace(meta.ssm_prefill_meta,
+                                    checkpoint_offsets=torch.tensor([offset], device='cuda', dtype=torch.long))
     replay_conv_boundaries(x, state, meta, 4)
     # Compare whole allocations, not just the selected slot/layer or output checkpoint.
     torch.testing.assert_close(runtime, expected_runtime, rtol=0, atol=0)
