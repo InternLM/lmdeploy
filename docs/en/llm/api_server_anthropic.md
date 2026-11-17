@@ -89,3 +89,22 @@ curl http://{server_ip}:{server_port}/v1/messages/count_tokens \
     "messages": [{"role": "user", "content": "Count these tokens"}]
   }'
 ```
+
+## Incremental routed experts (LMDeploy extension)
+
+On the PyTorch backend, `/v1/messages` accepts `return_routed_experts: true`
+and `routed_experts_start_len` as top-level JSON fields. Enable routed-expert
+collection with `--enable-return-routed-experts` on the server. The offset
+is a strict non-negative integer, defaults to `0` (full history), and cannot
+exceed the processed prompt length. Streaming and non-streaming requests use
+the same offset; slicing applies to final routing output.
+
+These are LMDeploy extensions, not standard Anthropic fields. Anthropic SDK
+clients can pass `extra_body={"return_routed_experts": True, "routed_experts_start_len": 4}` to `client.messages.create(...)`; the SDK
+merges these fields into the top-level HTTP body. A literal nested `extra_body`
+object is not supported by this endpoint.
+
+See [incremental routing semantics](./api_server.md#returning-incremental-routed-experts-pytorch)
+for returned row ranges, partial-continuation examples, and client length checks.
+The offset only crops returned rows; it does not limit prefix-cache matching
+or internal routing storage. It is not supported by TurboMind.

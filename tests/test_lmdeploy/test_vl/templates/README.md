@@ -4,6 +4,12 @@ normalized. Tests require no network access or model weights.
 - `glm5_3_flash.jinja`: [zai-org/GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash/blob/3f1971b7b5f7a528c9c4ef6212c8785298a8c24a/chat_template.jinja),
   revision `3f1971b7b5f7a528c9c4ef6212c8785298a8c24a`.
 
+- `gpt_oss.jinja`:
+  [openai/gpt-oss-20b/chat_template.jinja](https://huggingface.co/openai/gpt-oss-20b/blob/d666cf3b67006cf8227666739edf25164aaffdeb/chat_template.jinja),
+  revision `d666cf3b67006cf8227666739edf25164aaffdeb`. Byte-identical to
+  [openai/gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b/blob/b5c939de8f754692c1647ca79fbf85e8c1e70f8a/chat_template.jinja)
+  at revision `b5c939de8f754692c1647ca79fbf85e8c1e70f8a`.
+
 - `internvl3.jinja`: the `chat_template` field in
   [OpenGVLab/InternVL3-8B/tokenizer_config.json](https://huggingface.co/OpenGVLab/InternVL3-8B/blob/853e3a797a661694b1b8ece0cb72dc2b23e3dac9/tokenizer_config.json).
 

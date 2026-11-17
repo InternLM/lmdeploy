@@ -204,7 +204,7 @@ class ChatCompletionRequest(BaseModel):
     reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None
     response_format: ResponseFormat | None = Field(default=None, examples=[None])
     # additional argument of lmdeploy
-    repetition_penalty: float | None = None
+    repetition_penalty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
@@ -219,7 +219,12 @@ class ChatCompletionRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices('enable_thinking', AliasPath('extra_body', 'enable_thinking')),
     )
-    return_token_ids: bool | None = False
+    return_token_ids: bool | None = Field(
+        default=False,
+        validation_alias=AliasChoices('return_token_ids', AliasPath('extra_body', 'return_token_ids')),
+        description=('Return prompt_token_ids and generated output_ids. Streaming includes the complete prompt IDs '
+                     'on each choice\'s first chunk and incremental output IDs on each chunk.'),
+    )
     return_prompt_text: bool = Field(
         default=False,
         validation_alias=AliasChoices('return_prompt_text', AliasPath('extra_body', 'return_prompt_text')),
@@ -262,6 +267,11 @@ class ChatCompletionRequest(BaseModel):
     return_routed_experts: bool | None = Field(
         default=False,
         description=('Whether to return MoE routed expert indices in the response.'),
+    )
+    routed_experts_start_len: int = Field(
+        default=0, ge=0, strict=True,
+        validation_alias=AliasChoices('routed_experts_start_len', AliasPath('extra_body', 'routed_experts_start_len')),
+        description='Absolute start position of returned routing rows; does not limit prefix caching.',
     )
 
 
@@ -339,6 +349,7 @@ class ChatCompletionResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: list[ChatCompletionResponseChoice]
+    prompt_token_ids: list[int] | None = None
     usage: UsageInfo
     # OpenAI shape placeholder. Request-side tier scheduling is not implemented;
     # the response reports ``None`` until scheduling is added.
@@ -384,6 +395,7 @@ class ChatCompletionStreamResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: list[ChatCompletionResponseStreamChoice]
+    prompt_token_ids: list[int] | None = None
     usage: UsageInfo | None = None
 
 
@@ -415,7 +427,7 @@ class CompletionRequest(BaseModel):
     frequency_penalty: float | None = 0.0
     user: str | None = None
     # additional argument of lmdeploy
-    repetition_penalty: float | None = None
+    repetition_penalty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     session_id: int | None = -1
@@ -610,7 +622,7 @@ class GenerateReqInput(BaseModel):
     stop_token_ids: list[int] | None = None
     stream: bool | None = False
     temperature: float | None = None
-    repetition_penalty: float | None = None
+    repetition_penalty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     ignore_eos: bool | None = False
     top_p: float | None = None
     top_k: int | None = None
@@ -619,6 +631,7 @@ class GenerateReqInput(BaseModel):
     spaces_between_special_tokens: bool | None = True
     include_stop_str_in_output: bool | None = False
     return_routed_experts: bool | None = False
+    routed_experts_start_len: int = Field(default=0, ge=0, strict=True)
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     # kwargs for media IO

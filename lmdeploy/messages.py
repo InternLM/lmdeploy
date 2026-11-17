@@ -124,6 +124,11 @@ class GenerationConfig:
             model-processed input after multimodal expansion. Rows are returned
             for tokens after this boundary. ``-1`` disables input logprobs
             while preserving generated-token logprobs.
+        logprob_extra_token_ids: Extra token ids whose logprobs are returned in
+            every input-logprob row, in addition to the target and top-k
+            entries. Requires ``logprob_start_len >= 0``. Useful for scoring a
+            fixed candidate set (e.g. answer symbols) at prompt positions.
+            PyTorch engine only.
         response_format: Generate responses according to given formatting.
             Examples:
 
@@ -172,6 +177,13 @@ class GenerationConfig:
                     }
                 }
 
+        return_routed_experts: Whether to return MoE routed expert indices.
+            Requires routed-expert collection in the PyTorch backend.
+        routed_experts_start_len: Absolute, zero-based start position of returned
+            routing rows in the current processed prompt. Defaults to 0 (full
+            history). Must be a non-negative integer no greater than the prompt
+            length. Only slices returned rows; does not limit prefix-cache
+            matching or internal routed-expert storage.
         logits_processors: Custom logit processors.
         repetition_ngram_size: The size of n-grams to consider for repetition early stop.
             Must be non-negative; values below 0 are treated as 0.
@@ -198,6 +210,7 @@ class GenerationConfig:
     spaces_between_special_tokens: bool = True
     logprobs: int = None
     logprob_start_len: int = -1
+    logprob_extra_token_ids: list[int] | None = None
     response_format: dict | None = None
     logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
@@ -214,6 +227,9 @@ class GenerationConfig:
 
     # router replay
     return_routed_experts: bool = False
+    # Returned routing rows cover [start_len, prompt_tokens + output_tokens - 1).
+    # This does not limit prefix-cache matching or routed-expert storage.
+    routed_experts_start_len: int = 0
 
     # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
     repetition_ngram_size: int = 0
@@ -269,10 +285,17 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        if type(self.routed_experts_start_len) is not int or self.routed_experts_start_len < 0:
+            raise ValueError('routed_experts_start_len must be a non-negative integer')
         if self.logprob_start_len < -1:
             raise ValueError('logprob_start_len must be greater than or equal to -1')
         if self.logprob_start_len >= 0 and (self.logprobs is None or self.logprobs < 0):
             raise ValueError('logprobs must be non-negative when logprob_start_len is non-negative')
+        if self.logprob_extra_token_ids is not None:
+            if self.logprob_start_len < 0:
+                raise ValueError('logprob_extra_token_ids requires logprob_start_len >= 0')
+            if not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in self.logprob_extra_token_ids):
+                raise ValueError('logprob_extra_token_ids must be a list of non-negative ints')
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
             self.repetition_ngram_size = 0
             self.repetition_ngram_threshold = 0

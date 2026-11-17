@@ -270,6 +270,7 @@ def register(router: APIRouter, server_context) -> None:
             try:
                 final_usage = None
                 prompt_text_sent = False
+                prompt_token_ids_sent = False
                 async for chunk in chat_runner.stream():
                     logprobs = None
                     output_token_logprobs = None
@@ -306,10 +307,14 @@ def register(router: APIRouter, server_context) -> None:
                     if request.return_prompt_text and not prompt_text_sent:
                         response_json['prompt_text'] = chat_runner.prompt_text
                         prompt_text_sent = True
+                    if request.return_token_ids and not prompt_token_ids_sent:
+                        response_json['prompt_token_ids'] = chat_runner.prompt_token_ids
+                        prompt_token_ids_sent = True
                     if chunk.cache_block_ids is not None and chunk.is_last_delta:
+                        response_json['cache_session_id'] = chat_runner.session.session_id
                         response_json['cache_block_ids'] = chunk.cache_block_ids
                         response_json['remote_token_ids'] = chunk.token_ids
-                    yield f'data: {json.dumps(response_json)}\n\n'
+                    yield f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n'
                 if final_usage is not None:
                     yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
                 yield 'data: [DONE]\n\n'
@@ -321,7 +326,7 @@ def register(router: APIRouter, server_context) -> None:
                 async for chunk in _completion_stream_generator():
                     yield chunk
             except RequestError as error:
-                yield f'data: {json.dumps({"error": request_error_payload(error)})}\n\n'
+                yield f'data: {json.dumps({"error": request_error_payload(error)}, ensure_ascii=False)}\n\n'
                 yield 'data: [DONE]\n\n'
 
         # Streaming response
@@ -383,13 +388,16 @@ def register(router: APIRouter, server_context) -> None:
             created=created_time,
             model=model_name,
             choices=choices,
+            prompt_token_ids=chat_runner.prompt_token_ids,
             usage=usage,
-        ).model_dump()
+        ).model_dump(exclude={'prompt_token_ids'} if not request.return_token_ids else None)
 
         if request.return_prompt_text:
             response['prompt_text'] = chat_runner.prompt_text
 
         if with_cache:
+            # Keep the OpenAI response ID independent of the engine's cache owner.
+            response['cache_session_id'] = chat_runner.session.session_id
             response['cache_block_ids'] = cache_block_ids
             response['remote_token_ids'] = remote_token_ids
 

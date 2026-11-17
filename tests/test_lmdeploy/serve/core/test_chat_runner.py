@@ -9,7 +9,7 @@ import pytest
 
 from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage, DeltaToolCall
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage, DeltaToolCall, ToolCall
 
 
 class _FakeSession:
@@ -66,7 +66,7 @@ class _FakeEngine:
     async def preprocess(self, messages, session, **kwargs):
         self.preprocess_messages = messages
         self.preprocess_kwargs = kwargs
-        return SimpleNamespace(messages=messages, session=session)
+        return SimpleNamespace(messages=messages, session=session, inputs={'input_ids': [1, 2, 3]})
 
     def generate(self, request, **kwargs):
         async def _generator():
@@ -149,6 +149,23 @@ def test_runner_forwards_parser_adjusted_response_format_to_engine():
     assert context.async_engine.preprocess_kwargs['gen_config'].response_format == response_format
 
 
+@pytest.mark.parametrize('error', [
+    RequestError(ErrorCode.INVALID_REQUEST, 'Invalid grammar'), asyncio.CancelledError(),
+])
+def test_runner_prepare_failure_releases_owned_session(error):
+    context = _FakeServerContext(_Parser)
+
+    async def preprocess(*args, **kwargs):
+        raise error
+
+    context.async_engine.preprocess = preprocess
+    with pytest.raises(type(error)) as raised:
+        asyncio.run(ChatRunner.prepare(context, _request()))
+    if isinstance(error, RequestError):
+        assert raised.value is error
+    assert context.session_manager.removed == [context.session_manager.session]
+
+
 def test_runner_normalizes_string_stop_word_for_engine():
     context = _FakeServerContext(_Parser)
 
@@ -229,6 +246,47 @@ def test_runner_stream_chunks_preserve_metadata():
     assert chunks[0].routed_experts == [[1]]
     assert chunks[0].reasoning_tokens == 2
     assert context.async_engine.generator_closed is True
+    assert context.session_manager.removed == [context.session_manager.session]
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('names,finish_reason,stop_sequence,valid', [
+    ([], 'stop', None, False),
+    (['search'], 'stop', None, True),
+    (['other'], 'stop', None, False),
+    (['search', 'search'], 'stop', None, False),
+    ([], 'length', None, True),
+    ([], 'stop', 'caller-stop', True),
+])
+def test_named_output_validation_preserves_interruption(stream, names, finish_reason, stop_sequence, valid):
+    class Parser(_Parser):
+        def stream_chunk(self, delta_text, delta_token_ids, **kwargs):
+            calls = [DeltaToolCall(index=i, id=f'call-{i}', type='function',
+                                   function=dict(name=name, arguments='{}')) for i, name in enumerate(names)]
+            return [(DeltaMessage(role='assistant', content='answer' if not calls else None,
+                                  tool_calls=calls or None), bool(calls))]
+
+        def parse_complete(self, text, token_ids=None, **kwargs):
+            return text, [ToolCall(function=dict(name=name, arguments='{}')) for name in names], None
+
+    context = _FakeServerContext(Parser)
+    context.async_engine.outputs[0].finish_reason = finish_reason
+    context.async_engine.outputs[0].stop_sequence = stop_sequence
+
+    async def run():
+        runner = await ChatRunner.prepare(context, _request(
+            tools=_tools(), tool_choice={'type': 'function', 'function': {'name': 'search'}}))
+        if stream:
+            return [chunk async for chunk in runner.stream()][-1].finish_reason
+        return (await runner.collect()).finish_reason
+
+    if valid:
+        assert asyncio.run(run()) == ('tool_calls' if names else finish_reason)
+    else:
+        with pytest.raises(RequestError) as error:
+            asyncio.run(run())
+        assert error.value.code == ErrorCode.INTERNAL_ERROR
+    assert context.async_engine.generator_closed
     assert context.session_manager.removed == [context.session_manager.session]
 
 
@@ -411,5 +469,28 @@ def test_runner_preserves_stop_sequence_with_token_id_parser(stream, stop_sequen
         assert result.stop_sequence == stop_sequence
         assert runner._closed and engine.generator_closed
         assert engine.session_mgr.removed == [engine.session_mgr.session]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('enabled', [False, None, True])
+def test_runner_snapshots_preprocessed_prompt_ids(enabled):
+    context = _FakeServerContext(_Parser)
+    prompt_ids = [101, 102, 103]
+    original_preprocess = context.async_engine.preprocess
+
+    async def preprocess(*args, **kwargs):
+        result = await original_preprocess(*args, **kwargs)
+        # No rendered text is needed to return the engine input IDs.
+        result.inputs = {'input_ids': prompt_ids}
+        return result
+
+    context.async_engine.preprocess = preprocess
+
+    async def run():
+        runner = await ChatRunner.prepare(context, _request(return_token_ids=enabled))
+        prompt_ids.append(104)
+        assert runner.prompt_token_ids == ([101, 102, 103] if enabled else None)
+        await runner.close()
 
     asyncio.run(run())

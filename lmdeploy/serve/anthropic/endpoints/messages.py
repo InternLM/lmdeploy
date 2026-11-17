@@ -16,6 +16,7 @@ from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
 from ..adapter import (
     build_message_content_blocks,
+    chat_template_kwargs_from_thinking,
     map_finish_reason,
     normalize_tool_choice,
     to_openai_messages,
@@ -67,15 +68,18 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             temperature=request.temperature,
             top_p=request.top_p,
             top_k=request.top_k,
+            repetition_penalty=request.repetition_penalty,
+            media_io_kwargs=request.media_io_kwargs,
+            mm_processor_kwargs=request.mm_processor_kwargs,
             stop=request.stop_sequences,
             tools=to_openai_tools(request.tools),
             tool_choice=normalize_tool_choice(request.tool_choice),
             return_logprob=bool(request.return_logprob),
             return_token_ids=bool(request.return_token_ids),
             return_routed_experts=bool(request.return_routed_experts),
+            routed_experts_start_len=request.routed_experts_start_len,
             include_stop_str_in_output=bool(request.include_stop_str_in_output),
-            chat_template_kwargs=(
-                {'enable_thinking': request.thinking.type != 'disabled'} if request.thinking is not None else None),
+            chat_template_kwargs=chat_template_kwargs_from_thinking(request.thinking),
         )
         try:
             chat_runner = await ChatRunner.prepare(

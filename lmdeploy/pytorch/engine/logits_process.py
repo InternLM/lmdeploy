@@ -260,6 +260,8 @@ class SamplingInputs:
     response_formats: list[str, ...] = ()
     logits_processors: list[list[LogitsProcessor]] = None
     max_num_logprobs: None | int = None
+    # sorted union of requested candidate ids for input-logprob rows
+    logprob_extra_token_ids: None | torch.LongTensor = None
     all_ids: None | torch.Tensor = None
     num_ignore_eos: torch.Tensor = None
     batch_size: int = 0

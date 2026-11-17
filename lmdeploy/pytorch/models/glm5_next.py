@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch import distributed as dist
 from torch import nn
 
+from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.backends.cuda.attention.sparse_mla import FlashMLASparseImpl
 from lmdeploy.pytorch.backends.cuda.kpool import (
     CudaKPoolAttention,
@@ -1000,8 +1001,12 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         if is_owner:
             query = self.indexer.project_query(q_lora)[0]
             rotate = kpool_rotate_query_cuda if query.is_cuda else kpool_rotate_query
-            query = rotate(query)
-            query_fp8, query_scale = self.indexer.quantize_fp8(query)
+            if self.indexer.cache_dtype == torch.bfloat16:
+                query_fp8 = query.to(self.indexer.cache_dtype)
+                query_scale = torch.ones((*query.shape[:-1], 1), device=query.device, dtype=torch.float32)
+            else:
+                query = rotate(query)
+                query_fp8, query_scale = self.indexer.quantize_fp8(query)
             head_gate = self.indexer.project_head_gate(hidden_states)[0]
             query_weight = (head_gate * query_scale.squeeze(-1)
                             * self.indexer.softmax_scale)
@@ -1107,6 +1112,7 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                 attn_metadata.block_offsets[batch_idx],
                 num_groups,
                 self.index_kpool,
+                head_dim=self.indexer.head_dim,
             )
             logits = kpool_score_contiguous_cuda(
                 query_slice,
@@ -1244,7 +1250,8 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         nope_size = self.kv_lora_rank
         kpool_tail_state = None if tail_k is None else (tail_k, tail_score)
         if not attn_metadata.is_decoding:
-            use_sparse = int(attn_metadata.max_kv_seqlen) > self.index_topk
+            use_sparse = (envs.mla_disable_dense_prefill
+                          or int(attn_metadata.max_kv_seqlen) > self.index_topk)
             logical_indices = self._kpool_indices(
                 hidden_states,
                 q_lora,

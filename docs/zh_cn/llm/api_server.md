@@ -100,6 +100,43 @@ LMDeploy 使用 `temperature=1.0`。要保留之前的兜底行为，请显式�
 
 向 `/v1/chat/completions` 传入 `return_prompt_text=true`，响应会包含实际渲染的 `prompt_text`。使用 Python OpenAI 客户端时传入 `extra_body={"return_prompt_text": True}`；原始 JSON 同时支持顶层字段和该嵌套对象，顶层值优先。流式响应在每个 choice 的首个 chunk 中返回 prompt。该值来自实际模板输出，推理强度标记取决于模型模板；原始 `input_ids` 请求没有渲染 prompt，返回 `null`。未请求时不返回此字段。
 
+### 返回 Chat token IDs
+
+向 `/v1/chat/completions` 传入 `return_token_ids=true`，响应顶层会返回
+`prompt_token_ids`，每个 choice 中保留生成部分的 `output_ids`。使用 Python
+OpenAI 客户端时传入 `extra_body={"return_token_ids": True}`；原始 JSON 同时支持
+顶层字段和该嵌套对象，顶层值优先。未请求时不返回新增的 `prompt_token_ids` 字段，
+该开关与 `return_prompt_text`、logprobs 独立生效。
+
+输入 IDs 来自准备传给生成过程的输入，包含聊天模板 token，不会通过重新编码
+`prompt_text` 来还原。直接传入 `input_ids` 时，即使没有渲染文本，也会返回
+预处理后的输入 IDs。
+
+例如，非流式响应包含：
+
+```json
+{
+  "prompt_token_ids": [101, 102, 103],
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": "..."},
+      "output_ids": [201, 202],
+      "finish_reason": "stop"
+    }
+  ]
+}
+```
+
+流式响应在每个 choice 的首个数据 chunk 中返回完整输入 IDs，即使该 chunk
+没有可见文本。`n > 1` 时，此字段可能出现在多个 chunk 中；多个 choice 合并到
+同一 chunk 时，共用一份顶层字段。客户端保存一份完整输入列表即可，仅按 choice
+分别拼接增量 `output_ids`。仅包含 usage 的 chunk 不携带输入 IDs。
+
+这些 IDs 可用于固定序列打分和控制 token 排障，但此开关本身不会请求 logprobs，
+也不改变 `output_ids` 原有的停止 token 过滤行为。回放时仍需保存模型和 tokenizer
+版本及推理配置；多模态请求还需要原始媒体及预处理配置。
+
 ### 使用 PyTorch 返回更多 Chat logprobs
 
 使用 `--backend pytorch --logprobs-mode raw_logprobs` 启动服务。Chat 请求允许
@@ -347,6 +384,48 @@ InternLM/internlm2-chat-1_8b 8 http://${MASTER_IP}:${PROXY_PORT}
 echo "Host IP addresses:"
 hostname -I
 ```
+
+## 增量返回 routed experts（PyTorch）
+
+MoE router replay 需要先开启 `PytorchEngineConfig.enable_return_routed_experts`
+（服务端 CLI 为 `--enable-return-routed-experts`），再在请求中设置
+`return_routed_experts=True`。可选参数 `routed_experts_start_len` 指定返回路由的起始行：
+
+- 支持 Python `GenerationConfig`、`/generate`、`/v1/chat/completions` 和
+  [`/v1/messages`](./api_server_anthropic.md)；chat
+  支持顶层字段和嵌套 `extra_body`。本字段是 LMDeploy 扩展，
+  不是 OpenAI 或 Anthropic 标准字段；不支持 TurboMind 后端。
+- 默认 `0`，保持全量返回。必须是非负整数（不接受布尔值、浮点数或字符串），
+  且不能超过 tokenization、chat template 和多模态展开后的实际输入长度。
+- 设处理后的 prompt 长度为 `P`、生成长度为 `G`，正常返回行范围为
+  `[routed_experts_start_len, P + G - 1)`。最后生成的 token 尚未参与模型前向。
+  切片后没有剩余行时返回空数组；原本无路由数据时仍不返回数据。该字段不会自动开启路由采集。
+- 在最终 finish/cancel 输出处裁剪；使用 Ray shared store 时在 put 前裁剪，
+  本地数组输出同样裁剪，返回数据的表示方式不变。不修改 prefix-cache 匹配、缓存路由历史、
+  GPU 采集或 target/MTP accepted-route 筛选。缓存命中可以超过此偏移，它不是缓存边界。
+
+例如，OpenAI 客户端可使用以下扩展参数，仅请求从位置 4 开始的路由行
+（处理后的 prompt 至少需要 4 tokens）：
+
+```python
+extra_body = {
+    'return_routed_experts': True,
+    'routed_experts_start_len': 4,
+}
+# 将 extra_body=extra_body 传给 client.chat.completions.create(...)。
+```
+
+`/generate` 将两个字段直接放在 JSON 请求体中；Python 使用
+`GenerationConfig(return_routed_experts=True, routed_experts_start_len=4)`。
+
+Partial continuation 示例：输入 `A B C`，生成 `D E` 后暂停，客户端已保留
+`A B C D` 的 4 行路由。续跑输入 `A B C D E` 时，偏移应设为 **4，而不是 5**；
+若继续生成 `F G`，仅返回 `E F` 的路由，拼接后恢复完整 6 行。
+只有历史路由恰好覆盖未修改的 token 前缀时，才使用 `len(resumed_prompt_ids) - 1`。
+客户端须校验长度并拼接，本 PR 不实现客户端续跑逻辑；编辑历史或插入 tool tokens
+需要额外连续性检查。旧服务端可能忽略新字段，客户端须检查返回长度，不能直接拼接旧全量响应。
+
+该选项只减少重复返回的路由行，不减少 GPU→CPU 全量采集、内部缓存或训练所需的最终完整历史。
 
 ## FAQ
 

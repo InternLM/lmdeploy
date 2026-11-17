@@ -211,13 +211,17 @@ async def _stream_choice(
             buffer += chunk.decode() if isinstance(chunk, bytes) else chunk
             while '\n\n' in buffer:
                 event, buffer = buffer.split('\n\n', 1)
-                for line in event.splitlines():
+                # Unicode separators inside JSON strings are not SSE line breaks.
+                for line in event.split('\n'):
                     if not line.startswith('data: '):
                         continue
                     data = line.removeprefix('data: ')
                     if data == '[DONE]':
                         continue
                     payload = json.loads(data)
+                    if 'error' in payload:
+                        await queue.put(('error_event', payload))
+                        return
                     if payload.get(
                             'usage'
                     ) is not None and not payload.get('choices'):
@@ -266,6 +270,8 @@ def _batch_stream_payloads(payloads: list[dict]) -> list[dict]:
             # A later choice may be sending its first delta in this batch.
             if 'prompt_text' in payload:
                 batches[target].setdefault('prompt_text', payload['prompt_text'])
+            if 'prompt_token_ids' in payload:
+                batches[target].setdefault('prompt_token_ids', payload['prompt_token_ids'])
         next_batch_by_index[index] = target + 1
 
     for payload in batches:
@@ -305,6 +311,7 @@ async def _collate_streams(
 
             payloads = []
             stream_error = None
+            error_event = None
             for item in items:
                 if item[0] == 'data':
                     payloads.append(item[1])
@@ -313,12 +320,19 @@ async def _collate_streams(
                     usages[item[1]] = item[2]
                 elif item[0] == 'done':
                     completed += 1
+                elif item[0] == 'error_event':
+                    error_event = item[1]
+                    break
                 else:
                     stream_error = item[1]
                     break
 
             for payload in _batch_stream_payloads(payloads):
-                yield f'data: {json.dumps(payload)}\n\n'
+                yield f'data: {json.dumps(payload, ensure_ascii=False)}\n\n'
+            if error_event is not None:
+                yield f'data: {json.dumps(error_event, ensure_ascii=False)}\n\n'
+                yield 'data: [DONE]\n\n'
+                return
             if stream_error is not None:
                 raise stream_error
         if include_usage and len(usages) == len(tasks):
@@ -331,7 +345,7 @@ async def _collate_streams(
                 'choices': [],
                 'usage': _aggregate_usage(ordered_usages).model_dump(),
             }
-            yield f'data: {json.dumps(usage_response)}\n\n'
+            yield f'data: {json.dumps(usage_response, ensure_ascii=False)}\n\n'
         yield 'data: [DONE]\n\n'
     finally:
         stopping.set()

@@ -1207,7 +1207,8 @@ def test_hybrid_save_load_roundtrip_restores_all_rank_local_bytes(layout):
 
 
 @pytest.mark.parametrize('replay_len', [None, 8, 16, 32])
-def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path, monkeypatch, replay_len):
+@pytest.mark.parametrize('cache_dtype', [torch.float8_e4m3fn, torch.bfloat16])
+def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path, monkeypatch, replay_len, cache_dtype):
     import lmdeploy.pytorch.engine.cache_engine.state as state_module
     from lmdeploy.hf_configs.configuration_glm5_next import Glm5NextConfig
     from lmdeploy.pytorch.backends.default.cache import DefaultCacheBackend
@@ -1246,7 +1247,7 @@ def test_glm_mtp_store_roundtrip_restores_joint_cache_without_raw_tails(tmp_path
                      mooncake_state_save_slots=1, prefill_save_alignment=64,
                      enable_replayssm=replay_len is not None, replayssm_buffer_len=replay_len or 16)
     states = StateCacheEngine(config, model_config)
-    indexer = SimpleNamespace(index_kpool=4, head_dim=8)
+    indexer = SimpleNamespace(index_kpool=4, head_dim=8, cache_dtype=cache_dtype)
     draft = SimpleNamespace(_TOKEN_CACHE=Glm5NextMTPAttention._TOKEN_CACHE, indexer=indexer)
     context = BlockCacheRequestContext(BlockCacheGeometry(64, 64))
     requests = (KPoolIndexer.get_block_cache_requests(indexer, context) * 2
