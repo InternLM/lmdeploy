@@ -51,4 +51,39 @@ void invokeCandidateSelector(float*       out,
                              int          input_bits,
                              cudaStream_t stream);
 
+/// DFlash2 draft block attention: non-causal GQA over [context | block].
+///
+///   q        [tq, nh,  hd]
+///   k_ctx/v_ctx [tc, nkv, hd]   (context rows, RoPE already applied)
+///   k_blk/v_blk [tq, nkv, hd]   (block rows, RoPE already applied)
+///   out      [tq, nh,  hd]
+///
+/// Block queries attend to every block key (non-causal) and to context keys
+/// within the sliding window before the query.
+void invokeDflash2Attention(void*        out,
+                            const void*  q,
+                            const void*  k_ctx,
+                            const void*  v_ctx,
+                            const void*  k_blk,
+                            const void*  v_blk,
+                            int          tq,
+                            int          tc,
+                            int          nh,
+                            int          nkv,
+                            int          hd,
+                            float        scale,
+                            int          window,
+                            int          input_bits,
+                            cudaStream_t stream);
+
+/// NeoX-style RoPE applied in place to a [rows, heads, head_dim] tensor.
+void invokeDflash2Rope(void*        x,
+                       const int*   positions,
+                       int          rows,
+                       int          heads,
+                       int          head_dim,
+                       float        base,
+                       int          input_bits,
+                       cudaStream_t stream);
+
 }  // namespace turbomind
