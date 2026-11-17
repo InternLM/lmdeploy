@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -95,6 +96,83 @@ def test_abort_does_not_cancel_later_requests_on_same_session(active_handle, mon
         assert metrics_processor.scheduler_stats.num_succeeded_reqs == 1
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize('stage', ['preprocess', 'prepared', 'waiting_handle'])
+@pytest.mark.parametrize('sync_close', [False, True])
+def test_close_invalidates_pending_request(stage, sync_close, monkeypatch):
+    from lmdeploy.metrics.metrics_processor import metrics_processor
+    from lmdeploy.metrics.stats import SchedulerStats
+    from lmdeploy.model import BaseChatTemplate
+    from lmdeploy.serve.processors import MultimodalProcessor
+
+    monkeypatch.setattr(metrics_processor, 'scheduler_stats', SchedulerStats())
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        started, release = asyncio.Event(), threading.Event()
+
+        def encode(prompt, **kwargs):
+            if stage == 'preprocess':
+                loop.call_soon_threadsafe(started.set)
+                assert release.wait(5)
+            return [1, 2, 3]
+
+        processor = MultimodalProcessor(SimpleNamespace(encode=encode), BaseChatTemplate())
+        engine = _engine(processor)
+        engine.epoch = 0
+        manager = engine.session_mgr
+        manager.attach_event_loop(loop)
+        handle = SimpleNamespace(async_cancel=AsyncMock(),
+                                 async_stream_infer=Mock(side_effect=AssertionError('closed request dispatched')))
+        manager.build_request_handle_pool(SimpleNamespace(create_instance=lambda: handle), 1)
+        pool = manager.request_handle_pool
+        session = manager.get(42)
+        session.epoch = engine.epoch
+        prepared = None
+
+        async def collect():
+            request = prepared or await engine.preprocess('hello', session, do_preprocess=False)
+            return [out async for out in engine.generate(request)]
+
+        if stage != 'preprocess':
+            prepared = await engine.preprocess('hello', session, do_preprocess=False)
+        if stage == 'waiting_handle':
+            held = await pool.get()
+            original_get = pool.get
+
+            async def get():
+                started.set()
+                return await original_get()
+
+            monkeypatch.setattr(pool, 'get', get)
+        task = None if stage == 'prepared' else asyncio.create_task(collect())
+        try:
+            if task is not None:
+                await asyncio.wait_for(started.wait(), 5)
+            assert session._handle is None
+            if sync_close:
+                await asyncio.wait_for(asyncio.to_thread(session.close), 5)
+            else:
+                await session.async_close()
+            assert manager.sessions == {}
+            # Old request cleanup must leave a reused session ID intact.
+            replacement = manager.get(42)
+        finally:
+            release.set()
+            if stage == 'waiting_handle':
+                pool.put(held)
+            processor.close()
+        outputs = await asyncio.wait_for(task if task is not None else collect(), 5)
+        assert [out.finish_reason for out in outputs] == ['abort']
+        handle.async_stream_infer.assert_not_called()
+        handle.async_cancel.assert_not_awaited()
+        assert pool.num_dispatched == 0
+        assert manager.sessions == {42: replacement}
+        assert metrics_processor.scheduler_stats.num_aborted_reqs == 1
+        assert metrics_processor.scheduler_stats.num_uncompleted_reqs == 0
+
+    asyncio.run(run())
 
 
 def test_preprocess_reports_context_error_and_removes_session():
@@ -344,3 +422,104 @@ def test_abort_endpoint_prevents_dispatch(stage, abort_all, monkeypatch):
         assert metrics_processor.scheduler_stats.num_uncompleted_reqs == 0
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize('abort_all', [False, True])
+def test_request_arriving_during_abort_all_remains_cancellable(abort_all, monkeypatch):
+    from fastapi import APIRouter
+
+    from lmdeploy.messages import EngineOutput, ResponseType
+    from lmdeploy.metrics.metrics_processor import metrics_processor
+    from lmdeploy.metrics.stats import SchedulerStats
+    from lmdeploy.model import BaseChatTemplate
+    from lmdeploy.serve.openai.api_server import ServerContext
+    from lmdeploy.serve.openai.endpoints.management import register
+    from lmdeploy.serve.openai.protocol import AbortRequest
+    from lmdeploy.serve.processors import MultimodalProcessor
+
+    monkeypatch.setattr(metrics_processor, 'scheduler_stats', SchedulerStats())
+    monkeypatch.setattr(metrics_processor, 'queue_update', Mock())
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        abort_started, release_abort = asyncio.Event(), asyncio.Event()
+        prompt_started, release_prompt = asyncio.Event(), threading.Event()
+        infer_started, cancelled = asyncio.Event(), asyncio.Event()
+
+        def encode(prompt, **kwargs):
+            loop.call_soon_threadsafe(prompt_started.set)
+            assert release_prompt.wait(5)
+            return [1, 2, 3]
+
+        async def cancel(session_id):
+            if session_id == old.session_id:
+                abort_started.set()
+                await release_abort.wait()
+            else:
+                cancelled.set()
+
+        async def infer(*args, **kwargs):
+            infer_started.set()
+            await cancelled.wait()
+            yield EngineOutput(ResponseType.CANCEL, [])
+
+        processor = MultimodalProcessor(SimpleNamespace(encode=encode), BaseChatTemplate())
+        engine = _engine(processor)
+        engine.epoch = 0
+        engine.num_spec_token = 0
+        engine.request_logger.log_response = Mock()
+        handle = SimpleNamespace(async_cancel=AsyncMock(side_effect=cancel),
+                                 async_stream_infer=Mock(side_effect=infer))
+        manager = engine.session_mgr
+        manager.build_request_handle_pool(SimpleNamespace(create_instance=lambda: handle), 1)
+        context = ServerContext()
+        context.async_engine = engine
+        context.enable_abort_handling = True
+        old = context.create_session(41)
+        router = APIRouter()
+        register(router, context)
+        abort = next(route.endpoint for route in router.routes if route.path == '/abort_request')
+
+        async def collect(session):
+            request = await engine.preprocess('hello', session, do_preprocess=False)
+            return [out async for out in engine.generate(request)]
+
+        tasks = []
+        try:
+            async with old.request_handle():
+                abort_task = asyncio.create_task(abort(AbortRequest(abort_all=True)))
+                tasks.append(abort_task)
+                await asyncio.wait_for(abort_started.wait(), 5)
+                newcomer = context.create_session(42)
+                request_task = asyncio.create_task(collect(newcomer))
+                tasks.append(request_task)
+                await asyncio.wait_for(prompt_started.wait(), 5)
+            release_abort.set()
+            assert (await asyncio.wait_for(abort_task, 5)).status_code == 200
+            assert context.find_session(41) is None
+            assert context.find_session(42) is newcomer
+            assert newcomer.epoch == engine.epoch
+            assert newcomer.abort_version == 0
+
+            release_prompt.set()
+            await asyncio.wait_for(infer_started.wait(), 5)
+            response = await abort(AbortRequest(session_id=42, abort_all=abort_all))
+            assert response.status_code == 200
+            outputs = await asyncio.wait_for(request_task, 5)
+            assert [out.finish_reason for out in outputs] == ['abort']
+            assert handle.async_stream_infer.call_count == 1
+            assert [call.args[0] for call in handle.async_cancel.await_args_list] == [
+                old.session_id, newcomer.session_id]
+            assert manager.sessions == {}
+            assert manager.user_session_id_map == {}
+            assert manager.session_id_map == {}
+            assert manager.request_handle_pool.num_dispatched == 0
+            assert metrics_processor.scheduler_stats.num_uncompleted_reqs == 0
+        finally:
+            release_abort.set()
+            release_prompt.set()
+            cancelled.set()
+            await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 5)
+            processor.close()
+
+    asyncio.run(run())

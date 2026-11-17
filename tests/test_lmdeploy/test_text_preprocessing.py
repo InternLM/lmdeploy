@@ -3,7 +3,7 @@ import asyncio
 import threading
 from copy import deepcopy
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -169,5 +169,85 @@ def test_engine_close_releases_text_worker(processor):
         for _ in range(2):
             with pytest.raises(RuntimeError, match='shutdown'):
                 await asyncio.wait_for(processor.get_prompt_input('closed', do_preprocess=False), 5)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('multimodal', [False, True])
+def test_prompt_worker_does_not_share_tokenizer_with_event_loop(monkeypatch, multimodal):
+    from fastapi import APIRouter
+
+    from lmdeploy.messages import PytorchEngineConfig
+    from lmdeploy.serve.anthropic.adapter import count_input_tokens
+    from lmdeploy.serve.core import async_engine
+    from lmdeploy.serve.core.vl_async_engine import VLAsyncEngine
+    from lmdeploy.serve.openai.endpoints.auxiliary import register
+    from lmdeploy.serve.openai.protocol import EncodeRequest, PoolingRequest, PPLRequest
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        started, release = asyncio.Event(), threading.Event()
+
+        class Tokenizer:
+            # Model a tokenizer whose mutable state cannot be borrowed twice.
+            def __init__(self, *args, **kwargs):
+                self.borrowed = threading.Lock()
+
+            def encode(self, prompt, **kwargs):
+                if not self.borrowed.acquire(blocking=False):
+                    raise RuntimeError('Already borrowed')
+                try:
+                    if prompt == 'worker':
+                        loop.call_soon_threadsafe(started.set)
+                        assert release.wait(5), 'Event loop blocked behind the prompt worker'
+                    return list(prompt.encode())
+                finally:
+                    self.borrowed.release()
+
+            def decode(self, ids, **kwargs):
+                if not self.borrowed.acquire(blocking=False):
+                    raise RuntimeError('Already borrowed')
+                try:
+                    return bytes(ids).decode()
+                finally:
+                    self.borrowed.release()
+
+        config = PytorchEngineConfig(session_len=4096, max_batch_size=1, enable_metrics=False)
+        backend = SimpleNamespace(engine_config=config, create_instance=Mock(), close=Mock())
+        monkeypatch.setattr(async_engine, 'Tokenizer', Tokenizer)
+        monkeypatch.setattr(async_engine, 'get_chat_template', lambda *a, **kw: BaseChatTemplate())
+        monkeypatch.setattr(async_engine, 'get_hf_gen_cfg', lambda *a, **kw: {})
+        monkeypatch.setattr(async_engine, 'get_model_arch', lambda *a, **kw: ('LlamaForCausalLM', SimpleNamespace()))
+        monkeypatch.setattr(async_engine.AsyncEngine, '_build_pytorch', lambda *a, **kw: backend)
+        if multimodal:
+            from lmdeploy.vl import engine as vl_engine
+
+            monkeypatch.setattr(vl_engine, 'ImageEncoder', lambda *a, **kw: SimpleNamespace())
+        engine_cls = VLAsyncEngine if multimodal else async_engine.AsyncEngine
+        engine = engine_cls('model', backend='pytorch', backend_config=config)
+        engine.async_get_reward_score = AsyncMock(return_value=[0.5])
+        engine.async_get_ppl = AsyncMock(return_value=1.5)
+        router = APIRouter()
+        register(router, SimpleNamespace(async_engine=engine))
+        endpoints = {route.path: route.endpoint for route in router.routes}
+        task = asyncio.create_task(engine.prompt_processor.get_prompt_input('worker', do_preprocess=False))
+        try:
+            await asyncio.wait_for(started.wait(), 5)
+            # Auxiliary APIs and streaming decode must work while preprocessing
+            # holds its tokenizer, even for tokenizers that mutate on encode.
+            for prompt in ('hello', ['hello', 'world']):
+                response = await endpoints['/v1/encode'](EncodeRequest(input=prompt))
+                assert response.length == (5 if isinstance(prompt, str) else [5, 5])
+            await endpoints['/pooling'](PoolingRequest(input='hello'))
+            engine.async_get_reward_score.assert_awaited_once_with([list(b'hello')])
+            await endpoints['/get_ppl'](PPLRequest(input='hello'))
+            engine.async_get_ppl.assert_awaited_once_with(list(b'hello'))
+            assert count_input_tokens(engine, [dict(role='user', content='hello')]) == 5
+            assert engine.tokenizer.decode(list(b'hello')) == 'hello'
+            assert not task.done()
+        finally:
+            release.set()
+            await asyncio.wait_for(task, 5)
+            engine.close()
 
     asyncio.run(run())

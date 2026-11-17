@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import aclosing, suppress
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -70,6 +71,58 @@ def test_stale_session_cleanup_does_not_remove_reused_session_id():
     assert session_mgr.sessions[session_id] is new_session
     assert session_mgr.session_id_map[session_id] == 42
     assert session_mgr.user_session_id_map[42] == session_id
+
+
+@pytest.mark.parametrize('arrival', ['new_id', 'reused_public_id', 'reused_internal_id'])
+@pytest.mark.parametrize('cancel_fails', [False, True])
+def test_abort_all_cleanup_preserves_sessions_created_while_waiting(arrival, cancel_fails):
+    async def run():
+        manager = SessionManager()
+        manager.build_request_handle_pool(_FakeEngine(), 1)
+        old = manager.get(manager.map_user_session_id(42))
+        pending = manager.get(manager.map_user_session_id(43))
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def cancel(session_id):
+            started.set()
+            await release.wait()
+            if cancel_fails:
+                raise RuntimeError('backend cancellation failed')
+
+        task = None
+        try:
+            async with old.request_handle() as handle:
+                handle.async_cancel = AsyncMock(side_effect=cancel)
+                task = asyncio.create_task(manager.async_abort_all())
+                await asyncio.wait_for(started.wait(), 5)
+                if arrival == 'reused_internal_id':
+                    # A new Session object replaces the old one under the same
+                    # internal ID while its cancellation is still unwinding.
+                    manager.sessions.pop(old.session_id)
+                    newcomer = manager.get(old.session_id)
+                    public_id = 42
+                else:
+                    public_id = 44
+                    if arrival == 'reused_public_id':
+                        manager.remove(old)
+                        public_id = 42
+                    newcomer = manager.get(manager.map_user_session_id(public_id))
+            # The old handle has been returned before its delayed cancellation
+            # completes, so abort-all must clean up the old Session object.
+        finally:
+            release.set()
+            if task is not None:
+                await asyncio.wait_for(task, 5)
+
+        handle.async_cancel.assert_awaited_once_with(old.session_id)
+        assert old.abort_version == pending.abort_version == 1
+        assert newcomer.abort_version == 0
+        assert manager.sessions == {newcomer.session_id: newcomer}
+        assert manager.user_session_id_map == {public_id: newcomer.session_id}
+        assert manager.session_id_map == {newcomer.session_id: public_id}
+        assert manager.request_handle_pool.num_dispatched == 0
+
+    asyncio.run(run())
 
 
 async def _run_idle_async_close_removes_session_and_allows_reuse():

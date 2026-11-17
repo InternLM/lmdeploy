@@ -158,7 +158,10 @@ class AsyncEngine:
         self.model_name = model_name if model_name else model_path
         self.chat_template = get_chat_template(model_path, chat_template_config, trust_remote_code=trust_remote_code)
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
-        self.prompt_processor = MultimodalProcessor(self.tokenizer,
+        # Encoding can mutate tokenizer state (e.g. CodeLlama infilling). Keep
+        # the prompt worker independent of auxiliary APIs and streaming decode.
+        prompt_tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
+        self.prompt_processor = MultimodalProcessor(prompt_tokenizer,
                                                     self.chat_template,
                                                     allowed_media_domains=allowed_media_domains)
         self.hf_gen_cfg = get_hf_gen_cfg(model_path, trust_remote_code=trust_remote_code)
@@ -906,9 +909,13 @@ class AsyncEngine:
 
         logits = [None] * len(input_ids)
 
-        async def _proc(session, i):
+        async def _proc(session, i, abort_version):
+            input_len = len(input_ids[i])
+            if self._if_session_stale(session, input_len, abort_version) is not None:
+                raise RequestError(ErrorCode.REQUEST_CANCELLED)
             async with session.request_handle() as handle:
-                input_len = len(input_ids[i])
+                if self._if_session_stale(session, input_len, abort_version) is not None:
+                    raise RequestError(ErrorCode.REQUEST_CANCELLED)
                 # TODO(lvhan): Fix the ugly code later on
                 max_new_tokens = 1 if self.backend == 'turbomind' else 0
                 # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
@@ -927,11 +934,19 @@ class AsyncEngine:
         if sessions is None:
             create_sessions = True
             sessions = [self.session_mgr.get() for _ in range(len(input_ids))]
-        tasks = [_proc(session, i) for i, session in enumerate(sessions)]
-        await asyncio.gather(*tasks)
-        if create_sessions:
-            for session in sessions:
-                self.session_mgr.remove(session)
+        tasks = [asyncio.create_task(_proc(session, i, session.abort_version)) for i, session in enumerate(sessions)]
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            # gather() can raise while sibling requests still own handles. Stop
+            # and await them before removing the sessions created for this batch.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            if create_sessions:
+                for session in sessions:
+                    self.session_mgr.remove(session)
         return logits
 
     async def async_get_ppl(self, input_ids: list[int]) -> float:
@@ -956,8 +971,11 @@ class AsyncEngine:
 
         ce_loss = None
         session = self.session_mgr.get()
+        abort_version = session.abort_version
         try:
             async with session.request_handle() as handle:
+                if self._if_session_stale(session, len(input_ids), abort_version) is not None:
+                    raise RequestError(ErrorCode.REQUEST_CANCELLED)
                 # The reason to set `top_k=1` is that pt engine crashes at top_k sampling stage
                 # when perform inference on a reward model.
                 gen_config = GenerationConfig(max_new_tokens=1, return_ppl=True, top_k=1)

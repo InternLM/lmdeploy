@@ -122,8 +122,9 @@ class Session:
     async def async_close(self):
         """Close request bookkeeping for the session."""
         logger.info(f'[session] Ending session {self.session_id}')
+        # Preprocessing may still be running without an inference handle.
+        await self.async_abort()
         if self._handle is not None:
-            await self.async_abort()
             await self._active.wait()
         session_mgr_ref = self._session_mgr
         session_mgr = session_mgr_ref() if session_mgr_ref is not None else None
@@ -252,18 +253,14 @@ class SessionManager:
 
     async def async_abort_all(self):
         """Abort all sessions."""
-        logger.info(f'[SessionManager] aborting all {len(self.sessions)} sessions')
-        tasks = []
-        for session in list(self.sessions.values()):
-            tasks.append(session.async_abort())
-        await asyncio.gather(*tasks, return_exceptions=True)
-        # Remove sessions without handle (i.e., those that have not started inference or already ended)
-        sessions_without_handle = [sid for sid, session in self.sessions.items() if session._handle is None]
-        for session_id in sessions_without_handle:
-            self.sessions.pop(session_id, None)
-            user_session_id = self.session_id_map.pop(session_id, None)
-            if user_session_id is not None:
-                self.user_session_id_map.pop(user_session_id, None)
+        sessions = list(self.sessions.values())
+        logger.info(f'[SessionManager] aborting all {len(sessions)} sessions')
+        await asyncio.gather(*(session.async_abort() for session in sessions), return_exceptions=True)
+        # New sessions may arrive or reuse an ID while cancellation is pending.
+        # Only clean up the aborted objects; remove() protects reused IDs.
+        for session in sessions:
+            if session._handle is None:
+                self.remove(session)
 
     def has(self, session_id):
         return session_id in self.sessions

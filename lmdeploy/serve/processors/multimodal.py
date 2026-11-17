@@ -44,7 +44,7 @@ class MultimodalProcessor:
         """Initialize MultimodalProcessor.
 
         Args:
-            tokenizer: Tokenizer instance for encoding prompts.
+            tokenizer: Tokenizer owned by the prompt worker; must not be used concurrently by other callers.
             chat_template: Chat template instance for message processing.
             vl_encoder: Optional ImageEncoder instance for multimodal processing.
             backend: Optional backend name ('turbomind' or 'pytorch') for multimodal processing.
