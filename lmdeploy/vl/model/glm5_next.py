@@ -189,11 +189,11 @@ class GLM5NextVisionModel(VisionModel):
         processed = self.image_cache.process(images, self._preprocess_image, self.mm_feature_dtype, image_kwargs)
 
         if isinstance(input_prompt, str):
-            # Tokenize the original placeholders once, then expand their IDs.
-            # GLM image placeholders are special tokens, so this preserves the
-            # tokenizer's boundaries without constructing a huge repeated text.
-            input_prompt = self.processor(text=[input_prompt], padding=True,
-                                          return_tensors='pt')['input_ids'][0].tolist()
+            # Images are already processed, so tokenize without the full
+            # processor's image/placeholder validation. Expand the special-token
+            # IDs below instead of constructing a huge repeated text.
+            input_prompt = self.processor.tokenizer(text=[input_prompt], padding=True,
+                                                    return_tensors='pt')['input_ids'][0].tolist()
         if input_prompt.count(self.image_token_id) != len(processed):
             raise ValueError('GLM image placeholders must match the number of images')
         merge_length = self.processor.image_processor.merge_size**2

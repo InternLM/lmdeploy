@@ -244,14 +244,15 @@ class TestGLM5NextProcessorCompatibility:
         return model
 
     @pytest.mark.parametrize('raw', [False, True])
-    def test_cached_images_match_native_processor(self, real_model, raw):
+    @pytest.mark.parametrize('cache_enabled', [False, True])
+    def test_cached_images_match_native_processor(self, real_model, raw, cache_enabled):
         import torch
         from PIL import Image
 
         model = real_model
         model.backend = 'pytorch'
         model.mm_feature_dtype = torch.bfloat16
-        model.image_cache.max_bytes = 16 * 1024**2
+        model.image_cache.max_bytes = 16 * 1024**2 if cache_enabled else 0
         images = [Image.new('RGB', (56, 112), 'red'), Image.new('RGB', (112, 56), 'blue')]
         messages = [dict(role='user', content=[dict(type='image', data=image) for image in images])]
         prompt = '<|begin_of_image|><|image|><|end_of_image|>word_3<|begin_of_image|><|image|><|end_of_image|>'
@@ -267,7 +268,7 @@ class TestGLM5NextProcessorCompatibility:
             assert torch.equal(torch.stack([item['image_grid_thw'] for item in result['multimodal']]),
                                expected['image_grid_thw'])
         for cached, original in zip(warm['multimodal'], cold['multimodal']):
-            assert cached['pixel_values'] is original['pixel_values']
+            assert (cached['pixel_values'] is original['pixel_values']) == cache_enabled
             start, end = cached['offset']
             assert warm['input_ids'][start:end] == [model.image_token_id] * (end - start)
 
