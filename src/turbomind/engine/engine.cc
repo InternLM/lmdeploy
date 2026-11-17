@@ -448,6 +448,21 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
             continue;
         }
 
+        // A speculative round submits a full draft block of query rows starting at
+        // the last committed token, so its KV write can run up to
+        // `2 * (max_proposals + 1)` rows past the cursor. Reserve that margin below
+        // `session_len` (matching the `context_headroom` charged to
+        // ContextTokenResource): otherwise a round near the top of the window can
+        // write past the allocated KV columns, underflowing a `BatchCopy` size and
+        // aborting the engine (copy.cc TM_LOG_FATAL). This must be a clean
+        // kTooLong/OOM, never a crash.
+        const int spec_reserve  = model_.spec ? 2 * (model_.spec->policy().max_proposals() + 1) : 0;
+        const int session_limit = param_.session_len > spec_reserve ? param_.session_len - spec_reserve : 0;
+        if (input_len > session_limit) {
+            signals.push_back(MakeRequestSignal(r, Request::kTooLong, 0));
+            continue;
+        }
+
         /// TODO: force step after prefix matching
 
         auto c = std::make_unique<Sequence>(r);
@@ -459,13 +474,13 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
         c->prompt_len = c->seq_len = token_ids - c->token_ids;  // all known tokens
 
         int max_seq_len = c->prompt_len + c->gen_cfg.max_new_tokens;
-        if (max_seq_len > param_.session_len) {
-            max_seq_len = param_.session_len;
+        if (max_seq_len > session_limit) {
+            max_seq_len = session_limit;
             if (tp_rank_ == 0) {
                 const int trunc_output_len = max_seq_len - c->prompt_len;
                 // clang-format off
-                TM_LOG_WARN("ID {}: total sequence length ({} + {}) exceeds `session_len` ({}), `max_new_tokens` is truncated to {}",
-                    r->id, c->prompt_len, c->gen_cfg.max_new_tokens, param_.session_len, trunc_output_len);
+                TM_LOG_WARN("ID {}: total sequence length ({} + {}) exceeds the speculative `session_len` budget ({}), `max_new_tokens` is truncated to {}",
+                    r->id, c->prompt_len, c->gen_cfg.max_new_tokens, session_limit, trunc_output_len);
                 // clang-format on
             }
         }
