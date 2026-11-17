@@ -81,7 +81,8 @@ def _conv_boundaries(x, runtime, shared, slots, sources, histories, cu, cp_ids, 
             # AR runtime is chronological, including the unused oldest entry.
             value = tl.load(runtime + slot * R0 + c * R1 + (i + 1) * R2, valid, other=0)
         else:
-            pos = (history - (WIDTH - 1) + i) % RING if SPEC else i + 1
+            # Triton remainder is signed; fresh/short histories must still wrap inside the ring.
+            pos = ((history - (WIDTH - 1) + i) % RING + RING) % RING if SPEC else i + 1
             initial = tl.load(runtime + slot * R0 + c * R1 + pos * R2, valid, other=0)
             restored = tl.load(shared + source * S0 + c * S1 + i * S2,
                                valid & restore, other=0)
@@ -96,7 +97,7 @@ def _conv_boundaries(x, runtime, shared, slots, sources, histories, cu, cp_ids, 
                                 valid & valid_cp & (token >= 0), other=0)
                 # Short c may still include accepted history before this chunk.
                 initial_i = token + WIDTH - 1
-                initial_pos = (history + token) % RING if SPEC else initial_i + 1
+                initial_pos = ((history + token) % RING + RING) % RING if SPEC else initial_i + 1
                 old = tl.load(runtime + slot * R0 + c * R1 + initial_pos * R2,
                               valid & valid_cp & (token < 0), other=0)
                 old_shared = tl.load(shared + source * S0 + c * S1 + initial_i * S2,

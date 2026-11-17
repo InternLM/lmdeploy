@@ -194,3 +194,39 @@ def test_auxiliary_cursor_graph_staging_and_padding():
     graph.replay()
     assert static.output_state_ids[1, 5] == 8
     assert static.output_state_ids[2:].eq(-1).all()
+
+
+@pytest.mark.parametrize('spec', [0, 5])
+@pytest.mark.parametrize('history', [0, 1, 17])
+@pytest.mark.parametrize('offset', [1, 4])
+def test_conv_boundaries_preserve_packed_neighbors(monkeypatch, spec, history, offset):
+    from lmdeploy.pytorch.kernels.cuda.replayssm_indexed import replay_conv_boundaries
+
+    # Slot-major packing makes a negative first-channel offset hit the preceding layer.
+    # Extra channels also guard the masked tail of the 128-channel kernel tile.
+    channels, ring, slot, layer, cp = 129, 4 + spec, 2, 1, 5
+    runtime = torch.full((5, 3, channels + 2, ring), 7., device='cuda', dtype=torch.bfloat16)
+    shared = torch.full((9, 3, channels + 2, 3), 11., device='cuda', dtype=torch.bfloat16)
+    runtime[slot, layer, :channels] = torch.arange(channels * ring, device='cuda').reshape(channels, ring) + 32
+    expected_runtime, expected_shared = runtime.clone(), shared.clone()
+    source = 2 if history == 17 else -1
+    positions = [(history - 3 + i) % ring if spec else i + 1 for i in range(3)]
+    initial = runtime[slot, layer, :channels, positions].clone()
+    if history == 0:
+        initial.zero_()
+    elif source > 0:
+        initial.copy_(shared[source, layer, :channels])
+    for i in range(3):
+        pos = (history - 3 + i) % ring if spec else i + 1
+        if history == 0 or source > 0:
+            expected_runtime[slot, layer, :channels, pos] = initial[:, i]
+    x = torch.arange(4, device='cuda', dtype=torch.bfloat16)[None, :, None].expand(1, 4, channels).contiguous()
+    expected_shared[cp, layer, :channels] = torch.cat((initial, x[0, :offset].T), dim=1)[:, -3:]
+    state = SimpleNamespace(conv_state=runtime[:, layer, :channels],
+                            shared_conv_state=shared[:, layer, :channels],
+                            cursor=SimpleNamespace(Tmax=spec + 1))
+    meta = _metadata(monkeypatch, [4], [history], [slot], [source], [cp], [offset], spec)
+    replay_conv_boundaries(x, state, meta, 4)
+    # Compare whole allocations, not just the selected slot/layer or output checkpoint.
+    torch.testing.assert_close(runtime, expected_runtime, rtol=0, atol=0)
+    torch.testing.assert_close(shared, expected_shared, rtol=0, atol=0)
