@@ -88,6 +88,15 @@ class SharedStore:
         ref = self._data.pop(key)
         return ray.get(ref)
 
+    def truncate(self, key: str, num_rows: int) -> str:
+        import ray
+        data = ray.get(self._data[key])
+        if len(data) <= num_rows:
+            return key
+        new_key = self.put(data[:num_rows])
+        del self._data[key]
+        return new_key
+
     def clear(self):
         import ray
         all_data = list(self._data.values())
@@ -136,6 +145,14 @@ class EngineInstance(EngineInstanceBase):
     def __del__(self):
         """Destructor."""
         self.engine.req_manager.senders.pop(self.req_sender.sender_id)
+
+    @staticmethod
+    async def trim_routed_experts(key: str, num_rows: int) -> str:
+        # A detached store can outlive the server version that created it.
+        if hasattr(_SHARED_STORE, 'truncate'):
+            return await _SHARED_STORE.truncate.remote(key, num_rows)
+        data = await _SHARED_STORE.get.remote(key)
+        return await _SHARED_STORE.put.remote(data[:num_rows])
 
     def _get_extra_outputs(self, resp: Response, num_all_ids: int, routed_experts_start_len: int = 0):
         """Get extra outputs."""

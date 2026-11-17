@@ -1,0 +1,142 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+"""Replay the Sage2.1 O12 generation through the OpenAI chat endpoint on
+CPU."""
+import json
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from tokenizers import AddedToken, decoders, models, pre_tokenizers
+from tokenizers import Tokenizer as FastTokenizer
+from transformers import PreTrainedTokenizerFast
+
+from lmdeploy.messages import EngineOutput, ResponseType
+from lmdeploy.serve.core.async_engine import AsyncEngine, PreprocessedRequest
+from lmdeploy.serve.openai.chat_completions import register
+from lmdeploy.serve.parsers.response_parser import BaseResponseParser
+from lmdeploy.tokenizer import HuggingFaceTokenizer, Tokenizer
+
+# One untrimmed QA generation. Both copies of STOP_HERE and the trailing text are present.
+OUTPUT_IDS = [785, 1196, 6801, 752, 311, 2550, 6896, 279, 1555, 25, 8989, 26779, 29, 45268, 80891,
+              9782, 9342, 1, 323, 4302, 770, 13, 154842, 522, 26779, 29, 45268, 80891, 9782, 9342]
+
+
+def _replay_tokenizer():
+    # Retain the original ID -> ByteLevel piece mapping. Only STOP_HERE needs ordinary input encoding here.
+    vocab = {'[UNK]': 0, '"': 1, '.': 13, ':': 25, '>': 29, 'Ġthe': 279, 'Ġto': 311, 'Ġand': 323, '</': 522,
+             'Ġme': 752, 'Ġelse': 770, 'The': 785, 'Ġuser': 1196, 'Ġline': 1555, 'Ġoutput': 2550,
+             'Ġnothing': 4302, 'Ġwants': 6801, 'Ġexactly': 6896, 'Ġ"</': 8989, '-text': 9342, 'Ġtail': 9782,
+             'think': 26779, 'ĠSTOP': 45268, 'STOP': 50336, '_HERE': 80891}
+    tags = {'<think>': 154841, '</think>': 154842, '<tool_call>': 154843, '</tool_call>': 154844,
+            '<arg_key>': 154847, '</arg_key>': 154848, '<arg_value>': 154849, '</arg_value>': 154850}
+    backend = FastTokenizer(models.WordLevel({**vocab, **tags}, unk_token='[UNK]'))
+    backend.pre_tokenizer = pre_tokenizers.Split('_', behavior='merged_with_next')
+    backend.decoder = decoders.ByteLevel()
+    backend.add_tokens([AddedToken(tag, normalized=False) for tag in tags])
+    hf = PreTrainedTokenizerFast(tokenizer_object=backend, clean_up_tokenization_spaces=False)
+    tokenizer = object.__new__(Tokenizer)
+    tokenizer.model = object.__new__(HuggingFaceTokenizer)
+    tokenizer.model.model = hf
+    return tokenizer
+
+
+def _replay_app(context):
+    tokenizer = _replay_tokenizer()
+
+    class Parser(BaseResponseParser):
+        pass
+
+    Parser.set_parsers('default', 'glm47', tokenizer.model.model)
+    context.response_parser_cls = Parser
+    engine = AsyncEngine.__new__(AsyncEngine)
+    engine.tokenizer = tokenizer
+    engine.num_spec_token = 5
+    engine.session_mgr = context.session_manager
+    engine.request_logger = SimpleNamespace(log_response=lambda *args: None)
+    context.async_engine.tokenizer = tokenizer
+    cancel = AsyncMock()
+
+    @asynccontextmanager
+    async def request_handle():
+        yield SimpleNamespace(async_cancel=cancel)
+
+    async def preprocess(messages, session, gen_config, **kwargs):
+        session.epoch = None
+        session.request_handle = request_handle
+        return PreprocessedRequest(session=session, inputs={'input_ids': [785]}, input_token_len=1,
+                                   gen_config=gen_config, adapter_name=None)
+
+    @asynccontextmanager
+    async def replay_backend(*args, **kwargs):
+        async def batches():
+            # The answer's STOP and _HERE straddle the last two batches.
+            for batch in (OUTPUT_IDS[:22], OUTPUT_IDS[22:27], OUTPUT_IDS[27:]):
+                yield EngineOutput(ResponseType.SUCCESS, batch)
+            yield EngineOutput(ResponseType.FINISH, [])
+        yield batches()
+
+    engine.safe_run = replay_backend
+    context.async_engine.preprocess = preprocess
+    context.async_engine.generate = engine.generate
+    context.async_engine.model_name = 'glm53-flash'
+    app = FastAPI()
+    register(app, context)
+    return app, cancel
+
+
+@pytest.mark.parametrize('options', [{}, {'return_token_ids': True}, {'stream': True, 'return_token_ids': True}],
+                         ids=['qa-request', 'output-ids', 'stream-output-ids'])
+def test_multi_token_stop_in_content_only(chat_endpoint, options):
+    _, context = chat_endpoint
+    app, cancel = _replay_app(context)
+    prompt = 'Output exactly this line and nothing else: </think> STOP_HERE tail-text'
+    request = dict(model='glm53-flash', messages=[dict(role='user', content=prompt)], temperature=0, max_tokens=4096,
+                   reasoning_effort='high', chat_template_kwargs={'reasoning_effort': 'high'}, stop=['STOP_HERE'],
+                   **options)
+    with TestClient(app) as client:
+        response = client.post('/v1/chat/completions', json=request)
+    assert response.status_code == 200, response.text
+    if options.get('stream'):
+        chunks = [json.loads(line[6:]) for line in response.text.splitlines()
+                  if line.startswith('data: ') and line != 'data: [DONE]']
+        choices = [choice for chunk in chunks for choice in chunk['choices']]
+        body = ''.join(choice['delta'].get('content') or '' for choice in choices)
+        reasoning = ''.join(choice['delta'].get('reasoning_content') or '' for choice in choices)
+        ids = [i for choice in choices for i in choice.get('output_ids') or []]
+        finish = choices[-1]['finish_reason']
+    else:
+        choice = response.json()['choices'][0]
+        body, reasoning = choice['message']['content'], choice['message']['reasoning_content']
+        ids, finish = choice.get('output_ids'), choice['finish_reason']
+    assert reasoning == ('The user wants me to output exactly the line: '
+                         '"</think> STOP_HERE tail-text" and nothing else.')
+    assert body == '</think> '
+    if options.get('return_token_ids'):
+        assert ids == OUTPUT_IDS[:-2]
+    assert finish == 'stop'
+    cancel.assert_awaited_once()
+
+
+def test_nonstream_stop_miss_preserves_custom_parse_complete(chat_endpoint):
+    _, context = chat_endpoint
+    app, cancel = _replay_app(context)
+
+    class CustomParser(context.response_parser_cls):
+        def parse_complete(self, text, token_ids=None, **kwargs):
+            content, tools, reasoning = super().parse_complete(text, token_ids, **kwargs)
+            return f'custom: {content}', tools, reasoning
+
+    context.response_parser_cls = CustomParser
+    request = dict(model='glm53-flash', messages=[dict(role='user', content='Replay the recorded answer.')],
+                   stream=False, stop=['STOP_HERE_HERE'], return_token_ids=True)
+    with TestClient(app) as client:
+        response = client.post('/v1/chat/completions', json=request)
+    assert response.status_code == 200, response.text
+    choice = response.json()['choices'][0]
+    assert choice['message']['content'] == 'custom: </think> STOP_HERE tail-text'
+    assert choice['output_ids'] == OUTPUT_IDS
+    assert choice['finish_reason'] == 'length'
+    cancel.assert_not_awaited()

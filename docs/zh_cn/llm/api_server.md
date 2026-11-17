@@ -433,6 +433,10 @@ Partial continuation 示例：输入 `A B C`，生成 `D E` 后暂停，客户�
 
 2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `backend_config` 的 `cache_max_entry_count` 大小
 
-3. 关于停止符，我们只支持编码后为单个 index 的字符。此外，可能存在多种 index 都会解码出带有停止符的结果。对于这种情况，如果这些 index 数量太多，我们只会采用 tokenizer 编码出的 index。而如果你想要编码后为多个 index 的停止符，可以考虑在流式客户端做字符串匹配，匹配成功后跳出流式循环即可。
+3. API 服务如何处理请求中 `stop` 字段指定的停止串？
+
+   - **单 token 停止串。** 如果模型的 tokenizer 将停止串单独编码为一个 token，引擎生成任一匹配的 token ID 就会停止。词表里可能有多个条目都包含这段文字。如果候选 ID 超过 5 个，LMDeploy 只保留单独解码后恰好等于停止串的 ID，最多保留 5 个。如果没有留下候选 ID，则使用停止串自身编码得到的 ID。模型用多个 token 拼出相同文字时，不会触发这项 ID 检查。
+   - **GLM 聊天请求中的多 token 停止串。** 在 `/v1/chat/completions` 启用 GLM 的 token ID 解析器且 `ignore_eos` 为默认值 `false` 时，服务端会在助手正文 `content` 中匹配这些停止串，即使它们跨越多个输出批次。例如，请求传入 `stop=["STOP_HERE"]` 后，模型在思考或工具调用中提到 `STOP_HERE` 可以继续生成。如果正文是 `answerSTOP_HEREtail`，默认只返回 `answer`。流式和非流式请求都支持，同一请求中的单 token 停止串仍由引擎按 ID 判断。
+   - **客户端匹配。** 对于 `/v1/completions`，以及未启用上述 GLM 正文匹配的 `/v1/chat/completions` 请求，服务端会跳过多 token 停止串。需要遇到这类字符串就停止时，可以使用流式客户端，每收到一批就检查已拼接的文本，匹配成功后退出读取循环。这样也能识别从上一批末尾延续到下一批开头的停止串。
 
 4. 自定义对话模板，请参考[chat_template.md](../advance/chat_template.md)

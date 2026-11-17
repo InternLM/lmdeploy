@@ -194,7 +194,11 @@ class ChatCompletionRequest(BaseModel):
         examples=[None],
         deprecated='max_tokens is deprecated in favor of the max_completion_tokens field',
     )
-    stop: str | list[str] | None = Field(default=None, examples=[None])
+    stop: str | list[str] | None = Field(
+        default=None,
+        description=('Single-token stop strings are handled by the engine. The GLM token-ID chat parser also '
+                     'supports multi-token stops in assistant content.'),
+        examples=[None])
 
     stream: bool | None = False
     stream_options: StreamOptions | None = Field(default=None, examples=[None])
