@@ -164,7 +164,7 @@ def check_request(request: CompletionRequest, server_context) -> str:
         return f'The session_id {request.session_id!r} is occupied.'
 
     # check sampling settings
-    if request.n <= 0:
+    if request.n is not None and request.n <= 0:
         return f'The n {request.n!r} must be a positive int.'
     if request.top_p is not None and not (0 < request.top_p <= 1):
         return f'The top_p {request.top_p!r} must be in (0, 1].'
