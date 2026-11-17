@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from threading import Lock
 from typing import TYPE_CHECKING
 
 from lmdeploy.utils import get_logger
@@ -73,6 +74,8 @@ class EngineHealthMonitor:
         self._health_probe_task: asyncio.Task | None = None
         self._started_time = time.monotonic()
         self._last_success_time: float | None = None
+        self._snapshot_time: float | None = None
+        self._snapshot_lock = Lock()
         # Background polling and on-demand /health refreshes both update the
         # cached snapshot, so run backend probes one at a time.
         self._probe_lock = asyncio.Lock()
@@ -138,22 +141,30 @@ class EngineHealthMonitor:
                 self._health_probe_task = None
 
         status = result['status']
-        if status in ('healthy', 'sleeping'):
-            self._last_success_time = probe_time
-        self._snapshot = dict(status=status, message=result['message'])
+        # Publish status and timestamps together for the monitoring thread.
+        with self._snapshot_lock:
+            if status in ('healthy', 'sleeping'):
+                self._last_success_time = probe_time
+            self._snapshot_time = time.monotonic()
+            self._snapshot = dict(status=status, message=result['message'])
 
     async def refresh_snapshot(self) -> dict:
         """Run one bounded probe and return the latest health snapshot."""
         await self.probe_once()
         return self.snapshot()
 
-    def snapshot(self) -> dict:
-        snapshot = dict(self._snapshot)
+    def snapshot(self, *, include_age: bool = False) -> dict:
+        with self._snapshot_lock:
+            snapshot = dict(self._snapshot)
+            last_success_time = self._last_success_time
+            snapshot_time = self._snapshot_time
         now = time.monotonic()
-        if snapshot['status'] == 'healthy' and self._last_success_time is not None:
-            if now - self._last_success_time > self.unhealthy_after:
+        if include_age:
+            snapshot['snapshot_age_seconds'] = (now - snapshot_time if snapshot_time is not None else None)
+        if snapshot['status'] in ('healthy', 'sleeping') and last_success_time is not None:
+            if now - last_success_time > self.unhealthy_after:
                 snapshot['status'] = 'unhealthy'
-                snapshot['message'] = f'No successful health probe for {now - self._last_success_time:.1f}s.'
+                snapshot['message'] = f'No successful health probe for {now - last_success_time:.1f}s.'
         elif snapshot['status'] == 'initializing' and now - self._started_time > self.unhealthy_after:
             snapshot['status'] = 'unhealthy'
             snapshot['message'] = 'Engine health monitor did not complete an initial probe.'

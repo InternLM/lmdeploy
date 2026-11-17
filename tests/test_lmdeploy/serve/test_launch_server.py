@@ -1,7 +1,11 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import importlib
 import signal
 from unittest.mock import Mock
 
+import pytest
+
+from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.serve.openai.launch_server import terminate_processes
 
 
@@ -34,3 +38,56 @@ def test_dead_frontend_still_terminates_orphaned_group(monkeypatch):
     terminate_processes([process])
     process.terminate.assert_not_called()
     killpg.assert_called_once_with(123, signal.SIGTERM)
+
+
+@pytest.fixture
+def launcher(monkeypatch):
+    module = importlib.import_module('lmdeploy.serve.openai.launch_server')
+    monkeypatch.setattr(module.mp, 'set_start_method', Mock())
+    monkeypatch.setattr(module.signal, 'signal', Mock())
+    monkeypatch.setattr(module, 'get_host_ip', lambda: '127.0.0.1')
+    monkeypatch.setattr(module, 'is_port_available', Mock(return_value=True))
+    process = Mock(return_value=Mock(exitcode=0))
+    monkeypatch.setattr(module.mp, 'Process', process)
+    return module
+
+
+@pytest.mark.parametrize('monitoring_port', [None, 9300])
+def test_monitoring_ports_follow_local_dp_ranks(launcher, monitoring_port):
+    launcher.launch_server(2, 1, '/unused', PytorchEngineConfig(dp=8, ep=8), server_port=9200,
+                           monitoring_port=monitoring_port)
+    calls = launcher.mp.Process.call_args_list
+    assert len(calls) == 4
+    for rank, call in enumerate(calls):
+        kwargs = call.kwargs['kwargs']
+        assert kwargs['server_port'] == 9200 + rank
+        assert kwargs['backend_config'].dp_rank == 4 + rank
+        if monitoring_port is None:
+            assert 'monitoring_port' not in kwargs
+        else:
+            assert kwargs['monitoring_port'] == 9300 + rank
+
+
+@pytest.mark.parametrize('port', [0, -1, 65535, 9200, 9207, 9193])
+def test_invalid_monitoring_port_range_fails_before_spawning(launcher, port):
+    with pytest.raises(ValueError, match='[Mm]onitoring'):
+        launcher.launch_server(1, 0, '/unused', PytorchEngineConfig(dp=8, ep=8),
+                               server_port=9200, monitoring_port=port)
+    launcher.mp.Process.assert_not_called()
+
+
+def test_occupied_monitoring_port_fails_before_spawning(launcher):
+    launcher.is_port_available.side_effect = lambda port: port != 9303
+    with pytest.raises(ValueError, match='Monitoring port 9303 is not available'):
+        launcher.launch_server(1, 0, '/unused', PytorchEngineConfig(dp=8, ep=8),
+                               server_port=9200, monitoring_port=9300)
+    launcher.mp.Process.assert_not_called()
+
+
+def test_automatic_api_ports_skip_monitoring_ports(launcher, monkeypatch):
+    monkeypatch.setattr(launcher.random, 'randint', lambda *_: 100)
+    launcher.launch_server(1, 0, '/unused', PytorchEngineConfig(dp=2, ep=2),
+                           proxy_url='http://router', monitoring_port=3100)
+    calls = launcher.mp.Process.call_args_list
+    assert [call.kwargs['kwargs']['server_port'] for call in calls] == [3200, 3300]
+    assert [call.kwargs['kwargs']['monitoring_port'] for call in calls] == [3100, 3101]

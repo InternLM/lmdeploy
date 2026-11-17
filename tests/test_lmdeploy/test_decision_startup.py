@@ -54,7 +54,7 @@ def server_startup(monkeypatch):
     build, run = Mock(return_value=engine), Mock()
     monkeypatch.setattr(api_server, 'get_task', Mock(return_value=('llm', build)))
     monkeypatch.setattr(api_server, 'set_parsers', lambda *args: None)
-    monkeypatch.setattr(api_server, 'create_lifespan_handler', lambda *args: None)
+    monkeypatch.setattr(api_server, 'create_lifespan_handler', lambda *args, **kwargs: None)
     monkeypatch.setattr(api_server.uvicorn, 'run', run)
     return api_server, build, run
 
@@ -307,3 +307,44 @@ def test_cli_forwards_decision_temperature(monkeypatch, dp):
     SubCliServe.api_server(args)
     assert launch.call_args.kwargs['decision_temperature'] == 0.75
     assert launch.call_args.kwargs['task'] == 'intern-decision'
+
+
+@pytest.mark.parametrize('dp', [1, 8])
+def test_cli_forwards_monitoring_port(monkeypatch, dp):
+    import importlib
+
+    from lmdeploy.cli.serve import SubCliServe
+
+    parser = argparse.ArgumentParser()
+    monkeypatch.setattr(SubCliServe, 'subparsers', parser.add_subparsers())
+    SubCliServe.add_parser_api_server()
+    args = parser.parse_args(['api_server', '/models/checkpoint', '--backend', 'pytorch',
+                              '--monitoring-port', '9300', '--dp', str(dp), '--max-batch-size', '2'])
+    module = importlib.import_module('lmdeploy.serve.openai.api_server' if dp == 1
+                                     else 'lmdeploy.serve.openai.launch_server')
+    launch = Mock()
+    monkeypatch.setattr(module, 'serve' if dp == 1 else 'launch_server', launch)
+    SubCliServe.api_server(args)
+    assert launch.call_args.kwargs['monitoring_port'] == 9300
+
+
+@pytest.mark.parametrize('port', [0, -1, 65536, 9200])
+def test_invalid_monitoring_port_fails_before_loading_model(server_startup, port):
+    api, build, run = server_startup
+    with pytest.raises(ValueError, match='monitoring_port'):
+        api.serve('/unused', server_port=9200, monitoring_port=port)
+    build.assert_not_called()
+    run.assert_not_called()
+
+
+def test_monitoring_configuration_preserves_api_security(server_startup, monkeypatch):
+    api, _, _ = server_startup
+    lifespan = Mock()
+    monkeypatch.setattr(api, 'create_lifespan_handler', lifespan)
+    monkeypatch.setenv('SSL_KEYFILE', '/test/key.pem')
+    monkeypatch.setenv('SSL_CERTFILE', '/test/cert.pem')
+    api.serve('/unused', generation_config='lmdeploy', server_name='127.0.0.1',
+              server_port=9200, monitoring_port=9300, api_keys='secret', ssl=True)
+    assert lifespan.call_args.kwargs['monitoring_config'] == dict(
+        host='127.0.0.1', port=9300, api_keys=['secret'],
+        ssl_keyfile='/test/key.pem', ssl_certfile='/test/cert.pem')

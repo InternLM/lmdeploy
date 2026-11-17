@@ -8,6 +8,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from lmdeploy.messages import GenerationConfig
+from lmdeploy.serve.core import generation_config as generation_config_module
 from lmdeploy.serve.core.generation_config import (
     build_generation_config,
     extract_request_gen_config,
@@ -225,7 +226,7 @@ def test_generate_request_sampling_merge_uses_server_defaults():
     assert gen_config.min_p == 0.1
 
 
-@patch('lmdeploy.serve.core.generation_config._load_hf_generation_config')
+@patch.object(generation_config_module, '_load_hf_generation_config')
 def test_resolve_default_gen_config_auto(mock_load):
     mock_load.return_value = {
         'temperature': 0.6,

@@ -25,14 +25,14 @@ def is_port_available(port: int) -> bool:
             return False
 
 
-def find_available_ports(num: int) -> list[int]:
+def find_available_ports(num: int, excluded_ports: set[int] | None = None) -> list[int]:
     """Find available port."""
 
     ports = []
     test_port = 3000
     while len(ports) < num:
         test_port += random.randint(10, 500)
-        if is_port_available(test_port):
+        if test_port not in (excluded_ports or ()) and is_port_available(test_port):
             ports.append(test_port)
 
     return ports
@@ -111,6 +111,7 @@ def launch_server(num_nodes: int,
                   backend_config: PytorchEngineConfig | TurbomindEngineConfig,
                   proxy_url: str = None,
                   server_port: int | None = None,
+                  monitoring_port: int | None = None,
                   **kwargs):
     """Run multiple server processes in dp mode."""
     log_level = kwargs.get('log_level', 'ERROR')
@@ -141,8 +142,14 @@ def launch_server(num_nodes: int,
     server_urls = []
     processes = []
 
+    monitoring_ports = set()
+    if monitoring_port is not None:
+        if not 1 <= monitoring_port <= 65535 or monitoring_port + dp_per_node - 1 > 65535:
+            raise ValueError('monitoring_port range must be within 1-65535')
+        monitoring_ports = set(range(monitoring_port, monitoring_port + dp_per_node))
+
     if proxy_url is not None and server_port is None:
-        server_port_li = find_available_ports(dp_per_node)
+        server_port_li = find_available_ports(dp_per_node, excluded_ports=monitoring_ports)
     else:
         base_port = server_port if server_port is not None else 23333
         _validate_server_port_range(base_port, dp_per_node)
@@ -150,6 +157,12 @@ def launch_server(num_nodes: int,
         for port in server_port_li:
             if not is_port_available(port):
                 raise ValueError(f'Port {port} is not available')
+
+    for port in sorted(monitoring_ports):
+        if port in server_port_li:
+            raise ValueError(f'Monitoring port {port} overlaps an API server port')
+        if not is_port_available(port):
+            raise ValueError(f'Monitoring port {port} is not available')
 
     for idx in range(dp_per_node):
         backend_config_dp = copy.deepcopy(backend_config)
@@ -162,6 +175,8 @@ def launch_server(num_nodes: int,
         cur_server_kwargs.update(kwargs)
         cur_server_kwargs['server_name'] = server_name
         cur_server_kwargs['server_port'] = server_port
+        if monitoring_port is not None:
+            cur_server_kwargs['monitoring_port'] = monitoring_port + idx
         cur_server_kwargs['backend_config'] = backend_config_dp
         cur_server_kwargs['proxy_url'] = proxy_url
         url = f'{http_or_https}://{server_name}:{server_port}'
