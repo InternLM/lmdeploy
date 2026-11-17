@@ -29,13 +29,26 @@ DRAFT_WEIGHT_SPECS: dict[str, DraftWeightSpec] = {
 }
 
 
+# TurboMind registers MTP heads under the C++ name "mtp" (see
+# TM_REGISTER_SPECULATIVE_MODEL("mtp", ...)); the CLI exposes model-specific
+# aliases. Normalize so --speculative-algorithm qwen3_5_mtp (and the other MTP
+# aliases) reaches the registered MTP model. Must stay in sync with the
+# registered speculative-model names in src/turbomind/models/speculative/.
+_MTP_ALIASES = {'qwen3_5_mtp': 'mtp', 'hy3_mtp': 'mtp', 'deepseek_mtp': 'mtp'}
+
+
+def normalize_spec_method(method: str) -> str:
+    """Map a CLI speculative-algorithm name to the TurboMind-registered name."""
+    return _MTP_ALIASES.get(method, method)
+
+
 def build_draft_model(speculative_config,
                       target_model,
                       target_model_path,
                       engine_data_type,
                       download_dir=None):
     """Build the draft weight mapper and resolve the checkpoint it reads."""
-    method = speculative_config.method
+    method = normalize_spec_method(speculative_config.method)
 
     if method == 'mtp':
         target_text = target_model.text_model
