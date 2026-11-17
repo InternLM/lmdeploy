@@ -21,7 +21,7 @@ def hf_media_template():
         template.tokenizer = PreTrainedTokenizerFast(
             tokenizer_object=Tokenizer(WordLevel({'<unk>': 0}, unk_token='<unk>')), chat_template=source)
         template.assistant_end = ''
-        template.is_gpt_oss = False
+        template.is_gpt_oss = name == 'gpt_oss'
         template.is_glm5_next = name == 'glm5_3_flash'
         return template
 

@@ -2,19 +2,21 @@
 import multiprocessing as mp
 import os
 import resource
+from copy import deepcopy
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numpy as np
 import pytest
 import torch
-from PIL import Image
+from PIL import Image, ImageOps
 
 from lmdeploy.messages import PytorchEngineConfig, TurbomindEngineConfig, VisionConfig
 from lmdeploy.pytorch.models.qwen3_vl import Qwen3VLInputProcessor
 from lmdeploy.pytorch.multimodal.data_type import get_image_mrope_pos_ids, make_multimodal_content_hash
 from lmdeploy.vl.constants import Modality
-from lmdeploy.vl.media.image import EncodedImage
+from lmdeploy.vl.media.image import EncodedImage, ImageMediaIO
 from lmdeploy.vl.model.glm5_next import GLM5NextVisionModel
 from lmdeploy.vl.model.image_cache import ImageProcessorCache, ProcessedImage
 
@@ -40,6 +42,15 @@ def glm_model():
     model.processor = SimpleNamespace(image_processor=ImageProcessor())
     model.image_cache = ImageProcessorCache(1024)
     return model
+
+
+@pytest.fixture
+def native_glm_model(glm_model):
+    from transformers.models.glm5_next.image_processing_glm5_next import Glm5NextImageProcessor
+
+    glm_model.processor.image_processor = Glm5NextImageProcessor()
+    glm_model.image_cache = ImageProcessorCache(16 * 1024**2)
+    return glm_model
 
 
 def test_image_cache_budget_and_inflight_ownership():
@@ -173,11 +184,86 @@ def test_image_cache_process_reuses_encoded_images_without_decoding(monkeypatch)
     features = ProcessedImage(torch.ones(4), torch.tensor([1, 2, 2]), 'content')
     preprocess = Mock(return_value=features)
     cache = ImageProcessorCache(1024)
-    size = {'longest_edge': 16}
-    assert cache.process([image, image], preprocess, torch.float32, size) == [features, features]
-    assert cache.process([image], preprocess, torch.float32, size) == [features]
+    options = {'size': {'longest_edge': 16}}
+    assert cache.process([image, image], preprocess, torch.float32, options) == [features, features]
+    assert cache.process([image], preprocess, torch.float32, options) == [features]
     decode.assert_called_once_with()
-    preprocess.assert_called_once_with(decoded, size)
+    preprocess.assert_called_once_with(decoded, options)
+
+
+@pytest.mark.parametrize('orientation', range(2, 9))
+@pytest.mark.parametrize('cache_enabled', [False, True])
+def test_glm_image_cache_preserves_exif_orientation(monkeypatch, native_glm_model, orientation, cache_enabled):
+    model = native_glm_model
+    if not cache_enabled:
+        model.image_cache.max_bytes = 0
+    y, x = np.indices((112, 56))
+    image = Image.fromarray(np.stack([x * 4, y * 2, (x + y) % 256], axis=-1).astype(np.uint8))
+    exif = Image.Exif()
+    exif[274] = orientation
+    buffer = BytesIO()
+    image.save(buffer, format='JPEG', exif=exif)
+    data = buffer.getvalue()
+    encoded = ImageMediaIO(defer_decode=True).load_bytes(data)
+    normal = ImageMediaIO().load_bytes(data)
+    with Image.open(BytesIO(data)) as original:
+        expected = ImageOps.exif_transpose(original).convert('RGB')
+    reference = model.processor.image_processor(images=[expected], return_tensors='pt')
+
+    cold = model._preprocess_images([encoded], [9], None)
+    if cache_enabled:
+        monkeypatch.setattr(EncodedImage, 'decode', Mock(side_effect=AssertionError('unexpected warm decode')))
+    warm = model._preprocess_images([encoded], [3, 9], None)
+    eager = model._preprocess_images([normal], [9], None)
+    num_tokens = int(reference['image_grid_thw'].prod()) // model.processor.image_processor.merge_size**2
+    assert cold['input_ids'] == eager['input_ids'] == [9] * num_tokens
+    assert warm['input_ids'] == [3] + cold['input_ids']
+    assert cold['multimodal'][0]['offset'] == (0, num_tokens)
+    assert warm['multimodal'][0]['offset'] == (1, num_tokens + 1)
+    for result in (cold, warm, eager):
+        item = result['multimodal'][0]
+        assert torch.equal(item['pixel_values'], reference['pixel_values'].to(model.mm_feature_dtype))
+        assert torch.equal(item['image_grid_thw'], reference['image_grid_thw'][0])
+        assert item['content_hash'] == cold['multimodal'][0]['content_hash']
+    assert (warm['multimodal'][0]['pixel_values'] is cold['multimodal'][0]['pixel_values']) == cache_enabled
+
+
+@pytest.mark.parametrize('options', [
+    {'min_image_tokens': 64, 'max_image_tokens': 64},
+    {'do_normalize': False},
+    {'image_mean': [0.1, 0.2, 0.3], 'image_std': [0.5, 0.5, 0.5]},
+])
+def test_glm_image_cache_respects_request_processor_options(native_glm_model, options):
+    model = native_glm_model
+    image = Image.new('RGB', (112, 112), (120, 30, 200))
+    original_options = deepcopy(options)
+    default = model._preprocess_images([image], [9], None)
+    custom = model._preprocess_images([image], [9], {'image': options})
+    warm = model._preprocess_images([image], [9], {'image': dict(reversed(list(options.items())))})
+    after = model._preprocess_images([image], [9], None)
+    reference = model.processor.image_processor(images=[image], return_tensors='pt', **options)
+    item = custom['multimodal'][0]
+    num_tokens = int(reference['image_grid_thw'].prod()) // model.processor.image_processor.merge_size**2
+    assert custom['input_ids'] == [9] * num_tokens
+    assert item['offset'] == (0, num_tokens)
+    assert torch.equal(item['pixel_values'], reference['pixel_values'].to(model.mm_feature_dtype))
+    assert torch.equal(item['image_grid_thw'], reference['image_grid_thw'][0])
+    assert item['content_hash'] != default['multimodal'][0]['content_hash']
+    assert warm['multimodal'][0]['pixel_values'] is item['pixel_values']
+    assert after['multimodal'][0]['pixel_values'] is default['multimodal'][0]['pixel_values']
+    assert options == original_options
+
+
+@pytest.mark.parametrize('options', [
+    {'max_pixels': 1024},
+    {'merge_size': 4},
+    {'min_image_tokens': 65, 'max_image_tokens': 64},
+])
+def test_glm_image_cache_rejects_invalid_native_processor_options(native_glm_model, options):
+    image = Image.new('RGB', (112, 112))
+    native_glm_model._preprocess_images([image], [9], None)
+    with pytest.raises(ValueError):
+        native_glm_model._preprocess_images([image], [9], {'image': options})
 
 
 @pytest.mark.parametrize('error', [

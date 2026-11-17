@@ -27,6 +27,7 @@ from lmdeploy.serve.openai.protocol import (
     CompletionStreamResponse,
     CompletionTokensDetails,
     LogProbs,
+    PromptTokensDetails,
     UsageInfo,
 )
 from lmdeploy.serve.utils.request_cleanup import with_request_cleanup
@@ -335,6 +336,7 @@ def register(router: APIRouter, server_context) -> None:
         async def completion_stream_generator() -> AsyncGenerator[str, None]:
             # First chunk with role
             final_usage = UsageInfo() if include_usage else None
+            cached_tokens = 0
             # reasoning accounting is per-chunk work; skip it entirely
             # for streams that will not report usage
             counters = None if final_usage is None else _build_reasoning_counters(
@@ -356,24 +358,27 @@ def register(router: APIRouter, server_context) -> None:
                             final_usage.prompt_tokens += final_res.input_token_len
                             final_usage.completion_tokens += final_res.generate_token_len
                             final_usage.total_tokens += total_tokens
+                            cached_tokens += final_res.cached_tokens
                         response_json = create_stream_response_json(
-                            index=0,
+                            index=gen_index,
                             text=res.response,
                             finish_reason=res.finish_reason,
                             logprobs=logprobs)
                         if res.cache_block_ids is not None:
+                            response_json['cache_session_id'] = sessions[gen_index].session_id
                             response_json['cache_block_ids'] = res.cache_block_ids
                             response_json['remote_token_ids'] = res.token_ids
-                        yield f'data: {json.dumps(response_json)}\n\n'
+                        yield f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n'
             except RequestError as e:
-                yield f'data: {json.dumps({"error": request_error_payload(e)})}\n\n'
+                yield f'data: {json.dumps({"error": request_error_payload(e)}, ensure_ascii=False)}\n\n'
                 yield 'data: [DONE]\n\n'
                 return
             if final_usage is not None:
+                final_usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
                 if counters is not None:
                     final_usage.completion_tokens_details = CompletionTokensDetails(
                         reasoning_tokens=sum(counter.reasoning_tokens for counter in counters))
-                yield f'data: {json.dumps(create_stream_usage_response_json(final_usage))}\n\n'
+                yield f'data: {json.dumps(create_stream_usage_response_json(final_usage), ensure_ascii=False)}\n\n'
             yield 'data: [DONE]\n\n'
 
         # Streaming response
@@ -386,6 +391,7 @@ def register(router: APIRouter, server_context) -> None:
 
         # Non-streaming response
         usage = UsageInfo()
+        cached_tokens = 0
         choices = [None] * len(generators)
         cache_block_ids = []
         remote_token_ids = []
@@ -393,7 +399,7 @@ def register(router: APIRouter, server_context) -> None:
                                              prepared_requests)
 
         async def _inner_call(i, generator, session, counter=None):
-            nonlocal cache_block_ids, remote_token_ids
+            nonlocal cache_block_ids, remote_token_ids, cached_tokens
             final_logprobs = []
             final_token_ids = []
             final_res = None
@@ -440,6 +446,7 @@ def register(router: APIRouter, server_context) -> None:
             usage.prompt_tokens += final_res.input_token_len
             usage.completion_tokens += final_res.generate_token_len
             usage.total_tokens += total_tokens
+            cached_tokens += final_res.cached_tokens
 
         call_results = await asyncio.gather(*[
             _inner_call(i, generators[i], sessions[i],
@@ -454,6 +461,7 @@ def register(router: APIRouter, server_context) -> None:
         if counters is not None:
             usage.completion_tokens_details = CompletionTokensDetails(
                 reasoning_tokens=sum(counter.reasoning_tokens for counter in counters))
+        usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
 
         response = CompletionResponse(
             id=request_id,
@@ -464,6 +472,8 @@ def register(router: APIRouter, server_context) -> None:
         ).model_dump()
 
         if with_cache:
+            # Cache ownership uses the engine's ID, not the public response ID.
+            response['cache_session_id'] = sessions[0].session_id
             response['cache_block_ids'] = cache_block_ids
             response['remote_token_ids'] = remote_token_ids
 

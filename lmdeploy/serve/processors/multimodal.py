@@ -4,13 +4,13 @@ from typing import Any, Literal
 
 import PIL
 
-from lmdeploy.model import MODELS, BaseChatTemplate
+from lmdeploy.model import MODELS, BaseChatTemplate, HFChatTemplate
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.media.audio import AudioMediaIO
 from lmdeploy.vl.media.connection import load_from_url
-from lmdeploy.vl.media.image import ImageMediaIO
+from lmdeploy.vl.media.image import ImageMediaIO, apply_exif_orientation
 from lmdeploy.vl.media.time_series import TimeSeriesMediaIO
 from lmdeploy.vl.media.video import VideoMediaIO
 
@@ -57,24 +57,25 @@ class MultimodalProcessor:
         self.defer_image_decode = defer_image_decode
 
     @staticmethod
-    def merge_message_content(msg: dict) -> dict:
+    def merge_message_content(msg: dict, preserve_content_parts: bool = False) -> dict:
         """Merge multimodal content blocks and ensure content field exists.
 
-        This function normalizes message content to match vLLM's behavior:
+        This function normalizes message content for the selected chat template:
         1. Missing content field -> add content='' (empty string)
         2. None content -> convert to content='' (empty string)
         3. String content -> return as-is
-        4. List content (multimodal) -> merge all text blocks with newline separator
+        4. List content -> preserve structured parts when requested, otherwise merge text blocks with newlines
 
         Args:
             msg: A message dict with 'role' and optionally 'content' field
+            preserve_content_parts: Let the template render structured content lists directly.
 
         Returns:
             A message dict with 'content' field guaranteed to exist
 
         Note:
             This implementation is based on vLLM's content processing logic.
-            vLLM uses "\n".join() to merge multiple text blocks from multimodal content.
+            vLLM uses "\n".join() for string-format templates; structured templates receive content parts.
 
         References:
             - vLLM content normalization:
@@ -92,6 +93,9 @@ class MultimodalProcessor:
 
         # If content is already a string, return as-is
         if isinstance(msg['content'], str):
+            return msg
+
+        if preserve_content_parts and isinstance(msg['content'], list):
             return msg
 
         # If content is a list, merge all text blocks into a single string
@@ -197,6 +201,9 @@ class MultimodalProcessor:
             else:
                 raise NotImplementedError(f'unknown type: {item_type}')
 
+            # URL/path images are request-owned and already normalized by ImageMediaIO.
+            if modality == Modality.IMAGE and isinstance(data_src, PIL.Image.Image):
+                data = apply_exif_orientation(data)
             out_message['content'].append({'type': modality.value, 'data': data, **item_params})
 
         out_messages[i] = out_message
@@ -401,9 +408,6 @@ class MultimodalProcessor:
                                      chat_template_kwargs: dict | None = None,
                                      **kwargs):
         """Process text-only prompt and return prompt string and input_ids."""
-        # Change multimodal data to openai text messages
-        if isinstance(prompt, list):
-            prompt = [self.merge_message_content(msg) for msg in prompt]
         if do_preprocess:
             # use adapter's chat template if possible
             chat_template = self.chat_template
@@ -412,6 +416,13 @@ class MultimodalProcessor:
         else:
             chat_template = BaseChatTemplate()
         chat_template_kwargs = dict(chat_template_kwargs or {})
+        if isinstance(prompt, list):
+            # GLM-5.3 renders adjacent text parts without a separator. Preserve
+            # them for its default tokenizer/template. Explicit request-level
+            # overrides retain the existing string-content input contract.
+            preserve_parts = (isinstance(chat_template, HFChatTemplate) and chat_template.is_glm5_next
+                              and chat_template_kwargs.get('chat_template') is None)
+            prompt = [self.merge_message_content(msg, preserve_content_parts=preserve_parts) for msg in prompt]
         template_reasoning_effort = reasoning_effort
         if template_reasoning_effort is None:
             template_reasoning_effort = chat_template_kwargs.pop('reasoning_effort', None)

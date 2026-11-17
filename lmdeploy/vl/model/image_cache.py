@@ -50,11 +50,11 @@ class ImageProcessorCache:
         self._entries: OrderedDict[tuple, ProcessedImage] = OrderedDict()
 
     def process(self, images: list, preprocess: Callable[[Any, dict | None], ProcessedImage],
-                dtype: torch.dtype | None, size: dict | None) -> list[ProcessedImage]:
+                dtype: torch.dtype | None, processor_kwargs: dict | None) -> list[ProcessedImage]:
         """Reuse image features, preparing cold storage for the selected
         transport.
 
-        ``preprocess`` handles one decoded image and its size override, including
+        ``preprocess`` handles one decoded image and its processor options, including
         any model-specific content hash. Only FD-capable transports opt into
         shared storage; cache reuse does not depend on that capability.
         """
@@ -62,11 +62,11 @@ class ImageProcessorCache:
         share_pixels = self.share_memory and torch.multiprocessing.get_sharing_strategy() == 'file_descriptor'
         processed = []
         for image in images:
-            key = self.key(image, dtype, size) if cache_enabled else None
+            key = self.key(image, dtype, processor_kwargs) if cache_enabled else None
             item = self.get(key) if key is not None else None
             if item is None:
                 decoded = image.decode() if isinstance(image, EncodedImage) else image
-                item = preprocess(decoded, size)
+                item = preprocess(decoded, processor_kwargs)
                 # Release cold temporaries before processing the next image.
                 del decoded
                 if share_pixels:
@@ -86,7 +86,7 @@ class ImageProcessorCache:
         return processed
 
     @staticmethod
-    def key(image, dtype: torch.dtype | None, size: dict | None) -> tuple:
+    def key(image, dtype: torch.dtype | None, processor_kwargs: dict | None) -> tuple:
         if isinstance(image, EncodedImage):
             content = hashlib.sha256(image.data).hexdigest()
             identity = ('encoded', image.mode, content)
@@ -98,7 +98,8 @@ class ImageProcessorCache:
         else:
             # Offline pipelines can also supply NumPy arrays or CPU tensors.
             identity = ('array', make_multimodal_content_hash(image, None))
-        return identity, dtype, tuple(sorted(size.items())) if size else ()
+        options_hash = make_multimodal_content_hash(processor_kwargs, None) if processor_kwargs else None
+        return identity, dtype, options_hash
 
     def get(self, key: tuple) -> ProcessedImage | None:
         item = self._entries.get(key)
