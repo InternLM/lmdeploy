@@ -15,7 +15,6 @@ def check_request(request: ChatCompletionRequest,
                   json_request: dict | None = None) -> str:
     """Validate chat-completion options and fan-out compatibility."""
     engine_config = server_context.engine_config
-    session_manager = server_context.session_manager
     try:
         # Check logprobs settings
         logprobs_mode = engine_config.logprobs_mode
@@ -38,9 +37,6 @@ def check_request(request: ChatCompletionRequest,
                 'when logprobs_mode is enabled in engine configuration.')
     except AttributeError:
         pass
-
-    if session_manager.has(request.session_id):
-        return f'The session_id {request.session_id!r} is occupied.'
 
     # check sampling settings
     if request.n is not None and request.n <= 0:

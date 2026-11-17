@@ -57,7 +57,6 @@ def _create_top_logprobs(token_ids: list[int] | None = None,
 
 def check_request(request: GenerateReqInput, server_context) -> str:
     engine_config = server_context.engine_config
-    session_manager = server_context.session_manager
     logprobs_mode = getattr(engine_config, 'logprobs_mode', None)
     return_logprob = request.return_logprob
     top_logprobs_num = request.top_logprobs_num or 0
@@ -101,9 +100,6 @@ def check_request(request: GenerateReqInput, server_context) -> str:
             return 'logprob_start_len requires max_tokens=0.'
     elif request.max_tokens is not None and request.max_tokens == 0:
         return f'The max_tokens {request.max_tokens!r} must be a positive integer.'
-
-    if session_manager.has(request.session_id):
-        return f'The session_id {request.session_id!r} is occupied.'
 
     # check sampling settings
     if request.top_p is not None and not (0 < request.top_p <= 1):
@@ -154,8 +150,8 @@ def register(router: APIRouter, server_context) -> None:
             stop_words=request.stop,
         )
 
-        session = server_context.create_session(request.session_id)
         try:
+            session = server_context.create_session(request.session_id)
             prepared_request = await server_context.async_engine.preprocess(
                 messages=prompt,
                 session_id=session,

@@ -226,7 +226,8 @@ class SessionManager:
     def map_user_session_id(self, user_session_id: int) -> int:
         """Map a user_session_id to a session_id."""
         if user_session_id in self.user_session_id_map:
-            raise ValueError(f'User session id {user_session_id} already exists')
+            raise RequestError(ErrorCode.REQUEST_CONFLICT,
+                               f'User session id {user_session_id} already exists')
         session_id = next(self.session_id_generator)
         self.user_session_id_map[user_session_id] = session_id
         self.session_id_map[session_id] = user_session_id

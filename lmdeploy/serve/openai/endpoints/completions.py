@@ -148,7 +148,6 @@ def _build_reasoning_counters(reasoning_tags, prepared_requests):
 
 def check_request(request: CompletionRequest, server_context) -> str:
     engine_config = server_context.engine_config
-    session_manager = server_context.session_manager
     try:
         # Check logprobs settings
         logprobs_mode = engine_config.logprobs_mode
@@ -159,9 +158,6 @@ def check_request(request: CompletionRequest, server_context) -> str:
             return 'logprobs must be non-negative when logprobs_mode is enabled in engine configuration.'
     except AttributeError:
         pass
-
-    if session_manager.has(request.session_id):
-        return f'The session_id {request.session_id!r} is occupied.'
 
     # check sampling settings
     if request.n <= 0:
@@ -257,7 +253,10 @@ def register(router: APIRouter, server_context) -> None:
         sessions = []
         if isinstance(request.prompt, str):
             request.prompt = [request.prompt]
-            sessions.append(server_context.create_session(request.session_id))
+            try:
+                sessions.append(server_context.create_session(request.session_id))
+            except RequestError as e:
+                return create_request_error_response(e)
         elif isinstance(request.prompt, list):
             for _ in request.prompt:
                 sessions.append(server_context.create_session())
