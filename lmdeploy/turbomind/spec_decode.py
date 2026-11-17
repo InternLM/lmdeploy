@@ -43,6 +43,16 @@ def normalize_spec_method(method: str) -> str:
     return _MTP_ALIASES.get(method, method)
 
 
+def draft_quant_formats(hf_config: dict) -> list:
+    """Return the weight formats declared by a draft checkpoint."""
+    quant_config = search_nested_config(hf_config, 'quantization_config')
+    if quant_config and quant_config.get('quant_method') == 'compressed-tensors':
+        group0 = quant_config.get('config_groups', {}).get('group_0', {})
+        if group0.get('format') == 'nvfp4-pack-quantized':
+            return [NVFP4Format(block_in=group0['weights']['group_size'])]
+    return []
+
+
 def build_draft_model(speculative_config,
                       target_model,
                       target_model_path,
@@ -76,12 +86,7 @@ def build_draft_model(speculative_config,
 
     # A quantized draft (e.g. NVFP4) declares its format in quantization_config;
     # expose the matching format to the resolver so packed weights resolve.
-    quant_formats = []
-    quant_config = search_nested_config(hf_config.to_dict(), 'quantization_config')
-    if quant_config and quant_config.get('quant_method') == 'compressed-tensors':
-        group0 = quant_config.get('config_groups', {}).get('group_0', {})
-        if group0.get('format') == 'nvfp4-pack-quantized':
-            quant_formats = [NVFP4Format(block_in=group0['weights']['group_size'])]
+    quant_formats = draft_quant_formats(hf_config.to_dict())
     if spec.quantized and not quant_formats:
         raise NotImplementedError(f'quantized draft weights are not supported yet ({method!r})')
     resolver = WeightFormatResolver(formats=[*quant_formats, TrivialFormat(weight_dtype=engine_data_type)])

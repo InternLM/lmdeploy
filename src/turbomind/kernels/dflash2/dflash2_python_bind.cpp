@@ -161,6 +161,59 @@ void BindDflash2Kernels(py::module_& module)
         py::arg("stream_ptr"));
 
     module.def(
+        "dflash2_attention_int4",
+        [](py::handle q_object,
+           py::handle k_ctx_data_object,
+           py::handle k_ctx_param_object,
+           py::handle v_ctx_data_object,
+           py::handle v_ctx_param_object,
+           py::handle k_blk_object,
+           py::handle v_blk_object,
+           py::handle out_object,
+           float      scale,
+           int        window,
+           uintptr_t  stream_ptr) {
+            CudaDeviceGuard guard{GetCudaOrdinal(q_object)};
+            auto q           = detail::ConsumeDLPackWithStrides(q_object, stream_ptr);
+            auto k_ctx_data  = detail::ConsumeDLPackWithStrides(k_ctx_data_object, stream_ptr);
+            auto k_ctx_param = detail::ConsumeDLPackWithStrides(k_ctx_param_object, stream_ptr);
+            auto v_ctx_data  = detail::ConsumeDLPackWithStrides(v_ctx_data_object, stream_ptr);
+            auto v_ctx_param = detail::ConsumeDLPackWithStrides(v_ctx_param_object, stream_ptr);
+            auto k_blk       = detail::ConsumeDLPackWithStrides(k_blk_object, stream_ptr);
+            auto v_blk       = detail::ConsumeDLPackWithStrides(v_blk_object, stream_ptr);
+            auto out         = detail::ConsumeDLPackWithStrides(out_object, stream_ptr);
+
+            invokeDflash2AttentionInt4(out.data_or(static_cast<void*>(nullptr)),
+                                       q.data_or(static_cast<const void*>(nullptr)),
+                                       k_ctx_data.data_or(static_cast<const void*>(nullptr)),
+                                       k_ctx_param.data_or(static_cast<const void*>(nullptr)),
+                                       v_ctx_data.data_or(static_cast<const void*>(nullptr)),
+                                       v_ctx_param.data_or(static_cast<const void*>(nullptr)),
+                                       k_blk.data_or(static_cast<const void*>(nullptr)),
+                                       v_blk.data_or(static_cast<const void*>(nullptr)),
+                                       static_cast<int>(q.shape(0)),
+                                       static_cast<int>(k_ctx_data.shape(0)),
+                                       static_cast<int>(q.shape(1)),
+                                       static_cast<int>(k_ctx_data.shape(1)),
+                                       static_cast<int>(q.shape(2)),
+                                       scale,
+                                       window,
+                                       BitsOf(q),
+                                       reinterpret_cast<cudaStream_t>(stream_ptr));
+        },
+        py::arg("q"),
+        py::arg("k_ctx_data"),
+        py::arg("k_ctx_param"),
+        py::arg("v_ctx_data"),
+        py::arg("v_ctx_param"),
+        py::arg("k_blk"),
+        py::arg("v_blk"),
+        py::arg("out"),
+        py::arg("scale"),
+        py::arg("window"),
+        py::arg("stream_ptr"));
+
+    module.def(
         "dflash2_residual_rmsnorm",
         [](py::handle out_object, py::handle residual_object, py::handle x_object, py::handle w_object,
            float eps, float x_scale, uintptr_t stream_ptr) {
