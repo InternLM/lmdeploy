@@ -63,9 +63,10 @@ private:
     std::vector<Tensor> ctx_v_;
     Buffer_<int>        ctx_len_;
 
-    void MaterializeContext(const Tensor& context_hidden, const Buffer_<int>& positions, int rows, cudaStream_t stream);
+    void MaterializeContext(const Tensor& context_hidden, const Buffer_<int>& base_dev,
+                            const Buffer_<int>& committed_dev, int rows, cudaStream_t stream);
     Tensor RunBlock(const Tensor& block_embeddings, const Tensor& positions, int rows, int ctx_rows,
-                    cudaStream_t stream, TensorMap& env, bool dump);
+                    cudaStream_t stream, TensorMap& env);
     void StoreProposals(const Buffer_<int>& proposals, const Buffer_<int>& positions, int rows, int batch_size,
                         TensorMap& env);
 };

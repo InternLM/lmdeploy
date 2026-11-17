@@ -145,6 +145,23 @@ void invokeDflash2ResidualRMSNorm(void*        out,
                                   int          input_bits,
                                   cudaStream_t stream);
 
+/// `out[0] = entry[0] + (has_accept ? accept[0] : 0)` (device-side draft length).
+void invokeDflash2CommitLen(int* out, const int* entry, const int* accept, int has_accept, cudaStream_t stream);
+
+/// `out[i] = base[0] + i` for i in [0, n) (device-side position generation).
+void invokeDflash2CountUp(int* out, const int* base, int n, cudaStream_t stream);
+
+/// Scatter context K/V rows: dst[base[0] + i] = src[i] for i < committed[0] - base[0].
+/// `src`/`dst` are [rows, nkv, hd] / [max_ctx, nkv, hd] flattened; `per_row = nkv*hd`.
+void invokeDflash2KvScatter(void*        dst,
+                            const void*  src,
+                            const int*   base,
+                            const int*   committed,
+                            int          rows,
+                            int          per_row,
+                            int          input_bits,
+                            cudaStream_t stream);
+
 /// In-place `t *= factor` (elementwise, fp16/fp32).
 void invokeDflash2Scale(void*        t,
                         long long    n,

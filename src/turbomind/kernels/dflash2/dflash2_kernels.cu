@@ -410,6 +410,74 @@ void launch_conv(void*        out,                 const void*  hidden,
 
 }  // namespace
 
+__global__ void commit_len_kernel(int* out, const int* entry, const int* accept, int has_accept)
+{
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        out[0] = entry[0] + (has_accept ? accept[0] : 0);
+    }
+}
+
+void invokeDflash2CommitLen(int* out, const int* entry, const int* accept, int has_accept, cudaStream_t stream)
+{
+    commit_len_kernel<<<1, 1, 0, stream>>>(out, entry, accept, has_accept);
+}
+
+__global__ void count_up_kernel(int* out, const int* base, int n)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        out[i] = base[0] + i;
+    }
+}
+
+void invokeDflash2CountUp(int* out, const int* base, int n, cudaStream_t stream)
+{
+    const int block = 128;
+    const int grid  = (n + block - 1) / block;
+    count_up_kernel<<<grid, block, 0, stream>>>(out, base, n);
+}
+
+template<typename T>
+__global__ void kv_scatter_kernel(T* __restrict__ dst, const T* __restrict__ src, const int* __restrict__ base,
+                                  const int* __restrict__ committed, int rows, int per_row)
+{
+    const long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    const long long total = (long long)rows * per_row;
+    if (idx >= total) {
+        return;
+    }
+    const int i = (int)(idx / per_row);
+    const int r = (int)(idx - (long long)i * per_row);
+    const int b = base[0];
+    int       delta = committed[0] - b;
+    if (delta < 0) delta = 0;
+    if (delta > rows) delta = rows;
+    if (b < 0 || i >= delta) {
+        return;
+    }
+    dst[((long long)(b + i)) * per_row + r] = src[idx];
+}
+
+void invokeDflash2KvScatter(void* dst, const void* src, const int* base, const int* committed, int rows, int per_row,
+                            int input_bits, cudaStream_t stream)
+{
+    const long long total = (long long)rows * per_row;
+    const int       block = 256;
+    const long long grid  = (total + block - 1) / block;
+    if (input_bits == 16) {
+        kv_scatter_kernel<__half><<<grid, block, 0, stream>>>(
+            static_cast<__half*>(dst), static_cast<const __half*>(src), base, committed, rows, per_row);
+    }
+    else if (input_bits == 32) {
+        kv_scatter_kernel<float><<<grid, block, 0, stream>>>(
+            static_cast<float*>(dst), static_cast<const float*>(src), base, committed, rows, per_row);
+    }
+    else {
+        TM_CHECK(false) << "dflash2 kv_scatter: unsupported input bits " << input_bits;
+    }
+}
+
+
 void invokeGroupedConv(void*        out,
                        const void*  hidden,
                        const void*  delta,
