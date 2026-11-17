@@ -714,7 +714,7 @@ class AsyncEngine:
                 return
             token_ids = input_ids.copy()
             gen_len = 0
-            state = DetokenizeState(input_len)
+            state = DetokenizeState(input_len, emitted_prefix_chars=0 if content_stop is not None else None)
             response = ''
             response_chunks = []
             finish_reason = None
@@ -788,8 +788,12 @@ class AsyncEngine:
                         for rows in steps:
                             out = decode_batch(outputs, rows)
                             if (resolve_separator is not None and read_ahead is not None and out.response
-                                    and not out.response.strip('\n')):
-                                following = read_ahead.following_ids(outputs, gen_len - before_batch, stop_ids)
+                                    and not out.response.strip('\n') and content_stop.can_match_separator()):
+                                offset = gen_len - before_batch
+                                if state.emitted_prefix_chars:
+                                    # This ID already starts a non-newline UTF-8 character after the separator.
+                                    offset -= 1
+                                following = read_ahead.following_ids(outputs, offset, stop_ids)
                                 await resolve_separator(following)
                             yield out
                             if content_stop is not None and content_stop.matched:
@@ -830,7 +834,7 @@ class AsyncEngine:
                         metrics_processor.increase_succeeded_requests()
 
                     # utf-8 char at the end means it's a potential unfinished byte sequence
-                    if text_stop or not response.endswith('�'):
+                    if content_stop is not None or not response.endswith('�'):
                         # avoid returning the last response twice
                         response = ''
                     token_ids, logits, last_hidden_state, logprobs = [], None, None, None

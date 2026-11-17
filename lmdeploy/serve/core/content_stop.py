@@ -54,12 +54,22 @@ class ChatContentStop:
     def __init__(self, words: list[str], include_stop: bool,
                  preview_text: Callable[[list[int]], str | None] | None = None,
                  resolve_separator: Callable[[AsyncIterator[int | None]], Awaitable[None]] | None = None):
-        self.resolve_separator = resolve_separator if any(word.endswith('\n') for word in words) else None
+        self.separator_stops = [(word.rstrip('\n'), len(word) - len(word.rstrip('\n')))
+                                for word in words if word.endswith('\n')]
+        self.resolve_separator = resolve_separator if self.separator_stops else None
         self.preview_text = preview_text
         self.words = words
         self.include_stop = include_stop
         self.pending = ''
         self.matched: str | None = None
+
+    def can_match_separator(self) -> bool:
+        """Can more newlines complete a stop using the pending content
+        suffix?"""
+        stem = self.pending.rstrip('\n')
+        newlines = len(self.pending) - len(stem)
+        return any(not prefix or (stem.endswith(prefix) and newlines < count)
+                   for prefix, count in self.separator_stops)
 
     def can_skip_token_steps(self, ids: list[int]) -> bool:
         """Keep this engine batch intact only if no stop can complete in it."""

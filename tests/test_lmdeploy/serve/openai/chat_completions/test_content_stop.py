@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Replay the Sage2.1 O12 generation through the OpenAI chat endpoint on
 CPU."""
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -16,9 +17,11 @@ from transformers import PreTrainedTokenizerFast
 
 from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.serve.core.async_engine import AsyncEngine, PreprocessedRequest
+from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
 from lmdeploy.serve.openai.chat_completions import register
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser
-from lmdeploy.tokenizer import HuggingFaceTokenizer, Tokenizer
+from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer, Tokenizer
 
 # One untrimmed QA generation. Both copies of STOP_HERE and the trailing text are present.
 OUTPUT_IDS = [785, 1196, 6801, 752, 311, 2550, 6896, 279, 1555, 25, 8989, 26779, 29, 45268, 80891,
@@ -32,6 +35,9 @@ def _replay_tokenizer():
              'Ġnothing': 4302, 'Ġwants': 6801, 'Ġexactly': 6896, 'Ġ"</': 8989, '-text': 9342, 'Ġtail': 9782,
              'think': 26779, 'ĠSTOP': 45268, 'STOP': 50336, '_HERE': 80891}
     vocab.update({'Ċ': 198, 'X': 55, 'lookup': 20973, 'Berlin': 93615})
+    vocab.update({'answer': 9214, 'ĠãĤ': 17562, 'Ħ': 226, 'tail': 14576})
+    vocab.update({'\u00ef\u00bf\u00bd': 60001})  # A literal U+FFFD encoded in UTF-8.
+    vocab.update({'\u00ed': 169, '\u00b4': 112})
     tags = {'<think>': 154841, '</think>': 154842, '<tool_call>': 154843, '</tool_call>': 154844,
             '<arg_key>': 154847, '</arg_key>': 154848, '<arg_value>': 154849, '</arg_value>': 154850}
     backend = FastTokenizer(models.WordLevel({**vocab, **tags}, unk_token='[UNK]'))
@@ -155,6 +161,24 @@ def test_nonstream_stop_miss_preserves_custom_parse_complete(chat_endpoint):
     cancel.assert_not_awaited()
 
 
+def _completion_fields(response, stream):
+    if stream:
+        chunks = [json.loads(line[6:]) for line in response.text.splitlines()
+                  if line.startswith('data: ') and line != 'data: [DONE]']
+        choices = [choice for chunk in chunks for choice in chunk['choices']]
+        usage = chunks[-1]['usage']
+    else:
+        choices = response.json()['choices']
+        usage = response.json()['usage']
+    messages = [choice['delta' if stream else 'message'] for choice in choices]
+    body = ''.join(message.get('content') or '' for message in messages)
+    names = [call['function']['name'] for message in messages for call in message.get('tool_calls') or []
+             if call['function'].get('name')]
+    ids = [token for choice in choices for token in choice.get('output_ids') or []]
+    probs = [entry for choice in choices for entry in choice.get('output_token_logprobs') or []]
+    return body, names, ids, probs, usage, choices[-1]
+
+
 @pytest.mark.parametrize('stream', [False, True])
 @pytest.mark.parametrize('include', [False, True])
 @pytest.mark.parametrize('split', [False, True], ids=['one-batch', 'split-batches'])
@@ -190,20 +214,7 @@ def test_stop_after_tool_preserves_token_boundary(chat_endpoint, stream, include
     with TestClient(app) as client:
         response = client.post('/v1/chat/completions', json=request)
     assert response.status_code == 200, response.text
-    if stream:
-        chunks = [json.loads(line[6:]) for line in response.text.splitlines()
-                  if line.startswith('data: ') and line != 'data: [DONE]']
-        choices = [choice for chunk in chunks for choice in chunk['choices']]
-        usage = chunks[-1]['usage']
-    else:
-        choices = response.json()['choices']
-        usage = response.json()['usage']
-    messages = [choice['delta' if stream else 'message'] for choice in choices]
-    body = ''.join(message.get('content') or '' for message in messages)
-    names = [call['function']['name'] for message in messages for call in message.get('tool_calls') or []
-             if call['function'].get('name')]
-    ids = [token for choice in choices for token in choice.get('output_ids') or []]
-    probs = [entry for choice in choices for entry in choice.get('output_token_logprobs') or []]
+    body, names, ids, probs, usage, last = _completion_fields(response, stream)
     expected_ids = start
     if match == 'content':
         expected_body = '\n\n' if include else ''
@@ -217,6 +228,96 @@ def test_stop_after_tool_preserves_token_boundary(chat_endpoint, stream, include
     assert names == ['lookup'] * (2 if match == 'two_tools' else 1)
     assert ids == expected_ids
     assert probs == [[-0.5, token] for token in expected_ids]
-    assert choices[-1]['routed_experts'] == experts[:len(expected_ids)]
+    assert last['routed_experts'] == experts[:len(expected_ids)]
     assert usage['completion_tokens'] == len(expected_ids)
-    assert choices[-1]['finish_reason'] == ('stop' if match in ('native', 'content') else 'length')
+    assert last['finish_reason'] == ('stop' if match in ('native', 'content') else 'length')
+
+
+@pytest.mark.parametrize('stream', [True, False])
+@pytest.mark.parametrize('split', [True, False], ids=['one-id-at-a-time', 'one-batch'])
+@pytest.mark.parametrize('minimum', [0, 5])
+@pytest.mark.parametrize('include', [False, True])
+def test_stop_before_partial_utf8(chat_endpoint, stream, split, minimum, include):
+    _, context = chat_endpoint
+    context.engine_config.logprobs_mode = 'raw_logprobs'
+    context.engine_config.enable_return_routed_experts = True
+    # 17562 contains the space ending STOP_HERE and the first two bytes of U+3084.
+    ids = [154842, 9214, 45268, 80891, 17562, 226, 14576]
+    groups = [[i] for i in ids] if split else [ids]
+    experts = [[[i]] for i in range(len(ids))]
+    outputs = [EngineOutput(ResponseType.FINISH if i == len(groups) - 1 else ResponseType.SUCCESS, group,
+                            logprobs=[{token: -0.5} for token in group],
+                            routed_experts=experts if i == len(groups) - 1 else None)
+               for i, group in enumerate(groups)]
+    app, _ = _replay_app(context, outputs)
+    request = dict(model='glm53-flash', messages=[dict(role='user', content='Replay.')], stop=['STOP_HERE '],
+                   min_new_tokens=minimum, max_tokens=16, include_stop_str_in_output=include,
+                   return_token_ids=True, return_logprob=True, return_routed_experts=True, stream=stream,
+                   stream_options={'include_usage': True} if stream else None)
+    with TestClient(app) as client:
+        response = client.post('/v1/chat/completions', json=request)
+    assert response.status_code == 200, response.text
+    body, _, tokens, probs, usage, last = _completion_fields(response, stream)
+    expected_ids = ids if minimum else ids[:5]
+    expected_body = 'answer STOP_HERE \u3084tail' if minimum else ('answer STOP_HERE ' if include else 'answer ')
+    assert body == expected_body
+    assert tokens == expected_ids
+    assert probs == [[-0.5, token] for token in expected_ids]
+    assert usage['completion_tokens'] == len(expected_ids)
+    assert last['routed_experts'] == experts[:len(expected_ids)]
+    assert last['finish_reason'] == ('length' if minimum else 'stop')
+
+
+def test_stream_delivers_newline_ids_without_unrelated_stop_lookahead(chat_endpoint):
+    _, context = chat_endpoint
+    consumed = []
+
+    def outputs():
+        for token in [154842, 154843, 20973, 154844, 198, 198, 198, 55]:
+            consumed.append(token)
+            yield EngineOutput(ResponseType.SUCCESS, [token])
+        yield EngineOutput(ResponseType.FINISH, [])
+
+    _replay_app(context, outputs())
+    request = ChatCompletionRequest(model='glm53-flash', messages=[dict(role='user', content='Look it up.')],
+                                    tools=[dict(type='function', function=dict(name='lookup',
+                                                                               parameters={'type': 'object'}))],
+                                    stop=['STOP_HERE\n'], stream=True, return_token_ids=True)
+
+    async def run():
+        runner = await ChatRunner.prepare(context, request, ChatRunnerOptions(match_glm_content_stop=True))
+        received = []
+        async for chunk in runner.stream():
+            received.extend(chunk.token_ids)
+            if chunk.token_ids == [198]:
+                assert received == consumed
+        assert received == consumed
+
+    asyncio.run(run())
+
+
+def test_partial_utf8_preserves_literal_replacement_and_whole_token_mode():
+    tokenizer = _replay_tokenizer()
+    ids = [9214, 17562, 226, 60001, 55]
+    for emitted, expected in [
+        (0, ['answer', ' ', '\u3084', '\ufffd', 'X']),
+        (None, ['answer', '', ' \u3084', '', '\ufffdX']),
+    ]:
+        state = DetokenizeState(emitted_prefix_chars=emitted)
+        deltas = []
+        for end in range(1, len(ids) + 1):
+            text, state = tokenizer.detokenize_incrementally(ids[:end], state)
+            deltas.append(text)
+        assert deltas == expected
+        assert ''.join(deltas) == tokenizer.decode(ids)
+
+
+def test_unfinished_utf8_surrogate_does_not_emit_early_replacements():
+    tokenizer = _replay_tokenizer()
+    ids = [169, 112, 55]  # ED B4, followed by ASCII X.
+    state = DetokenizeState(emitted_prefix_chars=0)
+    deltas = []
+    for end in range(1, len(ids) + 1):
+        text, state = tokenizer.detokenize_incrementally(ids[:end], state)
+        deltas.append(text)
+    assert deltas == ['', '', '\ufffd\ufffdX']

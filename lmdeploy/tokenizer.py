@@ -1,15 +1,40 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import codecs
 import json
 import os.path as osp
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import lru_cache, partial
 
 from lmdeploy.utils import get_logger
 
 # this file will be copied to triton server, make sure all
 # importing are starting from the package root lmdeploy
+
+
+@lru_cache(maxsize=1)
+def _byte_level_decoder() -> dict[str, int]:
+    from transformers.convert_slow_tokenizer import bytes_to_unicode
+    return {char: byte for byte, char in bytes_to_unicode().items()}
+
+
+def _incomplete_utf8_chars(tokens: list[str]) -> int:
+    """Count replacement characters produced by finalizing the pending
+    ByteLevel bytes."""
+    decoder = _byte_level_decoder()
+    tail = b''
+    for token in reversed(tokens):
+        try:
+            raw = bytes(decoder[c] for c in token)
+        except KeyError:
+            # ByteLevel decodes an unmapped (e.g. added) token as its literal UTF-8 bytes.
+            raw = token.encode()
+        tail = raw[-3:] + tail
+        if len(tail) >= 3:
+            break
+    _, consumed = codecs.utf_8_decode(tail, 'replace', False)
+    return len(tail[consumed:].decode('utf-8', errors='replace'))
 
 
 @dataclass
@@ -30,6 +55,9 @@ class DetokenizeState:
     prev_tokens: list[str] | None = None
     prefix_offset: int = 0
     read_offset: int = 0
+    # Number of characters already emitted from the uncommitted ByteLevel tokens.
+    # None selects the usual whole-token detokenization.
+    emitted_prefix_chars: int | None = None
 
     def as_tuple(self) -> tuple:
         """Return a tuple of states."""
@@ -322,19 +350,25 @@ class HuggingFaceTokenizer:
             spaces_between_special_tokens=spaces_between_special_tokens,
         )
 
-        # update state and get final decoded output
-        if len(new_text) > len(prefix_text) and not new_text.endswith('�'):
-            # utf-8 char at the end means it's a potential unfinished byte
-            # sequence from byte fallback tokenization.
-            # If it's in the middle, it's probably a real invalid id generated
-            # by the model
+        emitted = state.emitted_prefix_chars
+        start = len(prefix_text) + (emitted or 0)
+        withheld = int(new_text.endswith('\ufffd'))
+        if withheld and emitted is not None:
+            withheld = _incomplete_utf8_chars(output_tokens)
+        if withheld and emitted is not None:
+            # Release complete characters while leaving the undecided bytes for the next step.
+            delta = new_text[start:-withheld]
+            emitted += len(delta)
+        elif not withheld and len(new_text) > len(prefix_text):
+            delta = new_text[start:]
             prefix_offset = read_offset
             read_offset = len(output_tokens)
-            new_text = new_text[len(prefix_text):]
+            if emitted is not None:
+                emitted = 0
         else:
-            new_text = ''
+            delta = ''
 
-        return new_text, DetokenizeState(len(all_input_ids), prev_tokens, prefix_offset, read_offset)
+        return delta, DetokenizeState(len(all_input_ids), prev_tokens, prefix_offset, read_offset, emitted)
 
     def __call__(self, s: str | Sequence[str]):
         """Tokenize prompts.
