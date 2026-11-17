@@ -523,3 +523,27 @@ def test_request_arriving_during_abort_all_remains_cancellable(abort_all, monkey
             processor.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('start', [0, 2, 3])
+@pytest.mark.parametrize('tokenize', [False, True])
+def test_routed_experts_start_uses_processed_prompt_length(start, tokenize):
+    class _PromptProcessor:
+
+        async def get_prompt_input(self, **kwargs):
+            return {'prompt': 'rendered', 'input_ids': [1, 2]}
+
+    async def _run():
+        engine = _engine(_PromptProcessor())
+        config = GenerationConfig(return_routed_experts=True, routed_experts_start_len=start)
+        kwargs = {'messages': 'render me'} if tokenize else {'messages': None, 'input_ids': [1, 2]}
+        if start > 2:
+            with pytest.raises(RequestError) as error:
+                await engine.preprocess(session_id=17, gen_config=config, **kwargs)
+            assert error.value.code is ErrorCode.INVALID_REQUEST
+            assert engine.session_mgr.sessions == {}
+        else:
+            prepared = await engine.preprocess(session_id=17, gen_config=config, **kwargs)
+            assert prepared.gen_config.routed_experts_start_len == start
+
+    asyncio.run(_run())

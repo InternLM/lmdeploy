@@ -27,6 +27,7 @@ from lmdeploy.serve.openai.protocol import (
     FunctionCall,
     ToolCall,
 )
+from lmdeploy.serve.parsers.gpt_oss_response_parser import GptOssResponseParser
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParserManager
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 from lmdeploy.serve.parsers.tool_parser.interns2preview_tool_parser import InternS2PreviewToolParser
@@ -520,6 +521,97 @@ def test_http_messages_rejects_invalid_repetition_penalty(stream, raw_tokens, re
     assert context.async_engine.preprocess_calls == []
     assert context.async_engine.generate_calls == []
     assert context.session_mgr.next_session_id == 0
+
+
+def test_messages_count_tokens_counts_declared_tools(hf_media_template):
+    # A real chat template renders the whole tool schema into the prompt, so a
+    # count that ignores `tools` is not the count the same request produces.
+    # The template is also what rejects protocol objects, so the schemas have
+    # to reach it dumped, exactly as the generation path dumps them.
+    client = _make_client(server_context=_FakeServerContext(chat_template=hf_media_template('qwen3_vl')))
+    described = {**SEARCH_TOOL, 'description': 'Search the public web and return ranked result snippets.'}
+    two_parameters = {
+        **SEARCH_TOOL,
+        'input_schema': {
+            'type': 'object',
+            'properties': {
+                'query': {
+                    'type': 'string'
+                },
+                'limit': {
+                    'type': 'integer'
+                },
+            },
+            'required': ['query'],
+        },
+    }
+
+    without_tools = _post_count_tokens(client)
+    with_tools = _post_count_tokens(client, tools=[SEARCH_TOOL])
+    with_description = _post_count_tokens(client, tools=[described])
+    with_parameter = _post_count_tokens(client, tools=[two_parameters])
+
+    for response in (without_tools, with_tools, with_description, with_parameter):
+        assert response.status_code == 200
+    declared = with_tools.json()['input_tokens']
+    assert declared > without_tools.json()['input_tokens']
+    # Descriptions and parameter schemas reach the prompt, not just names.
+    assert with_description.json()['input_tokens'] > declared
+    assert with_parameter.json()['input_tokens'] > declared
+
+
+@pytest.mark.skipif(GptOssResponseParser is None, reason='openai_harmony is not installed')
+def test_messages_count_tokens_renders_gpt_oss_tool_wrappers(hf_media_template):
+    # Templates disagree on the tool shape: GPT-OSS reads `tool.function`, so
+    # the dumped function schema every other template expects raises
+    # UndefinedError and turns a valid request into HTTP 500 (PR review).
+    # Counting has to render tools the way this model's generation path does.
+    template = hf_media_template('gpt_oss')
+    context = _FakeServerContext(chat_template=template, response_parser_cls=GptOssResponseParser)
+    client = _make_client(server_context=context)
+
+    without_tools = _post_count_tokens(client)
+    with_tools = _post_count_tokens(client, tools=[SEARCH_TOOL])
+
+    assert without_tools.status_code == 200
+    assert with_tools.status_code == 200, with_tools.text
+
+    # the wrapper shape GPT-OSS generation renders, spelled out here so the
+    # assertion does not lean on the code under test
+    wrapped = [{
+        'type': 'function',
+        'function': {
+            'name': SEARCH_TOOL['name'],
+            'description': SEARCH_TOOL['description'],
+            'parameters': SEARCH_TOOL['input_schema'],
+        },
+    }]
+    expected_prompt = template.messages2prompt(DEFAULT_MESSAGES, tools=wrapped)
+    expected = len(context.async_engine.tokenizer.encode(expected_prompt, add_bos=True))
+    assert with_tools.json()['input_tokens'] == expected
+    assert expected > without_tools.json()['input_tokens']
+
+
+def test_messages_count_tokens_combines_tools_and_thinking(hf_media_template):
+    # Tools and the thinking switch travel to the template in one call, so
+    # neither may swallow the other (PR review).
+    client = _make_client(server_context=_FakeServerContext(chat_template=hf_media_template('qwen3_omni')))
+
+    def count(**overrides):
+        response = _post_count_tokens(client, **overrides)
+        assert response.status_code == 200, response.text
+        return response.json()['input_tokens']
+
+    plain = count(thinking={'type': 'enabled'})
+    no_thinking = count(thinking={'type': 'disabled'})
+    with_tools = count(tools=[SEARCH_TOOL], thinking={'type': 'enabled'})
+    with_both = count(tools=[SEARCH_TOOL], thinking={'type': 'disabled'})
+
+    assert with_tools > plain
+    assert no_thinking > plain  # a disabled think block is rendered, not dropped
+    # each switch contributes the same amount whatever the other one is
+    assert with_both - with_tools == no_thinking - plain
+    assert with_both - no_thinking == with_tools - plain
 
 
 def test_messages_count_tokens_rejects_empty_messages():
@@ -1460,6 +1552,42 @@ def test_http_tool_result_images_keep_their_ids_and_content_order(stream):
                                       dict(type='image_url', image_url=dict(url=f'https://example.com/{identifier}.png')),
                                       dict(type='text', text='after')]
     assert len(context.session_mgr.removed) == 1
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('raw_tokens', [False, True])
+@pytest.mark.parametrize('fields, expected', [({}, 0), ({'routed_experts_start_len': 0}, 0),
+                                           ({'routed_experts_start_len': 2}, 2)])
+def test_http_messages_routed_experts_start_reaches_engine(stream, raw_tokens, fields, expected):
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    payload = _messages_payload(stream=stream, return_routed_experts=True, **fields)
+    if raw_tokens:
+        payload.update(messages=[], input_ids=[1, 2, 3])
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', json=payload, headers=ANTHROPIC_HEADERS)
+    assert response.status_code == 200, response.text
+    config = context.async_engine.preprocess_calls[0][1]['gen_config']
+    assert config.return_routed_experts is True
+    assert config.routed_experts_start_len == expected
+    assert len(context.async_engine.generate_calls) == 1
+
+
+@pytest.mark.parametrize('bad', [-1, 1.5, True, '2'])
+def test_http_messages_rejects_invalid_routed_experts_start(bad):
+    context = _FakeServerContext()
+    app = FastAPI()
+    app.include_router(create_anthropic_router(context))
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    with TestClient(app) as client:
+        response = client.post('/v1/messages', headers=ANTHROPIC_HEADERS,
+                               json=_messages_payload(routed_experts_start_len=bad))
+    assert response.status_code == 400, response.text
+    assert response.json()['error']['type'] == 'invalid_request_error'
+    assert 'routed_experts_start_len' in response.json()['error']['message']
+    assert context.async_engine.preprocess_calls == []
+    assert context.async_engine.generate_calls == []
 
 
 def test_count_tokens_applies_thinking_switch_like_generation():
