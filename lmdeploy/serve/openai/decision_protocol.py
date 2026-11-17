@@ -124,6 +124,7 @@ class SystemoneRequest(BaseModel):
     @classmethod
     def valid_unicode(cls, value):
         if isinstance(value, dict):
+            # Keep these fields in sync with the Systemone schema; unknown fields are ignored.
             _validate_unicode({key: value[key] for key in ('state', 'model', 'assets') if key in value})
             questions = value.get('questions')
             if isinstance(questions, dict):
