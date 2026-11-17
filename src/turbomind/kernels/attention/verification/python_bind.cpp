@@ -47,6 +47,9 @@ int LaunchVerificationAttention(py::handle prefix_k_object,
                                 int        max_key_length,
                                 int        window_size,
                                 int        requested_max_split_count,
+                                int        quant_policy,
+                                int        split_count_override,
+                                bool       process_kv,
                                 int        rope_type,
                                 int        rope_dim,
                                 float      rope_base,
@@ -97,62 +100,66 @@ int LaunchVerificationAttention(py::handle prefix_k_object,
 
     const int     batch_size         = static_cast<int>(q_offsets.shape(0) - 1);
     const int64_t prefix_head_stride = prefix_k.stride(0) / head_dim;
-    invokeProcessKV_v2<T>(reinterpret_cast<char**>(block_ptrs.data<int64_t>()),
-                          prefix_k.data<T>(),
-                          prefix_v.data<T>(),
-                          nullptr,
-                          nullptr,
-                          prefix_offsets.data<int>(),
-                          prefix_offsets.data<int>(),
-                          block_ptr_offsets.data<int>(),
-                          nullptr,
-                          nullptr,
-                          rope,
-                          0,
-                          prefix_head_stride,
-                          1,
-                          prefix_head_stride,
-                          block_len,
-                          0,
-                          0,
-                          cutlass::FastDivmod(1),
-                          max_history_length,
-                          kv_head_count,
-                          head_dim,
-                          batch_size,
-                          0,
-                          stream);
+    if (process_kv) {
+        invokeProcessKV_v2<T>(reinterpret_cast<char**>(block_ptrs.data<int64_t>()),
+                              prefix_k.data<T>(),
+                              prefix_v.data<T>(),
+                              nullptr,
+                              nullptr,
+                              prefix_offsets.data<int>(),
+                              prefix_offsets.data<int>(),
+                              block_ptr_offsets.data<int>(),
+                              nullptr,
+                              nullptr,
+                              rope,
+                              0,
+                              prefix_head_stride,
+                              1,
+                              prefix_head_stride,
+                              block_len,
+                              0,
+                              0,
+                              cutlass::FastDivmod(1),
+                              max_history_length,
+                              kv_head_count,
+                              head_dim,
+                              batch_size,
+                              quant_policy,
+                              stream);
+    }
 
     const int64_t qkv_stride      = packed_qkv.stride(0);
     const int64_t qkv_head_stride = qkv_stride / head_dim;
     const T*      packed          = packed_qkv.data<T>();
     const T*      submitted_k     = packed + query_head_count * head_dim;
     const T*      submitted_v     = submitted_k + kv_head_count * head_dim;
-    invokeProcessKV_v2<T>(reinterpret_cast<char**>(block_ptrs.data<int64_t>()),
-                          submitted_k,
-                          submitted_v,
-                          nullptr,
-                          nullptr,
-                          q_offsets.data<int>(),
-                          k_offsets.data<int>(),
-                          block_ptr_offsets.data<int>(),
-                          nullptr,
-                          finished.data<bool>(),
-                          rope,
-                          0,
-                          qkv_head_stride,
-                          1,
-                          qkv_head_stride,
-                          block_len,
-                          0,
-                          0,
-                          cutlass::FastDivmod(1),
-                          max_query_length,
-                          kv_head_count,
-                          head_dim,
-                          batch_size,
-                          0,
-                          stream);
+    if (process_kv) {
+        invokeProcessKV_v2<T>(reinterpret_cast<char**>(block_ptrs.data<int64_t>()),
+                              submitted_k,
+                              submitted_v,
+                              nullptr,
+                              nullptr,
+                              q_offsets.data<int>(),
+                              k_offsets.data<int>(),
+                              block_ptr_offsets.data<int>(),
+                              nullptr,
+                              finished.data<bool>(),
+                              rope,
+                              0,
+                              qkv_head_stride,
+                              1,
+                              qkv_head_stride,
+                              block_len,
+                              0,
+                              0,
+                              cutlass::FastDivmod(1),
+                              max_query_length,
+                              kv_head_count,
+                              head_dim,
+                              batch_size,
+                              quant_policy,
+                              stream);
+    }
 
     verification_attention::Arguments arguments{};
     arguments.out                     = output.data<T>();
@@ -183,6 +190,7 @@ int LaunchVerificationAttention(py::handle prefix_k_object,
     arguments.partial_o               = partial_o.data<float>();
     arguments.partial_ml              = partial_ml.data<float>();
     arguments.data_type               = packed_qkv.dtype();
+    arguments.quant_policy            = quant_policy;
     arguments.stream                  = stream;
 
     const int m_slices = (max_query_length * arguments.query_group_size + verification_attention::CtaM(arguments) - 1)
@@ -195,6 +203,9 @@ int LaunchVerificationAttention(py::handle prefix_k_object,
                                                                        static_cast<int>(partial_o.shape(0)),
                                                                        requested_max_split_count,
                                                                        getSMCount());
+    if (split_count_override > 0) {
+        arguments.split_count = split_count_override;
+    }
     verification_attention::run(arguments);
     return arguments.split_count;
 }
@@ -229,6 +240,9 @@ void BindVerificationAttention(py::module_& module)
            int        max_key_length,
            int        window_size,
            int        requested_max_split_count,
+           int        quant_policy,
+           int        split_count_override,
+           bool       process_kv,
            int        rope_type,
            int        rope_dim,
            float      rope_base,
@@ -267,6 +281,9 @@ void BindVerificationAttention(py::module_& module)
                                                          max_key_length,
                                                          window_size,
                                                          requested_max_split_count,
+                                                         quant_policy,
+                                                         split_count_override,
+                                                         process_kv,
                                                          rope_type,
                                                          rope_dim,
                                                          rope_base,
@@ -303,6 +320,9 @@ void BindVerificationAttention(py::module_& module)
                                                             max_key_length,
                                                             window_size,
                                                             requested_max_split_count,
+                                                            quant_policy,
+                                                            split_count_override,
+                                                            process_kv,
                                                             rope_type,
                                                             rope_dim,
                                                             rope_base,
@@ -339,6 +359,9 @@ void BindVerificationAttention(py::module_& module)
         py::arg("max_key_length"),
         py::arg("window_size"),
         py::arg("requested_max_split_count"),
+        py::arg("quant_policy"),
+        py::arg("split_count_override"),
+        py::arg("process_kv") = true,
         py::arg("rope_type"),
         py::arg("rope_dim"),
         py::arg("rope_base"),
