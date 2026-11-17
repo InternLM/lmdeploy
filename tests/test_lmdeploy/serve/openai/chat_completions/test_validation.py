@@ -20,6 +20,7 @@ from lmdeploy.serve.openai.chat_completions.logprobs import _create_chat_complet
 from lmdeploy.serve.openai.chat_completions.validation import check_request
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.openai.responses import create_responses_router
+from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 from lmdeploy.serve.processors.multimodal import MultimodalProcessor
 
 
@@ -78,6 +79,83 @@ def test_chat_completions_accepts_raw_input_ids_without_messages():
 
 def test_chat_completions_accepts_null_n_as_unspecified():
     assert check_request(_request(n=None), _server_context()) == ''
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('names,parser_name', [
+    (None, 'glm47'), ([], 'glm47'), (['other'], 'glm47'),
+    (['lookup', 'lookup'], 'glm47'), (['lookup'], 'llama3'), (['lookup'], None),
+    (None, 'gpt-oss'), ([], 'gpt-oss'), (['other'], 'gpt-oss'),
+    (['lookup', 'lookup'], 'gpt-oss'),
+])
+def test_named_tool_choice_errors_before_generation(chat_endpoint, names, parser_name, stream):
+    _, context = chat_endpoint
+
+    class Parser(BaseResponseParser):
+        pass
+
+    if parser_name == 'gpt-oss':
+        pytest.importorskip('openai_harmony')
+        from lmdeploy.serve.parsers.gpt_oss_response_parser import GptOssResponseParser
+
+        context.response_parser_cls = GptOssResponseParser
+    else:
+        Parser.set_parsers(None, parser_name)
+        context.response_parser_cls = Parser
+    app = FastAPI()
+    register(app, context)
+    tools = None if names is None else [dict(type='function', function=dict(name=name)) for name in names]
+    with TestClient(app) as client:
+        response = client.post('/v1/chat/completions', json=dict(
+            model='fake-model', messages=[dict(role='user', content='Hello')], stream=stream,
+            tools=tools, tool_choice=dict(type='function', function=dict(name='lookup'))))
+    assert response.status_code == 400, response.text
+    assert response.json()['type'] == 'invalid_request_error'
+    assert context.async_engine.gen_configs == []
+    assert context.session_manager.sessions == {}
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('session_id', [None, 42])
+def test_named_grammar_compilation_failure_releases_session(preprocessing_client, chat_endpoint, stream, session_id):
+    client, engine = preprocessing_client
+    _, context = chat_endpoint
+
+    class Parser(BaseResponseParser):
+        pass
+
+    Parser.set_parsers(None, 'qwen3')
+    context.response_parser_cls = Parser
+    schema = dict(type='object', properties={'text': dict(type='string', pattern=r'^(a)\1$')}, required=['text'])
+    payload = dict(model='fake-model', messages=[dict(role='user', content='Hello')], stream=stream,
+                   session_id=session_id, max_completion_tokens=16,
+                   tools=[dict(type='function', function=dict(name='lookup', parameters=schema))],
+                   tool_choice=dict(type='function', function=dict(name='lookup')))
+    for _ in range(3):
+        response = client.post('/v1/chat/completions', json=payload)
+        assert response.status_code == 400, response.text
+        assert engine.call_count == 0
+        assert engine.session_mgr.sessions == {}
+        assert engine.session_mgr.user_session_id_map == {}
+
+    schema['properties']['text'].pop('pattern')
+    original_generate = engine.generate
+
+    def generate(*args, **kwargs):
+        async def outputs():
+            async for result in original_generate(*args, **kwargs):
+                result.response = '<tool_call>{"name":"lookup","arguments":{"text":"aa"}}</tool_call>'
+                yield result
+
+        return outputs()
+
+    engine.generate = generate
+    response = client.post('/v1/chat/completions', json=payload)
+    assert response.status_code == 200, response.text
+    assert 'tool_calls' in response.text
+    assert engine.call_count == 1
+    assert engine.session_mgr.sessions == {}
+    assert engine.session_mgr.user_session_id_map == {}
 
 
 @pytest.mark.parametrize('config, limit', [

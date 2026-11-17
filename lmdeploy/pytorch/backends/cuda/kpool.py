@@ -109,14 +109,15 @@ def kpool_decode_update_cuda(keys, scores, tail_keys, tail_scores, state_ids,
                              history_lengths, packed_cache, block_offsets,
                              ape, pool_size, round_scale, *, q_seqlens=None, kv_seqlens=None):
     """Batch verification updates and reuse indexed cache writes."""
+    cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
     closed_keys, closed_scores, groups, valid = update_kpool(
         keys, scores, tail_keys, tail_scores, state_ids, history_lengths, pool_size,
         q_seqlens=q_seqlens, kv_seqlens=kv_seqlens)
     compress = (compress_kpool if torch.cuda.get_device_capability(keys.device)[0] >= 9
                 else kpool_compress_quantize_cuda)
     values, scales = compress(
-        closed_keys, closed_scores, ape, mode='decode', round_scale=round_scale, valid=valid)
-    cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
+        closed_keys, closed_scores, ape, mode='decode', round_scale=round_scale,
+        valid=valid, out_dtype=cache_keys.dtype)
     fill_indexed_key_cache(values, scales, groups, valid, block_offsets,
                            cache_keys, cache_scales,
                            page_step=cache_keys.size(1) * pool_size // KPOOL_PAGE_SIZE)
@@ -126,11 +127,12 @@ def kpool_raw_decode_update_cuda(keys, scores, raw_keys, raw_scores, state_ids, 
                                   cu_seqlens_q, packed_cache, block_offsets, ape, pool_size, round_scale):
     """Fuse raw-ring decode state updates while retaining compact cache
     addressing."""
+    cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
     closed_keys, closed_scores, groups, valid = update_raw_kpool(
         keys, scores, raw_keys, raw_scores, state_ids, q_seqlens, kv_seqlens, cu_seqlens_q, pool_size)
     values, scales = kpool_compress_quantize_cuda(
-        closed_keys, closed_scores, ape, mode='decode', round_scale=round_scale, valid=valid)
-    cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
+        closed_keys, closed_scores, ape, mode='decode', round_scale=round_scale,
+        valid=valid, out_dtype=cache_keys.dtype)
     fill_indexed_key_cache(values, scales, groups, valid, block_offsets,
                            cache_keys, cache_scales,
                            page_step=cache_keys.size(1) * pool_size // KPOOL_PAGE_SIZE)
@@ -140,12 +142,13 @@ def kpool_prefill_update_cuda(keys, scores, tail_keys, tail_scores, state_ids,
                               q_seqlens, kv_seqlens, packed_cache, block_offsets,
                               ape, pool_size, round_scale):
     """Batch ragged pool assembly without a host read or cache-arena copy."""
+    cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
     closed_keys, closed_scores, group_ids, requests, valid = partition_kpool(
         keys, scores, tail_keys, tail_scores, state_ids, q_seqlens, kv_seqlens, pool_size)
     if closed_keys.size(0):
         values, scales = kpool_compress_quantize_cuda(
-            closed_keys, closed_scores, ape, mode='extend', round_scale=round_scale, valid=valid)
-        cache_keys, cache_scales = kpool_packed_cache_views(packed_cache, keys.size(-1))
+            closed_keys, closed_scores, ape, mode='extend', round_scale=round_scale,
+            valid=valid, out_dtype=cache_keys.dtype)
         fill_indexed_key_cache(values, scales, group_ids, valid, block_offsets,
                                cache_keys, cache_scales, page_step=cache_keys.size(1) * pool_size // KPOOL_PAGE_SIZE,
                                request_ids=requests)
@@ -206,14 +209,20 @@ def kpool_compress_quantize_cuda(
     mode: str,
     round_scale: bool,
     valid: Tensor | None = None,
+    out_dtype: torch.dtype = torch.float8_e4m3fn,
 ) -> tuple[Tensor, Tensor]:
-    """Reuse fused compression for both prefill and decode closed pools."""
+    """Compress prefill/decode pools to the destination cache precision."""
+    if out_dtype not in (torch.float8_e4m3fn, torch.bfloat16):
+        raise ValueError(f'Unsupported KPool value dtype: {out_dtype}')
     if slot_k.is_cuda and torch.cuda.get_device_capability(slot_k.device)[0] >= 9:
-        return compress_kpool(slot_k, slot_score, ape, mode=mode, round_scale=round_scale, valid=valid)
+        return compress_kpool(slot_k, slot_score, ape, mode=mode, round_scale=round_scale,
+                              valid=valid, out_dtype=out_dtype)
     if valid is not None:
         slot_k = torch.where(valid[:, None, None], slot_k, 0)
         slot_score = torch.where(valid[:, None, None], slot_score, 0)
-    pooled = kpool_compress(slot_k, slot_score, ape, mode=mode)
+    pooled = kpool_compress(slot_k, slot_score, ape, mode=mode, rotate=out_dtype != torch.bfloat16)
+    if out_dtype == torch.bfloat16:
+        return pooled, torch.ones((*pooled.shape[:-1], 1), device=pooled.device, dtype=torch.float32)
     return kpool_quantize_fp8(
         pooled,
         block_size=pooled.size(-1),
@@ -226,7 +235,7 @@ def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
                               pool_size, topk, *, return_groups=False, metadata=None):
     """Score and select all ragged prefill requests without host length
     reads."""
-    _validate_query(query_fp8, query_weight)
+    _validate_query(query_fp8, query_weight, allow_bf16=True)
     rows = query_fp8.size(0)
     if not rows:
         return torch.empty((0, topk // pool_size if return_groups else topk + pool_size - 1),
@@ -235,6 +244,22 @@ def kpool_select_prefill_cuda(query_fp8, query_weight, packed_cache,
     if metadata is None:
         metadata = kpool_prefill_metadata_cuda(
             q_seqlens, kv_seqlens, block_offsets, rows, pool_size, page_size=keys.size(1))
+    if query_fp8.dtype == torch.bfloat16:
+        tables = metadata.block_table.repeat_interleave(q_seqlens.long(), dim=0, output_size=rows)
+        max_rows = _get_max_score_rows(tables.size(1) * keys.size(1),
+                                       _envs.dsa_indexer_max_logits_mb * (1 << 20), num_heads=query_fp8.size(1))
+        selected = torch.empty((rows, topk // pool_size), device=query_fp8.device, dtype=torch.int32)
+        for start in range(0, rows, max_rows):
+            rs = slice(start, min(start + max_rows, rows))
+            logits = kpool_score_paged_cuda(query_fp8[rs], query_weight[rs], packed_cache,
+                                           metadata.group_lengths[rs], tables[rs], page_size=keys.size(1))
+            selected[rs] = kpool_select_groups_cuda(logits, metadata.group_lengths[rs],
+                                                   group_topk=topk // pool_size)
+            del logits
+        if return_groups:
+            return selected
+        return kpool_expand_groups_cuda(selected, metadata.group_lengths, pool_size, topk,
+                                        seq_lens=metadata.seq_lens)
     counts, starts = metadata.counts, metadata.starts
     seq, lengths = metadata.seq_lens, metadata.group_lengths
     query_starts, query_ends = metadata.query_starts, metadata.query_ends
@@ -339,16 +364,17 @@ def kpool_select_groups_cuda(
     )
 
 
-def _validate_query(query_fp8: Tensor, query_weight: Tensor) -> None:
+def _validate_query(query_fp8: Tensor, query_weight: Tensor, *, allow_bf16: bool = False) -> None:
     if query_fp8.ndim != 3:
         raise ValueError('query_fp8 must have shape [rows, heads, head_dim].')
     if query_weight.shape != query_fp8.shape[:2]:
         raise ValueError(
             'query_weight must have shape [rows, heads], got '
             f'{tuple(query_weight.shape)} for query {tuple(query_fp8.shape)}.')
-    if query_fp8.dtype != torch.float8_e4m3fn:
+    if query_fp8.dtype != torch.float8_e4m3fn and not (allow_bf16 and query_fp8.dtype == torch.bfloat16):
+        expected = 'float8_e4m3fn or bfloat16' if allow_bf16 else 'float8_e4m3fn'
         raise TypeError(
-            f'query_fp8 must use float8_e4m3fn, got {query_fp8.dtype}.')
+            f'query_fp8 must use {expected}, got {query_fp8.dtype}.')
     if query_weight.dtype != torch.float32:
         raise TypeError(
             f'query_weight must use float32, got {query_weight.dtype}.')
@@ -361,8 +387,8 @@ def kpool_score_contiguous_cuda(
     pooled_key_scale: Tensor,
     group_lengths: Tensor,
 ) -> Tensor:
-    """Score ragged pooled history with DeepGEMM's contiguous MQA primitive."""
-    _validate_query(query_fp8, query_weight)
+    """Score ragged history with FP8 DeepGEMM or the BF16 Torch reference."""
+    _validate_query(query_fp8, query_weight, allow_bf16=True)
     rows = query_fp8.size(0)
     if pooled_key_fp8.ndim != 2 or pooled_key_fp8.size(1) != query_fp8.size(2):
         raise ValueError(
@@ -377,6 +403,13 @@ def kpool_score_contiguous_cuda(
         return torch.empty(
             (rows, 0), dtype=torch.float32, device=query_fp8.device)
 
+    if query_fp8.dtype == torch.bfloat16:
+        if pooled_key_fp8.dtype != torch.bfloat16:
+            raise ValueError('KPool query/key precision must match')
+        dots = torch.einsum('rhd,kd->rhk', query_fp8.float(), pooled_key_fp8.float()).relu()
+        logits = (dots * query_weight[..., None]).sum(1) * pooled_key_scale.flatten()[None]
+        return logits.masked_fill(torch.arange(logits.size(1), device=logits.device)[None] >= group_lengths[:, None],
+                                  -float('inf'))
     starts = torch.zeros(rows, dtype=torch.int32, device=query_fp8.device)
     ends = group_lengths.to(device=query_fp8.device,
                             dtype=torch.int32).contiguous()
@@ -400,12 +433,12 @@ def kpool_score_paged_cuda(
     *,
     metadata: KPoolDecodeMetadata | None = None,
 ) -> Tensor:
-    """Score compact16 pages with Triton, or legacy page64 with DeepGEMM.
+    """Score BF16/compact16 with Triton, or FP8 legacy64 with DeepGEMM.
 
     Only columns below group_lengths are defined in either path. Pass the same lengths to the selector so graph padding
     is never consumed.
     """
-    _validate_query(query_fp8, query_weight)
+    _validate_query(query_fp8, query_weight, allow_bf16=True)
     rows = query_fp8.size(0)
     if packed_cache.dtype != torch.uint8 or packed_cache.ndim != 4:
         raise ValueError(
@@ -426,7 +459,14 @@ def kpool_score_paged_cuda(
         return torch.empty(
             (rows, 0), dtype=torch.float32, device=query_fp8.device)
 
-    if page_size == 16:
+    if packed_cache.size(-1) != query_fp8.size(-1) * query_fp8.element_size() + 4:
+        raise ValueError('KPool query precision must match packed cache precision')
+    if page_size not in (16, 64):
+        raise ValueError(f'Unsupported KPool storage page size: {page_size}')
+    if not rows:
+        return torch.empty((0, pooled_block_offsets.size(1) * page_size),
+                           dtype=torch.float32, device=query_fp8.device)
+    if page_size == 16 or query_fp8.dtype == torch.bfloat16:
         from lmdeploy.pytorch.kernels.cuda.kpool import score_paged
         return score_paged(query_fp8, query_weight, packed_cache,
                            group_lengths, pooled_block_offsets)
