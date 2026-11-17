@@ -239,7 +239,7 @@ __global__ void dflash2_attn_kernel(T* __restrict__ out,
                                     int  window)
 {
     constexpr int ND = HD / 32;  // dims owned per lane (4 for HD=128)
-    constexpr int NW = 4;        // warps per block
+    constexpr int NW = 8;        // warps per block
 
     const int bh  = blockIdx.x;
     const int i   = bh / nh;
@@ -264,22 +264,19 @@ __global__ void dflash2_attn_kernel(T* __restrict__ out,
         acc[k] = 0.f;
     }
 
-    for (int j = wid; j < nkeys; j += NW) {
+    // Context keys below first_ctx are masked out by the sliding window, so
+    // start there instead of scanning the whole context (all keys in
+    // [first_ctx, nkeys) are valid; first_ctx <= tc).
+    for (int j = first_ctx + wid; j < nkeys; j += NW) {
         const T* krow;
         const T* vrow;
-        bool     valid;
         if (j < tc) {
-            valid = j >= first_ctx;
-            krow  = k_ctx + ((long long)j * nkv + kvh) * HD;
-            vrow  = v_ctx + ((long long)j * nkv + kvh) * HD;
+            krow = k_ctx + ((long long)j * nkv + kvh) * HD;
+            vrow = v_ctx + ((long long)j * nkv + kvh) * HD;
         }
         else {
-            valid = true;
-            krow  = k_blk + ((long long)(j - tc) * nkv + kvh) * HD;
-            vrow  = v_blk + ((long long)(j - tc) * nkv + kvh) * HD;
-        }
-        if (!valid) {
-            continue;  // uniform within a warp
+            krow = k_blk + ((long long)(j - tc) * nkv + kvh) * HD;
+            vrow = v_blk + ((long long)(j - tc) * nkv + kvh) * HD;
         }
         float part = 0.f;
 #pragma unroll
@@ -407,7 +404,7 @@ void launch_attn(void*        out,                 const void*  q,
 {
     TM_CHECK_EQ(hd, 128) << "DFlash2 attention expects head_dim 128";
     const int grid  = tq * nh;
-    const int block = 128;
+    const int block = 256;
     dflash2_attn_kernel<T, 128><<<grid, block, 0, stream>>>(static_cast<T*>(out),
                                                             static_cast<const T*>(q),
                                                             static_cast<const T*>(k_ctx),
