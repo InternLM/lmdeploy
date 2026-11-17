@@ -7,6 +7,8 @@
 #include <thread>
 #include <vector>
 
+#include <cuda_runtime.h>
+
 #include "src/turbomind/core/allocator.h"
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/copy.h"
@@ -293,6 +295,9 @@ void ModelExecutor::Impl::ForwardTargetPass(int phase, TensorMap& env)
     model_.output_processor.OutputHiddenStatesAndLogits(phase, env, 2);
 
     target.head_storage = model_.target->Logits(target.hidden_states, {}, env);
+    // The sampler consumes the logits on a different stream; synchronize before
+    // publishing them or the first generation step can hang on stale data.
+    cudaDeviceSynchronize();
     env.produce("logits", target.head_storage);
 
     model_.output_processor.OutputHiddenStatesAndLogits(phase, env, 1);
