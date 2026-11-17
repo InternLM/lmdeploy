@@ -249,52 +249,39 @@ __global__ void dflash2_attn_kernel(T* __restrict__ out,
 
     __shared__ float sh[32];
 
-    auto key_dot = [&](int j, float& s_valid) {
-        float part = 0.f;
-        bool  valid;
-        const T* krow;
+    const float qd = to_f(qrow[d]);
+    // Single-pass online softmax: one block-reduce per key (not three passes).
+    float m   = -CUDART_INF_F;
+    float l   = 0.f;
+    float acc = 0.f;
+    for (int j = 0; j < nkeys; ++j) {
+        bool       valid;
+        const T*   krow;
+        const T*   vrow;
         if (j < tc) {
             valid = j >= first_ctx;
             krow  = k_ctx + ((long long)j * nkv + kvh) * HD;
+            vrow  = v_ctx + ((long long)j * nkv + kvh) * HD;
         }
         else {
             valid = true;
             krow  = k_blk + ((long long)(j - tc) * nkv + kvh) * HD;
+            vrow  = v_blk + ((long long)(j - tc) * nkv + kvh) * HD;
         }
-        if (valid) {
-            part = to_f(qrow[d]) * to_f(krow[d]);
+        if (!valid) {
+            continue;  // uniform across d
         }
-        float s = block_reduce_sum<HD>(part, sh);
-        s_valid = valid ? s * scale : -CUDART_INF_F;
-        return s_valid;
-    };
-
-    float maxs = -CUDART_INF_F;
-    for (int j = 0; j < nkeys; ++j) {
-        float s;
-        key_dot(j, s);
-        maxs = fmaxf(maxs, s);
+        const float s = block_reduce_sum<HD>(qd * to_f(krow[d]), sh) * scale;
+        const float mn = fmaxf(m, s);
+        const float corr = (m == -CUDART_INF_F) ? 0.f : __expf(m - mn);
+        const float e = __expf(s - mn);
+        l   = l * corr + e;
+        acc = acc * corr + e * to_f(vrow[d]);
+        m   = mn;
     }
-
-    float acc = 0.f;
-    for (int j = 0; j < nkeys; ++j) {
-        float s;
-        key_dot(j, s);
-        const float e = (s == -CUDART_INF_F) ? 0.f : __expf(s - maxs);
-        const T* vrow = (j < tc) ? (v_ctx + ((long long)j * nkv + kvh) * HD)
-                                 : (v_blk + ((long long)(j - tc) * nkv + kvh) * HD);
-        acc += e * to_f(vrow[d]);
-    }
-    float sum = 0.f;
-    for (int j = 0; j < nkeys; ++j) {
-        float s;
-        key_dot(j, s);
-        const float e = (s == -CUDART_INF_F) ? 0.f : __expf(s - maxs);
-        sum += e;
-    }
-    // Every d computes the same `sum` (block reduction is identical across d).
+    // `m`/`l` are identical across d (same block reduction), so acc/l is the output.
     T r;
-    from_f(r, acc / sum);
+    from_f(r, acc / l);
     out[((long long)i * nh + h) * HD + d] = r;
 }
 
@@ -641,19 +628,22 @@ __global__ void topk_kernel(int* __restrict__ ids, float* __restrict__ vals, con
     if (r >= rows) {
         return;
     }
-    const T* row = logits + (long long)r * vocab;
-    // insert-sort style top-K maintained in registers
-    float  best[K];
-    int    bidx[K];
+    const int tid = threadIdx.x;
+    const int nt  = blockDim.x;
+    const T*  row = logits + (long long)r * vocab;
+
+    float best[K];
+    int   bidx[K];
 #pragma unroll
     for (int i = 0; i < K; ++i) {
         best[i] = -CUDART_INF_F;
         bidx[i] = 0;
     }
-    for (int v = 0; v < vocab; ++v) {
+    for (int v = tid; v < vocab; v += nt) {
         const float x = to_f(row[v]);
         if (x > best[K - 1]) {
             int pos = K - 1;
+#pragma unroll
             while (pos > 0 && best[pos - 1] < x) {
                 best[pos] = best[pos - 1];
                 bidx[pos] = bidx[pos - 1];
@@ -663,13 +653,47 @@ __global__ void topk_kernel(int* __restrict__ ids, float* __restrict__ vals, con
             bidx[pos] = v;
         }
     }
+
+    extern __shared__ char smem[];
+    float* sv = reinterpret_cast<float*>(smem);
+    int*   si = reinterpret_cast<int*>(sv + nt * K);
 #pragma unroll
     for (int i = 0; i < K; ++i) {
-        ids[(long long)r * K + i]  = bidx[i];
-        vals[(long long)r * K + i] = best[i];
+        sv[tid * K + i] = best[i];
+        si[tid * K + i] = bidx[i];
+    }
+    __syncthreads();
+
+    if (tid == 0) {
+        float gv[K];
+        int   gi[K];
+#pragma unroll
+        for (int i = 0; i < K; ++i) {
+            gv[i] = -CUDART_INF_F;
+            gi[i] = 0;
+        }
+        const int total = nt * K;
+        for (int c = 0; c < total; ++c) {
+            const float x = sv[c];
+            if (x > gv[K - 1]) {
+                int pos = K - 1;
+#pragma unroll
+                while (pos > 0 && gv[pos - 1] < x) {
+                    gv[pos] = gv[pos - 1];
+                    gi[pos] = gi[pos - 1];
+                    --pos;
+                }
+                gv[pos] = x;
+                gi[pos] = si[c];
+            }
+        }
+#pragma unroll
+        for (int i = 0; i < K; ++i) {
+            ids[(long long)r * K + i]  = gi[i];
+            vals[(long long)r * K + i] = gv[i];
+        }
     }
 }
-
 void invokeDflash2TopK(int*         candidate_ids,
                        float*       values,
                        const void*  logits,
@@ -681,11 +705,11 @@ void invokeDflash2TopK(int*         candidate_ids,
 {
     TM_CHECK_EQ(k, 16) << "DFlash2 top-k expects k = 16";
     if (input_bits == 16) {
-        topk_kernel<__half, 16><<<rows, 1, 0, stream>>>(
+        topk_kernel<__half, 16><<<rows, 256, 256 * 16 * (sizeof(float) + sizeof(int)), stream>>>(
             candidate_ids, values, static_cast<const __half*>(logits), rows, vocab);
     }
     else if (input_bits == 32) {
-        topk_kernel<float, 16><<<rows, 1, 0, stream>>>(
+        topk_kernel<float, 16><<<rows, 256, 256 * 16 * (sizeof(float) + sizeof(int)), stream>>>(
             candidate_ids, values, static_cast<const float*>(logits), rows, vocab);
     }
     else {
