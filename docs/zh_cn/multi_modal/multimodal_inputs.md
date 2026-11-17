@@ -580,6 +580,8 @@ ______________________________________________________________________
 
 ## 处理器与 IO 参数
 
+此接口要求 **Transformers >= 5.17.0**。GLM-5.3-Flash 使用原生 HF 图像/视频 processor，不再支持旧版 GLM-4V processor 回退。
+
 两个可选参数用于控制媒体处理行为：
 
 - **`mm_processor_kwargs`**：按 `image`、`video`、`audio` 模态传递模型对应的 HF processor 参数
@@ -597,11 +599,13 @@ ______________________________________________________________________
 
 视频空间处理也可在 `video` 下使用相同的 token 预算参数。覆盖只影响当前请求，不修改共享 processor 默认值；可以只传一侧边界，另一侧使用默认值。边界必须为正整数，且最小值不能大于最大值。
 
-原生 GLM 不使用通用 `size` 契约，因此 `min_pixels`、`max_pixels`、`size` 会被明确拒绝，不再静默忽略。Qwen 和旧版 GLM-4V 兼容 processor 保留下面的像素预算写法；兼容 processor 不支持原生 GLM token 预算覆盖。XTuner 的 GLM tokenizer 目前将 token 预算配置命名为 `min_pixels/max_pixels`，接入时应将其值映射到请求的 `min_image_tokens/max_image_tokens`，不能直接复制字段名。
+原生 GLM 不使用通用 `size` 契约，因此 `min_pixels`、`max_pixels`、`size` 会被明确拒绝，不再静默忽略。Qwen 和 InternS2 保留下面的像素预算写法。XTuner 的 GLM tokenizer 目前将 token 预算配置命名为 `min_pixels/max_pixels`，接入时应将其值映射到请求的 `min_image_tokens/max_image_tokens`，不能直接复制字段名。
 
 `patch_size`、`temporal_patch_size` 和 `merge_size` 描述已加载视觉模型的固定几何，而不是请求级预处理选项。与默认值相同的字段会在调用 processor 前移除；原生 token 预算 processor 拒绝不同的值，基于 `size` 的 processor 则忽略并警告，以保持此前这些字段被忽略的兼容行为。其他受支持的预算、归一化选项仍按请求生效。
 
 `return_tensors` 和 `return_metadata` 属于前端输出契约。它们在 `mm_processor_kwargs.image/video` 下的值会被忽略并警告：LMDeploy 保留 PyTorch tensor 输出及 processor 必需的视频 metadata 默认值。这些字段不能切换输出格式或关闭视频 token 展开所需的元数据。
+
+raw 图像 token-ID 请求保留调用者原始的文本 IDs。LMDeploy 向 processor 提供与图像数量匹配的占位文本，再根据处理后的 grid 展开原始图像占位 IDs。原生 GLM 的 raw 视频/混合媒体请求使用 `text=None` 进行纯媒体处理后展开原始 IDs。这不代表为其他模型新增了通用 raw 视频支持。普通字符串 prompt 保持原样传入。
 
 ### 视频抽帧与向后兼容
 

@@ -192,6 +192,10 @@ class VisionModel(ABC):
 
         # process raw items with hf processor
         input_text = input_prompt if isinstance(input_prompt, str) else ''
+        if not isinstance(input_prompt, str) and not (raw_audios or raw_time_series):
+            # Custom processors require text with matching media placeholders.
+            input_text = ((self.mm_tokens.image_token or '') * len(raw_images)
+                          + (self.mm_tokens.video_token or '') * len(raw_videos))
         processor_outputs = (time_series_processor if raw_time_series else self.processor)(
             text=[input_text],
             padding=True,

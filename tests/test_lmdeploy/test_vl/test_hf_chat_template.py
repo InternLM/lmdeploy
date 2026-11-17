@@ -218,28 +218,25 @@ class TestGLM5NextProcessorCompatibility:
         model.hf_config = SimpleNamespace(image_token_id=42, video_token_id=43)
         return model
 
-    @pytest.fixture(params=['native', 'compat'])
-    def real_model(self, model, monkeypatch, request):
+    @pytest.fixture
+    def real_model(self, model, monkeypatch):
         from tokenizers import Tokenizer
         from tokenizers.models import WordLevel
         from transformers import PreTrainedTokenizerFast
+        from transformers.models.glm5_next.image_processing_glm5_next import Glm5NextImageProcessor
+        from transformers.models.glm5_next.processing_glm5_next import Glm5NextProcessor
+        from transformers.models.glm5_next.video_processing_glm5_next import Glm5NextVideoProcessor
 
         from lmdeploy.vl.model import glm5_next
 
-        family = 'glm5_next' if request.param == 'native' else 'glm4v'
-        image_module = pytest.importorskip(f'transformers.models.{family}.image_processing_{family}')
-        video_module = pytest.importorskip(f'transformers.models.{family}.video_processing_{family}')
-        processor_module = pytest.importorskip(f'transformers.models.{family}.processing_{family}')
-        prefix = 'Glm5Next' if request.param == 'native' else 'Glm4v'
         special = ['<|image|>', '<|video|>', '<|begin_of_image|>', '<|end_of_image|>',
                    '<|begin_of_video|>', '<|end_of_video|>']
         vocab = {f'word_{i}': i for i in range(42)}
         vocab.update({token: i for i, token in enumerate(special, 42)})
         tokenizer = PreTrainedTokenizerFast(tokenizer_object=Tokenizer(WordLevel(vocab, unk_token='word_0')),
                                            unk_token='word_0', pad_token='word_0', additional_special_tokens=special)
-        processor = getattr(processor_module, prefix + 'Processor')(
-            image_processor=getattr(image_module, prefix + 'ImageProcessor')(),
-            video_processor=getattr(video_module, prefix + 'VideoProcessor')(), tokenizer=tokenizer)
+        processor = Glm5NextProcessor(image_processor=Glm5NextImageProcessor(),
+                                      video_processor=Glm5NextVideoProcessor(), tokenizer=tokenizer)
         monkeypatch.setattr(glm5_next.AutoProcessor, 'from_pretrained', lambda *a, **k: processor)
         model.build_preprocessor()
         assert model._shared_video_token
@@ -262,17 +259,10 @@ class TestGLM5NextProcessorCompatibility:
         before_metadata = deepcopy(metadata)
         items = ([dict(type='image', data=image)] if mixed else []) + [
             dict(type='video', data=frames, video_metadata=metadata)]
-        if raw:
-            prompt = ([1, model.image_token_id, 2] if mixed else [1]) + [model.input_video_token_id, 3]
-        else:
-            prompt = (f'<|begin_of_image|>{model.image_token}<|end_of_image|>' if mixed else '')
-            prompt += f'<|begin_of_video|>{model.video_token}<|end_of_video|>'
         prompt = (([1, model.image_token_id, 2] if mixed else [1]) + [model.input_video_token_id, 3]
                   if raw else (f'<|begin_of_image|>{model.image_token}<|end_of_image|>' if mixed else '')
                   + f'<|begin_of_video|>{model.video_token}<|end_of_video|>')
-        native = hasattr(model.processor.image_processor, 'min_image_tokens')
-        budget = ({'min_image_tokens': 64, 'max_image_tokens': 64} if native else
-                  {'min_pixels': 64 * 1568, 'max_pixels': 64 * 1568})
+        budget = {'min_image_tokens': 64, 'max_image_tokens': 64}
         options = {'image': {**budget, 'return_tensors': 'np'},
                    'video': {**budget, 'return_metadata': False, 'return_tensors': 'np',
                              'fps': 99, 'do_sample_frames': True, 'video_metadata': [{'fps': 999}]}}
@@ -283,12 +273,20 @@ class TestGLM5NextProcessorCompatibility:
         monkeypatch.setattr(model.processor.video_processor, 'sample_frames', sample)
         frame_builder = Mock(wraps=model.processor.replace_frame_token_id)
         monkeypatch.setattr(model.processor, 'replace_frame_token_id', frame_builder)
+        processor_texts = []
+        processor_call = type(model.processor).__call__
+
+        def track_text(processor, *args, **kwargs):
+            processor_texts.append(kwargs.get('text'))
+            return processor_call(processor, *args, **kwargs)
+
+        monkeypatch.setattr(type(model.processor), '__call__', track_text)
         result = model.preprocess([dict(role='user', content=items)], prompt, options)
+        assert processor_texts == [None if raw else [prompt]]
         timestamps = [call.args[0] for call in frame_builder.call_args_list]
         assert timestamps and timestamps == [0.0, 5.25] * (len(timestamps) // 2)
-        expected_size = (budget if native else
-                         {'size': {'shortest_edge': budget['min_pixels'], 'longest_edge': budget['max_pixels']}})
-        expected = model.processor(text=[prompt if isinstance(prompt, str) else ''],
+        expected_size = budget
+        expected = model.processor(text=None if raw else [prompt],
                                    images=[image] if mixed else None, videos=[frames], return_tensors='pt',
                                    images_kwargs=expected_size,
                                    videos_kwargs={**expected_size, 'return_metadata': True,
@@ -338,53 +336,33 @@ class TestGLM5NextProcessorCompatibility:
         assert model.processor.image_processor.min_image_tokens == 16
 
     @pytest.mark.parametrize('trust_remote_code', [False, True])
-    @pytest.mark.parametrize('mode', ['native', 'missing_image', 'missing_video', ImportError, ValueError])
-    def test_build_preprocessor(self, monkeypatch, model, trust_remote_code, mode):
+    def test_build_preprocessor(self, monkeypatch, model, trust_remote_code):
         from lmdeploy.vl.model import glm5_next
 
         processor = SimpleNamespace(image_processor=object(), video_processor=object(),
                                     image_token='<image>', video_token='<video>')
         loader = Mock(return_value=processor)
-        if isinstance(mode, type):
-            loader.side_effect = mode('unsupported processor')
-        elif mode.startswith('missing_'):
-            loader.return_value = SimpleNamespace(**{
-                key: value for key, value in vars(processor).items()
-                if key != mode.removeprefix('missing_') + '_processor'
-            })
-        compat = Mock(return_value=processor)
         monkeypatch.setattr(glm5_next.AutoProcessor, 'from_pretrained', loader)
-        monkeypatch.setattr(model, '_build_compat_processor', compat)
-
         model.build_preprocessor(trust_remote_code=trust_remote_code)
-
         loader.assert_called_once_with(model.model_path, trust_remote_code=trust_remote_code)
-        if mode == 'native':
-            compat.assert_not_called()
-        else:
-            compat.assert_called_once_with(trust_remote_code)
         assert model.processor is processor
         assert model.mm_tokens.image_token_id == 42
         assert model.mm_tokens.video_token_id == 43
 
-    @pytest.mark.parametrize('error', [OSError, RuntimeError])
-    def test_unrelated_load_error_propagates(self, monkeypatch, model, error):
+    @pytest.mark.parametrize('missing', ['image_processor', 'video_processor'])
+    def test_missing_native_processor_fails(self, monkeypatch, model, missing):
+        from lmdeploy.vl.model import glm5_next
+
+        components = {key: object() for key in ['image_processor', 'video_processor'] if key != missing}
+        processor = SimpleNamespace(**components)
+        monkeypatch.setattr(glm5_next.AutoProcessor, 'from_pretrained', Mock(return_value=processor))
+        with pytest.raises(ValueError, match='native image/video processor'):
+            model.build_preprocessor()
+
+    @pytest.mark.parametrize('error', [ImportError, ValueError, OSError, RuntimeError])
+    def test_load_error_propagates(self, monkeypatch, model, error):
         from lmdeploy.vl.model import glm5_next
 
         monkeypatch.setattr(glm5_next.AutoProcessor, 'from_pretrained', Mock(side_effect=error('load failed')))
-        compat = Mock()
-        monkeypatch.setattr(model, '_build_compat_processor', compat)
         with pytest.raises(error, match='load failed'):
             model.build_preprocessor()
-        compat.assert_not_called()
-
-    def test_compat_error_propagates(self, monkeypatch, model):
-        from lmdeploy.vl.model import glm5_next
-
-        monkeypatch.setattr(glm5_next.AutoProcessor, 'from_pretrained',
-                            Mock(side_effect=ValueError('unsupported processor')))
-        compat = Mock(side_effect=ImportError('missing GLM-4V components'))
-        monkeypatch.setattr(model, '_build_compat_processor', compat)
-        with pytest.raises(ImportError, match='missing GLM-4V components'):
-            model.build_preprocessor()
-        compat.assert_called_once_with(False)

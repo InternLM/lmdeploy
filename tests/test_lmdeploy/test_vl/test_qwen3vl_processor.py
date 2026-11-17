@@ -86,6 +86,35 @@ def test_video_legacy_options_keep_loader_metadata_and_disable_resampling():
     assert metadata['fps'] == 8 and options['video_metadata'] == [{'fps': 999}]
 
 
+@pytest.mark.parametrize('count', [1, 2])
+def test_raw_image_ids_keep_processor_placeholders(qwen3vl_model, sample_messages, monkeypatch, count):
+    import torch
+
+    model = qwen3vl_model
+    messages = [{'role': 'user', 'content': sample_messages[0]['content'] * count}]
+    processor_texts = []
+    processor_call = type(model.processor).__call__
+
+    def track_text(processor, *args, **kwargs):
+        processor_texts.append(kwargs.get('text'))
+        return processor_call(processor, *args, **kwargs)
+
+    monkeypatch.setattr(type(model.processor), '__call__', track_text)
+    options = {'image': {'min_pixels': 65536, 'max_pixels': 65536}}
+    token = model.processor.image_token
+    reference_text = ' and '.join([token] * count)
+    reference = model.preprocess(messages, reference_text, options)
+    raw_ids = model.processor.tokenizer.encode(reference_text, add_special_tokens=False)
+    result = model.preprocess(messages, raw_ids, options)
+
+    assert processor_texts == [[reference_text], [token * count]]
+    assert len(result['multimodal']) == len(reference['multimodal']) == count
+    assert result['input_ids'] == reference['input_ids']
+    for actual, expected in zip(result['multimodal'], reference['multimodal']):
+        assert actual['offset'] == expected['offset']
+        torch.testing.assert_close(actual['pixel_values'], expected['pixel_values'], rtol=0, atol=0)
+
+
 def test_image_with_custom_pixels(qwen3vl_model, sample_messages):
     """Test that mm_processor_kwargs min/max pixels affect image preprocessing.
 
