@@ -5,13 +5,13 @@ from __future__ import annotations
 import os.path as osp
 from dataclasses import dataclass
 
-from lmdeploy.archs import get_model_arch
+from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.utils import get_model
 
 from .models.base import INPUT_MODELS
 from .models.qwen3_5_mtp import Qwen3_5MtpTextModel
 from .models.utils import source_model_config
-from .weight_format import TrivialFormat, WeightFormatResolver
+from .weight_format import NVFP4Format, TrivialFormat, WeightFormatResolver
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,7 @@ class DraftWeightSpec:
 
 DRAFT_WEIGHT_SPECS: dict[str, DraftWeightSpec] = {
     'eagle3': DraftWeightSpec(input_model='qwen3-eagle3', weight_source='sidecar'),
+    'dflash2': DraftWeightSpec(input_model='qwen3-dflash2', weight_source='sidecar'),
 }
 
 
@@ -73,9 +74,17 @@ def build_draft_model(speculative_config,
     _, hf_config = get_model_arch(path)
     draft_config = source_model_config(hf_config)
 
-    if spec.quantized:
+    # A quantized draft (e.g. NVFP4) declares its format in quantization_config;
+    # expose the matching format to the resolver so packed weights resolve.
+    quant_formats = []
+    quant_config = search_nested_config(hf_config.to_dict(), 'quantization_config')
+    if quant_config and quant_config.get('quant_method') == 'compressed-tensors':
+        group0 = quant_config.get('config_groups', {}).get('group_0', {})
+        if group0.get('format') == 'nvfp4-pack-quantized':
+            quant_formats = [NVFP4Format(block_in=group0['weights']['group_size'])]
+    if spec.quantized and not quant_formats:
         raise NotImplementedError(f'quantized draft weights are not supported yet ({method!r})')
-    resolver = WeightFormatResolver(formats=[TrivialFormat(weight_dtype=engine_data_type)])
+    resolver = WeightFormatResolver(formats=[*quant_formats, TrivialFormat(weight_dtype=engine_data_type)])
 
     model = INPUT_MODELS.get(spec.input_model)(draft_config, resolver=resolver, prefix=spec.prefix)
     return model, path

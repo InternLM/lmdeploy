@@ -11,3 +11,4 @@ from .qwen2_vl import Qwen2VLModel  # noqa: F401
 from .qwen3 import Qwen3TextModel  # noqa: F401
 from .qwen3_5 import Qwen3_5Model, Qwen3_5TextModel, Qwen3_5VisionModel  # noqa: F401
 from .qwen3_eagle3 import Qwen3Eagle3TextModel  # noqa: F401
+from .dflash2 import Qwen3Dflash2TextModel  # noqa: F401

@@ -22,6 +22,10 @@ add_library(models STATIC
         speculative/qwen3_5_mtp/qwen3_5_mtp_weight.cc
         speculative/qwen3_5_mtp/target_final_hidden.cc
         speculative/qwen3_5_mtp/qwen3_5_mtp_model.cc
+        speculative/dflash2/grouped_conv_weight.cc
+        speculative/dflash2/candidate_selector_weight.cc
+        speculative/dflash2/dflash2_model_weight.cc
+        speculative/dflash2/dflash2_model.cc
         linear_weight.cc
         norm_weight.cc
         layer_norm_weight.cc

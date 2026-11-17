@@ -8,6 +8,12 @@ from .attention import AttentionBuilder
 from .decoder_layer import DecoderLayerBuilder, DecoderLayerConfig
 from .deltanet import DeltaNetBuilder
 from .eagle3_weight import Eagle3WeightBuilder, Eagle3WeightConfig
+from .dflash2_weight import Dflash2WeightBuilder, Dflash2WeightConfig
+from .grouped_conv_weight import GroupedConvWeightBuilder, GroupedConvWeightConfig
+from .candidate_selector_weight import (
+    CandidateSelectorWeightBuilder,
+    CandidateSelectorWeightConfig,
+)
 from .ffn import FfnBuilder
 from .mla import MLABuilder
 from .module_list import ModuleListBuilder, ModuleListConfig

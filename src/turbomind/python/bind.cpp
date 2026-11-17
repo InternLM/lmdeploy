@@ -43,6 +43,7 @@
 #include "src/turbomind/models/qwenvit/qwenvit_input.h"
 #include "src/turbomind/models/qwenvit/qwenvit_weight.h"
 #include "src/turbomind/models/speculative/eagle3/eagle3_weight.h"
+#include "src/turbomind/models/speculative/dflash2/dflash2_weight.h"
 #include "src/turbomind/models/speculative/qwen3_5_mtp/qwen3_5_mtp_weight.h"
 #include "src/turbomind/models/vision_model_weight.h"
 #include "src/turbomind/python/attention_component_bindings.h"
@@ -708,6 +709,9 @@ PYBIND11_MODULE(_turbomind, m)
     bind_config<turbomind::core::DecoderLayerConfig>(m, "DecoderLayerConfig");
     bind_config<turbomind::core::Eagle3WeightConfig>(m, "Eagle3WeightConfig");
     bind_config<turbomind::core::Qwen35MtpWeightConfig>(m, "Qwen35MtpWeightConfig");
+    bind_config<turbomind::core::GroupedConvWeightConfig>(m, "GroupedConvWeightConfig");
+    bind_config<turbomind::core::CandidateSelectorWeightConfig>(m, "CandidateSelectorWeightConfig");
+    bind_config<turbomind::core::Dflash2WeightConfig>(m, "Dflash2WeightConfig");
     bind_config<turbomind::core::ModelWeightConfig>(m, "ModelWeightConfig");
     bind_config<turbomind::core::LayerNormConfig>(m, "LayerNormConfig");
     bind_config<turbomind::core::QwenVitConfig>(m, "QwenVitConfig");
