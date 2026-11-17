@@ -8,14 +8,18 @@
 // reuses the D7 SM75 kernel in M4.
 #pragma once
 
+#include "src/turbomind/models/language_model.h"
 #include "src/turbomind/models/speculative/speculative_model.h"
 #include "src/turbomind/models/speculative/speculative_policy.h"
 
 #include <memory>
+#include <vector>
 
 namespace turbomind {
 
 class Dflash2Weight;
+class TargetHiddenProjection;
+class Context;
 
 /// Block-diffusion policy: one block of `n_proposals + 1` query rows
 /// (`[next, mask x n]`), no private cache tail.
@@ -43,8 +47,27 @@ public:
     void RunDraft(int phase, const DraftContext& ctx, TensorMap& env) override;
 
 private:
-    const Dflash2Weight& spec_weights_;
-    Dflash2Policy        policy_;
+    const Dflash2Weight&    spec_weights_;
+    Dflash2Policy           policy_;
+    LanguageModel           draft_;
+    std::unique_ptr<TargetHiddenProjection> projection_;
+
+    const Context&     ctx_;
+    const EngineParam& param_;
+    LanguageModel&     target_;
+    int   hidden_{}, hd_{}, local_nh_{}, local_nkv_{}, total_heads_{}, inter_local_{};
+    int   top_k_{}, sel_rank_{}, window_{}, block_{}, mask_token_id_{}, max_ctx_{};
+    float rope_base_{};
+
+    std::vector<Tensor> ctx_k_;
+    std::vector<Tensor> ctx_v_;
+    Buffer_<int>        ctx_len_;
+
+    void MaterializeContext(const Tensor& context_hidden, const Buffer_<int>& positions, int rows, cudaStream_t stream);
+    Tensor RunBlock(const Tensor& block_embeddings, const Tensor& positions, int rows, int ctx_rows,
+                    cudaStream_t stream, TensorMap& env, bool dump);
+    void StoreProposals(const Buffer_<int>& proposals, const Buffer_<int>& positions, int rows, int batch_size,
+                        TensorMap& env);
 };
 
 }  // namespace turbomind

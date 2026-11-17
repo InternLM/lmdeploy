@@ -88,7 +88,7 @@ __global__ void grouped_conv_kernel(T* __restrict__ out,
 template<typename T, int RANK>
 __global__ void selector_scores_kernel(float* __restrict__ out,
                                        const T* __restrict__ hidden,   // [B, L, rank]
-                                       const T* __restrict__ unary,    // [B, L, K]
+                                       const float* __restrict__ unary,// [B, L, K] (fp32)
                                        const T* __restrict__ pred_cb,  // [V, rank]
                                        const T* __restrict__ succ_cb,  // [V, rank]
                                        const int* __restrict__ cand_ids,  // [B, L, K]
@@ -122,7 +122,10 @@ __global__ void selector_scores_kernel(float* __restrict__ out,
     for (int r = 0; r < rank; ++r) {
         acc += to_f(prow[r]) * to_f(hrow[r]) * to_f(srow[r]);
     }
-    out[idx] = to_f(unary[((long long)b * L + l) * K + c_]) + acc;
+    // unary is index-aligned with the successor (column) candidate: the
+    // reference does `unary_logits[:, :, None]` on a [B,L,K] tensor, which
+    // inserts the broadcast axis *before* K (i.e. [B,L,1,K] -> by column).
+    out[idx] = unary[((long long)b * L + l) * K + c_] + acc;
 }
 
 template<typename T>
@@ -145,7 +148,7 @@ void launch_selector(float*       out,
     const long long grid  = (total + block - 1) / block;
     selector_scores_kernel<T, 0><<<grid, block, 0, stream>>>(out,
                                                              static_cast<const T*>(hidden),
-                                                             static_cast<const T*>(unary),
+                                                             static_cast<const float*>(unary),
                                                              static_cast<const T*>(pred_cb),
                                                              static_cast<const T*>(succ_cb),
                                                              cand_ids,
@@ -184,6 +187,38 @@ __device__ __forceinline__ float block_reduce_sum(float v, float* sh)
     }
     __syncthreads();
     return sh[0];
+}
+
+template<typename T>
+__global__ void residual_norm_kernel(T* __restrict__ out, float* __restrict__ residual, const T* __restrict__ x,
+                                     const T* __restrict__ w, int rows, int cols, float eps, int has_x,
+                                     float x_scale)
+{
+    const int r     = blockIdx.x;
+    float*    res   = residual + (long long)r * cols;
+    T*        orow  = out + (long long)r * cols;
+    const T*  xrow  = x ? x + (long long)r * cols : nullptr;
+
+    if (has_x && xrow) {
+        for (int c = threadIdx.x; c < cols; c += blockDim.x) {
+            res[c] += to_f(xrow[c]) * x_scale;
+        }
+    }
+    __syncthreads();
+
+    float ss = 0.f;
+    for (int c = threadIdx.x; c < cols; c += blockDim.x) {
+        const float v = res[c];
+        ss += v * v;
+    }
+    __shared__ float sh[32];
+    ss = block_reduce_sum<256>(ss, sh);
+    const float inv = rsqrtf(ss / (float)cols + eps);
+    for (int c = threadIdx.x; c < cols; c += blockDim.x) {
+        float v;
+        from_f(v, res[c] * inv * to_f(w[c]));
+        orow[c] = v;
+    }
 }
 
 /// One block per (query row, query head); thread d owns output channel d.
@@ -493,6 +528,225 @@ void invokeDflash2Rope(void*        x,
     }
     else {
         TM_CHECK(false) << "dflash2 rope: unsupported input bits " << input_bits;
+    }
+}
+
+template<typename T>
+__global__ void add_kernel(T* __restrict__ out, const T* __restrict__ a, const T* __restrict__ b, long long n)
+{
+    const long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+    T r;
+    from_f(r, to_f(a[i]) + to_f(b[i]));
+    out[i] = r;
+}
+
+void invokeDflash2Add(void*        out,
+                      const void*  a,
+                      const void*  b,
+                      long long    n,
+                      int          input_bits,
+                      cudaStream_t stream)
+{
+    const int       block = 256;
+    const long long grid  = (n + block - 1) / block;
+    if (input_bits == 16) {
+        add_kernel<__half><<<grid, block, 0, stream>>>(
+            static_cast<__half*>(out), static_cast<const __half*>(a), static_cast<const __half*>(b), n);
+    }
+    else if (input_bits == 32) {
+        add_kernel<float><<<grid, block, 0, stream>>>(
+            static_cast<float*>(out), static_cast<const float*>(a), static_cast<const float*>(b), n);
+    }
+    else {
+        TM_CHECK(false) << "dflash2 add: unsupported input bits " << input_bits;
+    }
+}
+
+template<typename T, int K>
+__global__ void topk_kernel(int* __restrict__ ids, float* __restrict__ vals, const T* __restrict__ logits,
+                            int rows, int vocab)
+{
+    const int r = blockIdx.x;
+    if (r >= rows) {
+        return;
+    }
+    const T* row = logits + (long long)r * vocab;
+    // insert-sort style top-K maintained in registers
+    float  best[K];
+    int    bidx[K];
+#pragma unroll
+    for (int i = 0; i < K; ++i) {
+        best[i] = -CUDART_INF_F;
+        bidx[i] = 0;
+    }
+    for (int v = 0; v < vocab; ++v) {
+        const float x = to_f(row[v]);
+        if (x > best[K - 1]) {
+            int pos = K - 1;
+            while (pos > 0 && best[pos - 1] < x) {
+                best[pos] = best[pos - 1];
+                bidx[pos] = bidx[pos - 1];
+                --pos;
+            }
+            best[pos] = x;
+            bidx[pos] = v;
+        }
+    }
+#pragma unroll
+    for (int i = 0; i < K; ++i) {
+        ids[(long long)r * K + i]  = bidx[i];
+        vals[(long long)r * K + i] = best[i];
+    }
+}
+
+void invokeDflash2TopK(int*         candidate_ids,
+                       float*       values,
+                       const void*  logits,
+                       int          rows,
+                       int          vocab,
+                       int          k,
+                       int          input_bits,
+                       cudaStream_t stream)
+{
+    TM_CHECK_EQ(k, 16) << "DFlash2 top-k expects k = 16";
+    if (input_bits == 16) {
+        topk_kernel<__half, 16><<<rows, 1, 0, stream>>>(
+            candidate_ids, values, static_cast<const __half*>(logits), rows, vocab);
+    }
+    else if (input_bits == 32) {
+        topk_kernel<float, 16><<<rows, 1, 0, stream>>>(
+            candidate_ids, values, static_cast<const float*>(logits), rows, vocab);
+    }
+    else {
+        TM_CHECK(false) << "dflash2 topk: unsupported input bits " << input_bits;
+    }
+}
+
+__global__ void build_block_ids_kernel(int* ids, const int* const* token_ids_ptrs, const int* seq_len, int block,
+                                       int mask)
+{
+    if (threadIdx.x != 0 || blockIdx.x != 0) {
+        return;
+    }
+    const int  seq = seq_len ? seq_len[0] : 0;
+    const int* tok = token_ids_ptrs ? token_ids_ptrs[0] : nullptr;
+    int        next = mask;
+    if (seq > 0 && tok) {
+        next = tok[seq - 1];
+    }
+    ids[0] = next;
+    for (int i = 1; i < block; ++i) {
+        ids[i] = mask;
+    }
+}
+
+void invokeDflash2BuildBlockIds(int* ids, const int* const* token_ids_ptrs, const int* seq_len, int block,
+                                int mask_token_id, cudaStream_t stream)
+{
+    build_block_ids_kernel<<<1, 1, 0, stream>>>(ids, token_ids_ptrs, seq_len, block, mask_token_id);
+}
+
+__global__ void greedy_chain_kernel(int* props, const float* edge, const int* cand, int len, int top_k)
+{
+    // single thread walks the chain
+    if (threadIdx.x != 0 || blockIdx.x != 0) {
+        return;
+    }
+    int prev = 0;
+    for (int l = 0; l < len; ++l) {
+        const float* erow = edge + ((long long)l * top_k + prev) * top_k;
+        int          c    = 0;
+        for (int j = 1; j < top_k; ++j) {
+            if (erow[j] > erow[c]) {
+                c = j;
+            }
+        }
+        props[l] = cand[l * top_k + c];
+        prev      = c;
+    }
+}
+
+void invokeDflash2GreedyChain(int* props, const float* edge, const int* cand, int len, int top_k,
+                              cudaStream_t stream)
+{
+    greedy_chain_kernel<<<1, 1, 0, stream>>>(props, edge, cand, len, top_k);
+}
+
+__global__ void store_tokens_kernel(int* const* token_ids_ptrs, const int* props, const int* base, int n)
+{
+    int* tok = token_ids_ptrs[0];
+    const int b = base[0];
+    for (int i = 0; i < n; ++i) {
+        tok[b + i] = props[i];
+    }
+}
+
+void invokeDflash2StoreTokens(int* const* token_ids_ptrs, const int* props, const int* base, int n,
+                              cudaStream_t stream)
+{
+    store_tokens_kernel<<<1, 1, 0, stream>>>(token_ids_ptrs, props, base, n);
+}
+
+void invokeDflash2ResidualRMSNorm(void*        out,
+                                  float*       residual,
+                                  const void*  x,
+                                  const void*  w,
+                                  int          rows,
+                                  int          cols,
+                                  float        eps,
+                                  int          has_x,
+                                  float        x_scale,
+                                  int          input_bits,
+                                  cudaStream_t stream)
+{
+    if (input_bits == 16) {
+        residual_norm_kernel<__half><<<rows, 256, 0, stream>>>(static_cast<__half*>(out),
+                                                               residual,
+                                                               static_cast<const __half*>(x),
+                                                               static_cast<const __half*>(w),
+                                                               rows,
+                                                               cols,
+                                                               eps,
+                                                               has_x,
+                                                               x_scale);
+    }
+    else {
+        residual_norm_kernel<float><<<rows, 256, 0, stream>>>(static_cast<float*>(out),
+                                                              residual,
+                                                              static_cast<const float*>(x),
+                                                              static_cast<const float*>(w),
+                                                              rows,
+                                                              cols,
+                                                              eps,
+                                                              has_x,
+                                                              x_scale);
+    }
+}
+
+template<typename T>
+__global__ void scale_kernel(T* __restrict__ t, long long n, float factor)
+{
+    const long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+    T v;
+    from_f(v, to_f(t[i]) * factor);
+    t[i] = v;
+}
+
+void invokeDflash2Scale(void* t, long long n, float factor, int input_bits, cudaStream_t stream)
+{
+    const int       block = 256;
+    const long long grid  = (n + block - 1) / block;
+    if (input_bits == 16) {
+        scale_kernel<__half><<<grid, block, 0, stream>>>(static_cast<__half*>(t), n, factor);
+    }
+    else if (input_bits == 32) {
+        scale_kernel<float><<<grid, block, 0, stream>>>(static_cast<float*>(t), n, factor);
     }
 }
 

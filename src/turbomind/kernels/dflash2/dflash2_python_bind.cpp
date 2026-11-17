@@ -161,6 +161,30 @@ void BindDflash2Kernels(py::module_& module)
         py::arg("stream_ptr"));
 
     module.def(
+        "dflash2_residual_rmsnorm",
+        [](py::handle out_object, py::handle residual_object, py::handle x_object, py::handle w_object,
+           float eps, float x_scale, uintptr_t stream_ptr) {
+            CudaDeviceGuard guard{GetCudaOrdinal(out_object)};
+            auto out      = detail::ConsumeDLPackWithStrides(out_object, stream_ptr);
+            auto residual = detail::ConsumeDLPackWithStrides(residual_object, stream_ptr);
+            auto x        = detail::ConsumeDLPackWithStrides(x_object, stream_ptr);
+            auto w        = detail::ConsumeDLPackWithStrides(w_object, stream_ptr);
+            invokeDflash2ResidualRMSNorm(out.data_or(static_cast<void*>(nullptr)),
+                                         reinterpret_cast<float*>(residual.data_or(static_cast<void*>(nullptr))),
+                                         x.data_or(static_cast<const void*>(nullptr)),
+                                         w.data_or(static_cast<const void*>(nullptr)),
+                                         static_cast<int>(out.shape(0)),
+                                         static_cast<int>(out.shape(1)),
+                                         eps,
+                                         1,
+                                         x_scale,
+                                         BitsOf(out),
+                                         reinterpret_cast<cudaStream_t>(stream_ptr));
+        },
+        py::arg("out"), py::arg("residual"), py::arg("x"), py::arg("w"), py::arg("eps"), py::arg("x_scale"),
+        py::arg("stream_ptr"));
+
+    module.def(
         "dflash2_rope",
         [](py::handle x_object, py::handle positions_object, float base, uintptr_t stream_ptr) {
             CudaDeviceGuard guard{GetCudaOrdinal(x_object)};

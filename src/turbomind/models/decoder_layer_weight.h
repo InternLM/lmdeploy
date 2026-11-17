@@ -22,6 +22,7 @@ class DeltaNetWeight;
 class FfnWeight;
 class MoeWeight;
 class NormWeight;
+class GroupedConvWeight;
 
 /// Architecture-independent decoder layer weight composite.
 class DecoderLayerWeight: public core::Module {
@@ -45,7 +46,9 @@ public:
     X(FfnWeight, feed_forward)                                                                                         \
     X(MoeWeight, moe_ffn)                                                                                              \
     X(NormWeight, attention_norm)                                                                                      \
-    X(NormWeight, ffn_norm)
+    X(NormWeight, ffn_norm)                                                                                            \
+    X(GroupedConvWeight, attention_conv)                                                                              \
+    X(GroupedConvWeight, mlp_conv)
 
 #define DECODER_LAYER_WEIGHT_PARAMS(X)
 

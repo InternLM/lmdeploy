@@ -86,4 +86,70 @@ void invokeDflash2Rope(void*        x,
                        int          input_bits,
                        cudaStream_t stream);
 
+/// Elementwise `out = a + b` over `n` elements (fp16/bf16/fp32).
+void invokeDflash2Add(void*        out,
+                      const void*  a,
+                      const void*  b,
+                      long long    n,
+                      int          input_bits,
+                      cudaStream_t stream);
+
+/// Per-row top-k over the vocabulary: fills `candidate_ids` [rows, k] (int) and
+/// `values` [rows, k] (fp32, descending) from `logits` [rows, vocab] (fp16/fp32).
+void invokeDflash2TopK(int*         candidate_ids,
+                       float*       values,
+                       const void*  logits,
+                       int          rows,
+                       int          vocab,
+                       int          k,
+                       int          input_bits,
+                       cudaStream_t stream);
+
+/// Build the DFlash2 block ids `[next_token, mask x (block-1)]` on device.
+/// `ids[0] = token_ids[seq_len-1]` when `seq_len > 0`, else `mask`.
+void invokeDflash2BuildBlockIds(int*               ids,
+                                const int* const*  token_ids_ptrs,  // device array of device pointers
+                                const int*         seq_len,         // device pointer to one int
+                                int                block,
+                                int                mask_token_id,
+                                cudaStream_t       stream);
+
+/// Greedy chain through the candidate lattice: `props[l] = cand[l, argmax_c edge[l, prev, c]]`,
+/// `prev` starts at 0 and follows the chosen candidate index.
+void invokeDflash2GreedyChain(int*         props,
+                              const float* edge,
+                              const int*   cand,
+                              int          len,
+                              int          top_k,
+                              cudaStream_t stream);
+
+/// Write `props[0..n)` into `token_ids_ptrs[0][base[0] + i]` (all device-side).
+void invokeDflash2StoreTokens(int* const*  token_ids_ptrs,
+                              const int*   props,
+                              const int*   base,  // device pointer to one int
+                              int          n,
+                              cudaStream_t stream);
+
+/// Range-preserving residual + RMSNorm: `residual[f32] += x` (when `has_x`),
+/// then `out = fp16(rmsnorm(residual) * w)`. Keeps the residual stream in FP32
+/// so it does not overflow fp16 (DFlash2 SM70/75 requirement).
+void invokeDflash2ResidualRMSNorm(void*        out,
+                                  float*       residual,
+                                  const void*  x,
+                                  const void*  w,
+                                  int          rows,
+                                  int          cols,
+                                  float        eps,
+                                  int          has_x,
+                                  float        x_scale,  // residual += x * x_scale
+                                  int          input_bits,
+                                  cudaStream_t stream);
+
+/// In-place `t *= factor` (elementwise, fp16/fp32).
+void invokeDflash2Scale(void*        t,
+                        long long    n,
+                        float        factor,
+                        int          input_bits,
+                        cudaStream_t stream);
+
 }  // namespace turbomind

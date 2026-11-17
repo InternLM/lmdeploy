@@ -2,11 +2,39 @@
 
 #include "src/turbomind/models/speculative/dflash2/dflash2_model.h"
 
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
 #include "src/turbomind/core/check.h"
+#include "src/turbomind/core/copy.h"
+#include "src/turbomind/kernels/copy/copy.h"
+#include "src/turbomind/kernels/activation.h"
+#include "src/turbomind/kernels/dflash2/dflash2_kernels.h"
+#include "src/turbomind/kernels/norm/rms_norm.h"
+#include "src/turbomind/models/attention_weight.h"
+#include "src/turbomind/models/decoder_layer_weight.h"
+#include "src/turbomind/models/ffn_weight.h"
+#include "src/turbomind/models/llama/context.h"
 #include "src/turbomind/models/llama/llama_params.h"
 #include "src/turbomind/models/model_weight.h"
+#include "src/turbomind/models/norm_weight.h"
 #include "src/turbomind/models/speculative/dflash2/dflash2_weight.h"
+#include "src/turbomind/models/speculative/eagle3/target_hidden_projection.h"
 #include "src/turbomind/models/speculative/registry.h"
+
+namespace {
+void Df2DumpTensor(const char* name, const void* dev, size_t bytes)
+{
+    if (getenv("DF2_DUMP") == nullptr) return;
+    cudaDeviceSynchronize();
+    std::vector<char> h(bytes);
+    cudaMemcpy(h.data(), dev, bytes, cudaMemcpyDeviceToHost);
+    std::string path = std::string("/tmp/opencode/df2dump/") + name + ".bin";
+    FILE* f = fopen(path.c_str(), "wb");
+    if (f) { fwrite(h.data(), 1, bytes, f); fclose(f); }
+}
+}  // namespace
 
 namespace turbomind {
 
@@ -22,8 +50,6 @@ int Dflash2Policy::token_row_tail() const
 
 RoundExtent Dflash2Policy::Extent(const RoundRequest&) const
 {
-    // n proposals are verified as n + 1 query rows; the draft writes no private
-    // cache tail (context KV is materialized separately).
     return {n_ + 1, 0};
 }
 
@@ -34,8 +60,56 @@ std::optional<BootstrapExtent> Dflash2Policy::Bootstrap(int prompt_len) const
 
 Dflash2Model::Dflash2Model(const SpeculativeModelArgs& args):
     spec_weights_{*TM_CHECK_NOTNULL(args.draft_weights.get<Dflash2Weight>("spec"))},
-    policy_{args.param.spec_num_draft_tokens}
+    policy_{args.param.spec_num_draft_tokens},
+    draft_{args.registry, args.param, args.ctx, args.draft_weights, args.phases},
+    projection_{std::make_unique<TargetHiddenProjection>(args.param,
+                                                         args.ctx,
+                                                         args.phases,
+                                                         args.target.weights().num_layer,
+                                                         args.target.weights().hidden_units,
+                                                         args.target.weights().data_type,
+                                                         args.param.spec_tap_layer_ids,
+                                                         *spec_weights_.fc)},
+    ctx_{args.ctx},
+    param_{args.param},
+    target_{args.target}
 {
+    const auto& dw = draft_.weights();
+    hidden_      = dw.hidden_units;
+    const auto* a0 = dw.layer(0)->attention.get();
+    hd_          = a0->head_dim;
+    local_nh_    = a0->head_num / a0->tp_size;
+    local_nkv_   = a0->kv_head_num / a0->tp_size;
+    total_heads_ = local_nh_ + 2 * local_nkv_;
+    const auto* f0 = dw.layer(0)->feed_forward.get();
+    if (f0->w1 && f0->w1->output_dim) {
+        inter_local_ = f0->w1->output_dim;
+    }
+    else if (f0->w1w3 && f0->w1w3->output_dim) {
+        inter_local_ = f0->w1w3->output_dim / 2;
+    }
+    else {
+        inter_local_ = f0->inter_size / (f0->tp_size ? f0->tp_size : 1);
+    }
+    top_k_       = param_.spec_selector_top_k ? param_.spec_selector_top_k : 16;
+    sel_rank_    = param_.spec_selector_rank ? param_.spec_selector_rank : 256;
+    block_       = param_.spec_block_size ? param_.spec_block_size : 8;
+    mask_token_id_ = param_.spec_mask_token_id;
+    window_      = param_.spec_sliding_window ? param_.spec_sliding_window : 2048;
+    rope_base_   = 1e7f;
+    max_ctx_     = param_.session_len;
+
+    const DataType dtype = dw.data_type;
+    ctx_k_.resize(dw.num_layer);
+    ctx_v_.resize(dw.num_layer);
+    for (int l = 0; l < dw.num_layer; ++l) {
+        ctx_k_[l] = Tensor{{max_ctx_, local_nkv_, hd_}, dtype, kDEVICE};
+        ctx_v_[l] = Tensor{{max_ctx_, local_nkv_, hd_}, dtype, kDEVICE};
+        cudaMemsetAsync(ctx_k_[l].raw_data(), 0, (size_t)max_ctx_ * local_nkv_ * hd_ * byte_size(dtype), 0);
+        cudaMemsetAsync(ctx_v_[l].raw_data(), 0, (size_t)max_ctx_ * local_nkv_ * hd_ * byte_size(dtype), 0);
+    }
+    cudaDeviceSynchronize();
+    ctx_len_ = {param_.max_batch_size, kDEVICE};
 }
 
 Dflash2Model::~Dflash2Model() = default;
@@ -49,10 +123,348 @@ void Dflash2Model::Run(BatchOp, int, TensorMap&) {}
 
 HiddenStateTap* Dflash2Model::Tap(int)
 {
-    return nullptr;
+    return projection_.get();
 }
 
-void Dflash2Model::RunDraft(int, const DraftContext&, TensorMap&) {}
+void Dflash2Model::MaterializeContext(const Tensor& context_hidden, const Buffer_<int>& positions, int rows,
+                                      cudaStream_t stream)
+{
+    const auto& dw  = draft_.weights();
+    auto&       lin = *ctx_.linear;
+    const float eps = spec_weights_.hidden_norm->norm_eps_;
+    const bool  zc  = spec_weights_.hidden_norm->zero_centered_;
+
+    Buffer_<int> pos_host{rows, kCPU};
+    Copy(positions, pos_host);
+    const int* pos = pos_host.data();
+
+    Tensor x{{rows, hidden_}, dw.data_type, kDEVICE};
+    invokeRMSNorm(x, context_hidden, spec_weights_.hidden_norm->weight, eps, zc, stream);
+
+    Tensor qkv2{{rows, total_heads_ * hd_}, dw.data_type, kDEVICE};
+    for (int l = 0; l < dw.num_layer; ++l) {
+        const auto* a = dw.layer(l)->attention.get();
+        lin.Forward(x, *a->w_qkv, qkv2);
+        Tensor qkv = qkv2.view({rows, total_heads_, hd_});
+        invokeQkRMSNorm(qkv, a->q_norm->weight, a->k_norm->weight, local_nh_, local_nkv_,
+                        a->q_norm->norm_eps_, a->q_norm->zero_centered_, stream);
+        Tensor krow = qkv.slice({0, local_nh_, 0}, {rows, local_nkv_, hd_});
+        Tensor vrow = qkv.slice({0, local_nh_ + local_nkv_, 0}, {rows, local_nkv_, hd_});
+        Tensor kc{{rows, local_nkv_, hd_}, dw.data_type, kDEVICE};
+        Tensor vc{{rows, local_nkv_, hd_}, dw.data_type, kDEVICE};
+        GenericCopy(krow, kc, stream);
+        GenericCopy(vrow, vc, stream);
+        invokeDflash2Rope(kc.raw_data(), positions.data(), rows, local_nkv_, hd_, rope_base_, 16, stream);
+        for (int i = 0; i < rows; ++i) {
+            int    p0 = pos[i];
+            Tensor dk  = ctx_k_[l].slice({p0, 0, 0}, {1, local_nkv_, hd_});
+            Tensor dv  = ctx_v_[l].slice({p0, 0, 0}, {1, local_nkv_, hd_});
+            Tensor sk  = kc.slice({i, 0, 0}, {1, local_nkv_, hd_});
+            Tensor sv  = vc.slice({i, 0, 0}, {1, local_nkv_, hd_});
+            Copy(sk, dk);
+            Copy(sv, dv);
+        }
+    }
+}
+
+Tensor Dflash2Model::RunBlock(const Tensor& block_embeddings, const Tensor& positions, int rows, int ctx_rows,
+                              cudaStream_t stream, TensorMap& env, bool dump)
+{
+    const auto&    dw     = draft_.weights();
+    auto&          lin    = *ctx_.linear;
+    const DataType dtype  = dw.data_type;
+    const float    qscale = 1.0f / std::sqrt((float)hd_);
+    const int      G      = hidden_ / (param_.spec_conv_group_size ? param_.spec_conv_group_size : 16);
+    const int      gs     = param_.spec_conv_group_size ? param_.spec_conv_group_size : 16;
+    const int      taps   = param_.spec_conv_kernel_size ? param_.spec_conv_kernel_size : 2;
+
+    // Range-preserving: the residual stream is FP32 (fp16 overflows otherwise).
+    Tensor residual{{rows, hidden_}, DataType::kFloat32, kDEVICE};
+    cudaMemsetAsync(residual.raw_data(), 0, (size_t)rows * hidden_ * sizeof(float), stream);
+    Tensor h{{rows, hidden_}, dtype, kDEVICE};
+    Tensor qkv2{{rows, total_heads_ * hd_}, dtype, kDEVICE};
+    Tensor attn{{rows, local_nh_, hd_}, dtype, kDEVICE};
+    Tensor o{{rows, hidden_}, dtype, kDEVICE};
+    Tensor red{{rows, hidden_}, dtype, kDEVICE};
+    Tensor convd{{rows, 2 * taps * G}, dtype, kDEVICE};
+    Tensor convout{{rows, hidden_}, dtype, kDEVICE};
+    Tensor gating{{rows, inter_local_}, dtype, kDEVICE};
+    Tensor inter{{rows, inter_local_}, dtype, kDEVICE};
+    Tensor down{{rows, hidden_}, dtype, kDEVICE};
+
+    auto allreduce = [&](Tensor& t) {
+        if (ctx_.comm.d_comm) {
+            ctx_.comm.d_comm->AllReduceSum(
+                t.raw_data(), red.raw_data(), (size_t)rows * hidden_, dtype, ctx_.comm.d_tp_group, stream);
+            Copy(red, t);
+        }
+    };
+    // side-1 coefficients come from the layer INPUT at prepare, consumed at finish.
+    Tensor conv_side1{{rows, taps * G}, dtype, kDEVICE};
+    Tensor conv_side0{{rows, taps * G}, dtype, kDEVICE};
+    auto   conv = [&](GroupedConvWeight* c, Tensor& y, bool prepare) {
+        if (!c) {
+            return;
+        }
+        const void* base;
+        if (prepare) {
+            lin.Forward(y, *c->kernel_projection, convd);
+            // The kernel assumes contiguous [rows, taps*G] rows; the raw slice
+            // of the [rows, 2*taps*G] projection is strided, so repack it.
+            GenericCopy(convd.slice({0, 0}, {rows, taps * G}), conv_side0, stream);
+            GenericCopy(convd.slice({0, taps * G}, {rows, taps * G}), conv_side1, stream);
+            base = c->base_kernel.slice({0, 0, 0}, {1, taps, hidden_}).raw_data();
+            invokeGroupedConv(convout.raw_data(), y.raw_data(), conv_side0.raw_data(), base, rows, hidden_, G, gs, taps,
+                              block_, 16, stream);
+        }
+        else {
+            base = c->base_kernel.slice({1, 0, 0}, {1, taps, hidden_}).raw_data();
+            invokeGroupedConv(convout.raw_data(), y.raw_data(), conv_side1.raw_data(), base, rows, hidden_, G, gs,
+                              taps, block_, 16, stream);
+        }
+        Copy(convout, y);
+    };
+    auto resnorm = [&](const Tensor& x, const NormWeight* norm, float x_scale) {
+        invokeDflash2ResidualRMSNorm(h.raw_data(),
+                                     residual.data<float>(),
+                                     x.raw_data(),
+                                     norm->weight.raw_data(),
+                                     rows,
+                                     hidden_,
+                                     norm->norm_eps_,
+                                     1,
+                                     x_scale,
+                                     16,
+                                     stream);
+    };
+    // Range-preserving: sub-layer outputs are stored scaled-down (fp16) and the
+    // FP32 residual is restored by the reciprocal scale (as the SM70 path does).
+    constexpr float kResidualScale = 256.0f;
+
+    resnorm(block_embeddings, dw.layer(0)->attention_norm.get(), 1.0f);
+
+    for (int l = 0; l < dw.num_layer; ++l) {
+        auto*       layer = dw.layer(l);
+        const auto* a     = layer->attention.get();
+        if (dump && l == 0) Df2DumpTensor("s0_h", h.raw_data(), (size_t)rows*hidden_*byte_size(dtype));
+        conv(layer->attention_conv.get(), h, true);
+        if (dump && l == 0) Df2DumpTensor("s1_convh", h.raw_data(), (size_t)rows*hidden_*byte_size(dtype));
+        lin.Forward(h, *a->w_qkv, qkv2);
+        if (dump && l == 0) Df2DumpTensor("s2_qkv", qkv2.raw_data(), (size_t)rows*total_heads_*hd_*byte_size(dtype));
+        Tensor qkv = qkv2.view({rows, total_heads_, hd_});
+        invokeQkRMSNorm(qkv, a->q_norm->weight, a->k_norm->weight, local_nh_, local_nkv_, a->q_norm->norm_eps_,
+                        a->q_norm->zero_centered_, stream);
+        Tensor qv = qkv.slice({0, 0, 0}, {rows, local_nh_, hd_});
+        Tensor kv = qkv.slice({0, local_nh_, 0}, {rows, local_nkv_, hd_});
+        Tensor vv = qkv.slice({0, local_nh_ + local_nkv_, 0}, {rows, local_nkv_, hd_});
+        Tensor q2{{rows, local_nh_, hd_}, dtype, kDEVICE};
+        Tensor k2{{rows, local_nkv_, hd_}, dtype, kDEVICE};
+        Tensor v2{{rows, local_nkv_, hd_}, dtype, kDEVICE};
+        GenericCopy(qv, q2, stream);
+        GenericCopy(kv, k2, stream);
+        GenericCopy(vv, v2, stream);
+        invokeDflash2Rope(q2.raw_data(), positions.data<int>(), rows, local_nh_, hd_, rope_base_, 16, stream);
+        invokeDflash2Rope(k2.raw_data(), positions.data<int>(), rows, local_nkv_, hd_, rope_base_, 16, stream);
+        Tensor kctx = ctx_k_[l].slice({0, 0, 0}, {ctx_rows, local_nkv_, hd_});
+        Tensor vctx = ctx_v_[l].slice({0, 0, 0}, {ctx_rows, local_nkv_, hd_});
+        invokeDflash2Attention(attn.raw_data(), q2.raw_data(), kctx.raw_data(), vctx.raw_data(), k2.raw_data(),
+                               v2.raw_data(), rows, ctx_rows, local_nh_, local_nkv_, hd_, qscale, window_, 16, stream);
+        if (dump && l == 0) Df2DumpTensor("s3_attn", attn.raw_data(), (size_t)rows*local_nh_*hd_*byte_size(dtype));
+        invokeDflash2Scale(attn.raw_data(), (long long)rows * local_nh_ * hd_, 1.0f / kResidualScale, 16, stream);
+        lin.Forward(attn.view({rows, local_nh_ * hd_}), *a->wo, o);
+        if (dump && l == 0) Df2DumpTensor("s4_o", o.raw_data(), (size_t)rows*hidden_*byte_size(dtype));
+        allreduce(o);
+        conv(layer->attention_conv.get(), o, false);
+        if (dump) { char nm[32]; snprintf(nm,32,"oc%d",l); Df2DumpTensor(nm, o.raw_data(), (size_t)rows*hidden_*byte_size(dtype)); }
+        resnorm(o, layer->ffn_norm.get(), kResidualScale);
+        if (dump) { char nm[32]; snprintf(nm,32,"ha%d",l); Df2DumpTensor(nm, h.raw_data(), (size_t)rows*hidden_*byte_size(dtype)); }
+        // mlp
+        conv(layer->mlp_conv.get(), h, true);
+        auto* ff = layer->feed_forward.get();
+        void* gate_scale_ptr = nullptr;
+        long long gate_scale_n = 0;
+        if (ff->w1 && ff->w3) {
+            lin.Forward(h, *ff->w1, gating);
+            lin.Forward(h, *ff->w3, inter);
+            Activation(gating, inter, ff->act_type, stream);
+            gate_scale_ptr = gating.raw_data();
+            gate_scale_n   = (long long)rows * inter_local_;
+        }
+        else if (ff->w1w3) {
+            Tensor gate_up{{rows, 2 * inter_local_}, dtype, kDEVICE};
+            lin.Forward(h, *ff->w1w3, gate_up);
+            gating = gate_up.slice({0, 0}, {rows, inter_local_});
+            inter  = gate_up.slice({0, inter_local_}, {rows, inter_local_});
+            Activation(gating, inter, ff->act_type, stream);
+            gate_scale_ptr = gate_up.raw_data();
+            gate_scale_n   = (long long)rows * 2 * inter_local_;
+        }
+        // Range-preserving: scale the MLP output (w2 input) down; fp32 residual
+        // restores the reciprocal scale (silu(gate)*up overflows fp16 otherwise).
+        invokeDflash2Scale(gate_scale_ptr, gate_scale_n, 1.0f / kResidualScale, 16, stream);
+        lin.Forward(gating, *ff->w2, down);
+        allreduce(down);
+        conv(layer->mlp_conv.get(), down, false);
+        const NormWeight* next_norm = (l + 1 < dw.num_layer) ? dw.layer(l + 1)->attention_norm.get() : dw.norm.get();
+        resnorm(down, next_norm, kResidualScale);
+    }
+    return h;
+}
+
+void Dflash2Model::RunDraft(int phase, const DraftContext& ctx, TensorMap& env)
+{
+    if (*ctx_.is_warm_up) {
+        return;  // no tap data during warm-up
+    }
+    if (ctx.batch_size != 1) {
+        return;  // single-request path only for now
+    }
+    const auto&    dw    = draft_.weights();
+    const auto     stream = core::Context::stream().handle();
+    const DataType dtype = dw.data_type;
+
+    // 1. context hidden (fc applied by the tap) for this round's rows
+    Tensor context_hidden = projection_->ProjectAndGather(phase, stream);  // [N, H]
+    const int rows = context_hidden.shape(0);
+    if (rows == 0) {
+        return;
+    }
+
+    // committed length after CommitAcceptedState; only the newly committed rows
+    // (seqlen - already materialized) extend the draft context.
+    // NOTE: ctx.sequence_length is the ENTRY length (pre-commit this round);
+    // the committed length is entry + accept_len.
+    int base = 0, entry = 0, accept = 0;
+    {
+        Buffer_<int> h{1, kCPU};
+        Copy(ctx_len_, h);
+        base = h[0];
+        cudaMemcpy(&entry, const_cast<int*>(ctx.sequence_length.data()), sizeof(int), cudaMemcpyDeviceToHost);
+        if (ctx.accept_len.data()) {
+            cudaMemcpy(&accept, const_cast<int*>(ctx.accept_len.data()), sizeof(int), cudaMemcpyDeviceToHost);
+        }
+    }
+    const int committed = entry + accept;
+    {
+        static int _n = 0;
+        if (_n < 12) { fprintf(stderr, "[DF2meta] base=%d entry=%d accept=%d committed=%d rows=%d\n", base, entry, accept, committed, rows); fflush(stderr); ++_n; }
+        FILE* mf = fopen("/tmp/opencode/df2dump/meta.bin", "wb");
+        int md[4] = {base, entry, accept, committed};
+        if (mf) { fwrite(md, sizeof(int), 4, mf); fclose(mf); }
+    }
+    int delta = committed - base;
+    if (delta < 0) delta = 0;
+    if (delta > rows) delta = rows;
+    if (delta > 0) {
+        std::vector<int> pos_host(delta);
+        for (int i = 0; i < delta; ++i) pos_host[i] = base + i;
+        Buffer_<int> pos_dev{delta, kDEVICE};
+        Copy(Buffer_<int>{pos_host.data(), delta, kCPU}, pos_dev);
+        Tensor ctx = context_hidden.slice({0, 0}, {delta, hidden_});
+        MaterializeContext(ctx, pos_dev, delta, stream);
+    }
+    static int _once = 0;
+    const bool _dump_now = getenv("DF2_DUMP") && _once == 0 && delta >= 5;
+    if (_dump_now) {
+        ++_once;
+        int mb[6] = {base, entry, accept, committed, delta, rows};
+        FILE* mf0 = fopen("/tmp/opencode/df2dump/meta_snap.bin", "wb");
+        if (mf0) { fwrite(mb, sizeof(int), 6, mf0); fclose(mf0); }
+        int hb[2] = {delta, hidden_};
+        FILE* mf = fopen("/tmp/opencode/df2dump/meta2.bin", "wb");
+        if (mf) { fwrite(hb, sizeof(int), 2, mf); fclose(mf); }
+        Df2DumpTensor("ctx_h", context_hidden.raw_data(), (size_t)delta * hidden_ * byte_size(dtype));
+    }
+    {
+        Buffer_<int> newlen{1, kCPU};
+        newlen[0] = committed;
+        Buffer_<int> dst{1, kDEVICE};
+        Copy(newlen, dst);
+        Copy(dst, ctx_len_);
+    }
+
+    // 2. block ids [next, mask x (block-1)] (device-side)
+    Buffer_<int> ids{block_, kDEVICE};
+    Buffer_<int> committed_dev{1, kDEVICE};
+    Copy(Buffer_<int>{const_cast<int*>(&committed), 1, kCPU}, committed_dev);
+    invokeDflash2BuildBlockIds(ids.data(),
+                               ctx.request_token_ids_ptrs,
+                               committed_dev.data(),
+                               block_,
+                               mask_token_id_,
+                               stream);
+
+    // 3. block embeddings (shared target embeddings)
+    Tensor embed_buf{{block_, hidden_}, dtype, kDEVICE};
+    Tensor embeds = target_.Embed(ids, embed_buf, env);
+
+    // 4. block positions = [base+rows .. base+rows+block)
+    std::vector<int> bpos(block_);
+    for (int i = 0; i < block_; ++i) {
+        bpos[i] = committed + i;
+    }
+    Buffer_<int> bpos_dev{block_, kDEVICE};
+    Copy(Buffer_<int>{bpos.data(), block_, kCPU}, bpos_dev);
+
+    if (_dump_now) {
+        Df2DumpTensor("block_emb", embeds.raw_data(), (size_t)block_ * hidden_ * byte_size(dtype));
+        Buffer_<int> bh{block_, kCPU};
+        cudaMemcpy(bh.data(), bpos_dev.raw_data(), block_ * sizeof(int), cudaMemcpyDeviceToHost);
+        FILE* bf = fopen("/tmp/opencode/df2dump/bpos.bin", "wb");
+        if (bf) { fwrite(bh.data(), sizeof(int), block_, bf); fclose(bf); }
+    }
+    Tensor block_hidden = RunBlock(embeds, bpos_dev, block_, committed, stream, env, _dump_now);  // [block, H]
+    if (_dump_now) {
+        Df2DumpTensor("block_hidden", block_hidden.raw_data(), (size_t)block_ * hidden_ * byte_size(dtype));
+    }
+
+    // 5. selector over the mask positions (rows 1..block-1)
+    const int L = block_ - 1;
+    Tensor    mask_h = block_hidden.slice({1, 0}, {L, hidden_});
+    Tensor    sel_h{{L, sel_rank_}, dtype, kDEVICE};
+    ctx_.linear->Forward(mask_h, *spec_weights_.selector->hidden_projection, sel_h);
+
+    Tensor        logits = target_.Logits(mask_h, {}, env);  // [L, vocab]
+    const int     vocab  = logits.shape(1);
+    Buffer_<int>  cand{L * top_k_, kDEVICE};
+    Tensor        unary{{L, top_k_}, DataType::kFloat32, kDEVICE};
+    invokeDflash2TopK(cand.data(), unary.data<float>(), logits.raw_data(), L, vocab, top_k_, 16, stream);
+
+    Tensor edge{{L, top_k_, top_k_}, DataType::kFloat32, kDEVICE};
+    invokeCandidateSelector(edge.data<float>(),
+                            sel_h.raw_data(),
+                            unary.raw_data(),
+                            spec_weights_.selector->predecessor_codebook.raw_data(),
+                            spec_weights_.selector->successor_codebook.raw_data(),
+                            cand.data(),
+                            ids.data(),
+                            1,
+                            L,
+                            top_k_,
+                            vocab,
+                            sel_rank_,
+                            16,
+                            stream);
+
+    // 6. greedy chain (device) + store into the request's token ids
+    Buffer_<int> props{L, kDEVICE};
+    invokeDflash2GreedyChain(props.data(), edge.data<float>(), cand.data(), L, top_k_, stream);
+    if (_dump_now) {
+        Df2DumpTensor("sel_h", sel_h.raw_data(), (size_t)L * sel_rank_ * byte_size(dtype));
+        Df2DumpTensor("cand", cand.raw_data(), (size_t)L * top_k_ * sizeof(int));
+        Df2DumpTensor("unary", unary.raw_data(), (size_t)L * top_k_ * sizeof(float));
+        Df2DumpTensor("edge", edge.raw_data(), (size_t)L * top_k_ * top_k_ * sizeof(float));
+        Df2DumpTensor("props", props.raw_data(), (size_t)L * sizeof(int));
+        Df2DumpTensor("anchor", ids.raw_data(), (size_t)sizeof(int));
+        Df2DumpTensor("pcb0", spec_weights_.selector->predecessor_codebook.slice({0, 0}, {4, sel_rank_}).raw_data(), (size_t)4 * sel_rank_ * byte_size(dtype));
+        Df2DumpTensor("scb0", spec_weights_.selector->successor_codebook.slice({0, 0}, {4, sel_rank_}).raw_data(), (size_t)4 * sel_rank_ * byte_size(dtype));
+    }
+    if (!getenv("DF2_NOSTORE")) {
+        Buffer_<int> sb{1, kDEVICE};
+        Copy(committed_dev, sb);
+        invokeDflash2StoreTokens(ctx.request_token_ids_ptrs, props.data(), sb.data(), L, stream);
+    }
+}
 
 TM_REGISTER_SPECULATIVE_MODEL("dflash2", Dflash2Model);
 

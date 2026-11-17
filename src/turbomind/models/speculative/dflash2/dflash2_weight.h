@@ -94,7 +94,9 @@ public:
     TM_MODULE_DECLARE(CandidateSelectorWeight, CANDIDATE_SELECTOR_WEIGHT_CHILDREN, CANDIDATE_SELECTOR_WEIGHT_PARAMS)
 };
 
-/// DFlash2's own weight tree (ModelWeight::spec).
+/// DFlash2's own weight tree (ModelWeight::spec). Per-layer convs live on the
+/// draft's DecoderLayerWeight (`attention_conv`/`mlp_conv`); this tree holds the
+/// context projection, hidden norm and candidate selector.
 class Dflash2Weight: public core::Module {
 public:
     const char* type() const override
@@ -108,8 +110,6 @@ public:
 #define DFLASH2_WEIGHT_CHILDREN(X)                                                                                     \
     X(LinearWeight, fc)                                                                                                \
     X(NormWeight, hidden_norm)                                                                                         \
-    X(core::ModuleList, attention_convs)                                                                               \
-    X(core::ModuleList, mlp_convs)                                                                                     \
     X(CandidateSelectorWeight, selector)
 
 #define DFLASH2_WEIGHT_PARAMS(X)
