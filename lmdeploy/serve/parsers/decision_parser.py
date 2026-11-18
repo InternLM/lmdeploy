@@ -40,6 +40,23 @@ from lmdeploy.serve.parsers.decision_assets import (
 TASK_NAME = 'intern-decision'
 
 
+def _systemone_confidence(answer: dict) -> float:
+    probabilities = list(answer['probabilities'].values())
+    count = len(probabilities)
+    if count == 1:
+        return 1.0
+    maximum = max(probabilities)
+    if answer['type'] == 'choice':
+        confidence = (maximum - 1 / count) / (1 - 1 / count)
+    else:
+        # Score probabilities follow the zero-based criteria array order.
+        mode = probabilities.index(maximum)
+        spread = sum(probability * abs(index - mode) for index, probability in enumerate(probabilities))
+        uniform_spread = sum(abs(index - (count - 1) / 2) for index in range(count)) / count
+        confidence = 1 - spread / uniform_spread
+    return max(0.0, min(1.0, confidence))
+
+
 @dataclass(frozen=True)
 class DecisionInput:
     """Engine input compiled from one decision request."""
@@ -58,6 +75,7 @@ class DecisionContext:
     symbol_ids: Mapping[str, int]
     image_token_id: int | None
     temperature: float
+    image_token: str | None = None
 
 
 def validate_decision_config(backend_config, speculative_config=None) -> None:
@@ -124,6 +142,7 @@ def create_decision_context(engine, model_path: str, *, temperature: float | Non
         symbol_ids=MappingProxyType(symbol_ids),
         image_token_id=tokenizer.convert_tokens_to_ids(image_token) if image_token else None,
         temperature=resolve_temperature(model_path, temperature=temperature, original_model_path=original_model_path),
+        image_token=image_token,
     )
 
 
@@ -293,10 +312,16 @@ class DecisionParser:
                         if question['type'] != 'noul' or value is not None}
         else:
             row, sentinels = self._prepare_instructions(row)
+        self.compiled = compile_row(row)
+        # Inspect user text before legitimate image placeholders are inserted by the processor.
+        content = self.compiled.messages[1]['content']
+        text_parts = [content] if isinstance(content, str) else [part['text'] for part in content
+                                                               if part['type'] == 'text']
+        if self.context.image_token and any(self.context.image_token in text for text in text_parts):
+            raise RequestError(ErrorCode.INVALID_REQUEST, 'Reserved image marker appears in input evidence')
         if self._image_inputs:
             self._images_by_ref = prepare_decision_images(
                 self._image_inputs, allowed_media_domains=allowed_media_domains)
-        self.compiled = compile_row(row)
         if sentinels or self._image_inputs:
             message = self.compiled.messages[1]
             message['content'] = image_content(message['content'], sentinels, self._images_by_ref)
@@ -359,6 +384,8 @@ class DecisionParser:
         for name, answer in answers.items():
             answer.pop('source')
             answer.pop('decision')
+            if answer['type'] in ('choice', 'score'):
+                answer['confidence'] = _systemone_confidence(answer)
             if answer['type'] == 'noul':
                 answer.pop('probabilities')
                 answer.pop('confidence')
