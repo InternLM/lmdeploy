@@ -58,6 +58,7 @@ Documentation
 
    llm/pipeline.md
    llm/api_server.md
+   serving/request_trace.md
    llm/intern_decision.md
    llm/api_server_tools.md
    llm/api_server_reasoning.md

@@ -147,6 +147,7 @@ class ChatRunner:
                 reasoning_effort=parsed_request.reasoning_effort,
                 do_preprocess=options.do_preprocess,
                 adapter_name=adapter_name,
+                trace_model=parsed_request.model,
                 chat_template_kwargs=_chat_template_kwargs_from_request(parsed_request),
                 input_ids=options.input_ids,
                 media_io_kwargs=parsed_request.media_io_kwargs,

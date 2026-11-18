@@ -278,8 +278,10 @@ def register(router: APIRouter, server_context) -> None:
                                                    session,
                                                    gen_config=gen_config,
                                                    do_preprocess=False,
-                                                   adapter_name=adapter_name)
-            for prompt, session in zip(request.prompt, sessions)
+                                                   adapter_name=adapter_name,
+                                                   trace_model=model_name,
+                                                   trace_prompt_index=prompt_index)
+            for prompt_index, (prompt, session) in enumerate(zip(request.prompt, sessions))
         ], return_exceptions=True)
         preprocess_error = next((result for result in prepared_requests if isinstance(result, BaseException)), None)
         if preprocess_error is not None:

@@ -29,8 +29,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from lmdeploy.messages import EventType
 from lmdeploy.pytorch.kv_connector import KVLoadResult
 from lmdeploy.pytorch.messages import SchedulerSequence, SchedulerSession
+from lmdeploy.trace import ENABLED as TRACE_ENABLED
 
 from .block_trie import PrefixCacheStats
 
@@ -413,6 +415,8 @@ class KVLoadCoordinator:
             self.block_trie.state_checkpoints.unpin_restore(seq)
             seq.prefix_cache.restore.clear()
         seq.state.begin_remote_load()
+        if TRACE_ENABLED:
+            seq.record_event(EventType.KV_LOAD_STARTED, value=remote_step - load_start_step)
         self.track_prefill(seq, target_blocks=target_blocks)
         match_start_step = seq.prefix_cache.match_start_step
         if match_start_step < 0:
@@ -452,10 +456,16 @@ class KVLoadCoordinator:
                 continue
             if (record.deferred_cleanup is not _DeferredLoadCleanup.NONE
                     or not result.success):
+                if TRACE_ENABLED:
+                    event = (EventType.KV_LOAD_CANCELLED
+                             if record.deferred_cleanup is not _DeferredLoadCleanup.NONE else EventType.KV_LOAD_FAILED)
+                    record.seq.record_event(event)
                 self._rollback(record)
                 self._finish_cancelled_or_failed(record)
             else:
                 self._publish(record)
+                if TRACE_ENABLED:
+                    record.seq.record_event(EventType.KV_LOAD_FINISHED)
 
     def _publish(self, record: _LoadRecord) -> None:
         """Publish fully written blocks and return the sequence to waiting.

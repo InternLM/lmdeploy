@@ -1002,8 +1002,9 @@ class SchedulerSequence:
         self,
         event_type: EventType,
         timestamp: None | float = None,
+        value: int | None = None,
     ) -> None:
-        self.engine_events.append(EngineEvent.new_event(event_type, timestamp))
+        self.engine_events.append(EngineEvent.new_event(event_type, timestamp, value))
 
     def _update_embeddings(self, embeddings: list[InputEmbeddings]):
         """Update input embeddings."""

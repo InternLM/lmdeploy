@@ -53,6 +53,16 @@ if TYPE_CHECKING:
 logger = get_logger('lmdeploy')
 
 
+class _TracingFastAPI(FastAPI):
+    """Keep the FastAPI interface while tracing the complete ASGI stack."""
+
+    def build_middleware_stack(self):
+        """Observe framework error responses outside ServerErrorMiddleware."""
+        from lmdeploy.serve.observability.request_trace import RequestTraceMiddleware
+
+        return RequestTraceMiddleware(super().build_middleware_stack())
+
+
 class ServerContext:
     """Runtime dependencies and state shared by serving endpoints."""
 
@@ -424,6 +434,8 @@ def serve(model_path: str,
         # router replay
         if backend_config.enable_return_routed_experts:
             backend_config.enable_transfer_obj_ref = True
+    from lmdeploy.trace import ENABLED as TRACE_ENABLED
+
     server_context.async_engine = pipeline_class(
         model_path=model_path,
         model_name=model_name,
@@ -434,6 +446,7 @@ def serve(model_path: str,
         trust_remote_code=trust_remote_code,
         speculative_config=speculative_config,
         allowed_media_domains=allowed_media_domains,
+        enable_request_trace=TRACE_ENABLED,
         **kwargs)
     set_parsers(server_context, reasoning_parser, tool_call_parser)
     if task is not None:
@@ -457,13 +470,16 @@ def serve(model_path: str,
                                                                ssl_certfile=ssl_certfile)
                                                           if monitoring_port is not None else None))
 
+    app_class = _TracingFastAPI if TRACE_ENABLED else FastAPI
     if disable_fastapi_docs:
-        app = FastAPI(docs_url=None,
-                      redoc_url=None,
-                      openapi_url=None,
-                      lifespan=lifespan)
+        app = app_class(docs_url=None,
+                        redoc_url=None,
+                        openapi_url=None,
+                        lifespan=lifespan)
     else:
-        app = FastAPI(docs_url='/', lifespan=lifespan)
+        app = app_class(docs_url='/', lifespan=lifespan)
+
+    from lmdeploy.serve.observability.request_trace import HEADER
 
     router = create_openai_router(server_context)
     app.include_router(router)
@@ -477,6 +493,7 @@ def serve(model_path: str,
         app.add_middleware(
             CORSMiddleware,
             allow_origins=allow_origins,
+            expose_headers=[HEADER] if TRACE_ENABLED else [],
             allow_credentials=allow_credentials,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
