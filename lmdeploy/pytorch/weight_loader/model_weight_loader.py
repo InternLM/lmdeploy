@@ -35,6 +35,62 @@ def default_weight_loader(param: torch.nn.Parameter, loaded_weight: torch.Tensor
         param.data.copy_(loaded_weight)
 
 
+# compressed-tensors pack-quantized checkpoint suffixes mapped to the
+# canonical AutoAWQ names the AWQ linear family consumes.
+_CT_TO_AWQ_SUFFIX = {
+    'weight_packed': 'qweight',
+    'weight_scale': 'scales',
+    'weight_zero_point': 'qzeros',
+}
+
+
+def normalize_ct_weights(iterator):
+    """Normalize compressed-tensors W4A16 tensors to the canonical AWQ layout.
+
+    Detection works on checkpoint key suffixes, so checkpoints that carry no
+    ct keys pass through untouched. Tensors of one linear are staged until the
+    mandatory ``weight_packed``/``weight_scale`` pair is complete, then
+    converted in one ``convert_shard`` call. Peak staging memory stays at the
+    single-module bound documented in ``ct_repack``.
+
+    A ``weight_zero_point`` that arrives after its module converted must
+    carry the symmetric constant; anything else means an asymmetric scheme
+    the conversion does not support. Staging leftovers at the end mean a
+    corrupt checkpoint and raise.
+    """
+    staged: dict[str, dict[str, torch.Tensor]] = {}
+    converted: set[str] = set()
+    # Import stays local: this module loads early during engine startup, and
+    # the ct path needs the conversion library only.
+    from lmdeploy.turbomind import ct_repack
+
+    for name, tensor in iterator:
+        suffix = next((s for s in _CT_TO_AWQ_SUFFIX if name.endswith(s)), None)
+        if suffix is None:
+            yield name, tensor
+            continue
+        prefix = name[:-len(suffix)]
+        if prefix in converted:
+            # The module already converted. The symmetric constant zero
+            # point carries no extra information, so it may still arrive.
+            if suffix == 'weight_zero_point' and bool((tensor == ct_repack.CT_SYMMETRIC_ZERO).all()):
+                continue
+            raise ValueError(f'Duplicate compressed-tensors key {name!r} after {prefix} converted.')
+        shard = staged.setdefault(prefix, {})
+        shard[suffix] = tensor
+        if 'weight_packed' not in shard or 'weight_scale' not in shard:
+            continue
+
+        out_shard, _ = ct_repack.convert_shard(shard)
+        staged.pop(prefix)
+        converted.add(prefix)
+        for awq_name, awq_tensor in out_shard.items():
+            yield f'{prefix}{awq_name}', awq_tensor
+    if staged:
+        raise ValueError('Incomplete compressed-tensors shards for: '
+                         f'{sorted(staged)}; check the checkpoint integrity.')
+
+
 def _get_weight_type(model_path: str, use_safetensors: bool = None):
     """Get weight type."""
     weight_type = None
@@ -163,6 +219,7 @@ class ModelWeightLoader:
         self,
         model: torch.nn.Module,
         device: torch.device = None,
+        normalize_ct: bool = False,
     ):
         """Load model weights implementation."""
         assert hasattr(model, 'load_weights')
@@ -181,6 +238,8 @@ class ModelWeightLoader:
             np.random.shuffle(paths)
         for path in tqdm(paths, desc='Loading weights from safetensors', disable=disable_tqdm):
             weights_iterator = self._get_weights_iterator(path)
+            if normalize_ct:
+                weights_iterator = normalize_ct_weights(weights_iterator)
             weights_iterator = self._rename_weights_iterator(weights_iterator, model)
             if len(dummy_prefix) > 0:
                 weights_iterator = self._skip_dummy_iterator(weights_iterator, dummy_prefix)
@@ -207,9 +266,13 @@ def process_weights_after_loading(model: torch.nn.Module):
 
 
 @torch.inference_mode()
-def load_model_weights(model: torch.nn.Module, checkpoint_path: str, prefix: str = None, device: torch.device = None):
+def load_model_weights(model: torch.nn.Module,
+                       checkpoint_path: str,
+                       prefix: str = None,
+                       device: torch.device = None,
+                       normalize_ct: bool = False):
     """Loading model weights."""
     loader = ModelWeightLoader(checkpoint_path, prefix=prefix)
-    loader.load_model_weights(model, device=device)
+    loader.load_model_weights(model, device=device, normalize_ct=normalize_ct)
     model.eval()
     process_weights_after_loading(model)
