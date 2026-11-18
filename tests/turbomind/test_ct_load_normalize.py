@@ -142,3 +142,62 @@ def test_gen_tiny_ct_shards_normalize_bit_exact():
             assert set(out) == {f'{key}.{name}' for name in converted}
             for name, tensor in converted.items():
                 assert torch.equal(out[f'{key}.{name}'], tensor)
+
+
+def test_weight_shape_metadata_is_consumed():
+    """weight_shape validates against the packed tensor and never forwards.
+
+    AWQ modules have no weight_shape parameter; forwarding the metadata would fail the load with a KeyError on real
+    exports.
+    """
+    n, k = 64, 256
+    packed, scale, zero = ct_repack.quantize_ct(torch.randn(n, k))
+    tensors = [
+        ('x.weight_shape', torch.tensor([k, n], dtype=torch.int64)),
+        ('x.weight_packed', packed),
+        ('x.weight_scale', scale),
+        ('x.weight_zero_point', zero),
+    ]
+    out = dict(normalize_ct_weights(iter(tensors)))
+    assert set(out) == {'x.qweight', 'x.scales', 'x.qzeros'}
+
+
+def test_weight_shape_mismatch_raises():
+    """A weight_shape that matches neither orientation means corruption."""
+    packed, scale, _ = ct_repack.quantize_ct(torch.randn(32, 128))
+    tensors = [
+        ('x.weight_shape', torch.tensor([11, 22], dtype=torch.int64)),
+        ('x.weight_packed', packed),
+        ('x.weight_scale', scale),
+    ]
+    with pytest.raises(ValueError, match='weight_shape'):
+        list(normalize_ct_weights(iter(tensors)))
+
+
+def test_weight_shape_after_conversion_is_dropped():
+    """Metadata trailing its converted module carries nothing new."""
+    n, k = 64, 256
+    packed, scale, zero = ct_repack.quantize_ct(torch.randn(n, k))
+    tensors = [
+        ('x.weight_packed', packed),
+        ('x.weight_scale', scale),
+        ('x.weight_zero_point', zero),
+        ('x.weight_shape', torch.tensor([k, n], dtype=torch.int64)),
+    ]
+    out = dict(normalize_ct_weights(iter(tensors)))
+    assert set(out) == {'x.qweight', 'x.scales', 'x.qzeros'}
+
+
+def test_shared_state_clones_staged_tensors():
+    """Staged tensors own their storage across calls.
+
+    Hot-update buckets may deliver views into a reused IPC flat buffer; staging a view would let the next bucket
+    overwrite the staged bytes.
+    """
+    packed, _, _ = ct_repack.quantize_ct(torch.randn(32, 128))
+    buffer = packed.clone()
+    state = new_ct_normalize_state()
+    list(normalize_ct_weights(iter([('x.weight_packed', buffer)]), state))
+    staged = state['staged']['x.']['weight_packed']
+    buffer.fill_(12345)
+    assert not torch.equal(staged, buffer)

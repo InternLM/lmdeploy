@@ -64,6 +64,23 @@ def finalize_ct_weights(state: dict):
                          f'{sorted(state["staged"])}; check the checkpoint integrity.')
 
 
+def _validate_weight_shape(prefix: str, shape_tensor: torch.Tensor, packed: torch.Tensor):
+    """Reject a ``weight_shape`` record inconsistent with the packed tensor.
+
+    ct exports carry the unpacked weight geometry as ``weight_shape``; its
+    orientation varies by exporter, so either dimension order may match the
+    packed int32 layout ``[out_features, in_features // 8]``.
+    """
+    try:
+        dims = (int(shape_tensor[0]), int(shape_tensor[1]))
+    except (IndexError, TypeError, ValueError) as e:
+        raise ValueError(f'{prefix}.weight_shape must hold the unpacked [k, n] geometry') from e
+    out_features, words = packed.shape
+    k_total = words * 8
+    if dims not in ((k_total, out_features), (out_features, k_total)):
+        raise ValueError(f'{prefix}: weight_shape {dims} does not match packed weights {tuple(packed.shape)}')
+
+
 def normalize_ct_weights(iterator, state: dict | None = None):
     """Normalize compressed-tensors W4A16 tensors to the canonical AWQ layout.
 
@@ -73,12 +90,17 @@ def normalize_ct_weights(iterator, state: dict | None = None):
     converted in one ``convert_shard`` call. Peak staging memory stays at the
     single-module bound documented in ``ct_repack``.
 
+    Per-linear ``weight_shape`` metadata is validated and consumed: the AWQ
+    modules have no such parameter, and forwarding it would fail the load.
+
     A ``weight_zero_point`` that arrives after its module converted must
     carry the symmetric constant; anything else means an asymmetric scheme
     the conversion does not support. Staging leftovers at the end mean a
     corrupt checkpoint and raise — with a locally owned state. Pass a shared
     ``state`` (see ``new_ct_normalize_state``) to keep staging alive across
     calls; the caller then owns validation through ``finalize_ct_weights``.
+    Staged tensors always own their storage: hot-update buckets may deliver
+    views into reused IPC buffers.
     """
     if state is None:
         state = new_ct_normalize_state()
@@ -94,6 +116,19 @@ def normalize_ct_weights(iterator, state: dict | None = None):
     for name, tensor in iterator:
         suffix = next((s for s in _CT_TO_AWQ_SUFFIX if name.endswith(s)), None)
         if suffix is None:
+            if name.endswith('weight_shape'):
+                prefix = name[:-len('weight_shape')]
+                if prefix in converted:
+                    # Metadata trailing a converted module carries nothing new.
+                    continue
+                if not owns_state:
+                    tensor = tensor.clone()
+                shard = staged.setdefault(prefix, {})
+                packed = shard.get('weight_packed')
+                if packed is not None:
+                    _validate_weight_shape(prefix, tensor, packed)
+                shard['weight_shape'] = tensor
+                continue
             yield name, tensor
             continue
         prefix = name[:-len(suffix)]
@@ -103,11 +138,16 @@ def normalize_ct_weights(iterator, state: dict | None = None):
             if suffix == 'weight_zero_point' and bool((tensor == ct_repack.CT_SYMMETRIC_ZERO).all()):
                 continue
             raise ValueError(f'Duplicate compressed-tensors key {name!r} after {prefix} converted.')
+        if not owns_state:
+            tensor = tensor.clone()
         shard = staged.setdefault(prefix, {})
+        if suffix == 'weight_packed' and 'weight_shape' in shard:
+            _validate_weight_shape(prefix, shard['weight_shape'], tensor)
         shard[suffix] = tensor
         if 'weight_packed' not in shard or 'weight_scale' not in shard:
             continue
 
+        shard.pop('weight_shape', None)
         out_shard, _ = ct_repack.convert_shard(shard)
         staged.pop(prefix)
         converted.add(prefix)
