@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # modify from dlblas: https://github.com/DeepLink-org/DLBlas
 
+from collections.abc import Callable
+
 import torch
 import triton
 import triton.language as tl
@@ -142,14 +144,13 @@ def _fwd_kernel_ep_gather(
     output_tensor_stride1,
     topk_num: tl.constexpr,
     BLOCK_D: tl.constexpr,
+    FP32_ACC: tl.constexpr,
+    OUTPUT_SCALE: tl.constexpr,
 ):
     cur_block = tl.program_id(0)
     start_cur_token = tl.program_id(1)
     grid_num = tl.num_programs(1)
-    # align with xtuner rl
-    compute_dtype = output_tensor.dtype.element_ty
-    # compute_dtype = tl.float32
-
+    compute_dtype = tl.float32 if FP32_ACC else output_tensor.dtype.element_ty
     for cur_token in range(start_cur_token, total_token_num, grid_num):
         off_d = tl.arange(0, BLOCK_D)
         accumulator = tl.zeros([BLOCK_D], dtype=compute_dtype)
@@ -160,6 +161,8 @@ def _fwd_kernel_ep_gather(
                 acc_weight = tl.load(recv_topk_weight + cur_token * recv_topk_weight_stride0 + topk_index)
                 tmp = tl.load(input_tensor + source_token_index * input_tensor_stride0 + cur_block * BLOCK_D + off_d)
                 accumulator += tmp.to(compute_dtype) * acc_weight.to(compute_dtype)
+        if OUTPUT_SCALE != 1.0:
+            accumulator = accumulator * OUTPUT_SCALE
         tl.store(
             output_tensor + cur_token * output_tensor_stride0 + cur_block * BLOCK_D + off_d,
             accumulator.to(output_tensor.dtype.element_ty),
@@ -173,6 +176,8 @@ def ep_gather(
     recv_topk_weight: torch.Tensor,
     input_index: torch.Tensor,
     output_tensor: torch.Tensor,
+    fp32_acc: bool = False,
+    output_scale: float = 1.0,
 ):
     BLOCK_D = 1024  # block size of quantization
     num_warps = 2
@@ -200,6 +205,8 @@ def ep_gather(
         topk_num=recv_topk_ids.shape[1],
         num_warps=num_warps,
         BLOCK_D=BLOCK_D,
+        FP32_ACC=fp32_acc,
+        OUTPUT_SCALE=output_scale,
     )
     return
 
@@ -221,6 +228,9 @@ def fused_moe_v3(
     w13_weight: torch.Tensor,
     w2_weight: torch.Tensor,
     num_recv_tokens_per_expert: list[int] | None,
+    act_func: Callable = None,
+    fp32_acc: bool = False,
+    output_scale: float = 1.0,
 ):
     if num_recv_tokens_per_expert is None:
         return hidden_states
@@ -252,11 +262,11 @@ def fused_moe_v3(
     del hidden_states
     gateup_output = gather_out.new_empty((all_tokens, N))
     _deepgemm_grouped_bf16_nt_contiguous(input_tensor, w13_weight, gateup_output, m_indices)
-    down_input = gateup_output.new_empty((
-        all_tokens,
-        N // 2,
-    ))
-    down_input = silu_and_mul(gateup_output.view(-1, N), down_input)
+    if act_func is None:
+        down_input = gateup_output.new_empty((all_tokens, N // 2))
+        down_input = silu_and_mul(gateup_output.view(-1, N), down_input)
+    else:
+        down_input = act_func(gateup_output)
     down_output = gather_out.new_empty((all_tokens, K))
     _deepgemm_grouped_bf16_nt_contiguous(
         down_input,
@@ -264,5 +274,6 @@ def fused_moe_v3(
         down_output,
         m_indices,
     )
-    ep_gather(down_output, topk_idx, topk_weights, output_index, gather_out)
+    ep_gather(down_output, topk_idx, topk_weights, output_index, gather_out,
+              fp32_acc=fp32_acc, output_scale=output_scale)
     return gather_out

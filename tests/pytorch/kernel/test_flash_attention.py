@@ -4,6 +4,114 @@ import pytest
 import torch
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+def test_flash_attention_lse_merges_context_partitions():
+    from lmdeploy.pytorch.kernels.cuda.dcp import merge_attention_states
+    from lmdeploy.pytorch.kernels.cuda.flashattention import flash_attn_varlen_func
+
+    torch.manual_seed(9)
+    query = torch.randn(7, 4, 32, device='cuda', dtype=torch.float16)
+    key = torch.randn(13, 4, 32, device='cuda', dtype=torch.float16)
+    value = torch.randn_like(key)
+    cu_q = torch.tensor([0, 7], device='cuda', dtype=torch.int32)
+    cu_k = torch.tensor([0, 13], device='cuda', dtype=torch.int32)
+
+    full_output, full_lse = flash_attn_varlen_func(
+        query,
+        key,
+        value,
+        cu_seqlens_q=cu_q,
+        cu_seqlens_k=cu_k,
+        causal=False,
+        kv_layout='shd',
+        return_lse=True,
+    )
+    left_output, left_lse = flash_attn_varlen_func(
+        query,
+        key[:5],
+        value[:5],
+        cu_seqlens_q=cu_q,
+        cu_seqlens_k=torch.tensor([0, 5], device='cuda', dtype=torch.int32),
+        causal=False,
+        kv_layout='shd',
+        return_lse=True,
+    )
+    right_output, right_lse = flash_attn_varlen_func(
+        query,
+        key[5:],
+        value[5:],
+        cu_seqlens_q=cu_q,
+        cu_seqlens_k=torch.tensor([0, 8], device='cuda', dtype=torch.int32),
+        causal=False,
+        kv_layout='shd',
+        return_lse=True,
+    )
+    padded_output = left_output.new_empty(left_output.size(0),
+                                          left_output.size(1) * 2,
+                                          left_output.size(2))
+    padded_output[:, ::2].copy_(left_output)
+    left_output = padded_output[:, ::2]
+    padded_lse = left_lse.new_empty(left_lse.size(0), left_lse.size(1) * 2)
+    padded_lse[:, ::2].copy_(left_lse)
+    left_lse = padded_lse[:, ::2]
+    merged_output, merged_lse = merge_attention_states(
+        left_output, left_lse, right_output, right_lse)
+
+    expected_lse = torch.logsumexp(
+        torch.einsum('qhd,khd->qhk', query.float(), key.float()) /
+        query.size(-1)**0.5,
+        dim=-1,
+    )
+    torch.testing.assert_close(full_lse, expected_lse, atol=2e-3, rtol=2e-3)
+    torch.testing.assert_close(merged_lse, full_lse, atol=2e-3, rtol=2e-3)
+    torch.testing.assert_close(merged_output, full_output, atol=2e-3, rtol=2e-3)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+@pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
+def test_attention_partition_merge_preserves_dtype(dtype):
+    from lmdeploy.pytorch.kernels.cuda.dcp import merge_attention_states
+
+    device = 'cuda'
+    output = -torch.ones(1, 1, 1, dtype=dtype, device=device)
+    lse = torch.zeros(1, 1, device=device)
+    suffix = torch.ones_like(output)
+    suffix_lse = torch.zeros_like(lse)
+    for _ in range(512):
+        # Each merge computes in FP32, then rounds to the stored output dtype.
+        expected_output, expected_lse = merge_attention_states(output.float(), lse, suffix.float(), suffix_lse)
+        output, lse = merge_attention_states(output, lse, suffix, suffix_lse)
+        torch.testing.assert_close(output, expected_output.to(dtype), atol=0, rtol=0)
+        torch.testing.assert_close(lse, expected_lse, atol=0, rtol=0)
+    assert output.dtype == dtype
+    assert lse.dtype == torch.float32
+    if dtype == torch.float32:
+        torch.testing.assert_close(output, torch.full_like(output, 511 / 513), atol=1e-4, rtol=0)
+    torch.testing.assert_close(lse, torch.full_like(lse, math.log(513)), atol=1e-4, rtol=0)
+
+    expected_output, expected_lse = merge_attention_states(output.float(), lse, suffix.float(), suffix_lse)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        graph_output, graph_lse = merge_attention_states(output, lse, suffix, suffix_lse)
+    graph.replay()
+    torch.testing.assert_close(graph_output, expected_output.to(dtype), atol=0, rtol=0)
+    torch.testing.assert_close(graph_lse, expected_lse, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+def test_attention_partition_merge_ignores_empty_nan_outputs():
+    from lmdeploy.pytorch.kernels.cuda.dcp import merge_attention_states
+
+    device = 'cuda'
+    output = torch.tensor([[[2.0]], [[float('nan')]]], device=device, dtype=torch.bfloat16)
+    lse = torch.tensor([[0.0], [-torch.inf]], device=device)
+    empty = torch.full_like(output, torch.nan)
+    empty_lse = torch.full_like(lse, -torch.inf)
+    merged, merged_lse = merge_attention_states(output, lse, empty, empty_lse)
+    torch.testing.assert_close(merged, torch.tensor([[[2.0]], [[0.0]]], device=device, dtype=output.dtype))
+    torch.testing.assert_close(merged_lse, lse)
+
+
 def _conti_input(data, q_seqlens):
     data = [x[:l] for x, l in zip(data, q_seqlens)]
     data = torch.cat(data, dim=0)

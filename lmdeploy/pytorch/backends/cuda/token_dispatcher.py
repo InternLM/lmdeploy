@@ -20,6 +20,7 @@ import torch.distributed as dist
 
 from ..default.token_dispatcher import AlltoAllTokenDispatcher
 from ..token_dispatcher import TokenDispatcherImpl
+from .moe.ep_utils import mask_invalid_tokens
 
 
 class DeepEPMode(Enum):
@@ -726,6 +727,7 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         num_experts: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         topk_idx = topk_idx.to(torch.int64)
+        mask_invalid_tokens(topk_idx)
         expected_m = (hidden_states.shape[0] * self.get_buffer().group_size * topk_idx.shape[1] +
                       num_experts) // num_experts
 
@@ -757,6 +759,7 @@ class DeepEPTokenDispatcherLowLatency(TokenDispatcherImpl):
         async_finish: bool = True,
     ):
         assert topk_idx.dtype == torch.int64
+        mask_invalid_tokens(topk_idx)
         recv_hidden_states, recv_expert_count, handle, event, hook = (self.get_buffer().low_latency_dispatch(
             hidden_states,
             topk_idx,

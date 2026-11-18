@@ -141,6 +141,12 @@ response = pipe(('describe this image', image))
 print(response)
 ```
 
+对于 GLM-5，`VisionConfig(image_cache_max_bytes=...)` 可按字节设置图片预处理缓存预算。显式配置优先于环境变量 `LMDEPLOY_IMAGE_CACHE_MAX_BYTES`；未显式配置时，环境变量默认为每个 frontend 进程 4 GiB（`4294967296` 字节）。设置为 `0` 可关闭缓存。8 个 frontend 的缓存预算合计为 32 GiB，按需分配，并非启动时立即占满。缓存条目数还受 256 条或进程 FD 软限制的四分之一约束，取两者较小值。
+
+缓存目前支持 PyTorch 后端的 GLM-5 纯图片请求，可用于进程内引擎、ZMQ MP 引擎和 Ray MP 引擎。仅在设置 `PytorchEngineConfig(enable_mp_engine=True, mp_engine_backend='mp')` 且 PyTorch 使用 `file_descriptor` 共享策略时，才会准备共享像素存储并通过 FD 进行 RPC 传输。Ray MP 和进程内引擎仍可复用缓存，无需准备共享存储。该选择与 `distributed_executor_backend` 无关。视频和图片/视频混合请求保持原有的预处理路径。
+
+缓存预算不限制在途请求持有的内存。使用 ZMQ 共享存储路径时，容器的 `/dev/shm` 应为缓存图片、并发请求张量及其他共享内存使用者预留空间。共享内存不足时，图片预处理会回退到普通 CPU tensor 和 RPC 字节序列化，关闭缓存时也支持该回退。请求可以继续执行，但会增加数据复制和普通 CPU 内存开销。关闭缓存会跳过输入 cache key 的计算，但仍会计算 KV 前缀匹配所需的特征 content hash。
+
 ### 获取生成 token 的 logits
 
 ```python

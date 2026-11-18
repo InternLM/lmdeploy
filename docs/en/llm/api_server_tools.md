@@ -65,6 +65,18 @@ This mode requires a non-empty `tools` list and a parser that supports required 
 
 The required-tool constraint takes precedence over a client-provided `response_format`, because only one guided-decoding constraint can be active. Reasoning produced before the call remains available as `reasoning_content`. Streamed and non-streamed responses report `finish_reason="tool_calls"` when tool generation completes. If the token limit is reached before a call is complete, `finish_reason` remains `length`.
 
+To require exactly one call to a specific function, use a named choice:
+
+```python
+tool_choice = {'type': 'function', 'function': {'name': 'get_current_weather'}}
+```
+
+Pass this value as `tool_choice` in the request above. The function must match exactly one entry in `tools`, and the configured parser must support a named-tool grammar; otherwise the server returns HTTP 400. The grammar excludes plain-text-only answers and calls to other functions. Like `required`, it takes precedence over `response_format`, preserves enabled reasoning before the call, and still permits `finish_reason="length"` if the token budget is exhausted before completion.
+
+For GLM, tool and argument boundaries require dedicated control token IDs. The same tag spellings encoded as ordinary tokens inside argument values remain literal text.
+
+If generated output cannot be parsed into the selected call, normal completion reports a server error instead of a successful text answer. An explicit caller stop sequence or an exhausted token budget may still interrupt the call.
+
 With `tool_choice="auto"`, the model decides whether to call a tool. For example, a greeting may produce a text reply with `finish_reason="stop"`, even when tools are supplied.
 
 With `tool_choice="none"`, the default response parser disables tool-call extraction, but the supplied `tools` are still passed to the chat template. The model may still generate text in a tool-call format; this text is not extracted into structured `tool_calls`. GPT-OSS's Harmony parser removes `tools` before rendering the chat template in this mode.
@@ -176,7 +188,7 @@ ChatCompletion(id='2', choices=[Choice(finish_reason='tool_calls', index=0, logp
 
 ### Llama 3.1
 
-Meta announces in [Llama3's official user guide](https://llama.meta.com/docs/model-cards-and-prompt-formats/llama3_1) that,
+Meta announces in [Llama3's official user guide](https://github.com/meta-llama/llama-models/blob/main/models/llama3_1/prompt_format.md) that,
 
 > There are three built-in tools (brave_search, wolfram_alpha, and code interpreter) can be turned on using the system prompt:
 >

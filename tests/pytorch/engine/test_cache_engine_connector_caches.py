@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -106,6 +108,30 @@ def test_connector_kv_caches_omits_empty_pools():
     cache_engine = _make_cache_engine(allocation)
 
     assert cache_engine.connector_kv_caches == {}
+
+
+def test_connector_kv_caches_excludes_glm_mtp_tail():
+    from lmdeploy.pytorch.backends.default.cache import DefaultCacheBackend
+    from lmdeploy.pytorch.engine.cache_engine.schema import (
+        BlockCacheGeometry,
+        BlockCacheRequestContext,
+        build_block_cache_tensor_specs_from_requests,
+    )
+    from lmdeploy.pytorch.models.glm5_next import Glm5NextMTPAttention
+
+    attention = SimpleNamespace(_TOKEN_CACHE=Glm5NextMTPAttention._TOKEN_CACHE,
+                                indexer=SimpleNamespace(head_dim=8))
+    context = BlockCacheRequestContext(BlockCacheGeometry(64, 64))
+    requests = Glm5NextMTPAttention.get_block_cache_requests(attention, context)
+    specs = (_spec('mla'), _spec('kpool', consumer_rows=(0,)),
+             *build_block_cache_tensor_specs_from_requests(requests))
+    allocation = DefaultCacheBackend.build_block_layout(specs, num_layers=1).allocate(3, device='cpu')
+    engine = _make_cache_engine(allocation)
+
+    assert len(allocation.pools) == 3
+    assert allocation.tensor_views[-1].shape == (1, 3, 64, 2, 8)
+    assert list(engine.connector_kv_caches) == ['cache_pool.0.row.0', 'cache_pool.1.row.0']
+    assert allocation.nbytes > sum(t.numel() * t.element_size() for t in engine.connector_kv_caches.values())
 
 
 def test_connector_kv_caches_rejects_non_row_major_pool():

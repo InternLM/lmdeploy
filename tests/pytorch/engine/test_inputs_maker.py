@@ -11,7 +11,7 @@ import lmdeploy.pytorch.engine.engine_loop as engine_loop_module
 import lmdeploy.pytorch.engine.inputs_maker as inputs_maker_module
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
-from lmdeploy.pytorch.engine.engine_loop import EngineLoop, RunableEventAsync
+from lmdeploy.pytorch.engine.engine_loop import EngineLoop, EngineLoopConfig, RunableEventAsync
 from lmdeploy.pytorch.engine.inputs_maker import (
     InputsMakerAsync,
     InputsMakerConfig,
@@ -21,7 +21,18 @@ from lmdeploy.pytorch.engine.inputs_maker import (
 )
 from lmdeploy.pytorch.engine.model_agent.agent import BatchedOutputs
 from lmdeploy.pytorch.kv_connector import KVConnectorOutput
-from lmdeploy.pytorch.messages import MessageStatus, StateCheckpointRestore, StateCheckpointSaveReservation
+from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
+    MooncakeStoreConnectorMetadata,
+    MooncakeStoreSaveRequest,
+    MooncakeStoreStateSave,
+)
+from lmdeploy.pytorch.long_context import get_long_context_chunk_limit, plan_long_context_chunk
+from lmdeploy.pytorch.messages import (
+    MessageStatus,
+    SequenceMeta,
+    StateCheckpointRestore,
+    StateCheckpointSaveReservation,
+)
 from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import CheckpointCopyPlan
 
 
@@ -70,6 +81,8 @@ class _DummyMultiModal:
 
 class _DummySeq:
 
+    prefill_input_shift = 0
+
     def __init__(self,
                  history_ids: int,
                  token_ids: int,
@@ -78,9 +91,13 @@ class _DummySeq:
                  match_start_step: int = -1):
         self.num_history_ids = history_ids
         self.num_token_ids = token_ids
+        self._seq_meta = SequenceMeta(block_size=64)
+        self.kv_token_limit = None
         self.history_multimodals = SimpleNamespace(multimodals=all_multimodals)
+        self.history_embeddings = []
         self._input_multimodals = input_multimodals
         self.prefix_cache = SimpleNamespace(match_start_step=match_start_step)
+        self.kv_token_limit = None
         self.return_logits = False
         self.return_routed_experts = False
         self.return_ce_loss = False
@@ -131,6 +148,7 @@ class _CopyPlanScheduler:
 
 def _copy_plan_maker(scheduler):
     maker = object.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.scheduler = scheduler
     return maker
 
@@ -203,6 +221,7 @@ class _FakeScheduler:
         self,
         running,
         connector_token_lens=(),
+        connector_state_ids=(),
     ):
         self.connector_meta_calls.append(tuple(connector_token_lens))
         return None
@@ -238,6 +257,98 @@ def _make_inputs_maker_config():
                              window_size=-1,
                              enable_prefix_caching=False,
                              prefix_cache_decode_state_interval=0)
+
+
+@pytest.mark.parametrize(('history', 'end', 'budget', 'span', 'expected'), [
+    (0, 63, 32768, None, 63),
+    (0, 8191, 32768, None, 8191),
+    (0, 8192, 32768, None, 8192),
+    (0, 8193, 32768, None, 8192),
+    (0, 20000, 32768, None, 16384),
+    (16384, 20000, 32768, None, 20000),
+    (0, 20000, 4096, None, 4096),
+    (4096, 20000, 4096, None, 8192),
+    (8191, 9000, 32768, None, 8192),
+    (0, 20000, 32768, (16000, 18000), 8192),
+    (8192, 20000, 32768, (16000, 18000), 20000),
+    (0, 20000, 4096, (0, 17000), 17000),
+])
+def test_mooncake_prefill_uses_last_safe_aligned_boundary(history, end, budget, span, expected):
+    multimodals = {'image': [_DummyMultiModal(*span)]} if span else {}
+    seq = _DummySeq(history, end - history, multimodals, multimodals)
+    seq._seq_meta.prefill_save_alignment = 8192
+    chunker = LongContextChunker(budget)
+    plan = plan_long_context_chunk(seq, get_long_context_chunk_limit(seq, budget))
+
+    assert plan.chunk_end == expected
+    assert plan.is_last_chunk == (expected == end)
+    assert chunker.is_long_context(seq) == (expected != end)
+    chunker.set_seq(seq)
+    assert chunker.next_chunk_size()[0] == expected - history
+    assert chunker.is_last_chunk() == plan.is_last_chunk
+    for spans in (plan.multimodals or {}).values():
+        assert all(data.end <= expected for data in spans)
+
+
+@pytest.mark.parametrize(('spans', 'budget', 'alignment', 'ends'), [
+    ([(2, 4)], 3, 0, [1, 4, 6]),
+    ([(2, 4)], 2, 0, [1, 4, 6]),
+    ([(0, 2)], 2, 0, [2, 4, 6]),
+    ([(2, 4), (4, 6)], 3, 0, [1, 6, 8]),
+    ([(2, 4), (5, 7)], 3, 0, [1, 4, 7, 9]),
+    ([(1, 3), (3, 5)], 1, 0, [5, 7]),
+    ([(2, 6)], 2, 0, [1, 6]),
+    ([(8, 12)], 10, 8, [7, 16, 20]),
+    ([(16, 24)], 20, 8, [8, 24, 32]),
+])
+def test_shifted_prefill_keeps_multimodal_embeddings_in_their_chunk(spans, budget, alignment, ends):
+    multimodals = {'image': [_DummyMultiModal(*span) for span in spans]}
+    seq = _DummySeq(0, ends[-1], multimodals, multimodals)
+    seq.prefill_input_shift = 1
+    seq._seq_meta.prefill_save_alignment = alignment
+    chunker = LongContextChunker(budget)
+    chunker.set_seq(seq)
+
+    for expected_end in ends:
+        plan = plan_long_context_chunk(seq, chunker.max_prefill_num)
+        assert seq.num_history_ids < plan.chunk_end == expected_end
+        assert plan.is_last_chunk == (expected_end == ends[-1])
+        assert chunker.is_last_chunk() == plan.is_last_chunk
+        assert chunker.next_chunk_size()[0] == plan.chunk_size
+        assert all(not start <= expected_end < end for start, end in spans)
+        seq.set_step(expected_end)
+        seq.num_token_ids = ends[-1] - expected_end
+        seq._input_multimodals = {'image': [mm for mm in multimodals['image'] if mm.start >= expected_end]}
+        chunker.multimodals = seq._input_multimodals
+
+
+@pytest.mark.parametrize('local_copy', [None, ((1,), (3,))])
+def test_store_state_copy_is_attached_to_actual_prefill_without_apc(local_copy):
+    seq = _DummySeq(0, 16, {}, {})
+    maker = _make_policy_maker(seq)
+    maker.config.is_ssm = True
+    maker.long_context_chunker.clear()
+    maker.scheduler = _FakeScheduler([seq])
+    maker.scheduler.kv_connector = object()
+    inputs = _fake_model_inputs()
+    inputs.history_lengths = torch.tensor([0])
+    inputs.seq_length = torch.tensor([16])
+    inputs.state_offsets = torch.tensor([1])
+    maker.create_model_inputs = lambda seqs, is_prefill: inputs
+    maker.create_model_inputs_delta_valid_only = lambda: (None, [], [])
+    maker._prepare_prefill_cache_inputs = lambda seqs: CacheCheckpointInputs(state_save_plan=local_copy)
+    request = MooncakeStoreSaveRequest(7, 0, 0, (2,), (12,), (bytes(32),),
+                                      state=MooncakeStoreStateSave(1, 4, 16))
+
+    def build_meta(running, connector_token_lens, connector_state_ids):
+        assert connector_token_lens == (16,)
+        assert connector_state_ids == (1,)
+        return MooncakeStoreConnectorMetadata(save_requests=(request,))
+
+    maker.scheduler.build_connector_meta = build_meta
+    payload = maker._make_forward_inputs(prefill=True)
+    expected = ((1,), (4,)) if local_copy is None else ((1, 1), (3, 4))
+    assert payload['cache_inputs'].state_save_plan == expected
 
 
 def _fake_model_inputs(is_chunk: bool = False):
@@ -289,12 +400,15 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
 
     state_checkpoints = _StateCheckpoints()
     loop = EngineLoop.__new__(EngineLoop)
-    loop.scheduler = SimpleNamespace(resume_completed_migrations=lambda: None)
+    loop.config = EngineLoopConfig(role=EngineRole.Hybrid)
+    loop.scheduler = SimpleNamespace(
+        resume_completed_migrations=lambda: None,
+        prefetch_kv_lookups=lambda: events.append(('lookup', state_checkpoints.pinned)))
     loop.state_checkpoints = state_checkpoints
     loop.inputs_maker = _InputsMaker(state_checkpoints)
     loop.executor = _Executor(state_checkpoints)
     loop._sleep_requested = False
-    model_inputs = SimpleNamespace()
+    model_inputs = SimpleNamespace(ssm_prefill_meta=None)
     cache_inputs = CacheCheckpointInputs(state_save_plan=((0, ), (1, )))
     forward_inputs = dict(inputs=model_inputs, delta=None, cache_inputs=cache_inputs)
 
@@ -306,10 +420,27 @@ def test_engine_loop_keeps_state_save_pinned_until_output_boundary():
         'update_running',
         ('finish_dispatch', True),
         ('prefetch', True),
+        ('lookup', True),
         ('get_output', True),
         ('unpin_saves', True),
     ]
     assert not state_checkpoints.pinned
+
+
+def test_new_inputs_start_lookup_before_waking_model_scheduling():
+    events = []
+    loop = EngineLoop.__new__(EngineLoop)
+    loop.stop_event = asyncio.Event()
+
+    async def receive():
+        events.append('receive')
+        loop.stop_event.set()
+
+    loop.req_manager = SimpleNamespace(step=receive)
+    loop.scheduler = SimpleNamespace(prefetch_kv_lookups=lambda: events.append('lookup'))
+    loop.has_runable_event = SimpleNamespace(set=lambda: events.append('wake'))
+    asyncio.run(loop.preprocess_loop())
+    assert events == ['receive', 'lookup', 'wake']
 
 
 def test_engine_loop_routes_connector_only_output_without_model_postprocess():
@@ -376,7 +507,8 @@ def test_engine_loop_skips_prefetch_when_sleep_requested_but_unpins_state_save()
     loop.inputs_maker = _InputsMaker()
     loop.executor = _Executor()
     loop._sleep_requested = True
-    model_inputs = SimpleNamespace()
+    loop.config = EngineLoopConfig(role=EngineRole.Hybrid)
+    model_inputs = SimpleNamespace(ssm_prefill_meta=None)
     cache_inputs = CacheCheckpointInputs(state_save_plan=((0, ), (1, )))
     forward_inputs = dict(inputs=model_inputs, delta=None, cache_inputs=cache_inputs)
 
@@ -454,6 +586,8 @@ def test_inputs_maker_resumes_completed_migrations_before_selecting_work(method_
         return dict(running=['seq'], inputs=None, delta=None)
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(enable_decode_checkpoints=False)
+    maker.compact_state_manager = None
     maker.scheduler = _Scheduler()
     maker.executor = _Executor()
     maker.do_prefill = do_prefill
@@ -469,6 +603,35 @@ def test_inputs_maker_resumes_completed_migrations_before_selecting_work(method_
         'forward_async',
         'tick',
     ]
+
+
+def test_inputs_maker_attaches_decode_snapshot_to_normal_forward():
+    seq = object()
+    plan = torch.tensor([[0], [64], [1], [2]])
+    cache_inputs = CacheCheckpointInputs(state_save_plan=((3,), (4,)))
+    delta = SimpleNamespace(max_q_seqlen=4)
+    sent = []
+
+    def prepare(running, inputs, actual_delta, *, access_id):
+        assert running == [seq] and inputs is None and actual_delta is delta
+        assert access_id is None
+        return 7, plan
+
+    async def forward(payload):
+        sent.append(payload)
+
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(enable_decode_checkpoints=True)
+    maker.scheduler = SimpleNamespace(resume_completed_migrations=lambda: None, tick=lambda: None,
+                                      decode_checkpoints=SimpleNamespace(prepare=prepare))
+    maker.executor = SimpleNamespace(forward_async=forward)
+    maker.do_prefill = lambda: False
+    maker._make_forward_inputs = lambda *args: dict(running=[seq], inputs=None, delta=delta, cache_inputs=cache_inputs)
+    payload, running = asyncio.run(maker.prefetch_next_inputs())
+    assert len(sent) == 1 and sent[0] is payload and running == [seq]
+    assert payload['cache_inputs'].decode_save_plan is plan
+    assert payload['cache_inputs'].decode_save_id == 7
+    assert payload['cache_inputs'].state_save_plan is cache_inputs.state_save_plan
 
 
 def test_migration_loop_schedules_and_processes_ready_batch():
@@ -554,6 +717,7 @@ def test_engine_loop_reset_runtime_state_delegates_to_inputs_maker():
 
 def _make_policy_maker(long_seq, decode_seq=None):
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = False
     maker.scheduler = _FakeScheduler([])
@@ -701,6 +865,7 @@ def test_single_forward_multimodal_long_context_stays_normal_prefill_for_spec_de
                                    is_chunk_multimodal=False)
     cache_inputs = CacheCheckpointInputs(state_save_plan=((1, ), (2, )))
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = True
     maker.scheduler = _FakeScheduler([seq])
@@ -745,6 +910,7 @@ def test_prefill_passes_actual_computed_token_boundaries_to_kv_connector():
         seq_logit_length=None,
     )
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = False
     maker.scheduler = _FakeScheduler([seq])
@@ -769,7 +935,7 @@ def test_prefill_passes_actual_computed_token_boundaries_to_kv_connector():
     ('is_chunk', 'is_last_chunk', 'expected'),
     [
         pytest.param(False, False, (24, ), id='regular-prefill'),
-        pytest.param(True, False, (23, ), id='non-final-chunk'),
+        pytest.param(True, False, (24, ), id='non-final-chunk'),
         pytest.param(True, True, (24, ), id='final-chunk'),
     ],
 )
@@ -794,6 +960,7 @@ def test_spec_decoding_connector_boundary_uses_common_chunk_length(
         seq_logit_length=None,
     )
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = True
     maker.scheduler = _FakeScheduler([seq])
@@ -812,6 +979,30 @@ def test_spec_decoding_connector_boundary_uses_common_chunk_length(
     maker._make_forward_inputs(prefill=True)
 
     assert maker.scheduler.connector_meta_calls == [expected]
+
+
+def test_long_context_inputs_carry_next_prompt_token_for_mtp():
+    seq = SimpleNamespace(token_ids=np.arange(8, 17), num_history_ids=8, num_ignored_history=0,
+                          model_meta=None, logprob_start_pos=-1, logical_state=3,
+                          prefill_input_shift=1,
+                          mrope_pos_ids=np.arange(27).reshape(9, 3))
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
+    maker.config = SimpleNamespace(is_ssm=True, use_mrope=True)
+    maker.spec_decoding = True
+    maker.scheduler = SimpleNamespace(get_block_tables=lambda seqs: [np.array([2, 3, 4])])
+    maker.executor = SimpleNamespace(device_type='cuda')
+    maker.adapter_manager = SimpleNamespace(num_adapters=lambda: 1)
+    maker.kernel_blocks_per_kv = 1
+
+    inputs = maker.create_model_inputs_long_context(seq, 4).to_device('cpu')
+
+    assert inputs.input_ids.tolist() == [[8, 9, 10, 11]]
+    assert inputs.prefill_next_token_ids.tolist() == [12]
+    assert inputs.seq_length.tolist() == [4]
+    assert inputs.history_lengths.tolist() == [8]
+    assert inputs.state_offsets.tolist() == [3]
+    assert inputs.mrope_pos_ids.tolist() == seq.mrope_pos_ids[:4].T.tolist()
 
 
 def test_spec_decoding_input_logprobs_do_not_save_stale_mtp_rows():
@@ -834,6 +1025,7 @@ def test_spec_decoding_input_logprobs_do_not_save_stale_mtp_rows():
         seq_logit_length=torch.tensor([1]),
     )
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = True
     maker.scheduler = _FakeScheduler([seq])
@@ -868,6 +1060,7 @@ def test_spec_decoding_text_turn_ignores_previous_multimodal_chunk_limit():
                                    is_last_chunk=False,
                                    is_chunk_multimodal=False)
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = True
     maker.scheduler = _FakeScheduler([seq])
@@ -902,6 +1095,7 @@ def test_prefix_resumed_long_context_suffix_starts_new_chunk_chain():
                                    is_chunk_multimodal=False)
     cache_inputs = CacheCheckpointInputs(state_save_plan=((1, ), (2, )))
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = False
     maker.scheduler = _FakeScheduler([seq])
@@ -959,6 +1153,7 @@ def test_long_context_final_chunk_preserves_multimodal_flag_for_spec_decoding():
                                    is_last_chunk=False,
                                    is_chunk_multimodal=False)
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = True
     maker.scheduler = _FakeScheduler([])
@@ -990,11 +1185,9 @@ def test_long_context_chunk_defers_to_decode_after_chunk_forward():
     long_seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
     decode_seq = _DummySeq(history_ids=0, token_ids=1, all_multimodals={}, input_multimodals={})
     delta = SimpleNamespace(is_decoding=True)
-    cache_inputs = CacheCheckpointInputs(state_save_plan=((1, ), (2, )))
     maker = _make_policy_maker(long_seq, decode_seq)
     maker._last_forward_kind = 'long_context_chunk'
     maker.create_model_inputs_delta = lambda: (delta, [decode_seq], [])
-    maker._make_decode_cache_inputs = lambda running, delta: cache_inputs
     maker.create_model_inputs_long_context = lambda *args, **kwargs: (_ for _ in ()).throw(
         AssertionError('long chunk should wait behind decode'))
 
@@ -1002,7 +1195,7 @@ def test_long_context_chunk_defers_to_decode_after_chunk_forward():
 
     assert forward_inputs['inputs'] is None
     assert forward_inputs['delta'] is delta
-    assert forward_inputs['cache_inputs'] is cache_inputs
+    assert forward_inputs['cache_inputs'] is None
     assert maker.to_evict_seqs == []
 
 
@@ -1390,6 +1583,7 @@ def test_waiting_long_context_first_chunk_gets_round_robin_turn_after_short_pref
             return True
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = False
     maker.scheduler = _RoundRobinScheduler()
@@ -1452,6 +1646,7 @@ def test_waiting_long_context_admission_failure_falls_back_to_short_prefill():
             return True
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(role=EngineRole.Decode, is_ssm=False)
     maker.spec_decoding = False
     maker.scheduler = _WaitingLongFailScheduler()
@@ -1477,6 +1672,38 @@ def test_waiting_long_context_admission_failure_falls_back_to_short_prefill():
     assert not forward_inputs['inputs'].is_chunk
     assert forward_inputs['delta'] is None
     assert calls == [(True, True), (False, False)]
+
+
+@pytest.mark.parametrize('role', list(EngineRole))
+@pytest.mark.parametrize('length', [511, 512, 513, 1106])
+def test_chunk_history_advances_for_all_roles_without_decoding_on_prefill(role, length):
+    from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+    from lmdeploy.pytorch.messages import SequenceMeta
+    from lmdeploy.pytorch.paging import Scheduler
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+
+    scheduler = Scheduler(
+        SchedulerConfig(max_batches=4, max_session_len=4096, max_request_output_len=2048),
+        CacheConfig(max_batches=4, block_size=16, num_cpu_blocks=0, num_gpu_blocks=256),
+        SequenceMeta(16, strategy=ARSequenceStrategy()))
+    seq = scheduler.add_session(0).add_sequence(list(range(length)), preserve_cache=True)
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=role)
+    maker.running_seqs = []
+    maker.long_context_chunker = LongContextChunker(512)
+    chunker = maker.long_context_chunker
+    chunker.set_seq(seq)
+    for expected in range(512, length, 512):
+        assert not chunker.is_last_chunk()
+        size, _ = chunker.next_chunk_size()
+        maker.update_running_seqs([seq], SimpleNamespace(is_chunk=True, max_q_seqlen=size))
+        assert seq.num_history_ids == expected
+        assert maker.running_seqs == []
+    assert chunker.is_last_chunk()
+    # The input builder clears the chunker before submitting the final chunk.
+    chunker.clear()
+    maker.update_running_seqs([seq], SimpleNamespace(is_chunk=True))
+    assert maker.running_seqs == ([] if role == EngineRole.Prefill else [seq])
 
 
 def test_normal_prefill_can_update_running_while_long_chunker_is_active():
@@ -1560,6 +1787,7 @@ def test_last_long_context_chunk_runs_as_prefill_on_prefill_turn():
 def test_do_prefill_default_forces_pending_last_chunk_prefill():
     long_seq = _DummySeq(history_ids=512, token_ids=256, all_multimodals={}, input_multimodals={})
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(role=EngineRole.Decode,
                                    max_prefill_token_num=512,
                                    max_batches=1,
@@ -1579,8 +1807,11 @@ def test_state_checkpoint_copy_plan_is_compact():
     assert _make_state_checkpoint_copy_plan(()) is None
 
 
-def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans():
+@pytest.mark.parametrize('scoring', [False, True])
+def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans(scoring):
     messages = [_state_seq(4, 11), _state_seq(5)]
+    for seq in messages:
+        seq.logprob_start_pos = 0 if scoring else -1
     events = []
 
     class _StateCheckpoints:
@@ -1593,18 +1824,21 @@ def test_prepare_prefill_cache_inputs_groups_state_restore_and_save_plans():
             return CheckpointCopyPlan(state_pairs=((11, 4), ))
 
         def reserve_prefill_save_batch(self, seqs, steps=None):
+            assert not scoring, 'Scoring skips MTP and must not reserve a hybrid checkpoint.'
             assert steps is None
             return CheckpointCopyPlan(state_pairs=((4, 21), ))
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
     maker.state_checkpoints = _StateCheckpoints()
+    maker.spec_decoding = True
 
     cache_inputs = maker._prepare_prefill_cache_inputs(messages)
 
     assert events == ['pin_restores']
     assert cache_inputs.state_restore_plan == ((11, ), (4, ))
-    assert cache_inputs.state_save_plan == ((4, ), (21, ))
+    assert cache_inputs.state_save_plan == (None if scoring else ((4, ), (21, )))
 
 
 def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():
@@ -1622,8 +1856,10 @@ def test_prepare_prefill_cache_inputs_uses_explicit_chunk_end_step():
             return CheckpointCopyPlan(state_pairs=((4, 21), ))
 
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
     maker.state_checkpoints = _StateCheckpoints()
+    maker.spec_decoding = False
 
     cache_inputs = maker._prepare_prefill_cache_inputs([seq], save_steps=(160, ))
 
@@ -1651,9 +1887,11 @@ def test_prepare_prefill_cache_inputs_groups_partial_kv_restore_and_save_plans()
 
     scheduler = _CopyPlanScheduler()
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True, block_size=16)
     maker.scheduler = scheduler
     maker.state_checkpoints = _StateCheckpoints()
+    maker.spec_decoding = False
 
     cache_inputs = maker._prepare_prefill_cache_inputs(messages)
 
@@ -1667,62 +1905,11 @@ def test_prepare_prefill_cache_inputs_groups_partial_kv_restore_and_save_plans()
 
 def test_prepare_prefill_cache_inputs_rejects_mismatched_save_steps():
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
 
     with pytest.raises(ValueError, match='one entry per prefill sequence'):
         maker._prepare_prefill_cache_inputs([_state_seq(4, 11)], save_steps=())
-
-
-def test_make_decode_cache_inputs_compacts_valid_state_saves():
-    valid_seqs = [_state_seq(4), _state_seq(5)]
-
-    class _StateCheckpoints:
-
-        def reserve_decode_save_batch(self, seqs, interval):
-            assert interval == 16
-            return CheckpointCopyPlan(state_pairs=((4, 31), ))
-
-    maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    maker.config = SimpleNamespace(is_ssm=True,
-                                   enable_prefix_caching=True,
-                                   prefix_cache_decode_state_interval=16)
-    maker.state_checkpoints = _StateCheckpoints()
-    maker.spec_decoding = False
-    delta = SimpleNamespace(max_q_seqlen=1)
-
-    cache_inputs = maker._make_decode_cache_inputs(valid_seqs, delta)
-
-    assert cache_inputs.state_restore_plan is None
-    assert cache_inputs.state_save_plan == ((4, ), (31, ))
-
-
-@pytest.mark.parametrize(
-    ('is_ssm', 'enabled', 'interval', 'spec_decoding', 'max_q_seqlen'),
-    [
-        (False, True, 16, False, 1),
-        (True, False, 16, False, 1),
-        (True, True, 0, False, 1),
-        (True, True, 16, True, 1),
-        (True, True, 16, False, 2),
-    ],
-)
-def test_make_decode_cache_inputs_respects_feature_gates(is_ssm, enabled, interval, spec_decoding,
-                                                         max_q_seqlen):
-
-    class _StateCheckpoints:
-
-        def reserve_decode_save_batch(self, seqs, interval):
-            raise AssertionError('disabled decode checkpoint path must not reserve state')
-
-    maker = InputsMakerAsync.__new__(InputsMakerAsync)
-    maker.config = SimpleNamespace(is_ssm=is_ssm,
-                                   enable_prefix_caching=enabled,
-                                   prefix_cache_decode_state_interval=interval)
-    maker.state_checkpoints = _StateCheckpoints()
-    maker.spec_decoding = spec_decoding
-    delta = SimpleNamespace(max_q_seqlen=max_q_seqlen)
-
-    assert maker._make_decode_cache_inputs([_state_seq(4)], delta) is None
 
 
 @pytest.mark.parametrize('max_q_seqlen', [1, 4])  # standard decode, then spec/MTP
@@ -1739,6 +1926,7 @@ def test_create_model_inputs_delta_valid_only_matches_one_decode_advance(max_q_s
     # old double (num_all_ids + 2 * max_q_seqlen) nor zero (num_all_ids alone).
     num_all_ids = [100, 250]  # valid seqs' kv at the (stale) build state
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.engine_strategy = SimpleNamespace(get_num_decode_tokens=lambda: max_q_seqlen)
     maker.running_seqs = [
         SimpleNamespace(status=MessageStatus.RUNNING, num_all_ids=num_all_ids[0]),
@@ -1753,3 +1941,34 @@ def test_create_model_inputs_delta_valid_only_matches_one_decode_advance(max_q_s
     # base kv at the (stale) build state + one canonical decode advance
     assert output.max_kv_seqlen == max(num_all_ids) + max_q_seqlen
     assert output.sum_kv_seqlen == sum(num_all_ids) + len(valid_seqs) * max_q_seqlen
+
+
+def test_normal_prefill_rejects_nonfinal_chunk_before_building_inputs():
+    from lmdeploy.pytorch.engine.inputs_maker import _ForwardInputsTask
+
+    task = object.__new__(_ForwardInputsTask)
+    with pytest.raises(AssertionError, match='Non-final chunks must use exclusive chunk inputs'):
+        task._build_prefill_inputs([SimpleNamespace(kv_token_limit=64)])
+
+
+@pytest.mark.parametrize('history,end,budget,span,shift,expected_e,expected_c', [
+    (0, 200, 200, (120, 180), 0, 200, 192),
+    (0, 200, 200, (180, 200), 0, 200, 128),
+    (0, 150, 150, (128, 140), 1, 150, 64),
+    (0, 200, 160, (128, 180), 1, 127, 64),
+    (8, 200, 192, (128, 180), 1, 192, 192),
+])
+def test_compact_checkpoint_export_keeps_multimodal_and_shifted_dependencies_whole(
+        history, end, budget, span, shift, expected_e, expected_c):
+    multimodals = {'image': [_DummyMultiModal(*span)]}
+    seq = _DummySeq(history, end - history, multimodals, multimodals)
+    seq.input_end_pos = end
+    seq.prefill_input_shift = shift
+    seq._seq_meta.enable_prefix_caching = True
+    seq._seq_meta.prefill_save_alignment = 64
+    seq._seq_meta.compact_prefill_checkpoint_stride = 64
+    plan = plan_long_context_chunk(seq, budget)
+    assert (plan.chunk_end, plan.checkpoint_step) == (expected_e, expected_c)
+    assert not span[0] - shift < plan.chunk_end < span[1]
+    assert not span[0] - shift < plan.checkpoint_step < span[1]
+    assert all(data.end <= plan.chunk_end for spans in (plan.multimodals or {}).values() for data in spans)

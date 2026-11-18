@@ -68,6 +68,29 @@ model's chat template; Qwen3.8 preserves earlier reasoning by default. Set it
 to `False` to remove reasoning from completed earlier turns. Preserved
 reasoning is part of the input prompt and increases its token count.
 
+## GLM-5.3-Flash reasoning effort
+
+GLM-5.3-Flash supports `low`, `high`, and `max` reasoning efforts, as
+documented in the [Z.ai API reference](https://docs.z.ai/api-reference/llm/chat-completion).
+For Chat Completions, set `reasoning_effort`; for Responses, set
+`reasoning.effort`.
+
+**Compatibility note:** GLM-5.3-Flash requests with `medium` now return
+HTTP 400 (`invalid_request_error`) before media loading or generation.
+Previously, the model's default template silently treated `medium` as
+`max`. Update clients that send `medium` to explicitly select `low`,
+`high`, or `max`, or omit the effort to use the model default of `max`.
+LMDeploy does not automatically map `medium` to `high`.
+
+For Chat Completions, a non-null top-level `reasoning_effort` takes priority
+over `chat_template_kwargs.reasoning_effort`. When the top-level value is
+omitted or null, the template kwarg is used and validated instead. If both
+are omitted or null, the model default applies.
+
+This validation follows the `Glm5NextForConditionalGeneration` model
+architecture and also applies when a custom `--chat-template` is used.
+Other model architectures retain their existing effort handling.
+
 ## Custom parser
 
 The registered `--reasoning-parser` names are:

@@ -22,8 +22,10 @@ FAST_HADAMARD_TRANSFORM_VERSION=v1.1.0.post2
 if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
     export CPLUS_INCLUDE_PATH="/usr/local/cuda/include/cccl":${CPLUS_INCLUDE_PATH}
     pip install nvidia-nvshmem-cu13==3.4.5
+    pip install mooncake-transfer-engine-cuda13==0.3.12.post1
 else
     pip install nvidia-nvshmem-cu12==3.4.5
+    pip install mooncake-transfer-engine==0.3.12.post1
 fi
 pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepEP.git@${DEEP_EP_VERSION}"
 
@@ -48,6 +50,14 @@ fi
 pip download --no-deps --only-binary=:all: -d /wheels \
     "flash-attn-3==3.0.0" \
     --index-url "https://download.pytorch.org/whl/${FA3_CUDA_VERSION}"
+
+# lmdeploy-router: resolve the latest stable release when this script runs.
+ROUTER_TAG=$(curl -fsSL https://api.github.com/repos/caikun-pjlab/router/releases/latest \
+    | python -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])') || exit 1
+ROUTER_VERSION=${ROUTER_TAG#v}
+ROUTER_WHEEL="lmdeploy_router-${ROUTER_VERSION}-py3-none-linux_x86_64.whl"
+wget -q -O "/wheels/${ROUTER_WHEEL}" \
+    "https://github.com/caikun-pjlab/router/releases/download/${ROUTER_TAG}/${ROUTER_WHEEL}" || exit 1
 
 # GDRCopy debs
 apt-get update -y \

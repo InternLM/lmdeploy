@@ -1,5 +1,6 @@
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -8,9 +9,11 @@ import torch.multiprocessing as mp
 from torch import nn
 
 from lmdeploy.pytorch.distributed import DefaultContext
+from lmdeploy.pytorch.model_inputs import BuildModelContext
+from lmdeploy.pytorch.models.patch import build_model_context
 from lmdeploy.pytorch.nn import ParallelEmbedding, ParallelLMHead
 
-pytestmark = pytest.mark.skipif(
+requires_tp_gpus = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() < 2,
     reason='requires at least 2 CUDA devices',
 )
@@ -74,6 +77,7 @@ def parallel_lm_head(rank: int, world_size: int, vocab_size: int, feat_size: int
     dist.destroy_process_group()
 
 
+@requires_tp_gpus
 class TestEmbedding:
 
     @pytest.fixture
@@ -157,6 +161,7 @@ class TestEmbedding:
         torch.testing.assert_close(out, gt)
 
 
+@requires_tp_gpus
 def test_parallel_lm_head():
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '29501'
@@ -187,3 +192,32 @@ def test_parallel_lm_head():
 
     expected = torch.nn.functional.linear(x.cuda(), weight.cuda())
     torch.testing.assert_close(out, expected)
+
+
+@pytest.mark.parametrize('model_name', ['deepseek', 'glm'])
+@pytest.mark.parametrize('enabled', [False, True])
+def test_fp32_lm_head(model_name, enabled):
+    from lmdeploy.pytorch.models.deepseek_v32 import DeepseekV32ForCausalLM
+    from lmdeploy.pytorch.models.glm_moe_dsa import GlmMoeDsaForCausalLM
+
+    model_cls = DeepseekV32ForCausalLM if model_name == 'deepseek' else GlmMoeDsaForCausalLM
+    # Zero decoder layers exercise real embedding/head construction on CPU.
+    config = SimpleNamespace(vocab_size=128, hidden_size=64, pad_token_id=0, num_hidden_layers=0,
+                             rms_norm_eps=1e-6, qk_rope_head_dim=8, max_position_embeddings=128,
+                             rope_theta=10000., index_topk=8, tie_word_embeddings=False)
+    with build_model_context(BuildModelContext(fp32_lm_head=enabled, tie_word_embeddings=False)):
+        model = model_cls(config, None, dtype=torch.bfloat16, device='cpu')
+    emb, head = model.get_input_embeddings(), model.lm_head
+    dtype = torch.float32 if enabled else torch.bfloat16
+    assert head.weight.dtype == dtype
+    assert emb.weight.dtype == torch.bfloat16
+    assert head.weight is not emb.weight
+    generator = torch.Generator().manual_seed(123)
+    weight = torch.randn(128, 64, dtype=torch.bfloat16, generator=generator)
+    hidden = torch.randn(3, 64, dtype=torch.bfloat16, generator=generator)
+    head.weight_loader(head.weight, weight)
+    logits = head(hidden)
+    expected = torch.nn.functional.linear(hidden.to(dtype), weight.to(dtype))
+    torch.testing.assert_close(logits, expected, rtol=0, atol=0)
+    if enabled:
+        assert not torch.equal(logits, torch.nn.functional.linear(hidden, weight).float())

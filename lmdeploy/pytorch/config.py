@@ -3,6 +3,7 @@ import enum
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from math import gcd
 from typing import Any
 
 import torch
@@ -156,10 +157,11 @@ class CacheConfig:
     """Config of key value cache."""
 
     max_batches: int
-    block_size: int
+    block_size: int  # Physical tokens per rank; logical block size is block_size * dcp.
     num_cpu_blocks: int
     num_gpu_blocks: int
     kernel_block_size: int = -1
+    dcp: int = 1
     window_size: int = -1
     cache_max_entry_count: float = 0.8
     max_prefill_token_num: int = 8192
@@ -168,8 +170,17 @@ class CacheConfig:
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
+    # Internal geometry derived from the model/backend state layout at startup.
+    compact_state_capacity: 'SSMStateCapacity | None' = None
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
+    prefix_cache_decode_save_first: bool = False
+    prefill_save_alignment: int = 1024
+    prefill_save_last_only: bool = False
+    mooncake_state_save_slots: int = 8
+    # Model-owned checkpoint validity constraint, independent of prefill chunking.
+    prefix_cache_block_aligned: bool = False
+    prefix_cache_token_lookahead: int = 0
     states_shapes: list[tuple] = field(default_factory=list)
 
     # reserved blocks for dummy inputs, init to 0 for unit test.
@@ -182,8 +193,11 @@ class CacheConfig:
 
     def __post_init__(self):
         """Post init."""
+        assert self.dcp >= 1, 'invalid dcp'
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
+        assert self.prefill_save_alignment > 0, 'invalid prefill_save_alignment'
+        assert self.mooncake_state_save_slots > 0, 'invalid mooncake_state_save_slots'
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
@@ -194,6 +208,38 @@ class CacheConfig:
                 'prefix_cache_decode_state_interval must be a multiple of block_size')
         self.cudagraph_capture_batch_sizes = normalize_cudagraph_capture_batch_sizes(
             self.cudagraph_capture_batch_sizes, self.max_batches)
+
+    @property
+    def use_mooncake_store(self) -> bool:
+        """Whether this engine uses the Mooncake Store connector."""
+        config = self.kv_transfer_config
+        return (config is not None and config.is_kv_transfer_instance
+                and config.kv_connector == 'MooncakeStoreConnector')
+
+    @property
+    def num_store_state_caches(self) -> int:
+        """Reserved tail slots, excluded from runtime and local APC
+        allocation."""
+        if self.states_shapes and self.use_mooncake_store and self.kv_transfer_config.is_kv_producer:
+            return self.mooncake_state_save_slots
+        return 0
+
+    @property
+    def needs_prefix_cache_identity(self) -> bool:
+        """Local APC and Mooncake Store need stable multimodal identities."""
+        return self.enable_prefix_caching or self.use_mooncake_store
+
+    @property
+    def enable_decode_checkpoints(self) -> bool:
+        """Whether an SSM cache owner can save accepted decode states."""
+        return bool(self.states_shapes and (self.enable_prefix_caching or self.num_store_state_caches)
+                    and (self.prefix_cache_decode_save_first or self.prefix_cache_decode_state_interval))
+
+    @property
+    def state_lookup_alignment(self) -> int:
+        """Cover prefill, decode and retry boundaries; interval 0 keeps prefill
+        alignment."""
+        return gcd(self.prefill_save_alignment, self.prefix_cache_decode_state_interval)
 
 
 class TPMode(enum.Enum):
@@ -213,6 +259,7 @@ class DistConfig:
 
     # tp
     tp: int = 1  # default tp, equal to attn_tp
+    dcp: int = 1  # decode context parallelism inside attention tp
     attn_tp: int = None  # tp for attention
     mlp_tp: int = None  # tp for mlp
     moe_tp: int = None  # tp for moe
@@ -225,6 +272,9 @@ class DistConfig:
         """Post init."""
         assert self.dp_rank < self.dp
         assert self.dp >= 1
+        assert self.dcp >= 1
+        if self.dcp > 1:
+            assert self.dp == 1 and self.ep == 1, 'DCP currently requires dp=1 and ep=1'
 
         dp = self.dp
         tp = self.tp
@@ -253,6 +303,8 @@ class DistConfig:
         # attn tp
         self.attn_tp = self.attn_tp or self.world_size // dp
         self.tp = self.attn_tp
+        assert self.attn_tp % self.dcp == 0, (
+            f'attn_tp {self.attn_tp} must be divisible by dcp {self.dcp}')
         if self.mlp_tp > 1:
             assert (self.mlp_tp >= self.attn_tp
                     and self.mlp_tp % self.attn_tp == 0), (f'mlp_tp {self.mlp_tp}, attn_tp {self.attn_tp}')
@@ -290,6 +342,7 @@ class DistConfig:
             enable_microbatch=engine_config.enable_microbatch,
             enable_eplb=engine_config.enable_eplb,
             tp=engine_config.tp,
+            dcp=engine_config.dcp,
             attn_tp=engine_config.attn_tp_size,
             mlp_tp=engine_config.mlp_tp_size,
             moe_tp=engine_config.moe_tp_size,
@@ -406,6 +459,70 @@ class MemDecodeConfig:
             raise ValueError('router_path is required when adaptive_router is enabled.')
 
 
+@dataclass(frozen=True)
+class SSMStateCapacity:
+    """Separate request capacity from private state-unit capacity.
+
+    This is an internal geometry contract, not a reinterpretation of
+    ``CacheConfig.num_state_caches``. ``request_slots`` includes reserved slot
+    zero; checkpoint and Store budgets count shared units, not extra banks.
+    """
+
+    request_slots: int
+    max_update_tokens: int
+    checkpoint_budget: int = 0
+    store_budget: int = 0
+
+    def __post_init__(self):
+        values = (self.request_slots, self.max_update_tokens,
+                  self.checkpoint_budget, self.store_budget)
+        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
+            raise ValueError('Compact state capacities must be non-negative integers.')
+        if self.request_slots == 0:
+            if any(values[1:]):
+                raise ValueError('Stateless models must have zero compact state capacities.')
+        elif self.max_update_tokens == 0:
+            raise ValueError('Stateful models need at least one update token.')
+
+    @classmethod
+    def from_cache_config(cls, cache: CacheConfig, max_update_tokens: int) -> 'SSMStateCapacity':
+        """Normalize default state slots and derive capacity for a stateful
+        target."""
+        # CacheConfig.states_shapes is populated later than executor selection.
+        store_budget = (cache.mooncake_state_save_slots
+                        if cache.use_mooncake_store and cache.kv_transfer_config.is_kv_producer else 0)
+        if cache.num_state_caches is None:
+            cache.num_state_caches = cache.max_batches + 2 + cache.prefix_cache_state_budget + store_budget
+        return cls.from_state_slots(cache.num_state_caches, cache.prefix_cache_state_budget,
+                                    store_budget, max_update_tokens)
+
+    @classmethod
+    def from_state_slots(cls, num_state_caches: int | None, checkpoint_budget: int,
+                    store_budget: int, max_update_tokens: int) -> 'SSMStateCapacity':
+        """Preserve A=M-B-S, R=A-1; absence of state allocates nothing."""
+        if num_state_caches is None:
+            return cls(0, 0)
+        request_slots = num_state_caches - checkpoint_budget - store_budget
+        if request_slots < 1:
+            raise ValueError('State capacity must include reserved request slot zero.')
+        return cls(request_slots, max_update_tokens, checkpoint_budget, store_budget)
+
+    @property
+    def request_capacity(self) -> int:
+        return max(0, self.request_slots - 1)
+
+    @property
+    def bank_width(self) -> int:
+        """One private destination per verified token (AR=1, MTPk=1+k)."""
+        return self.max_update_tokens if self.request_slots else 0
+
+    @property
+    def num_units(self) -> int:
+        if not self.request_slots:
+            return 0
+        return 1 + self.request_capacity * self.bank_width + self.checkpoint_budget + self.store_budget
+
+
 @dataclass
 class StateCacheSpec:
     """Spec for a named sequence-scoped state cache (e.g. compressor
@@ -415,6 +532,10 @@ class StateCacheSpec:
     dtype: torch.dtype
     layer_ids: list[int] | None = None
     alignment: int = 256
+    store_cacheable: bool = True
+    # False only when resuming at every supported prefix boundary needs no
+    # prior contents. Runtime allocation and speculative rollback are unchanged.
+    prefix_checkpoint: bool = True
 
 
 @dataclass
@@ -443,6 +564,10 @@ class ModelConfig:
     use_flash_mla: bool = False
     mla_kv_cache_dtype: str | None = None
     mla_index_topk: int | None = None
+    # Custom indexers (e.g. GLM KPool) can use the packed MLA cache without NSA.
+    supports_mla_fp8_cache: bool = False
+    # Custom sparse indexers also need score memory without selecting NSA.
+    reserve_dsa_score_workspace: bool = False
 
     # dllm
     model_paradigm: str = 'ar'
@@ -458,7 +583,15 @@ class ModelConfig:
 
     # Named state-cache specs for models that need layered sequence state.
     state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
+    # Model/backend storage contract, not a runtime feature toggle.
+    state_cache_is_indexed: bool = False
     use_standard_kv_cache: bool = True
+
+    # A model can reject generic prefix-cache reuse when its auxiliary state
+    # cannot be restored at scheduler block boundaries.  ``None`` keeps the
+    # default supported behavior; a non-empty reason is surfaced before model
+    # weights are built.
+    prefix_caching_unsupported_reason: str | None = None
 
     # check env for model-device combination
     check_env_func: Callable = _default_check_env
@@ -609,6 +742,13 @@ class ModelConfig:
         else:
             assert tp % model_config.num_key_value_heads == 0
         model_config.dist_config = dist_config
+
+        if dist_config.dcp > 1:
+            assert model_config.use_flash_mla, 'DCP requires FlashMLA attention'
+            assert model_config.sliding_window < 0, 'DCP does not support sliding-window attention'
+            if model_config.mla_index_topk is not None:
+                from lmdeploy.pytorch import envs
+                assert envs.sparse_mla_backend != 'tilelang', 'DCP does not support TileLang attention'
 
         # should after setting `hf_config` and `model_arch` attributes
         model_config = _update_torch_dtype(model_config, dtype, device_type=device_type)
@@ -771,6 +911,7 @@ class SpecDecodeConfig:
         no_caches = ['medusa']
         if method not in no_caches:
             cache_config = CacheConfig(max_batches=target_cache_cfg.max_batches,
+                                       dcp=dist_config.dcp,
                                        block_size=target_cache_cfg.block_size,
                                        kernel_block_size=target_cache_cfg.kernel_block_size,
                                        num_cpu_blocks=target_cache_cfg.num_cpu_blocks,

@@ -169,6 +169,37 @@ class AscendOpsBackend(DlinferOpsBackend):
         """Backend name."""
         return 'ascend'
 
+    @classmethod
+    def build_op(cls, spec, *, enable_deterministic: bool = False):
+        # GDN is an Ascend/Dlinfer-only extension. Keep the dispatch here so
+        # CUDA and the shared LMDeploy backend remain unchanged.
+        from ...causal_conv1d import CausalConv1dBuildSpec
+        from ...gated_delta_rule import (
+            GatedDeltaMetaBuildSpec,
+            GatedDeltaRuleBuildSpec,
+        )
+        from ...rejection_sampling import RejectionSamplingBuildSpec
+
+        if isinstance(spec, RejectionSamplingBuildSpec):
+            from .rejection_sampling import AscendRejectionSamplingImpl
+            return AscendRejectionSamplingImpl()
+        if isinstance(spec, CausalConv1dBuildSpec):
+            from .causal_conv1d import AscendCausalConv1dImpl
+            return AscendCausalConv1dImpl()
+        if isinstance(spec, GatedDeltaMetaBuildSpec):
+            from .gated_delta_rule import AscendGatedDeltaMetaImpl
+            return AscendGatedDeltaMetaImpl()
+        if isinstance(spec, GatedDeltaRuleBuildSpec):
+            from .gated_delta_rule import AscendGatedDeltaRuleImpl
+            return AscendGatedDeltaRuleImpl()
+        return super().build_op(spec, enable_deterministic=enable_deterministic)
+
+    @classmethod
+    def get_cache_backend(cls):
+        """Get the Ascend cache backend provider."""
+        from .cache import AscendCacheBackend
+        return AscendCacheBackend
+
     @staticmethod
     def get_k_block_shape(
         block_size: int,

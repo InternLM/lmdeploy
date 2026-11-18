@@ -19,6 +19,77 @@ Q_POLICY_INT8 = tl.constexpr(8)
 Q_POLICY_TURBO = tl.constexpr(42)
 
 
+# Page-table width and row stride vary with live request lengths; keep both
+# runtime to avoid compiling a scatter variant for every context length.
+@triton.jit
+def _fill_indexed_key_cache_kernel(
+    Keys, Scales, GroupIds, Valid, RequestIds, BlockOffsets, KeyCache, ScaleCache,
+    BATCH: tl.constexpr, COLUMNS, PAGE: tl.constexpr,
+    PAGE_STEP: tl.constexpr, WIDTH: tl.constexpr,
+    stride_kr: tl.constexpr, stride_kd: tl.constexpr,
+    stride_sr: tl.constexpr, stride_br, stride_bc: tl.constexpr,
+    stride_kcb: tl.constexpr, stride_kcs: tl.constexpr, stride_kcd: tl.constexpr,
+    stride_scb: tl.constexpr, stride_scs: tl.constexpr,
+    BLOCK_D: tl.constexpr, HAS_REQUEST_IDS: tl.constexpr,
+):
+    row = tl.program_id(0)
+    if tl.load(Valid + row):
+        group = tl.load(GroupIds + row).to(tl.int64)
+        column = tl.minimum(tl.maximum(group // PAGE * PAGE_STEP, 0), COLUMNS - 1)
+        request = tl.load(RequestIds + row) if HAS_REQUEST_IDS else row % BATCH
+        page = tl.load(BlockOffsets + request * stride_br + column * stride_bc).to(tl.int64)
+        slot = group % PAGE
+        d = tl.arange(0, BLOCK_D)
+        key = tl.load(Keys + row * stride_kr + d * stride_kd, d < WIDTH, other=0.0)
+        scale = tl.load(Scales + row * stride_sr)
+        tl.store(KeyCache + page * stride_kcb + slot * stride_kcs + d * stride_kcd, key, d < WIDTH)
+        tl.store(ScaleCache + page * stride_scb + slot * stride_scs, scale)
+
+
+def fill_indexed_key_cache(keys: Tensor, scales: Tensor, group_ids: Tensor,
+                           valid: Tensor, block_offsets: Tensor,
+                           key_cache: Tensor, scale_cache: Tensor,
+                           page_step: int = 1, request_ids: Tensor | None = None) -> None:
+    """Scatter prequantized index keys and scales without reading the arena.
+
+    Rows are step-major [steps * batch] unless request_ids is provided.
+    Each valid destination must be unique;
+    inactive rows perform no load/store on the cache. ``page_step`` maps a
+    compressed page to its column in the uncompressed token page table.
+    Cache views retain their actual strides (including packed DSA storage).
+    """
+    rows, width = keys.shape
+    batch, columns = block_offsets.shape
+    if batch == 0 or columns == 0 or (request_ids is None and rows % batch) or page_step < 1:
+        raise ValueError('Invalid indexed-cache batch/page geometry.')
+    if group_ids.shape != (rows,) or valid.shape != (rows,):
+        raise ValueError('One group id and valid flag are required per key.')
+    if request_ids is not None and request_ids.shape != (rows,):
+        raise ValueError('One request id is required per key.')
+    if scales.shape not in ((rows,), (rows, 1)):
+        raise ValueError('One scale is required per key.')
+    if keys.dtype != key_cache.dtype or scales.dtype != scale_cache.dtype:
+        raise TypeError('Prequantized keys/scales must match cache dtypes.')
+    if key_cache.ndim != 3 or key_cache.size(-1) != width:
+        raise ValueError('Expected [pages, entries, width] key cache.')
+    if scale_cache.shape != (*key_cache.shape[:2], 1):
+        raise ValueError('Expected one scale per cache entry.')
+    if rows == 0:
+        return
+    if keys.dtype == torch.float8_e4m3fn:
+        # Copy the quantized representation even on devices without native FP8.
+        keys = keys.view(torch.uint8)
+        key_cache = key_cache.view(torch.uint8)
+    _fill_indexed_key_cache_kernel[(rows,)](
+        keys, scales, group_ids.contiguous(), valid.contiguous(),
+        request_ids.contiguous() if request_ids is not None else None,
+        block_offsets, key_cache, scale_cache,
+        batch, columns, key_cache.size(1), page_step, width,
+        *keys.stride(), scales.stride(0), *block_offsets.stride(),
+        *key_cache.stride(), *scale_cache.stride()[:2],
+        triton.next_power_of_2(width), request_ids is not None, num_warps=4)
+
+
 @triton.jit
 def _quant_int8(val):
     val_min = tl.min(val, 1)
@@ -71,6 +142,8 @@ def _fill_kv_cache_kernel(
     stride_vch: tl.constexpr,
     stride_vcd: tl.constexpr,
     stride_boff,
+    DCP_SIZE: tl.constexpr,
+    DCP_RANK: tl.constexpr,
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
@@ -85,24 +158,23 @@ def _fill_kv_cache_kernel(
     kv_seqlen = tl.load(KVSeqLens + batch_id)
     history_seqlen = kv_seqlen - q_seqlen
 
-    kv_block_id = history_seqlen // BLOCK + block_id
+    kv_block_id = history_seqlen // (BLOCK * DCP_SIZE) + block_id
 
     if kv_seqlen <= 0:
         return
 
-    if kv_block_id * BLOCK >= kv_seqlen:
+    if kv_block_id * BLOCK * DCP_SIZE >= kv_seqlen:
         return
 
     if is_decoding:
-        page_offs = tl.full((1, ), history_seqlen % BLOCK, dtype=tl.int32)
-        kv_mask = tl.full((1, ), 1, dtype=tl.int1)
+        page_offs = tl.full((1, ), (history_seqlen // DCP_SIZE) % BLOCK, dtype=tl.int32)
+        kv_mask = tl.full((1, ), history_seqlen % DCP_SIZE == DCP_RANK, dtype=tl.int1)
         q_offs = tl.full((1, ), q_startloc, dtype=tl.int32)
     else:
         page_offs = tl.arange(0, BLOCK)
-        kv_offs = kv_block_id * BLOCK + page_offs
+        kv_offs = (kv_block_id * BLOCK + page_offs) * DCP_SIZE + DCP_RANK
         kv_mask = (kv_offs >= history_seqlen) & (kv_offs < kv_seqlen)
-        token_off = q_startloc + kv_block_id * BLOCK - history_seqlen
-        q_offs = token_off + page_offs
+        q_offs = q_startloc + kv_offs - history_seqlen
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
     block_off = block_off.to(tl.int64)
@@ -796,7 +868,9 @@ def fill_kv_cache(k_states: Tensor,
                   k_scales_zeros: Tensor = None,
                   v_scales_zeros: Tensor = None,
                   quant_policy: QuantPolicy = QuantPolicy.NONE,
-                  kv_layout: str = 'bshd'):
+                  kv_layout: str = 'bshd',
+                  dcp_size: int = 1,
+                  dcp_rank: int = 0):
     """Fill key/value state to cache for paged attention.
 
     Args:
@@ -827,10 +901,12 @@ def fill_kv_cache(k_states: Tensor,
     if v_states.size(-1) == 0:
         head_dim_v = 0
 
+    if dcp_size > 1 and quant_policy != QuantPolicy.NONE:
+        raise ValueError('DCP generic KV fill currently supports only unquantized cache payloads')
     if max_q_seq_length == 1:
         max_num_blocks = 1
     else:
-        max_num_blocks = triton.cdiv(max_q_seq_length, block_size) + 1
+        max_num_blocks = triton.cdiv(max_q_seq_length, block_size * dcp_size) + 1
 
     BLOCK = block_size
 
@@ -904,6 +980,8 @@ def fill_kv_cache(k_states: Tensor,
             stride_vch=v_caches.stride(h_dim),
             stride_vcd=v_caches.stride(d_dim),
             stride_boff=block_offsets.stride(0),
+            DCP_SIZE=dcp_size,
+            DCP_RANK=dcp_rank,
             BLOCK=BLOCK,
             BLOCK_D=BLOCK_D,
             BLOCK_DV=BLOCK_DV,
@@ -1056,6 +1134,7 @@ def _fill_kv_cache_blocked_fp8_kernel(
     VCaches,
     KSCaches,
     VSCaches,
+    ZeroCache,
     cu_seqlen_q_ptr,
     KVSeqLens,
     BlockOffsets,
@@ -1087,8 +1166,14 @@ def _fill_kv_cache_blocked_fp8_kernel(
     stride_vsch: tl.constexpr,
     stride_vscd: tl.constexpr,
     stride_boff,
+    stride_zcn: tl.constexpr,
+    stride_zcb: tl.constexpr,
+    stride_zch: tl.constexpr,
+    ZERO_DIM: tl.constexpr,
     ROUND_SCALE: tl.constexpr,
     GROUP_SIZE: tl.constexpr,
+    DCP_SIZE: tl.constexpr,
+    DCP_RANK: tl.constexpr,
     BLOCK: tl.constexpr,
     BLOCK_D: tl.constexpr,
     BLOCK_DV: tl.constexpr,
@@ -1103,24 +1188,23 @@ def _fill_kv_cache_blocked_fp8_kernel(
     kv_seqlen = tl.load(KVSeqLens + batch_id)
     history_seqlen = kv_seqlen - q_seqlen
 
-    kv_block_id = history_seqlen // BLOCK + block_id
+    kv_block_id = history_seqlen // (BLOCK * DCP_SIZE) + block_id
 
     if kv_seqlen <= 0:
         return
 
-    if kv_block_id * BLOCK >= kv_seqlen:
+    if kv_block_id * BLOCK * DCP_SIZE >= kv_seqlen:
         return
 
     if is_decoding:
-        page_offs = tl.full((1, ), history_seqlen % BLOCK, dtype=tl.int32)
-        kv_mask = tl.full((1, ), 1, dtype=tl.int1)
+        page_offs = tl.full((1, ), (history_seqlen // DCP_SIZE) % BLOCK, dtype=tl.int32)
+        kv_mask = tl.full((1, ), history_seqlen % DCP_SIZE == DCP_RANK, dtype=tl.int1)
         q_offs = tl.full((1, ), q_startloc, dtype=tl.int32)
     else:
         page_offs = tl.arange(0, BLOCK)
-        kv_offs = kv_block_id * BLOCK + page_offs
+        kv_offs = (kv_block_id * BLOCK + page_offs) * DCP_SIZE + DCP_RANK
         kv_mask = (kv_offs >= history_seqlen) & (kv_offs < kv_seqlen)
-        token_off = q_startloc + kv_block_id * BLOCK - history_seqlen
-        q_offs = token_off + page_offs
+        q_offs = q_startloc + kv_offs - history_seqlen
 
     block_off = tl.load(BlockOffsets + batch_id * stride_boff + kv_block_id)
     block_off = block_off.to(tl.int64)
@@ -1162,6 +1246,11 @@ def _fill_kv_cache_blocked_fp8_kernel(
     kc, kcs = _quant_blocked_fp8(k, fp8_min, fp8_max, KCaches.dtype.element_ty, GROUP_SIZE, ROUND_SCALE)
     tl.store(kc_ptrs, kc, mask=mask_kc)
     tl.store(ksc_ptrs, kcs, mask=kv_mask[:, None] & (ds_off[None, :] < tl.cdiv(head_dim, GROUP_SIZE)))
+    if ZERO_DIM > 0:
+        zero_offs = tl.arange(0, triton.next_power_of_2(ZERO_DIM))
+        zero_ptrs = (ZeroCache + block_off * stride_zcn + head_id * stride_zch
+                     + page_offs[:, None] * stride_zcb + zero_offs[None, :])
+        tl.store(zero_ptrs, 0, mask=kv_mask[:, None] & (zero_offs[None, :] < ZERO_DIM))
     if BLOCK_DV > 0:
         vc, vcs = _quant_blocked_fp8(v, fp8_min, fp8_max, VCaches.dtype.element_ty, GROUP_SIZE, ROUND_SCALE)
         tl.store(vc_ptrs, vc, mask=mask_vc)
@@ -1180,7 +1269,10 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
                               block_offsets: Tensor,
                               group_size: int = 128,
                               kv_layout: str = 'bshd',
-                              scale_fmt: str | None = None):
+                              scale_fmt: str | None = None,
+                              dcp_size: int = 1,
+                              dcp_rank: int = 0,
+                              zero_fill_cache: Tensor | None = None):
     """Fill key/value state to cache for paged attention with fp8 quantization.
 
     Args:
@@ -1212,6 +1304,9 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
             scaling factors are stored/interpreted using the UE8M0 fp8 scale
             format; when ``None``, the default scale layout for this kernel
             is used.
+        zero_fill_cache (Tensor | None): Optional cache view with contiguous
+            last dimension to clear at exactly the written token slots. Used
+            for the BF16 RoPE tail of NoPE packed MLA rows.
     """
     assert scale_fmt in (None, 'ue8m0'), f'Unsupported scale format: {scale_fmt}.'
 
@@ -1238,7 +1333,7 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
     if max_q_seqlen == 1:
         max_num_blocks = 1
     else:
-        max_num_blocks = triton.cdiv(max_q_seqlen, block_size) + 1
+        max_num_blocks = triton.cdiv(max_q_seqlen, block_size * dcp_size) + 1
 
     BLOCK = block_size
     BLOCK_D = triton.next_power_of_2(head_dim)
@@ -1254,6 +1349,11 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
     grid = (num_heads, max_num_blocks, batch_size)
     ROUND_SCALE = 1 if scale_fmt == 'ue8m0' else 0
     is_decoding = max_q_seqlen == 1
+    zero_dim = 0 if zero_fill_cache is None else zero_fill_cache.size(d_dim)
+    if zero_fill_cache is None:
+        zero_fill_cache = k_caches
+    else:
+        assert zero_fill_cache.stride(d_dim) == 1
     _fill_kv_cache_blocked_fp8_kernel[grid](
         k_states,
         v_states,
@@ -1261,6 +1361,7 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
         v_caches,
         ks_caches,
         vs_caches,
+        zero_fill_cache,
         cu_seqlen_q,
         kv_seqlens,
         block_offsets,
@@ -1292,8 +1393,14 @@ def fill_kv_cache_blocked_fp8(k_states: Tensor,
         stride_vsch=vs_caches.stride(h_dim),
         stride_vscd=vs_caches.stride(d_dim),
         stride_boff=block_offsets.stride(0),
+        stride_zcn=zero_fill_cache.stride(b_dim),
+        stride_zcb=zero_fill_cache.stride(s_dim),
+        stride_zch=zero_fill_cache.stride(h_dim),
+        ZERO_DIM=zero_dim,
         ROUND_SCALE=ROUND_SCALE,
         GROUP_SIZE=group_size,
+        DCP_SIZE=dcp_size,
+        DCP_RANK=dcp_rank,
         BLOCK=BLOCK,
         BLOCK_D=BLOCK_D,
         BLOCK_DV=BLOCK_DV,

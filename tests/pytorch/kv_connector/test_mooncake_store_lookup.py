@@ -41,8 +41,8 @@ class _FakeStoreWorker:
         self.lookup_started = threading.Event()
         self.lookup_gate = None
 
-    def lookup(self, token_len, block_hashes):
-        self.lookup_calls.append((token_len, [bytes(block_hash) for block_hash in block_hashes]))
+    def lookup(self, token_len, block_hashes, *, recompute_blocks=0):
+        self.lookup_calls.append((token_len, [bytes(block_hash) for block_hash in block_hashes], recompute_blocks))
         gate = self.lookup_gate
         self.lookup_started.set()
         if gate is not None:
@@ -116,13 +116,14 @@ def test_blob_block_hashes_rejects_an_invalid_layout(blob, hash_len):
 
 
 @pytest.mark.parametrize(('store_result', 'expected'), [(37, 37), (0, 0)])
-def test_sync_lookup_hit_and_miss_over_real_zmq(lookup_pair_factory, store_result, expected):
+@pytest.mark.parametrize('recompute_blocks', [0, 1])
+def test_sync_lookup_hit_and_miss_over_real_zmq(lookup_pair_factory, store_result, expected, recompute_blocks):
     store_worker = _FakeStoreWorker([store_result])
     client, _, _ = lookup_pair_factory(store_worker)
     hashes = [b'a' * 16, b'b' * 16]
 
-    assert client.lookup(1, 128, hashes, non_block=False) == expected
-    assert store_worker.lookup_calls == [(128, hashes)]
+    assert client.lookup(1, 128, hashes, non_block=False, recompute_blocks=recompute_blocks) == expected
+    assert store_worker.lookup_calls == [(128, hashes, recompute_blocks)]
 
 
 def test_async_lookup_is_pending_and_submitted_only_once(lookup_pair_factory):
@@ -137,11 +138,49 @@ def test_async_lookup_is_pending_and_submitted_only_once(lookup_pair_factory):
         assert store_worker.lookup_started.wait(timeout=2)
         assert client.is_pending(2)
         assert client.lookup(2, 64, hashes) is None
-        assert store_worker.lookup_calls == [(64, hashes)]
+        assert store_worker.lookup_calls == [(64, hashes, 0)]
 
         gate.set()
         assert _poll_lookup(client, 2, 64, hashes) == 23
         assert not client.is_pending(2)
+    finally:
+        gate.set()
+
+
+@pytest.mark.parametrize('result', [0, 23, RuntimeError('lookup failed')])
+def test_prefetched_result_is_retained_until_admission_without_duplicate_rpc(lookup_pair_factory, result):
+    store_worker = _FakeStoreWorker([result])
+    client, _, _ = lookup_pair_factory(store_worker)
+    hashes = [b'a' * 16]
+
+    client.submit(2, 64, hashes)
+    query = client.queries[2]
+    expected = 0 if isinstance(result, BaseException) else result
+    assert query.future.result(timeout=2) == expected
+    client.submit(2, 64, hashes)
+    assert client.queries[2] is query
+    assert not query.admission_started
+    assert client.lookup(2, 64, hashes) == expected
+    assert store_worker.lookup_calls == [(64, hashes, 0)]
+    assert client.queries == {}
+
+
+def test_prefetch_only_blocks_admission_after_remote_extension_is_needed(lookup_pair_factory):
+    gate = threading.Event()
+    worker = _FakeStoreWorker([23])
+    worker.lookup_gate = gate
+    client, _, _ = lookup_pair_factory(worker)
+    hashes = [b'a' * 16]
+    try:
+        client.submit(2, 64, hashes)
+        assert worker.lookup_started.wait(timeout=2)
+        assert not client.is_pending(2)
+        assert client.lookup(2, 64, hashes) is None
+        assert client.is_pending(2)
+        assert client.lookup(2, 64, hashes) is None
+        assert len(worker.lookup_calls) == 1
+        gate.set()
+        assert _poll_lookup(client, 2, 64, hashes) == 23
     finally:
         gate.set()
 
@@ -165,7 +204,7 @@ def test_discard_drops_an_inflight_result_before_reusing_request_id(lookup_pair_
         assert client.lookup(3, 64, hashes, non_block=True) is None
         second_gate.set()
         assert _poll_lookup(client, 3, 64, hashes) == 29
-        assert store_worker.lookup_calls == [(64, hashes), (64, hashes)]
+        assert store_worker.lookup_calls == [(64, hashes, 0), (64, hashes, 0)]
     finally:
         first_gate.set()
         second_gate.set()
@@ -270,7 +309,7 @@ def test_close_is_idempotent_stops_server_and_removes_ipc_file(lookup_pair_facto
     assert not server.thread.is_alive()
     assert not os.path.exists(ipc_path)
     assert not os.path.exists(f'{ipc_path}.lock')
-    assert client.futures == {}
+    assert client.queries == {}
     with pytest.raises(RuntimeError, match='closed'):
         client.lookup(9, 64, [])
 
@@ -290,7 +329,7 @@ def test_close_drains_an_inflight_lookup_without_leaking_state(lookup_pair_facto
     close_thread.join(timeout=2)
 
     assert not close_thread.is_alive()
-    assert client.futures == {}
+    assert client.queries == {}
     assert client.context is None
     assert client.socket is None
 

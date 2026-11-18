@@ -182,33 +182,27 @@ class InternVLVisionModel(VisionModel):
         prompt_messages = []
         IMAGE_TOKEN = '<IMAGE_TOKEN>'
         messages = [x for x in messages if x['role'] not in ['preprocess', 'forward']]
-        if VisionModel.IMAGE_TOKEN_included(messages):
-            # backward compatibility
-            for message in messages:
-                role, content = message['role'], message['content']
-                if role != 'user' or isinstance(content, str):
-                    prompt_messages.append(message)
-                    continue
-                content = [x['text'] for x in content if x['type'] == 'text']
-                prompt = ''.join(content)
-                prompt = prompt.replace(f'{IMAGE_TOKEN}', f'<img>{self.image_token}</img>')
-                prompt_messages.append(dict(role='user', content=prompt))
-        else:
-            for message in messages:
-                role, content = message['role'], message['content']
-                if role != 'user' or isinstance(content, str):
-                    prompt_messages.append(message)
-                    continue
-                _content = []
+        for message in messages:
+            role, content = message['role'], message['content']
+            if role not in ('user', 'tool') or isinstance(content, str):
+                prompt_messages.append(message)
+                continue
+            # Legacy placeholders belong to this message, not the whole
+            # conversation: a user placeholder must not suppress tool images.
+            texts = [item['text'] for item in content if item['type'] == 'text']
+            if any(IMAGE_TOKEN in text for text in texts):
+                prompt = ''.join(texts).replace(IMAGE_TOKEN, f'<img>{self.image_token}</img>')
+            else:
+                parts = []
                 for item in content:
-                    item_type = item['type']
-                    if item_type == 'text':
-                        _content.append(item['text'])
-                    elif item_type in ['image', 'image_url']:
-                        _content.append(f'<img>{self.image_token}</img>\n')
+                    if item['type'] == 'text':
+                        parts.append(item['text'])
+                    elif item['type'] in ('image', 'image_url'):
+                        parts.append(f'<img>{self.image_token}</img>\n')
                     else:
                         raise ValueError(f'Unsupported message type: {item["type"]}')
-                prompt_messages.append(dict(role='user', content=''.join(_content)))
+                prompt = ''.join(parts)
+            prompt_messages.append(dict(message, content=prompt))
         prompt = chat_template.messages2prompt(prompt_messages, tools=tools, **chat_template_kwargs)
         return prompt, self.image_token
 

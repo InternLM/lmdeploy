@@ -108,8 +108,8 @@ def check_request(request: GenerateReqInput, server_context) -> str:
     # check sampling settings
     if request.top_p is not None and not (0 < request.top_p <= 1):
         return f'The top_p {request.top_p!r} must be in (0, 1].'
-    if request.top_k is not None and request.top_k < 0:
-        return f'The top_k {request.top_k!r} cannot be a negative integer.'
+    if request.top_k is not None and request.top_k < -1:
+        return f'The top_k {request.top_k!r} must be -1, 0, or a positive integer.'
     if request.temperature is not None and not (0 <= request.temperature <= 2):
         return f'The temperature {request.temperature!r} must be in [0, 2]'
 
@@ -227,7 +227,7 @@ def register(router: APIRouter, server_context) -> None:
                         routed_experts=routed_experts)
                     yield f'data: {response_json}\n\n'
             except RequestError as e:
-                yield f'data: {json.dumps({"error": request_error_payload(e)})}\n\n'
+                yield f'data: {json.dumps({"error": request_error_payload(e)}, ensure_ascii=False)}\n\n'
             yield 'data: [DONE]\n\n'
 
         if request.stream:

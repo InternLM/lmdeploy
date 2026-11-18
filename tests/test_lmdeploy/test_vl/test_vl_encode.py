@@ -1,6 +1,10 @@
+import base64
 import math
+from io import BytesIO
 
 import numpy as np
+import pytest
+from PIL import Image, ImageFile, ImageOps
 
 from lmdeploy.vl import (
     encode_audio_base64,
@@ -25,6 +29,22 @@ def test_image_encode_decode():
     assert img1.size == img2.size
     assert img1.mode == img2.mode
     assert img1.tobytes() == img2.tobytes()
+
+
+@pytest.mark.parametrize('defer_decode', [False, True])
+def test_owned_image_bytes_do_not_wait_for_shared_pil(defer_decode):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from lmdeploy.vl.media.image import EncodedImage, ImageMediaIO, _shared_pil_lock
+
+    buffer = BytesIO()
+    Image.new('RGB', (56, 112), 'red').save(buffer, format='PNG')
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with _shared_pil_lock:
+            image = pool.submit(ImageMediaIO(defer_decode=defer_decode).load_bytes, buffer.getvalue()).result(timeout=5)
+            if isinstance(image, EncodedImage):
+                image = pool.submit(image.decode).result(timeout=5)
+    assert image.size == (56, 112) and image.getpixel((0, 0)) == (255, 0, 0)
 
 
 def test_video_encode_decode():
@@ -80,22 +100,112 @@ def test_audio_encode_decode():
     assert np.allclose(audio_out, audio, atol=1e-4)
 
 
-def test_image_modes():
-    import numpy as np
-    from PIL import Image
+@pytest.mark.parametrize('source_mode', ['L', 'RGBA', 'CMYK'])
+@pytest.mark.parametrize('image_mode', ['RGB', 'L'])
+def test_image_modes(source_mode, image_mode):
+    image = Image.new('RGB', (32, 24), (120, 30, 200)).convert(source_mode)
+    b64 = encode_image_base64(image, image_mode=image_mode)
+    img_out = load_image(f'data:image/png;base64,{b64}', image_mode=image_mode)
+    assert img_out.mode == image_mode
+    assert img_out.tobytes() == image.convert(image_mode).tobytes()
 
-    grayscale_img = Image.fromarray(np.zeros((100, 100), dtype=np.uint8)).convert('L')
-    b64 = encode_image_base64(grayscale_img)  # should convert L -> RGB internally
 
-    img_out = load_image(f'data:image/png;base64,{b64}')
-    assert img_out.mode == 'RGB'
+@pytest.mark.parametrize('orientation', range(1, 10))
+@pytest.mark.parametrize('defer_decode', [False, True])
+def test_image_exif_orientation(tmp_path, orientation, defer_decode):
+    from lmdeploy.vl.media.image import EncodedImage, ImageMediaIO
+
+    y, x = np.indices((112, 56))
+    image = Image.fromarray(np.stack([x * 4, y * 2, (x + y) % 256], axis=-1).astype(np.uint8))
+    exif = Image.Exif()
+    exif[274] = orientation
+    buffer = BytesIO()
+    image.save(buffer, format='JPEG', exif=exif)
+    data = buffer.getvalue()
+    path = tmp_path / 'oriented.jpg'
+    path.write_bytes(data)
+    original = Image.open(BytesIO(data))
+    original_pixels = original.tobytes()
+    expected = ImageOps.exif_transpose(original).convert('RGB')
+    io = ImageMediaIO(defer_decode=defer_decode)
+    outputs = [io.load_bytes(data), io.load_file(path),
+               load_image('data:image/jpeg;base64,' + base64.b64encode(data).decode(), defer_decode=defer_decode),
+               load_image('data:image/png;base64,' + encode_image_base64(original))]
+    for actual in outputs:
+        if isinstance(actual, EncodedImage):
+            actual = actual.decode()
+        assert actual.size == expected.size
+        assert actual.tobytes() == expected.tobytes()
+        assert ImageOps.exif_transpose(actual).tobytes() == actual.tobytes()
+        assert actual.getexif().get(274, 1) not in range(2, 9)
+    jpeg = load_image('data:image/jpeg;base64,' + encode_image_base64(original, format='JPEG'))
+    assert jpeg.size == expected.size
+    assert np.abs(np.asarray(jpeg).astype(float) - np.asarray(expected).astype(float)).mean() < 3
+    assert original.size == (56, 112)
+    assert original.tobytes() == original_pixels
+    assert original.getexif()[274] == orientation
 
 
-def test_truncated_image():
-    url = 'https://github.com/irexyc/lmdeploy/releases/download/v0.0.1/tr.jpeg'
-    im = load_image(url)
-    assert im.width == 1638
-    assert im.height == 2048
+@pytest.mark.parametrize('defer_decode', [False, True])
+def test_image_malformed_exif_remains_decodable(defer_decode):
+    import struct
+
+    from lmdeploy.vl.media.image import EncodedImage, ImageMediaIO
+
+    buffer = BytesIO()
+    Image.new('RGB', (56, 112), 'red').save(buffer, format='JPEG')
+    jpeg = buffer.getvalue()
+    # A real APP1 segment with an invalid TIFF header; Pillow can still decode pixels.
+    payload = b'Exif\x00\x00XXXX\x00\x00\x00\x08' + bytes(32)
+    data = jpeg[:2] + b'\xff\xe1' + struct.pack('>H', len(payload) + 2) + payload + jpeg[2:]
+    reference = Image.open(BytesIO(data)).convert('RGB')
+    actual = ImageMediaIO(defer_decode=defer_decode).load_bytes(data)
+    if isinstance(actual, EncodedImage):
+        actual = actual.decode()
+    assert actual.size == reference.size
+    assert actual.tobytes() == reference.tobytes()
+    assert not actual.getexif()
+
+
+@pytest.mark.parametrize('orientation', [1, 6])
+def test_jpeg_video_frames_preserve_metadata(orientation):
+    frames = []
+    expected = []
+    for color in ['red', 'blue']:
+        buffer = BytesIO()
+        exif = Image.Exif()
+        exif[274] = orientation
+        Image.new('RGB', (56, 112), color).save(buffer, format='JPEG', exif=exif)
+        data = buffer.getvalue()
+        frames.append(base64.b64encode(data).decode())
+        expected.append(np.asarray(ImageOps.exif_transpose(Image.open(BytesIO(data))).convert('RGB')))
+    video, metadata = load_video('data:video/jpeg;base64,' + ','.join(frames), fps=2)
+    assert np.array_equal(video, np.stack(expected))
+    assert metadata == dict(total_num_frames=2, fps=2.0, duration=1.0,
+                            video_backend='jpeg_sequence', frames_indices=[0, 1])
+
+
+@pytest.mark.parametrize('orientation', [1, 6])
+@pytest.mark.parametrize('defer_decode', [False, True])
+def test_truncated_image(monkeypatch, orientation, defer_decode):
+    from lmdeploy.vl.media.image import EncodedImage
+
+    buffer = BytesIO()
+    exif = Image.Exif()
+    exif[274] = orientation
+    Image.new('RGB', (1638, 2048), (120, 30, 200)).save(buffer, format='JPEG', exif=exif)
+    data = buffer.getvalue()[:-128]  # Truncate scan data; a missing EOI alone may be tolerated by the decoder.
+    with monkeypatch.context() as context:
+        context.setattr(ImageFile, 'LOAD_TRUNCATED_IMAGES', False)
+        with pytest.raises(OSError, match='truncated'):
+            Image.open(BytesIO(data)).load()
+
+    # A data URL exercises the HTTP byte decoder without a network dependency.
+    im = load_image('data:image/jpeg;base64,' + base64.b64encode(data).decode(), defer_decode=defer_decode)
+    if isinstance(im, EncodedImage):
+        im = im.decode()
+    assert im.size == ((1638, 2048) if orientation == 1 else (2048, 1638))
+    assert im.mode == 'RGB'
 
 
 def test_single_frame_video():

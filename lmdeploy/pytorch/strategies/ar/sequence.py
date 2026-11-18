@@ -53,6 +53,8 @@ class SchedulerSequenceDefault(SchedulerSequence):
             self.cached_tokens = 0
             self.prefix_cache.suppress_match_stats = False
             self.prefix_cache.match_start_step = -1
+            self.prefix_cache.last_decode_save_step = -1
+            self.prefix_cache.decode_store_save_pending = False
             self.input_start_pos = self.num_all_ids
             self.input_end_pos = self.input_start_pos + num_valid
             self.arrive_time = time.perf_counter()

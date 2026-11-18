@@ -17,6 +17,7 @@ def _fill_graph_common_inputs_kernel(
     graph_block_offsets,
     qkv_lens,
     cu_seqlens,
+    dcp_local_kv_seqlens,
     input_ids_stride,
     position_ids_stride,
     block_row_stride,
@@ -42,6 +43,8 @@ def _fill_graph_common_inputs_kernel(
     PAD_QUERY_LEN: tl.constexpr,
     BLOCK_COPY: tl.constexpr,
     BLOCK_BATCHES: tl.constexpr,
+    DCP_SIZE: tl.constexpr,
+    DCP_RANK: tl.constexpr,
 ):
     tl.static_assert(MAX_TOKENS > 0, 'MAX_TOKENS must be positive')
     tl.static_assert(MAX_BATCHES > 0, 'MAX_BATCHES must be positive')
@@ -90,6 +93,11 @@ def _fill_graph_common_inputs_kernel(
         tl.store(qkv_lens + 2 * qkv_row_stride + q_offsets * qkv_col_stride,
                  kv_len,
                  mask=valid)
+        if DCP_SIZE > 1:
+            local_kv_len = tl.maximum((kv_len + DCP_SIZE - 1 - DCP_RANK) // DCP_SIZE, 0)
+            tl.store(dcp_local_kv_seqlens + q_offsets,
+                     local_kv_len,
+                     mask=valid)
 
         cu_q = tl.cumsum(q_len, 0)
         cu_k = tl.cumsum(kv_len, 0)
@@ -155,11 +163,16 @@ def fill_graph_common_inputs(input_ids: torch.Tensor,
                              graph_block_offsets: torch.Tensor,
                              qkv_lens: torch.Tensor,
                              cu_seqlens: torch.Tensor,
-                             pad_query_len: int) -> None:
+                             pad_query_len: int,
+                             *,
+                             dcp_local_kv_seqlens: torch.Tensor | None = None,
+                             dcp_size: int = 1,
+                             dcp_rank: int = 0) -> None:
     """Fill common token, block-table, and sequence graph buffers.
 
     The caller randomizes padded graph token IDs first. This operation only overwrites real token/position prefixes,
-    while padding the block table and sequence lengths for safe graph replay.
+    while padding the block table and sequence lengths for safe graph replay. With DCP, also fill the contiguous rank-
+    local KV-length buffer, including padded requests. The common lengths and cumulative offsets remain global.
     """
     num_tokens = input_ids.size(-1)
     batch_size, num_blocks = block_offsets.size()
@@ -175,6 +188,8 @@ def fill_graph_common_inputs(input_ids: torch.Tensor,
             (q_start_loc, q_seqlens, kv_seqlens))
         cu_seqlens[:, 0].zero_()
         cu_seqlens[:, 1:] = qkv_lens[1:].cumsum(1)
+        if dcp_size > 1:
+            dcp_local_kv_seqlens.copy_(((qkv_lens[2] + dcp_size - 1 - dcp_rank) // dcp_size).clamp_min(0))
         return
 
     max_tokens = graph_input_ids.size(-1)
@@ -197,6 +212,7 @@ def fill_graph_common_inputs(input_ids: torch.Tensor,
         graph_block_offsets,
         qkv_lens,
         cu_seqlens,
+        dcp_local_kv_seqlens,
         input_ids.stride(-1),
         position_ids.stride(-1),
         block_offsets.stride(0),
@@ -222,5 +238,7 @@ def fill_graph_common_inputs(input_ids: torch.Tensor,
         PAD_QUERY_LEN=pad_query_len,
         BLOCK_COPY=block_copy,
         BLOCK_BATCHES=block_batches,
+        DCP_SIZE=dcp_size,
+        DCP_RANK=dcp_rank,
         num_warps=4,
     )

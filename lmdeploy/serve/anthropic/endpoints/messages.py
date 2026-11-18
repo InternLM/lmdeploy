@@ -16,6 +16,7 @@ from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
 from ..adapter import (
     build_message_content_blocks,
+    chat_template_kwargs_from_thinking,
     map_finish_reason,
     normalize_tool_choice,
     to_openai_messages,
@@ -67,13 +68,18 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             temperature=request.temperature,
             top_p=request.top_p,
             top_k=request.top_k,
+            repetition_penalty=request.repetition_penalty,
+            media_io_kwargs=request.media_io_kwargs,
+            mm_processor_kwargs=request.mm_processor_kwargs,
             stop=request.stop_sequences,
             tools=to_openai_tools(request.tools),
             tool_choice=normalize_tool_choice(request.tool_choice),
             return_logprob=bool(request.return_logprob),
             return_token_ids=bool(request.return_token_ids),
             return_routed_experts=bool(request.return_routed_experts),
+            routed_experts_start_len=request.routed_experts_start_len,
             include_stop_str_in_output=bool(request.include_stop_str_in_output),
+            chat_template_kwargs=chat_template_kwargs_from_thinking(request.thinking),
         )
         try:
             chat_runner = await ChatRunner.prepare(
@@ -132,11 +138,13 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             id=request_id,
             model=request.model,
             content=content_blocks,
-            stop_reason=map_finish_reason(res.finish_reason),
-            stop_sequence=None,
-            usage=MessageUsage(
+            stop_reason='stop_sequence' if res.stop_sequence is not None else map_finish_reason(res.finish_reason),
+            stop_sequence=res.stop_sequence,
+            usage=MessageUsage.build(
                 input_tokens=res.input_token_len,
                 output_tokens=res.generate_token_len,
+                cached_tokens=res.cached_tokens,
+                thinking_tokens=res.reasoning_tokens,
             ),
             output_ids=res.token_ids if chat_request.return_token_ids else None,
             output_token_logprobs=output_token_logprobs,

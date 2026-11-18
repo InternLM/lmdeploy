@@ -64,6 +64,10 @@ class ParallelEmbedding(nn.Module):
         self.out_dtype = dtype
         self.start_index = self.rank * self.vocab_size_padded
         self.end_index = (self.rank + 1) * self.vocab_size_padded
+        # Tied heads need FP32 storage while embedding outputs keep the model dtype.
+        bm_ctx = get_build_model_context()
+        if force_dtype is None and bm_ctx.fp32_lm_head and bm_ctx.tie_word_embeddings:
+            force_dtype = torch.float32
         weight_dtype = force_dtype or dtype
         self.register_parameter('weight', self.create_weight(self.vocab_size_padded, hidden_size, weight_dtype, device))
         self.weight.weight_loader = self.weight_loader
@@ -130,6 +134,9 @@ class ParallelLMHead(ParallelEmbedding):
         padding_size: int = DEFAULT_VOCAB_PADDING_SIZE,
         layer_type: str = 'attn',
     ):
+        # DeepSeek/GLM and MTP construct this class without the mixin builder.
+        if get_build_model_context().fp32_lm_head:
+            dtype = torch.float32
         super().__init__(vocab_size=vocab_size,
                          hidden_size=hidden_size,
                          padding_idx=None,

@@ -133,6 +133,36 @@ response = pipe.infer("Hello, how are you?", max_new_tokens=30)
 print(response.text)
 ```
 
+## GLM-5.3-Flash FP8 MLA cache
+
+The PyTorch backend supports an optional packed FP8 MLA cache for
+GLM-5.3-Flash, including its MTP draft model:
+
+```shell
+lmdeploy serve api_server /path/to/GLM-5.3-Flash --backend pytorch \
+    --tp 8 --quant-policy fp8 --model-name glm53
+```
+
+Use `--quant-policy none` (the default) for the BF16 baseline. To enable
+FP8 in Python, use `PytorchEngineConfig(quant_policy=16)`. This choice only
+quantizes the MLA latent cache; KPool and KDA states retain their original
+formats. Each latent row uses 656 bytes instead of 1024 bytes: 512 FP8
+values, four FP32 scales, and a zero-filled 64-element BF16 tail. This is
+a 35.9% reduction in latent-cache payload, not total GPU memory.
+
+The implementation follows the NoPE approach in
+[vLLM #59246](https://github.com/vllm-project/vllm/pull/59246).
+Decode pads the query to 576 dimensions while preserving the model's
+attention scale. Prefill dequantizes to the logical 512 dimensions and
+retains the short-prompt dense MHA path. KPool tail tokens are retained
+when aligning sparse indices. FP8 introduces quantization error, so
+evaluate accuracy and speed for your workload before enabling it.
+
+The H200 test environment uses FlashMLA `1.0.0+ba89a34`, with its
+656-byte sparse-cache format and Hopper support. Use a compatible
+FlashMLA build; a version with a different packed-cache format is not
+interchangeable.
+
 ## Evaluation
 
 We apply kv quantization of LMDeploy to several LLM models and utilize OpenCompass to evaluate the inference accuracy. The results are shown in the table below:

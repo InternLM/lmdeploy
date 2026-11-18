@@ -35,6 +35,7 @@ from lmdeploy.serve.managers import Session, SessionManager
 from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
+from lmdeploy.vl.media.base import MediaInputError
 
 from .exceptions import ErrorCode, RequestError, SafeRunException
 
@@ -57,6 +58,7 @@ class GenOut:
     cached_tokens: int = 0
     # Token ids aligned 1:1 with input-scoring logprobs rows.
     logprob_token_ids: list[int] | None = None
+    stop_sequence: str | None = None
 
     def to_response(self, index: int = 0) -> Response:
         """Convert GenOut to Response object.
@@ -90,6 +92,24 @@ class PreprocessedRequest:
 
 
 # class AsyncEngine(LogitsMixin):
+# Client-visible detail for preprocessing failures is scoped to MediaInputError,
+# which media loading raises only at the boundary where a user-supplied path is
+# opened, with a message naming just that path. The exception *type* cannot be
+# trusted for this: e.g. decoding an HTTP/base64 video stages the bytes in a
+# NamedTemporaryFile, and if the server's temp dir vanishes the resulting
+# FileNotFoundError names an internal path. Every other exception keeps the
+# generic message; the full traceback still goes to the server log.
+def _client_visible_preprocess_message(exc: Exception) -> str:
+    """Build the client-visible message for a preprocessing failure.
+
+    MediaInputError surfaces its message, which names the offending user-supplied path; every other exception keeps the
+    generic message, with details preserved only in the server log.
+    """
+    if not isinstance(exc, MediaInputError):
+        return 'Request preprocessing failed.'
+    return f'Request preprocessing failed: {exc}'
+
+
 class AsyncEngine:
     """Async inference engine. Maintaining a bunch of tm_model instances.
 
@@ -517,6 +537,14 @@ class AsyncEngine:
                     f'Session {session.session_id} already has an active request.')
 
             chat_template_kwargs = chat_template_kwargs or {}
+            if self.arch == 'Glm5NextForConditionalGeneration':
+                effort = (reasoning_effort if reasoning_effort is not None
+                          else chat_template_kwargs.get('reasoning_effort'))
+                if effort is not None and effort not in ('low', 'high', 'max'):
+                    raise RequestError(
+                        ErrorCode.INVALID_REQUEST,
+                        f'Unsupported reasoning_effort {effort!r} for GLM-5.3-Flash. '
+                        'Supported efforts are low, high and max.')
             if enable_thinking is not None:
                 logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
                 if chat_template_kwargs.get('enable_thinking') is None:
@@ -552,6 +580,10 @@ class AsyncEngine:
                     f'Input length ({input_len}) must be smaller than the model context length ({self.session_len}).')
 
             gen_config = self._determine_gen_config(input_ids, gen_config=gen_config)
+            if gen_config.routed_experts_start_len > input_len:
+                raise RequestError(
+                    ErrorCode.INVALID_REQUEST,
+                    'routed_experts_start_len must not exceed the processed prompt length.')
             input_logprobs_requested = gen_config.logprob_start_len >= 0
             if input_logprobs_requested and gen_config.logprob_start_len >= input_len:
                 raise RequestError(
@@ -604,7 +636,8 @@ class AsyncEngine:
             metrics_processor.increase_total_requests()
             metrics_processor.increase_failed_requests('error')
             remove_session()
-            raise RequestError(ErrorCode.PREPROCESS_FAILED) from e
+            raise RequestError(ErrorCode.PREPROCESS_FAILED,
+                               _client_visible_preprocess_message(e)) from e
 
     @staticmethod
     def _request_error_from_status(status: ResponseType) -> RequestError:
@@ -781,6 +814,13 @@ class AsyncEngine:
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{input_len}, output_tokens {gen_len}')
+                    stop_sequence = None
+                    if finish_reason == 'stop':
+                        # Match against the same token IDs used by GenerationConfig,
+                        # before the terminal token is discarded from visible output.
+                        stop_sequence = next((word for word in gen_config.stop_words or []
+                                              if outputs.token_ids[-1] in
+                                              self.tokenizer.indexes_containing_token(word)), None)
                     yield GenOut(response,
                                  input_len,
                                  gen_len,
@@ -792,7 +832,8 @@ class AsyncEngine:
                                  last_hidden_state=last_hidden_state,
                                  routed_experts=routed_experts,
                                  cache_block_ids=outputs.cache_block_ids,
-                                 cached_tokens=cached_tokens)
+                                 cached_tokens=cached_tokens,
+                                 stop_sequence=stop_sequence)
                 else:
                     logger.error(f'session {session_id} finished, {outputs.status}, '
                                  'reason "error"')

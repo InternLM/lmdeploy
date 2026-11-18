@@ -73,24 +73,28 @@ def _run_server(gpu_ids: list[int], model_path: str, **kwargs):
 
 
 def terminate_processes(processes: list[mp.Process]):
-    """Terminate child server process groups."""
+    """Let frontends close their engines before terminating leftover groups."""
     for process in processes:
-        logger.info(f'Terminating process group {process.pid}')
+        logger.info(f'Terminating server process {process.pid}')
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            if process.is_alive():
+                # Group SIGTERM also kills Ray before engine drain can finish.
+                process.terminate()
         except ProcessLookupError:
             # Process group may already be terminated
             pass
 
-    # Wait for processes to terminate
+    # Reap leftover helpers only after the frontend has closed its engine.
     for process in processes:
         process.join(timeout=15)
+        signum = signal.SIGTERM
         if process.is_alive():
             logger.warning(f'Process {process.pid} did not terminate gracefully, forcing kill')
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            signum = signal.SIGKILL
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            pass
 
     logger.info('All processes terminated')
 
@@ -111,6 +115,13 @@ def launch_server(num_nodes: int,
     """Run multiple server processes in dp mode."""
     log_level = kwargs.get('log_level', 'ERROR')
     logger.setLevel(log_level)
+
+    if kwargs.get('task') == 'intern-decision':
+        from lmdeploy.serve.parsers.decision_parser import validate_decision_config
+        validate_decision_config(backend_config, kwargs.get('speculative_config'))
+        if kwargs.get('decision_temperature') is not None:
+            from lmdeploy.intern_decision_encoding import resolve_temperature
+            resolve_temperature(model_path, temperature=kwargs['decision_temperature'])
 
     mp.set_start_method('spawn', force=True)
     dp = backend_config.dp

@@ -43,11 +43,6 @@ HF_MODELS_WITH_CHAT_TEMPLATES = [
     'zai-org/glm-4-9b-chat',
     'zai-org/codegeex4-all-9b',
     'zai-org/cogvlm2-llama3-chat-19B',
-    'microsoft/Phi-3-mini-128k-instruct',
-    'microsoft/Phi-3-vision-128k-instruct',
-    'microsoft/Phi-3.5-mini-instruct',
-    'microsoft/Phi-3.5-vision-instruct',
-    'microsoft/Phi-3.5-MoE-instruct',
     '01-ai/Yi-1.5-34B-Chat',
     # Accessing the following models is supposed to be authenticated
     # 'openbmb/MiniCPM-V-2_6',

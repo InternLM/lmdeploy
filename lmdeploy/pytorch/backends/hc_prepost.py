@@ -10,6 +10,21 @@ from .base import BuildSpec
 class HCPrePostImpl(ABC):
     """Backend interface for DeepSeek-V4 hyper-connection reductions."""
 
+    def prepare_projection_weight(self, weight: torch.Tensor) -> torch.Tensor | None:
+        """Prepare an optional projection layout after loading model
+        weights."""
+        return None
+
+    def try_project_mixes(self, x_fp32: torch.Tensor, weight: torch.Tensor) -> torch.Tensor | None:
+        """Project with a prepared backend layout, or use the ordinary
+        linear."""
+        return None
+
+    def try_scale_mixes(self, mixes: torch.Tensor, x_fp32: torch.Tensor, eps: float) -> torch.Tensor | None:
+        """Optionally fuse projection scaling; return None for the existing RMS
+        path."""
+        return None
+
     @abstractmethod
     def pre(
         self,
@@ -18,9 +33,11 @@ class HCPrePostImpl(ABC):
         hc_scale: torch.Tensor,
         hc_base: torch.Tensor,
         out_dtype: torch.dtype,
+        norm_weight: torch.Tensor | None = None,
+        norm_eps: float = 1e-6,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Run sinkhorn and reduce HC states from ``[..., hc, dim]`` to ``[...,
-        dim]``."""
+        dim]``, optionally followed by RMSNorm after the output-dtype cast."""
         raise NotImplementedError
 
     @abstractmethod
@@ -34,6 +51,12 @@ class HCPrePostImpl(ABC):
                     comb: torch.Tensor) -> torch.Tensor:
         """Expand one hidden state back to ``[..., hc, dim]``."""
         raise NotImplementedError
+
+    def post_expand_with_fp32(self, x: torch.Tensor, residual: torch.Tensor, post: torch.Tensor,
+                              comb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Also prepare the rounded output for the next FP32 HC projection."""
+        out = self.post_expand(x, residual, post, comb)
+        return out, out.float()
 
 
 @dataclass(frozen=True)

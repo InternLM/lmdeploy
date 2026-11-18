@@ -1,15 +1,86 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import pickle
 from collections import deque
 from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
+from unittest.mock import Mock
 
+import pybase64
 import pytest
 import torch
 
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 from lmdeploy.pytorch.model_inputs import ModelInputs
+from lmdeploy.pytorch.spec_decode.base import BaseSpecModelAgent
+from lmdeploy.serve.openai.protocol import UpdateParamsRequest
+from lmdeploy.utils import FlattenedTensorBucket
+
+
+@pytest.mark.parametrize('history_len', [0, 7])
+@pytest.mark.parametrize('num_spec_tokens', [0, 1, 3])
+@pytest.mark.parametrize('device', ['cpu', pytest.param('cuda', marks=pytest.mark.skipif(
+    not torch.cuda.is_available(), reason='CUDA is not available'))])
+def test_prefill_conv_short_chunks_keep_their_own_history(monkeypatch, history_len, num_spec_tokens, device):
+    import torch.nn.functional as F
+
+    from lmdeploy.pytorch.backends import gated_delta_rule as meta_module
+    from lmdeploy.pytorch.backends.cuda.causal_conv1d import CausalConv1dTilelangImpl
+    from lmdeploy.pytorch.backends.cuda.utils import has_tilelang
+
+    lengths = (1, 2, 3, 8)
+    width, channels = 4, 8
+    histories = [torch.arange((history_len + length) * channels, dtype=torch.float32,
+                             device=device).reshape(-1, channels) / 100 + index
+                 for index, length in enumerate(lengths)]
+    weight = torch.arange(channels * width, dtype=torch.float32, device=device).reshape(channels, width) / 100
+    state_ids = torch.tensor([3, 1, 4, 2], device=device)
+    state_len = width + num_spec_tokens
+    state = torch.full((5, channels, state_len), -100., device=device)
+    for slot, history in zip((3, 1, 4, 2), histories):
+        if history_len:
+            offsets = torch.arange(history_len - width, history_len, device=device)
+            if num_spec_tokens:
+                state[slot, :, offsets % state_len] = history[:history_len][-width:].T
+            else:
+                state[slot] = history[:history_len][-width:].T
+    q_lengths = torch.tensor(lengths, device=device)
+    cu_seqlens = torch.cat((q_lengths.new_zeros(1), q_lengths.cumsum(0)))
+    monkeypatch.setattr(meta_module, 'get_step_ctx_manager',
+                        lambda: SimpleNamespace(build_ctx=SimpleNamespace(num_spec_tokens=num_spec_tokens)))
+    meta = meta_module.GatedDeltaMeta(sum(lengths), width, state_ids, SimpleNamespace(
+        is_decoding=False, cu_seqlens_q=cu_seqlens, q_seqlens=q_lengths, kv_seqlens=q_lengths + history_len))
+    x = torch.cat([history[history_len:] for history in histories])[None]
+
+    def reference_conv(x, weight, bias, seq_idx, initial_states, return_final_states, activation):
+        outputs = []
+        start = 0
+        for index, length in enumerate(lengths):
+            values = torch.cat((initial_states[index], x[0, :, start:start + length]), dim=-1)
+            outputs.append(F.conv1d(values[None], weight[:, None], groups=channels))
+            start += length
+        return torch.cat(outputs, dim=-1)
+
+    if device == 'cuda':
+        if not has_tilelang():
+            pytest.skip('TileLang is not available')
+        impl = CausalConv1dTilelangImpl()
+    else:
+        impl = object.__new__(CausalConv1dTilelangImpl)
+        impl.conv1d_fn = reference_conv
+    output = impl._prefill(x, weight, None, state, meta, None)
+    expected_outputs = []
+    for slot, history, length in zip((3, 1, 4, 2), histories, lengths):
+        padded = F.pad(history.T, (width - 1, 0))
+        expected_outputs.append(F.conv1d(padded[None], weight[:, None], groups=channels)[..., -length:])
+        if num_spec_tokens:
+            offsets = torch.arange(history_len + length - width, history_len + length, device=device)
+            actual_state = state[slot, :, offsets % state_len]
+        else:
+            actual_state = state[slot]
+        torch.testing.assert_close(actual_state, padded[:, -width:])
+    torch.testing.assert_close(output, torch.cat(expected_outputs, dim=-1).transpose(1, 2))
 
 
 def _input_logprob_model_inputs(input_ids, indices):
@@ -224,6 +295,18 @@ def test_input_compaction_accepts_empty_pre_boundary_chunk():
     assert agent._prev_chunk_last_logit is None
 
 
+def test_input_logprobs_append_requested_token_ids():
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.misc_config = SimpleNamespace(logprobs_mode=None)
+    inputs = _input_logprob_model_inputs([5, 1, 2, 3], [0, 1, 2])
+    logits = torch.arange(3 * 8, dtype=torch.float32).reshape(3, 8)
+    output = agent._get_outputs_with_logprobs(logits, inputs, 0, None, logprob_extra_token_ids=torch.tensor([4, 6]))
+    # columns: [target, *requested ids]
+    torch.testing.assert_close(output.logprobs.indices, torch.tensor([[1, 4, 6], [2, 4, 6], [3, 4, 6]],
+                                                                     dtype=torch.int32))
+    torch.testing.assert_close(output.logprobs.vals, logits.gather(-1, output.logprobs.indices.long()))
+
+
 def test_dp_dummy_skips_input_compaction_without_sampling_inputs():
     inputs = _input_logprob_model_inputs([0], None)
     inputs.is_dummy = True
@@ -352,10 +435,12 @@ def test_prepare_inputs_prefill_keeps_chunk_model_metas_across_interleaved_prefi
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.ssm_state_cursor = None
     prev_output = {'model_metas': [{'chunk': 1}]}
     agent._prev_chunk_output = prev_output
 
-    normal_prefill = SimpleNamespace(is_chunk=False,
+    normal_prefill = SimpleNamespace(ssm_state_meta=None, ssm_prefill_meta=None,
+                                     ssm_source_state_ids=None, is_chunk=False,
                                      is_first_chunk=False,
                                      is_last_chunk=False,
                                      model_metas=[{
@@ -367,7 +452,9 @@ def test_prepare_inputs_prefill_keeps_chunk_model_metas_across_interleaved_prefi
     assert agent._prev_chunk_output is prev_output
     assert normal_prefill.model_metas == [{'normal': 1}]
 
-    middle_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=False, model_metas=None)
+    middle_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=False,
+                                   model_metas=None, ssm_state_meta=None, ssm_prefill_meta=None,
+                                     ssm_source_state_ids=None)
 
     agent._prepare_inputs_prefill(middle_chunk, delta=None)
 
@@ -379,8 +466,11 @@ def test_prepare_inputs_prefill_final_chunk_consumes_chunk_model_metas():
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.ssm_state_cursor = None
     agent._prev_chunk_output = {'model_metas': [{'chunk': 1}]}
-    final_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=True, model_metas=None)
+    final_chunk = SimpleNamespace(is_chunk=True, is_first_chunk=False, is_last_chunk=True,
+                                  model_metas=None, ssm_state_meta=None, ssm_prefill_meta=None,
+                                     ssm_source_state_ids=None)
 
     agent._prepare_inputs_prefill(final_chunk, delta=None)
 
@@ -410,12 +500,14 @@ def test_model_agent_reset_runtime_state_discards_decode_and_chunk_carry():
     agent.strategy_factory = _StrategyFactory()
     agent.spec_agent = _SpecAgent()
     agent.step_inputs = old_step_inputs
+    agent.ssm_state_cursor = object()
     agent._prev_chunk_output = {'model_metas': [object()]}
     agent._prev_chunk_last_logit = object()
 
     agent.reset_runtime_state()
 
     assert agent.step_inputs is new_step_inputs
+    assert agent.ssm_state_cursor is None
     assert agent._prev_chunk_output is None
     assert agent._prev_chunk_last_logit is None
     assert events == ['build_step_inputs', 'reset_spec']
@@ -627,6 +719,7 @@ def _make_minimal_build_agent(target_layer_ids, mask_token_id=99):
         custom_module_map=None,
         quant_config=None,
         fp32_lm_head=False,
+        state_cache_is_indexed=False,
         tie_word_embeddings=False,
     )
     agent.misc_config = SimpleNamespace(
@@ -686,17 +779,6 @@ def test_spec_agent_build_model_context_is_capability_based():
 
     agent.specdecode_config = None
     assert agent.build_model_context() == SpecModelBuildContext()
-
-
-def test_spec_agent_reset_runtime_state_discards_chunk_carry():
-    from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
-
-    agent = SpecModelAgent.__new__(SpecModelAgent)
-    agent._prev_chunk_last = {'hidden_states': object()}
-
-    agent.reset_runtime_state()
-
-    assert agent._prev_chunk_last == {}
 
 
 @pytest.mark.parametrize(
@@ -765,15 +847,19 @@ def test_model_forward_orders_kv_and_state_checkpoint_copies(monkeypatch, is_dum
             events.append('kv_restore' if plan is restore_plan else 'kv_save')
 
     class _StateCacheEngine:
+        compact_plan = None
         state_caches = object()
         named_state_caches = {}
 
-        def copy_slots(self, src, dst):
+        def copy_slots(self, src, dst, *, checkpoint_only=False):
+            assert checkpoint_only
             copy_calls.append(('state', src, dst))
             events.append('state_restore' if src == (5, ) else 'state_save')
 
     inputs = SimpleNamespace(
         is_dummy=is_dummy,
+        ssm_state_meta=None, ssm_prefill_meta=None,
+                                     ssm_source_state_ids=None,
         state_offsets=None,
         seq_length=torch.tensor([1]),
     )
@@ -965,6 +1051,7 @@ def test_background_records_h2d_inputs_after_wait_and_before_forward(monkeypatch
     model_agent.stream = _Stream()
     model_agent.all_context = nullcontext
     model_agent._keep_h2d_transfer = lambda item: events.append('keep')
+    model_agent._release_completed_h2d_transfers = lambda: None
 
     async def _async_step(**forward_inputs):
         assert forward_inputs == {'inputs': 'device-inputs'}
@@ -979,6 +1066,7 @@ def test_background_records_h2d_inputs_after_wait_and_before_forward(monkeypatch
 
     task = event_loop.create_task(model_agent._async_loop_background())
     event_loop.run_until_complete(asyncio.wait_for(forward_done.wait(), timeout=1))
+    assert not task.done()
     task.cancel()
     event_loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
 
@@ -1004,14 +1092,18 @@ def test_record_forward_input_stream_defers_origin_stream_reuse():
     forward_stream.wait_event(h2d_event)
     _record_forward_input_stream({'delta': tensor}, forward_stream)
     with torch.cuda.stream(forward_stream):
+        observed = torch.empty_like(tensor)
         torch.cuda._sleep(10_000_000)
-        observed = tensor.clone()
+        observed.copy_(tensor)
 
     del tensor
     with torch.cuda.stream(h2d_stream):
         replacement = torch.zeros((numel, ), dtype=torch.uint8, device='cuda')
 
-    assert replacement.data_ptr() != original_ptr
+    # A delayed host may reach this check after the consumer has finished;
+    # reusing its storage is then safe. Only pending work must pin the input.
+    if not forward_stream.query():
+        assert replacement.data_ptr() != original_ptr
     forward_stream.synchronize()
     h2d_stream.synchronize()
     assert torch.all(observed == 7)
@@ -1149,6 +1241,44 @@ class TestDrainQueues:
 
 
 class TestDPForwardInputsMaker:
+
+    @pytest.mark.parametrize('num_spec_tokens', [0, 3])
+    @pytest.mark.parametrize('compact', [False, True])
+    def test_dummy_uses_current_metadata_after_kv_wakeup(self, monkeypatch, num_spec_tokens, compact):
+        from lmdeploy.pytorch.disagg.config import EngineRole
+        from lmdeploy.pytorch.engine.model_agent.inputs_maker import DPForwardInputsMaker
+        from lmdeploy.pytorch.strategies.ar.model_inputs import ARModelInputsStrategy
+        from lmdeploy.pytorch.strategies.ar_spec.model_inputs import ARSpecModelInputsStrategy
+
+        strategy = (ARSpecModelInputsStrategy(num_spec_tokens) if num_spec_tokens else ARModelInputsStrategy())
+        config = SimpleNamespace(states_shapes=[(1,)], use_mrope=False, vocab_size=16)
+        agent = SimpleNamespace(model_config=config,
+                                cache_config=SimpleNamespace(role=EngineRole.Hybrid, max_batches=8),
+                                inputs_strategy=strategy, device='cpu',
+                                _pre_in_que=asyncio.Queue(), _in_que=asyncio.Queue(),
+                                dist_ctx=SimpleNamespace(dist_config=SimpleNamespace(enable_microbatch=False)),
+                                spec_agent=Mock())
+        agent.spec_agent.is_enabled.return_value = bool(num_spec_tokens)
+        BaseModelAgent.set_model_config(agent, config)
+        monkeypatch.setattr(torch.cuda, 'Event', Mock(return_value=Mock()))
+        maker = DPForwardInputsMaker(agent)
+        assert maker._make_dummy_forward_inputs()['inputs'].ssm_state_meta is None
+        extra = Mock(wraps=strategy.make_dummy_extra_inputs)
+        monkeypatch.setattr(strategy, 'make_dummy_extra_inputs', extra)
+
+        for _ in range(2):
+            old_meta = agent.make_dummy_meta
+            # KV wakeup replaces metadata; cache construction then binds the bank width.
+            BaseModelAgent.set_model_config(agent, config)
+            assert agent.make_dummy_meta is not old_meta
+            agent.make_dummy_meta.compact_bank_width = num_spec_tokens + 1 if compact else 0
+            forward = maker._make_dummy_forward_inputs()
+            inputs = forward['inputs']
+            assert inputs.is_dummy
+            assert (inputs.ssm_state_meta is not None) == compact
+            assert extra.call_args.kwargs['meta'] is agent.make_dummy_meta
+            assert forward['return_logits'] == bool(num_spec_tokens)
+
 
     @staticmethod
     def _make_ready_event():
@@ -1290,12 +1420,14 @@ class TestDPForwardInputsMaker:
     def test_get_attaches_dummy_inputs_to_connector_only_step(self):
         async def _run():
             metadata = object()
+            cache_inputs = None
             connector_inputs = {
                 'inputs': None,
                 'delta': None,
                 'extra_inputs': None,
                 'return_logits': False,
                 'kv_connector_metadata': metadata,
+                'cache_inputs': cache_inputs,
             }
             dummy_inputs = {
                 'inputs': 'connector_dummy',
@@ -1312,6 +1444,7 @@ class TestDPForwardInputsMaker:
             assert result['extra_inputs'] == 'dummy_extra'
             assert result['return_logits'] is True
             assert result['kv_connector_metadata'] is metadata
+            assert result['cache_inputs'] is cache_inputs
 
         asyncio.run(_run())
 
@@ -1419,6 +1552,7 @@ class TestResetGraphRunner:
                 events.append('memdecode_reset')
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
         agent.patched_model = _PatchedModel()
         agent.spec_agent = _SpecAgent()
         agent.memdecode_agent = _MemDecodeAgent()
@@ -1461,15 +1595,14 @@ class TestResetGraphRunner:
         events = []
         model = object()
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
         agent._model_update_group = {'update': object()}
         agent.patched_model = SimpleNamespace(
             get_model=lambda: model,
             get_prefill_warmup_token_sizes=lambda: prefill_token_sizes,
         )
-        agent.spec_agent = SimpleNamespace(
-            get_model=lambda: None,
-            is_enabled=lambda: False,
-        )
+        agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+        agent.spec_agent._enabled = False
         agent.state = SimpleNamespace(is_sleeping=is_sleeping)
         agent.all_context = nullcontext
         agent.reset_graph_runner = lambda: events.append('reset')
@@ -1511,7 +1644,6 @@ class TestResetGraphRunner:
 
         agent = SpecModelAgent.__new__(SpecModelAgent)
         agent.proposer = type('Proposer', (), {'model': _Model()})()
-        agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
 
         @contextmanager
         def _draft_context():
@@ -1528,13 +1660,12 @@ class TestResetGraphRunner:
             'reset',
             'exit_draft_context',
         ]
-        assert agent._prev_chunk_last == {}
 
 
 class TestModelAgentWakeup:
 
     @staticmethod
-    def _make_level2_agent(rebuilt_block_nbytes):
+    def _make_level2_agent(rebuilt_block_nbytes, compact=False):
         from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
         events = []
@@ -1571,15 +1702,16 @@ class TestModelAgentWakeup:
             events.append(('build_cache_plans', received_cache_config, received_spec_cache_config))
             agent._cache_plan_block_nbytes = rebuilt_block_nbytes
             target_nbytes, spec_nbytes = rebuilt_block_nbytes
-            return target_nbytes, spec_nbytes, 0
+            return (target_nbytes, spec_nbytes, 0, 4096) if compact else (target_nbytes, spec_nbytes, 0)
 
         agent.build_model = _build_model
         agent.build_cache_plans = _build_cache_plans
         agent.build_graph_runner = lambda: events.append('build_graph_runner')
         return agent, events, cache_config, spec_cache_config
 
-    def test_level2_wakeup_rebuilds_cache_plans_before_graph_runner(self):
-        agent, events, cache_config, spec_cache_config = self._make_level2_agent((256, 128))
+    @pytest.mark.parametrize('compact', [False, True])
+    def test_level2_wakeup_rebuilds_cache_plans_before_graph_runner(self, compact):
+        agent, events, cache_config, spec_cache_config = self._make_level2_agent((256, 128), compact=compact)
 
         agent.wakeup(['weights'])
 
@@ -1644,7 +1776,6 @@ class TestModelAgentWakeup:
 
         spec_agent = SpecModelAgent.__new__(SpecModelAgent)
         spec_agent.proposer = type('Proposer', (), {'model': _SpecGraphRunner()})()
-        spec_agent._prev_chunk_last = {'hidden_states': torch.ones(1, 1, 2)}
         spec_agent.cache_engine = object()
 
         @contextmanager
@@ -1693,7 +1824,6 @@ class TestModelAgentWakeup:
         assert model_agent._prev_chunk_output is None
         assert model_agent._prev_chunk_last_logit is None
         assert model_agent.step_inputs == {'fresh': 'step_inputs'}
-        assert spec_agent._prev_chunk_last == {}
         assert model_agent.cache_engine is None
         assert model_agent.state_cache_engine is None
         assert spec_agent.cache_engine is None
@@ -1763,18 +1893,11 @@ class TestCheckpointEngineWeightUpdate:
             def get_model(self):
                 return self.model
 
-        class _SpecAgent:
-            method = None
-
-            def is_enabled(self):
-                return False
-
-            def get_model(self):
-                return None
-
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
         agent.patched_model = _PatchedModel()
-        agent.spec_agent = _SpecAgent()
+        agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+        agent.spec_agent._enabled = False
         agent.memdecode_agent = None
         agent._checkpoint_engine_zmq_ctx = None
         agent.state = SimpleNamespace(is_sleeping=True)
@@ -1920,6 +2043,7 @@ class TestMemDecodeModelAgentLifecycle:
 
         monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
         agent, events = self._make_agent(enabled=True)
+        agent.cache_config = SimpleNamespace(compact_state_capacity=None)
 
         BaseModelAgent.release(agent)
 
@@ -2067,3 +2191,86 @@ class TestMemDecodeModelAgentLifecycle:
             ('base_cache', swap_in_map, swap_out_map),
             ('memory_cache', swap_in_map, swap_out_map),
         ]
+
+
+@pytest.fixture(params=['flat', 'null_llm', 'nested', 'mirrored'])
+def weight_update_agent(request):
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+    config = SimpleNamespace(num_hidden_layers=5, num_nextn_predict_layers=2)
+    # Follower ranks have the draft config but no local proposer.
+    agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+    agent.spec_agent._enabled = True
+    agent.spec_agent.method = 'deepseek_mtp'
+    agent.spec_agent.proposer = None
+    agent.spec_agent.model_config = SimpleNamespace(hf_config=config, num_layers=2)
+    if request.param == 'null_llm':
+        agent.spec_agent.model_config.llm_config = None
+    elif request.param in ('nested', 'mirrored'):
+        agent.spec_agent.model_config.llm_config = config
+        # A wrapper can omit language fields or contain stale mirrored values.
+        agent.spec_agent.model_config.hf_config = (
+            SimpleNamespace(text_config=config) if request.param == 'nested'
+            else SimpleNamespace(num_hidden_layers=99, num_nextn_predict_layers=1))
+    return agent
+
+
+@pytest.mark.parametrize('method,enabled,indices', [
+    ('deepseek_mtp', True, [2, 3]), ('qwen3_5_mtp', True, [6]),
+    ('deepseek_mtp', False, []), ('eagle', True, []),
+])
+@pytest.mark.parametrize('prefix', ['model.layers.', 'model.language_model.layers.'])
+def test_split_updated_weights(weight_update_agent, method, enabled, indices, prefix):
+    agent = weight_update_agent
+    agent.spec_agent.method = method
+    agent.spec_agent._enabled = enabled
+    names = ['model.embed_tokens.weight', 'model.layers.4.input_layernorm.weight',
+             'model.layers.5.eh_proj.weight', 'model.layers.6.shared_head.norm.weight',
+             'model.layers.50.eh_proj.weight', 'model.layers.7.eh_proj.weight', 'mtp.fc.weight', 'lm_head.weight']
+    names = [name.replace('model.layers.', prefix) for name in names]
+    weights = [(name, torch.zeros(1)) for name in names]
+    main, draft = agent._split_updated_weights(weights)
+    assert [n for n, _ in draft] == [names[i] for i in indices]
+    assert [n for n, _ in main] == [n for i, n in enumerate(names) if i not in indices]
+    assert all(t is dict(weights)[n] for n, t in main + draft)
+
+
+@pytest.mark.parametrize('entry', ['update_params', 'shared_bucket_loader'])
+@pytest.mark.parametrize('prefix', ['model.layers.', 'model.language_model.layers.'])
+@pytest.mark.parametrize('bucket_kind', ['mixed', 'main_only', 'draft_only', 'empty'])
+def test_update_routes_before_renaming(weight_update_agent, monkeypatch, entry, prefix, bucket_kind):
+    agent = weight_update_agent
+    loaded = {'main': [], 'draft': []}
+
+    def model(tag):
+        return SimpleNamespace(rename_weight=lambda n: 'renamed.' + n,
+                               load_weights=lambda weights: loaded[tag].extend(weights))
+
+    main, draft = model('main'), model('draft')
+    agent.patched_model = SimpleNamespace(get_model=lambda: main)
+    agent.spec_agent.get_model = lambda: draft
+    expected = {'main': [('lm_head.weight', torch.tensor([1.]))],
+                'draft': [(f'{prefix}5.enorm.weight', torch.tensor([2.]))]}
+    if bucket_kind in ('draft_only', 'empty'):
+        expected['main'] = []
+    if bucket_kind in ('main_only', 'empty'):
+        expected['draft'] = []
+    weights = expected['main'] + expected['draft']
+    if entry == 'update_params':
+        bucket = FlattenedTensorBucket(named_tensors=weights)
+        agent.all_context = nullcontext
+        agent._update_params_ipc_tensor = bucket.get_flattened_tensor() if weights else None
+        agent._update_params_ipc_event = Mock()
+        monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
+        payload = pybase64.b64encode(pickle.dumps({'metadata': bucket.metadata})).decode()
+        agent.update_params(UpdateParamsRequest(serialized_named_tensors=payload,
+                                                load_format='flattened_bucket', finished=False))
+        assert agent._update_params_ipc_event.record.call_count == sum(bool(v) for v in expected.values())
+    else:
+        # NCCL and checkpoint-engine IPC use this upstream shared loader.
+        agent._load_updated_weight_bucket(weights, 'test')
+    for tag, expected_weights in expected.items():
+        assert len(loaded[tag]) == len(expected_weights)
+        for (actual_name, actual_tensor), (name, tensor) in zip(loaded[tag], expected_weights):
+            assert actual_name == 'renamed.' + name
+            torch.testing.assert_close(actual_tensor, tensor)

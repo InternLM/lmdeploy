@@ -367,9 +367,10 @@ def test_async_lookup_pending_preserves_private_partial_prefix():
     assert scheduler.block_trie.stats.num_query_tokens == 0
 
 
-def test_external_cached_tokens_survive_remote_ready_admission():
+@pytest.mark.parametrize('enable_prefix_caching', [False, True])
+def test_external_cached_tokens_survive_remote_ready_admission(enable_prefix_caching):
     connector = _AsyncLookupConnector([(8, True)])
-    scheduler = _make_async_lookup_scheduler(connector)
+    scheduler = _make_async_lookup_scheduler(connector, enable_prefix_caching=enable_prefix_caching)
     seq = scheduler.add_session(73).add_sequence(torch.arange(13))
 
     started = scheduler.schedule(is_prefill=True)
@@ -380,12 +381,18 @@ def test_external_cached_tokens_survive_remote_ready_admission():
     assert seq.num_history_ids == 8
     assert seq.cached_tokens == 8
     assert seq.prefix_cache.match_start_step == 0
+    assert scheduler.block_trie.stats.num_query_tokens == (13 if enable_prefix_caching else 0)
+    assert scheduler.block_trie.stats.num_hit_tokens == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == 13
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == 8
 
     admitted = scheduler.schedule(is_prefill=True)
 
     assert admitted.running == [seq]
     assert seq.cached_tokens == 8
     assert seq.prefix_cache.match_start_step == 0
+    assert scheduler.schedule_metrics.prefix_cache_hit_rate == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_hit_rate == pytest.approx(8 / 13)
 
 
 @pytest.mark.parametrize('enable_prefix_caching', [False, True])
@@ -403,7 +410,8 @@ def test_mtp_remote_hit_recomputes_boundary_in_private_block(enable_prefix_cachi
         ),
     )
     connector = MooncakeStoreScheduler(cache_config)
-    connector.client.lookup = Mock(return_value=8)
+    # The worker has already dropped the final block from an eight-token hit.
+    connector.client.lookup = Mock(return_value=4)
     scheduler = _make_async_lookup_scheduler(
         connector,
         enable_prefix_caching=enable_prefix_caching,
@@ -691,8 +699,9 @@ def test_soft_reservation_blocks_new_load_until_capacity_is_released():
     ]
 
 
-def test_failed_async_load_preserves_local_prefix_and_releases_remote_tail():
-    connector = _AsyncLookupConnector([(4, True)])
+@pytest.mark.parametrize('recompute', [False, True])
+def test_failed_async_load_preserves_local_prefix_and_releases_remote_tail(recompute):
+    connector = _AsyncLookupConnector([(4, True), (0, False)])
     scheduler = _make_async_lookup_scheduler(connector)
     tokens = torch.arange(13)
     cached = scheduler.add_session(79).add_sequence(tokens[:9])
@@ -700,6 +709,7 @@ def test_failed_async_load_preserves_local_prefix_and_releases_remote_tail():
     scheduler.block_trie.allocate(cached)
     cached.state.stop()
     seq = scheduler.add_session(80).add_sequence(tokens)
+    seq.prefix_cache.suppress_match_stats = recompute
     scheduler.schedule(is_prefill=True)
     connector.failed_ids.add(seq.seq_id)
 
@@ -709,8 +719,18 @@ def test_failed_async_load_preserves_local_prefix_and_releases_remote_tail():
     assert seq.status == MessageStatus.WAITING
     assert seq.num_history_ids == 8
     assert seq.num_blocks == 2
-    assert seq.cached_tokens == 8
+    assert seq.cached_tokens == (0 if recompute else 8)
     assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
+    assert scheduler.block_trie.stats.num_query_tokens == (0 if recompute else 13)
+    assert scheduler.block_trie.stats.num_hit_tokens == (0 if recompute else 8)
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == (0 if recompute else 5)
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == (0 if recompute else 4)
+
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert scheduler.block_trie.stats.num_query_tokens == (0 if recompute else 18)
+    assert scheduler.block_trie.stats.num_hit_tokens == (0 if recompute else 8)
+    assert scheduler.schedule_metrics.external_prefix_cache_queries == (0 if recompute else 10)
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == (0 if recompute else 4)
 
 
 def test_async_load_soft_reservation_shrinks_across_chunks():
@@ -793,11 +813,12 @@ def test_worker_drain_finishes_an_ended_session_with_a_dropped_load_output():
     scheduler.schedule(is_prefill=True)
     scheduler.end_session(85)
 
-    scheduler.finish_kv_transfers_after_worker_drain()
+    scheduler.reset_cache_after_worker_drain()
 
     assert 85 not in scheduler.sessions
     assert connector.finished == [seq.seq_id]
     assert scheduler.kv_load_coordinator.soft_reserved_blocks() == 0
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == scheduler.cache_config.num_gpu_blocks
 
 
 def test_completed_async_load_is_admitted_before_an_older_waiter():
@@ -928,3 +949,45 @@ def test_worker_drain_releases_save_leases_when_outputs_are_discarded():
 
     assert scheduler.block_manager.get_num_free_gpu_blocks() == 2
     assert not scheduler.kv_save_coordinator.has_pending()
+
+
+def test_cache_reset_drains_save_leases_before_clearing_local_prefix():
+
+    class _SaveMetadata(KVConnectorMetadata):
+
+        def get_save_block_leases(self):
+            return (KVSaveBlockLease(9, tuple(logical_blocks)), )
+
+    connector = _AsyncLookupConnector([])
+    scheduler = _make_async_lookup_scheduler(connector, num_gpu_blocks=4)
+    seq = scheduler.add_session(90).add_sequence(torch.arange(8))
+    scheduler.block_manager.allocate(seq)
+    scheduler.block_trie.allocate(seq)
+    logical_blocks = seq.logical_blocks.get_real_blocks().copy()
+    connector.build_connector_meta = lambda step_input: _SaveMetadata()
+    scheduler.build_connector_meta([seq], connector_token_lens=(8, ))
+    scheduler.end_session(90)
+    assert scheduler.kv_save_coordinator.has_pending()
+    assert all(scheduler.block_manager.allocator.get_ref_count(logical_blocks) == 2)
+
+    def finish_transfers():
+        # Both the trie and asynchronous writer still own the blocks until
+        # worker drain is acknowledged. Do not delete remote Store contents.
+        assert all(scheduler.block_manager.allocator.get_ref_count(logical_blocks) == 2)
+
+    connector.finish_transfers_after_worker_drain = finish_transfers
+    scheduler.reset_cache_after_worker_drain()
+
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 4
+    assert not scheduler.kv_save_coordinator.has_pending()
+    assert connector.shutdown_calls == 0
+    newcomer = scheduler.add_session(91).add_sequence(torch.arange(9))
+    scheduler.block_trie.match(newcomer)
+    assert newcomer.num_history_ids == 0
+
+
+def test_cache_reset_rejects_live_sessions():
+    scheduler = _make_async_lookup_scheduler(_AsyncLookupConnector([]))
+    scheduler.add_session(92)
+    with pytest.raises(RuntimeError, match='sessions'):
+        scheduler.reset_cache_after_worker_drain()
