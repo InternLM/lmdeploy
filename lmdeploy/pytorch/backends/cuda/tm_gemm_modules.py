@@ -122,6 +122,12 @@ class TurbomindGemmW4A16Impl(LinearW4A16Impl):
         and the packed handle computes ``silu(x @ gate.T) * (x @ up.T)`` in
         one kernel call.
         """
+        # Retire the previous packed weight first: the device-wide sync in
+        # _release waits for in-flight forwards on any engine stream before
+        # the old native buffers close, so replacement below cannot free
+        # storage that is still being read.
+        self._release()
+
         loaded, err = _load_turbomind_channel()
         if loaded is None:
             raise RuntimeError(
@@ -180,11 +186,16 @@ class TurbomindGemmW4A16Impl(LinearW4A16Impl):
         if weight is None:
             raise RuntimeError('update_weights() must run before forward (TM packed weight missing)')
 
-        # The channel consumes a [m, k] row-major contiguous view. DLPack
+        # The channel consumes a [m, k] row-major contiguous fp16 view. DLPack
         # exports without strides, so a non-contiguous input would be read
-        # with silent layout corruption.
+        # with silent layout corruption. Non-fp16 callers keep the AWQ
+        # Triton contract: convert in, restore the output dtype on the way
+        # out.
         in_shape = x.shape
+        input_dtype = x.dtype
         x = x.flatten(0, -2)
+        if input_dtype != torch.float16:
+            x = x.half()
         if not x.is_contiguous():
             x = x.contiguous()
 
@@ -198,6 +209,8 @@ class TurbomindGemmW4A16Impl(LinearW4A16Impl):
         out = out.reshape(in_shape[:-1] + (self.out_features,))
         if out.ndim == 2:
             out = out.unsqueeze(0)
+        if input_dtype != torch.float16:
+            out = out.to(dtype=input_dtype)
 
         if all_reduce:
             if scatter_size is not None:
