@@ -44,7 +44,27 @@ _CT_TO_AWQ_SUFFIX = {
 }
 
 
-def normalize_ct_weights(iterator):
+def new_ct_normalize_state() -> dict:
+    """Create staging state that lets one linear's tensors split across
+    streams.
+
+    Pass the returned dict to consecutive ``normalize_ct_weights`` calls so a
+    module whose ``weight_packed``/``weight_scale`` land in different
+    safetensors shards (or update buckets) still stages together. Finish the
+    sequence with ``finalize_ct_weights``; a state passed this way does NOT
+    validate leftovers at the end of a single stream.
+    """
+    return {'staged': {}, 'converted': set()}
+
+
+def finalize_ct_weights(state: dict):
+    """Reject staged leftovers once every stream of a state was consumed."""
+    if state['staged']:
+        raise ValueError('Incomplete compressed-tensors shards for: '
+                         f'{sorted(state["staged"])}; check the checkpoint integrity.')
+
+
+def normalize_ct_weights(iterator, state: dict | None = None):
     """Normalize compressed-tensors W4A16 tensors to the canonical AWQ layout.
 
     Detection works on checkpoint key suffixes, so checkpoints that carry no
@@ -56,10 +76,17 @@ def normalize_ct_weights(iterator):
     A ``weight_zero_point`` that arrives after its module converted must
     carry the symmetric constant; anything else means an asymmetric scheme
     the conversion does not support. Staging leftovers at the end mean a
-    corrupt checkpoint and raise.
+    corrupt checkpoint and raise — with a locally owned state. Pass a shared
+    ``state`` (see ``new_ct_normalize_state``) to keep staging alive across
+    calls; the caller then owns validation through ``finalize_ct_weights``.
     """
-    staged: dict[str, dict[str, torch.Tensor]] = {}
-    converted: set[str] = set()
+    if state is None:
+        state = new_ct_normalize_state()
+        owns_state = True
+    else:
+        owns_state = False
+    staged = state['staged']
+    converted = state['converted']
     # Import stays local: this module loads early during engine startup, and
     # the ct path needs the conversion library only.
     from lmdeploy.turbomind import ct_repack
@@ -86,7 +113,7 @@ def normalize_ct_weights(iterator):
         converted.add(prefix)
         for awq_name, awq_tensor in out_shard.items():
             yield f'{prefix}{awq_name}', awq_tensor
-    if staged:
+    if owns_state and staged:
         raise ValueError('Incomplete compressed-tensors shards for: '
                          f'{sorted(staged)}; check the checkpoint integrity.')
 
@@ -236,14 +263,19 @@ class ModelWeightLoader:
         paths = sorted(paths)
         if _envs.random_load_weight:
             np.random.shuffle(paths)
+        # One staging state spans all shard files: a linear's weight_packed /
+        # weight_scale pair may split across shard boundaries.
+        ct_state = new_ct_normalize_state()
         for path in tqdm(paths, desc='Loading weights from safetensors', disable=disable_tqdm):
             weights_iterator = self._get_weights_iterator(path)
             if normalize_ct:
-                weights_iterator = normalize_ct_weights(weights_iterator)
+                weights_iterator = normalize_ct_weights(weights_iterator, ct_state)
             weights_iterator = self._rename_weights_iterator(weights_iterator, model)
             if len(dummy_prefix) > 0:
                 weights_iterator = self._skip_dummy_iterator(weights_iterator, dummy_prefix)
             model.load_weights(weights_iterator)
+        if normalize_ct:
+            finalize_ct_weights(ct_state)
         if device is not None:
             model.to(device)
 
