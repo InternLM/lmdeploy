@@ -1288,6 +1288,7 @@ def test_engine_sleep_keeps_compact_holds_until_successful_worker_drain(failure)
 
     engine._engine_loop = SimpleNamespace(drain_for_sleep=scheduling_drain,
                                           reset_runtime_state=lambda: events.append('reset-runtime'))
+    engine.engine_conn = SimpleNamespace(reset=lambda: None)
     engine.executor = SimpleNamespace(sleep=worker_drain)
     if failure:
         with pytest.raises(RuntimeError, match='injected worker'):
@@ -1325,6 +1326,7 @@ def test_compact_sleep_reset_waits_for_both_real_device_events(slow_rank):
         pass
 
     engine._engine_loop = SimpleNamespace(drain_for_sleep=schedule_paused, reset_runtime_state=lambda: None)
+    engine.engine_conn = SimpleNamespace(reset=lambda: None)
 
     async def scenario():
         fast_finished = asyncio.Event()

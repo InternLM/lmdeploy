@@ -83,7 +83,7 @@ class PDWorkerRuntime:
             prepared = perf_counter()
             result = await self.backend.p2p_migrate(MigrationAssignment(
                 protocol=batch.protocol, remote_engine_id=receive.remote_engine_id, batch=plan,
-                transfer_id=handoff.transfer_id))
+                transfer_id=handoff.transfer_id, deadline=receive.deadline))
             logger.info('PD %s: %d segments, %d bytes, plan %.3f ms, transfer %.3f ms, %s',
                          handoff.transfer_id, len(plan), sum(t.length for t in plan),
                          (prepared - begin) * 1000, (perf_counter() - prepared) * 1000, result.status)

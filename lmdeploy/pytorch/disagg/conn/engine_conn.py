@@ -42,10 +42,12 @@ class EngineP2PConnection:
         self._initializations = {}
         self._receiver_tasks = {}
         self._connected_addresses = {}
+        self.local_engine_id = ''
 
         self.use_unique_kvtransfer_engine = os.environ.get('LMDEPLOY_USE_UNIQUE_KVTRANSFER_ENGINE', False)
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
+        self.local_engine_id = init_request.local_engine_id
         peer = init_request.remote_engine_id
         identity = (peer, init_request.remote_engine_config.engine_epoch)
         if identity in self._initializations:
@@ -106,13 +108,19 @@ class EngineP2PConnection:
         future = asyncio.get_running_loop().create_future()
         self._control_waiters[request_id] = future
         try:
-            await self.p2p_sender[remote_engine_id].send_json(
-                dict(kind='pd_control', request_id=request_id, control=request.model_dump()))
+            await asyncio.wait_for(self.p2p_sender[remote_engine_id].send_json(
+                dict(kind='pd_control', request_id=request_id, control=request.model_dump())), timeout=5)
             return await asyncio.wait_for(asyncio.shield(future), timeout=30)
+        except zmq.ZMQError as error:
+            raise ConnectionError(f'PD control to {remote_engine_id} failed: {error}') from error
         finally:
             self._control_waiters.pop(request_id, None)
 
     def apply_control(self, request: PDControlRequest):
+        if request.action == 'claim':
+            health = self.engine.get_local_health_status()
+            if not health['alive']:
+                raise ValueError(health['message'])
         sequence = self.engine.scheduler.pd_coordinator.control(request)
         if sequence is not None:
             self.engine.scheduler.end_session(sequence.session_id)

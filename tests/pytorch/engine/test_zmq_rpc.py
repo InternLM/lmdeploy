@@ -31,10 +31,18 @@ def test_engine_worker_health_status_is_synchronous():
     from lmdeploy.pytorch.paging.pd_coordinator import PDCoordinator
     worker.engine = Engine.__new__(Engine)
     owner = PDCoordinator(None, None)
-    owner.failed = True
     worker.engine.scheduler = SimpleNamespace(pd_coordinator=owner)
+    worker.engine.req_manager = SimpleNamespace(is_loop_alive=lambda: True)
+    worker.engine._loop_main = None
+    worker.engine._engine_loop = None
+    worker.engine.get_schedule_metrics = lambda: None
     status = worker.get_health_status()
-    assert not status['alive'] and status['pd']['quarantined']
+    assert status['alive'] and status['pd']['quarantined'] == 0
+
+    worker.engine._engine_loop = SimpleNamespace(forward_started_at=0, tasks=[])
+    assert not worker.get_health_status()['alive']
+    worker.engine._engine_loop.forward_started_at = None
+    assert worker.get_health_status()['alive']
 
     from lmdeploy.pytorch.disagg.conn.protocol import PDControlRequest
     worker.engine.engine_conn = SimpleNamespace(apply_control=owner.control)

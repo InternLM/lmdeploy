@@ -12,7 +12,7 @@ from torch.profiler import record_function
 
 from lmdeploy.messages import RequestMetrics
 from lmdeploy.profiling import PROFILE_PHASES, trace_phase
-from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.disagg.config import PD_RENEW_INTERVAL, EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import PDControlRequest
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch, PDTransferResult
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
@@ -20,7 +20,6 @@ from lmdeploy.pytorch.utils import cancel_async_tasks, wait_for_async_tasks
 from lmdeploy.utils import get_logger
 
 from .engine import InferOutput, ResponseType, response_reqs
-from .request import RequestType
 
 if TYPE_CHECKING:
     from lmdeploy.pytorch.disagg.conn.engine_conn import EngineP2PConnection
@@ -138,6 +137,10 @@ class EngineLoop:
         self.inputs_maker = inputs_maker
         self.config = config
         self.engine_conn = engine_conn
+        self._pd_receive_tasks: set[asyncio.Task] = set()
+        self._pd_native_jobs: set[asyncio.Task] = set()
+        self._pd_control_tasks: set[asyncio.Task] = set()
+        self.forward_started_at: float | None = None
 
         # tasks and control events
         self.tasks: set[asyncio.Task] = set()
@@ -173,11 +176,44 @@ class EngineLoop:
             self.has_runable_event.set()
 
     async def pd_maintenance_loop(self):
-        from time import monotonic
         while not self.stop_event.is_set():
-            for sequence in self.scheduler.pd_coordinator.expire_unclaimed(monotonic()):
+            owner = self.scheduler.pd_coordinator
+            for sequence in owner.expire_exports(time.monotonic()):
+                logger.warning('PD export for session %s expired without a receiver release.', sequence.session_id)
                 self.scheduler.end_session(sequence.session_id)
+            notifications, owner.notifications = owner.notifications, []
+            for peer, request in notifications:
+                self._queue_pd_control(peer, request)
             await asyncio.sleep(1)
+
+    def _queue_pd_control(self, peer, request):
+        task = asyncio.create_task(self._send_pd_control(peer, request))
+        self._pd_control_tasks.add(task)
+        task.add_done_callback(self._pd_control_tasks.discard)
+
+    async def _send_pd_control(self, peer, request):
+        """Retry terminal notifications without blocking inference or
+        expiry."""
+        deadline = time.monotonic() + self.scheduler.pd_coordinator.release_timeout
+        while not self.stop_event.is_set():
+            try:
+                await self.engine_conn.control(peer, request)
+                return
+            except ValueError as error:
+                logger.warning('PD %s acknowledgment rejected: %s', request.transfer_id, error)
+                return
+            except (asyncio.TimeoutError, KeyError, ConnectionError) as error:
+                logger.warning('PD %s %s acknowledgment failed: %s', request.transfer_id, request.action, error)
+            if time.monotonic() >= deadline:
+                return
+            await asyncio.sleep(5)
+
+    def _pd_native_done(self, job):
+        self._pd_native_jobs.discard(job)
+        if not job.cancelled():
+            # A job may outlive its timed-out transaction. Its late result must
+            # not re-enter paging or release a newer request's allocations.
+            job.exception()
 
     async def drain_for_sleep(self):
         """Pause scheduling after the current forward step drains."""
@@ -485,7 +521,10 @@ class EngineLoop:
         if self._sleep_requested:
             return None, None
 
-        return await self.inputs_maker.send_next_inputs()
+        self.forward_started_at = time.monotonic()
+        result = await self.inputs_maker.send_next_inputs()
+        self.forward_started_at = None
+        return result
 
     async def _prefetch_next_inputs(self):
         """Prefetch the next batch unless sleep has started."""
@@ -536,6 +575,7 @@ class EngineLoop:
         forward_inputs: dict[str, Any],
     ):
         """Get outputs and prefetch."""
+        self.forward_started_at = time.monotonic()
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
         if PROFILE_PHASES:
@@ -618,6 +658,7 @@ class EngineLoop:
             self.resp_queue.put_nowait(step_outputs)
         # out might come from shared memory, need to explicitly delete to release memory in time
         del out
+        self.forward_started_at = None
 
         return forward_inputs, next_running
 
@@ -733,7 +774,9 @@ class EngineLoop:
             if seq.migration_request.handoff is None:
                 legacy.append(seq)
             else:
-                await self._receive_handoff(seq)
+                task = asyncio.create_task(self._receive_handoff(seq))
+                self._pd_receive_tasks.add(task)
+                task.add_done_callback(self._pd_receive_tasks.discard)
         if legacy:
             await self._migration_loop_migrate(legacy)
 
@@ -748,74 +791,100 @@ class EngineLoop:
         request = receive.request
         handoff = request.handoff
         control = dict(transfer_id=handoff.transfer_id, engine_epoch=handoff.engine_epoch,
-                       receiver_epoch=owner.epoch)
+                       receiver_epoch=owner.epoch, receiver_engine_id=self.engine_conn.local_engine_id)
         seq.state.activate()
         result = PDTransferResult(transfer_id=handoff.transfer_id, status='failed_drained')
-        submitted = False
+        job = None
         claim_attempted = False
         try:
-            if not receive.cancelled and not owner.failed:
+            if not receive.quarantined:
                 claim_attempted = True
                 await self.engine_conn.control(request.remote_engine_id, PDControlRequest(action='claim', **control))
                 claimed = time.perf_counter()
-                if not receive.cancelled:
+                if not receive.quarantined:
                     if handoff.valid_token_count:
                         batch = MigrationExecutionBatch(protocol=seq.migration_request.protocol, receives=[request])
                         job = asyncio.create_task(self.executor.migrate(batch))
-                        submitted = True
-                        while True:
-                            try:
-                                result, = await asyncio.shield(job)
-                                break
-                            except asyncio.CancelledError:
-                                # Shutdown must still observe the all-rank native
-                                # result before allowing paging cleanup.
-                                if job.cancelled():
-                                    raise
-                                continue
+                        self._pd_native_jobs.add(job)
+                        job.add_done_callback(self._pd_native_done)
+                        result.status = 'completion_unknown'
                     else:
                         result.status = 'completed'
-        except (Exception, asyncio.CancelledError) as error:
-            # RPC loss after dispatch has no physical completion proof. Before
-            # dispatch, no worker can address these destinations.
-            result = PDTransferResult(transfer_id=handoff.transfer_id,
-                                       status='completion_unknown' if submitted else 'failed_drained', error=str(error))
+        except Exception as error:
+            result.error = str(error)
+
+        reported = forced = False
+        renewed = time.monotonic()
+        while True:
+            if job is not None and job.done():
+                try:
+                    result, = job.result()
+                except (Exception, asyncio.CancelledError) as error:
+                    result = PDTransferResult(transfer_id=handoff.transfer_id, status='completion_unknown',
+                                              error=str(error))
+                job = None
+            if job is None:
+                action = owner.finish_receive(seq, result)
+                if action != 'quarantined':
+                    break
+            if not receive.quarantined and time.time() >= request.deadline:
+                owner.quarantine_receive(seq, 'PD transfer exceeded its progress deadline.')
+            if receive.quarantined:
+                if not reported:
+                    response_reqs(self.req_manager, seq.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                                  err_msg=receive.error)
+                    reported = True
+                    self._queue_pd_control(request.remote_engine_id,
+                                           PDControlRequest(action='revoke', reason=receive.error, **control))
+                    logger.warning('PD %s isolated for at most %.0f seconds: %s',
+                                   handoff.transfer_id, owner.release_timeout, receive.error)
+                if owner.expire_receive(seq, handoff.transfer_id, time.monotonic()):
+                    logger.warning('PD %s forced release after %.0f seconds without completion proof.',
+                                   handoff.transfer_id, owner.release_timeout)
+                    action = receive.cancelled or 'error'
+                    forced = True
+                    break
+            elif time.monotonic() - renewed >= PD_RENEW_INTERVAL:
+                try:
+                    await self.engine_conn.control(request.remote_engine_id,
+                                                   PDControlRequest(action='claim', **control))
+                except (ValueError, asyncio.TimeoutError, KeyError, ConnectionError) as error:
+                    owner.quarantine_receive(seq, f'Prefill lease renewal failed: {error}')
+                renewed = time.monotonic()
+            if job is not None:
+                await asyncio.wait([job], timeout=1)
+            else:
+                await asyncio.sleep(1)
+
         transferred = time.perf_counter()
-        if result.status != 'completion_unknown':
-            try:
-                action = 'release' if claim_attempted else 'revoke'
-                await self.engine_conn.control(request.remote_engine_id, PDControlRequest(action=action, **control))
-            except (ValueError, TimeoutError, KeyError) as error:
-                logger.warning('PD terminal acknowledgment failed for %s: %s', handoff.transfer_id, error)
-        action = owner.finish_receive(seq, result)
+        self._queue_pd_control(request.remote_engine_id,
+                               PDControlRequest(action='release' if claim_attempted else 'revoke', **control))
         if PROFILE_PHASES:
             trace_phase('pd_receive', transfer_id=handoff.transfer_id, session_id=seq.session_id, seq_id=seq.seq_id,
                         source_session_id=handoff.session_id, status=result.status,
                         boundary=handoff.valid_token_count, blocks=len(request.block_pairs),
                         queue_ms=(begin - seq.arrive_time) * 1000, claim_ms=(claimed - begin) * 1000,
                         executor_ms=(transferred - claimed) * 1000,
-                        release_ms=(time.perf_counter() - transferred) * 1000)
+                        release_ms=0.0, release_async=True, forced_release=forced)
         if action == 'ready':
             # Publish only completed immutable full blocks. The exact loaded
             # recurrent state is a one-shot input, never an invented checkpoint.
             self.scheduler.block_trie.allocate(seq, token_limit=handoff.valid_token_count)
             seq.state.deactivate()
+            self.has_runable_event.set()
+            self.migration_event.set()
             return
-        response_reqs(self.req_manager, seq.resp, ResponseType.INTERNAL_ENGINE_ERROR,
-                      err_msg=result.error or f'PD receive {action}')
-        if action == 'quarantined':
-            logger.error('PD %s quarantined; source and destination allocations remain held.', handoff.transfer_id)
-            self.req_manager.block_request_types((RequestType.ADD_SESSION, RequestType.ADD_MESSAGE))
-            for pending in list(self.scheduler.migration_waiting):
-                response_reqs(self.req_manager, pending.resp, ResponseType.INTERNAL_ENGINE_ERROR,
-                              err_msg='PD receiver is quarantined; restart required.')
-                self.scheduler.end_session(pending.session_id)
+        if action == 'stale':
             return
+        if not reported:
+            response_reqs(self.req_manager, seq.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                          err_msg=result.error or receive.error or f'PD receive {action}')
         if action == 'stop':
             seq.state.release_paging_resources()
             seq.state.stop()
         else:
             self.scheduler.end_session(seq.session_id)
+        self.migration_event.set()
 
     async def migration_loop(self):
         """Async loop migration."""
@@ -889,7 +958,7 @@ class EngineLoop:
 
     def cancel(self):
         """Cancel all loops."""
-        for task in self.tasks:
+        for task in self.tasks | self._pd_receive_tasks | self._pd_control_tasks:
             if not task.done():
                 task.cancel()
         self.tasks.clear()

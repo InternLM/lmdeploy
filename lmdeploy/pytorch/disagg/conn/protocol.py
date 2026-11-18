@@ -130,12 +130,15 @@ class PDHandoff(BaseModel):
 
 
 class PDControlRequest(BaseModel):
-    """Grant and revoke are serialized by the source paging owner."""
+    """Bind source grants and receiver aborts to a transfer and its
+    incarnations."""
 
-    action: Literal['claim', 'revoke', 'release']
+    action: Literal['claim', 'revoke', 'release', 'abort']
     transfer_id: str
     engine_epoch: str
     receiver_epoch: str = ''
+    receiver_engine_id: str = ''
+    reason: str = ''
 
 
 class MigrationRequest(BaseModel):

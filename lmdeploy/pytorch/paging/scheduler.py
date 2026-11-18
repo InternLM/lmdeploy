@@ -307,8 +307,6 @@ class Scheduler:
     def schedule_migration(self):
         """Admit waiting migration sequences to paging resources."""
         migration_ready: SeqList = []
-        if self.pd_coordinator.failed:
-            return migration_ready
         migration_waiting = sorted(
             self.migration_waiting,
             key=lambda seq: seq.arrive_time,

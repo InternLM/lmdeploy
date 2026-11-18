@@ -3,11 +3,12 @@
 import hashlib
 import json
 from dataclasses import dataclass, field
-from time import monotonic
+from time import monotonic, time
 from uuid import uuid4
 
 import numpy as np
 
+from lmdeploy.pytorch.disagg.config import PD_RELEASE_TIMEOUT, PD_TRANSFER_TIMEOUT
 from lmdeploy.pytorch.disagg.conn.protocol import PDControlRequest, PDHandoff
 from lmdeploy.pytorch.disagg.messages import PDReceiveRequest
 
@@ -29,8 +30,10 @@ class PDExport:
     logical_blocks: np.ndarray
     state_access: StateAccess | None
     receiver_epoch: str = ''
+    receiver_engine_id: str = ''
     revoked: bool = False
-    created_at: float = field(default_factory=monotonic)
+    renewed_at: float = field(default_factory=monotonic)
+    reason: str = ''
 
 
 @dataclass
@@ -40,14 +43,19 @@ class PDReceive:
     logical_blocks: np.ndarray
     state_access: StateAccess | None
     cancelled: str = ''
-    quarantined: bool = False
+    failed_at: float | None = None
+    error: str = ''
+
+    @property
+    def quarantined(self):
+        return self.failed_at is not None
 
 
 class PDCoordinator:
     """Serialize grants/cancellation on the scheduler loop and pin allocations.
 
-    A granted export survives request cancellation until its receiver reports physical completion. Session IDs and
-    timeout alone never release a grant.
+    Failed receives and abandoned grants have a bounded hold. Expiry deliberately favors availability over proof of DMA
+    completion; it releases only this transaction's references, never another Store or request owner's holds.
     """
 
     def __init__(self, block_manager, state_manager):
@@ -57,7 +65,10 @@ class PDCoordinator:
         self.exports: dict[str, PDExport] = {}
         self._export_by_sequence = {}
         self.receives: dict[int, PDReceive] = {}
-        self.failed = False
+        self.release_timeout = PD_RELEASE_TIMEOUT
+        self.transfer_timeout = PD_TRANSFER_TIMEOUT
+        self.forced_releases = 0
+        self.notifications: list[tuple[str, PDControlRequest]] = []
 
     def validate_receive(self, seq, cache_schema):
         handoff = seq.migration_request.handoff
@@ -65,8 +76,6 @@ class PDCoordinator:
                 or handoff.prompt_token_count != seq.num_valid_ids
                 or handoff.prompt_digest != prompt_digest(seq, seq.valid_ids)):
             raise ValueError('PD handoff does not match this prompt or execution schema.')
-        if self.failed:
-            raise RuntimeError('PD receiver is quarantined and requires restart.')
 
     def prepare_receive(self, seq):
         """Pin the matched prefix and private destinations before granting
@@ -90,33 +99,53 @@ class PDCoordinator:
                 self.state_manager.retain_state(legacy_id)
         request = PDReceiveRequest(remote_engine_id=migration.remote_engine_id, handoff=handoff,
                                     block_pairs=pairs, state_id=state_id, auxiliary_id=auxiliary_id,
-                                    legacy_state_id=legacy_id)
+                                    legacy_state_id=legacy_id, deadline=time() + self.transfer_timeout)
         blocks = seq.logical_blocks.get_real_blocks().copy()
         self.block_manager.pin_logical_blocks(blocks)
         self.receives[seq.seq_id] = PDReceive(seq, request, blocks, access)
 
     def finish_receive(self, seq, result) -> str:
-        """Commit only complete results; unknown native work keeps every
-        hold."""
-        receive = self.receives[seq.seq_id]
-        if result.transfer_id != receive.request.handoff.transfer_id:
-            raise ValueError('PD completion belongs to another receive operation.')
+        """A late completion may release its own hold, but never a newer
+        receive."""
+        receive = self.receives.get(seq.seq_id)
+        if receive is None or result.transfer_id != receive.request.handoff.transfer_id:
+            return 'stale'
         if result.status == 'completion_unknown':
-            receive.quarantined = self.failed = True
+            self.quarantine_receive(seq, result.error or 'PD native completion is unknown.')
             return 'quarantined'
-        success = result.status == 'completed' and not receive.cancelled
-        if receive.state_access is not None:
-            self.state_manager.complete(receive.state_access, success=success)
-        elif receive.request.legacy_state_id is not None:
-            self.state_manager.free_state(receive.request.legacy_state_id)
-        self.block_manager.release_logical_blocks(receive.logical_blocks)
-        del self.receives[seq.seq_id]
+        success = result.status == 'completed' and not receive.cancelled and not receive.quarantined
+        self._release_receive(receive, success=success)
         if success:
             seq.set_step(receive.request.handoff.valid_token_count)
             seq.migration_request = None
             seq.kv_token_limit = None
             return 'ready'
         return receive.cancelled or 'error'
+
+    def quarantine_receive(self, seq, reason):
+        receive = self.receives[seq.seq_id]
+        if receive.failed_at is None:
+            receive.failed_at = monotonic()
+            receive.error = reason
+
+    def expire_receive(self, seq, transfer_id, now):
+        """Apply the availability deadline without claiming native DMA
+        drained."""
+        receive = self.receives.get(seq.seq_id)
+        if (receive is None or receive.request.handoff.transfer_id != transfer_id
+                or receive.failed_at is None or now - receive.failed_at < self.release_timeout):
+            return False
+        self._release_receive(receive, success=False)
+        self.forced_releases += 1
+        return True
+
+    def _release_receive(self, receive, *, success):
+        if receive.state_access is not None:
+            self.state_manager.complete(receive.state_access, success=success)
+        elif receive.request.legacy_state_id is not None:
+            self.state_manager.free_state(receive.request.legacy_state_id)
+        self.block_manager.release_logical_blocks(receive.logical_blocks)
+        del self.receives[receive.sequence.seq_id]
 
     def publish(self, seq, cache_schema, state_ids) -> PDHandoff:
         existing = self._export_by_sequence.get(seq.seq_id)
@@ -156,6 +185,15 @@ class PDCoordinator:
     def control(self, request: PDControlRequest):
         """Return the released sequence, or None while its resources stay
         held."""
+        if request.action == 'abort':
+            if request.receiver_epoch != self.epoch:
+                raise ValueError('PD receiver incarnation has changed.')
+            for receive in self.receives.values():
+                handoff = receive.request.handoff
+                if handoff.transfer_id == request.transfer_id and handoff.engine_epoch == request.engine_epoch:
+                    self.quarantine_receive(receive.sequence, request.reason or 'Prefill abandoned this transfer.')
+                    break
+            return None
         if request.engine_epoch != self.epoch:
             raise ValueError('PD engine incarnation has changed.')
         export = self.exports.get(request.transfer_id)
@@ -165,13 +203,22 @@ class PDCoordinator:
             return None
         if request.action == 'claim':
             if not request.receiver_epoch or export.revoked:
-                raise ValueError('PD export was revoked or has no receiver incarnation.')
+                raise ValueError(export.reason or 'PD export was revoked or has no receiver incarnation.')
             if export.receiver_epoch and export.receiver_epoch != request.receiver_epoch:
                 raise ValueError('PD export is already claimed by another receiver.')
             export.receiver_epoch = request.receiver_epoch
+            export.receiver_engine_id = request.receiver_engine_id
+            export.renewed_at = monotonic()
             return None
         if request.action == 'revoke':
-            export.revoked = True
+            if not export.revoked:
+                export.revoked = True
+                export.renewed_at = monotonic()
+                export.reason = request.reason or 'Prefill request was cancelled.'
+                if export.receiver_engine_id:
+                    self.notifications.append((export.receiver_engine_id, PDControlRequest(
+                        action='abort', transfer_id=request.transfer_id, engine_epoch=self.epoch,
+                        receiver_epoch=export.receiver_epoch, reason=export.reason)))
             if export.receiver_epoch:
                 return None
         elif not export.receiver_epoch or export.receiver_epoch != request.receiver_epoch:
@@ -187,6 +234,7 @@ class PDCoordinator:
         if receive is not None:
             if receive.cancelled != 'end':
                 receive.cancelled = 'stop' if stop else 'end'
+            self.quarantine_receive(seq, 'Decode request was cancelled.')
             return True
         transfer_id = self._export_by_sequence.get(seq.seq_id)
         if transfer_id is None:
@@ -198,10 +246,13 @@ class PDCoordinator:
     def has_pending(self) -> bool:
         return bool(self.exports or self.receives)
 
-    def expire_unclaimed(self, now: float, ttl: float = 300) -> list:
-        """Reclaim only prepared exports for which no reader was granted."""
-        return [self._release_export(export) for export in list(self.exports.values())
-                if not export.receiver_epoch and now - export.created_at >= ttl]
+    def expire_exports(self, now: float) -> list:
+        """Reclaim unclaimed exports and grants whose receiver stopped
+        renewing."""
+        expired = [export for export in self.exports.values()
+                   if now - export.renewed_at >= self.release_timeout]
+        self.forced_releases += sum(bool(export.receiver_epoch) for export in expired)
+        return [self._release_export(export) for export in expired]
 
     def require_drained(self):
         if self.has_pending():
@@ -210,11 +261,15 @@ class PDCoordinator:
     def reset(self):
         self.require_drained()
         self.epoch = uuid4().hex
-        self.failed = False
+        self.notifications.clear()
 
     def snapshot(self):
+        now = monotonic()
+        failures = [r.failed_at for r in self.receives.values() if r.quarantined]
         return dict(exports=len(self.exports), grants=sum(bool(x.receiver_epoch) for x in self.exports.values()),
-                    receives=len(self.receives), quarantined=self.failed,
+                    receives=len(self.receives), quarantined=len(failures),
+                    oldest_quarantine_seconds=now - min(failures) if failures else 0.0,
+                    forced_releases=self.forced_releases,
                     pinned_blocks=sum(len(x.logical_blocks) for x in (*self.exports.values(), *self.receives.values())))
 
     def _release_export(self, export):

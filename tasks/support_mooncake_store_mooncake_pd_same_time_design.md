@@ -6,6 +6,8 @@
 
 状态：用户已批准整体设计和任务拆分，按 T0–T8 实施；验证和 commit 记录见同目录 progress 文档。
 
+2026-11-18 决策更新：PD 采用请求级隔离、迟到完成优先释放、300 秒超时强制回收，不默认重启 worker、TransferEngine 或整套缓存。第 6 节已按此更新；这是可用性优先的策略，超时不能证明旧 DMA 已结束。Store 自身的 native unknown 处理保持独立。
+
 ## 1 范围和版本
 
 ### 1.1 交付范围
@@ -18,7 +20,7 @@
 | 缓存类型     | MHA/GQA 的 K/V 与量化附属数据；MLA/DSA；KDA/GDN 的 recurrent/conv state；GLM KPool 与 tail；MTP cache  |
 | 并行配置     | P/D 的有效 `attn_tp` 相同；各自 DP、EP 可以不同；各实例内部 target/MTP 拓扑一致                        |
 | MTP          | 两端模型、方法、宽度、cache schema 一致；GLM 使用当前 `deepseek_mtp` 路径，覆盖已有 MTP 所需的交接语义 |
-| 正确性       | 不覆盖共享 prefix；不读取未完成的数据；I/O 未排空的 block、state、auxiliary slot 不得复用              |
+| 正确性       | 不覆盖共享 prefix、不发布失败状态；PD 隔离期保护 block/state/aux，300 秒强制回收仅解除 PD 自己的持有   |
 | 不扩展的范围 | DCP、异构 TP、PP 重分片、Turbomind，以及新的非 CUDA state backend                                      |
 
 已有 `block_size != kernel_block_size` 的 PD 限制暂时保留。当前 GLM 已经使用 logical64/kernel64，KPool 每个 owner 含 16 个压缩条目；支持这个布局不需要顺带实现任意 logical/kernel 拆分。
@@ -124,7 +126,7 @@ Store worker 当前在同步 API 返回或异常后发送完成回调。它能�
 | [mooncake_store.py](/data/code/sglang/python/sglang/srt/mem_cache/storage/mooncake_store/mooncake_store.py:620) | 配置兼容时复用共享 TE，否则创建独立实例                                   | 共享 TE 有配置和 MR 所有权前提，不是无条件优化                                 |
 | `prefill.py:process_disagg_prefill_transfer_queue`                                                              | 对 transfer 完成做 rank 共识后处理请求                                    | 单 rank 完成不能代表整个请求完成                                               |
 
-SGLang 本地 [prefill.py 的 `_send_done`](/data/code/sglang/python/sglang/srt/disaggregation/prefill.py:244) 还保留了一个 TODO：failed/cleared room 的发送释放缺少 quiescence 证明。因此参考其结构和性能方法，但不照搬该失败释放行为。本任务的内存安全要求需要更严格的完成条件。
+SGLang 本地 device KV 的 deferred release 支持 ACK 或超时回收，同时保留迟到写入风险的 FIXME。2026-11-18 用户确认采用类似的有界隔离策略：超时回收用于避免永久占用，不将其描述为 DMA 已排空。
 
 官方 [SGLang PD 文档](https://docs.sglang.io/docs/advanced_features/pd_disaggregation) 也将传输线程、队列和提交批量作为独立的调优项。这里只采用与同 TP、CUDA 场景直接相关的能力，不引入异构 TP staging。
 
@@ -247,7 +249,7 @@ FA KV、MTP KV、state 和 tail 的有效性分别判断。KV 全命中不代表
 
 请求结束、HTTP 出错、协程被 cancel、RPC 超时、某个 rank 报错，都是逻辑事件。它们不证明 native RDMA、其他 rank 或 CUDA 工作已经停止。
 
-资源可复用需要同时满足：没有模型读写、没有 PD 读写、没有 Store 读写，且普通请求、trie、checkpoint 的引用计数也允许释放。PD 成功后无需等待 Store 保存完成才能让 D 生成，但源显存仍要受剩余 Store 引用保护。
+正常回收需要传输终态和引用计数共同允许。PD 成功后无需等待 Store 保存完成才能让 D 生成，但源显存仍受剩余 Store 引用保护。PD 异常隔离满 300 秒时，按用户确认的策略解除该事务的引用；不释放 Store、模型、其他请求或 checkpoint 的持有。极端迟到 DMA 仍可能访问复用后的地址，这是该超时策略保留的风险。
 
 ### 6.2 事务状态
 
@@ -261,7 +263,8 @@ stateDiagram-v2
     InFlight --> Cancelling: cancel or timeout
     Cancelling --> FailedDrained: physical drain proven
     Cancelling --> Quarantined: completion unknown
-    Quarantined --> FailedDrained: drain or transport fencing proven
+    Quarantined --> FailedDrained: late terminal completion
+    Quarantined --> Released: 300 s availability deadline
     Ready --> Released: commit receiver and release source hold
     FailedDrained --> Released: discard private destinations
 ```
@@ -270,32 +273,34 @@ stateDiagram-v2
 
 ### 6.3 各类故障的行为
 
-| 情况                                  | 处理                                                                                                  |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| admission、schema 校验或 grant 前失败 | 尚未提交 I/O；回滚 tentative prefix、新分配资源和未提交的持有                                         |
-| 用户 stop/end 或客户端断开            | 记录取消，阻止新提交；保留已提交访问的资源，直到全部 rank drain                                       |
-| 部分资源/部分 rank 失败               | 请求整体失败；成功 rank 与未完成 rank 仍都需要收齐 terminal 结果；不启动 decode                       |
-| 同步传输 API 返回负值或抛异常         | 只有版本契约证明已 drain 才释放；否则转 completion unknown                                            |
-| Future 被取消                         | 不能取消后台线程或 native 操作的所有权；worker 保存原始任务/票据并继续收尾                            |
-| P/D 断联或进程异常                    | 失效对应 incarnation；保留可能被访问的资源；完成 native drain 或经验证的 transport fencing 后才能复用 |
-| 重复/延迟 release、迟到 callback      | 按 transfer ID + epoch 幂等处理；不得影响新操作                                                       |
-| sleep、shutdown、cache reset          | 停止新 admission，排空 model/PD/Store 各自访问，再释放引用、MR 和 allocation；wakeup 使用新 epoch     |
+| 情况                                  | 处理                                                                                              |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| admission、schema 校验或 grant 前失败 | 尚未提交 I/O；回滚 tentative prefix、新分配资源和未提交的持有                                     |
+| 用户 stop/end 或客户端断开            | 结束业务等待；隔离该事务，完成后提前释放，隔离满 300 秒强制回收；重复取消不延长期限               |
+| 部分资源/部分 rank 失败               | 请求整体失败，不启动 decode；继续等待 all-rank 结果，缺失结果进入有界隔离                         |
+| 同步传输 API 返回负值或抛异常         | 只有版本契约证明已 drain 才释放；否则转 completion unknown                                        |
+| Future 被取消                         | 不能取消后台线程或 native 操作的所有权；worker 保存原始任务/票据并继续收尾                        |
+| P/D 断联或进程异常                    | 控制超时触发请求级失败；D 停止续租，P/D 各自保留至完成通知或期限到达；不默认重启 worker/通信      |
+| 重复/延迟 release、迟到 callback      | 按 transfer ID + epoch 幂等处理；不得影响新操作                                                   |
+| sleep、shutdown、cache reset          | 停止新 admission，排空 model/PD/Store 各自访问，再释放引用、MR 和 allocation；wakeup 使用新 epoch |
 
-`Quarantined` 不能成为无限吃内存的隐藏行为：记录数量和字节、限制新 admission，超出可恢复范围时将实例标为不健康并走明确的 teardown/restart。超时重试同一物理地址、TTL 到期直接回收、丢弃 ticket 都不是替代方案。
+`Quarantined` 只影响该事务，不封锁整个 engine 或 Mooncake backend。状态接口公开隔离事务数、最老隔离年龄、pinned blocks 和累计强制回收数。隔离从第一次取消、失败或完成状态不明开始计时，300 秒后回收；新错误不刷新期限。底层调用尚未返回时继续持有其 Future，迟到结果不再操作已回收事务的分页资源。
 
 Mooncake 最新 [TransferEngine API](https://github.com/kvcache-ai/Mooncake/blob/main/docs/source/api-reference/python/transfer-engine.md) 已描述 drainable scatter ticket，并区分 `COMPLETED`、`FAILED_DRAINED`、`COMPLETION_UNKNOWN`。未知状态要求继续持有两端 buffer 和 registration。目标容器是否具备该接口、或现有 batch sync API 是否提供等价保证，必须在 T0 核实，不能从 API 的 “sync” 名称推断。
 
-如果目标版本不能提供安全的完成契约，优先锁定可用的 Mooncake 版本/接口；若必须修改 native 层才能满足要求，应单独提交依赖变更设计，不以 Python 的 `try/except` 掩盖。不能宣称仅靠取消协程或分配新 block 就完全解决旧 native I/O 的寿命问题。
+当前旧版接口没有 drain 查询能力，返回 unknown 时使用上述有界隔离，不引入默认重启。整个 pool 的注销/显存卸载仍需确认 native 完成；请求 block 的超时复用并不等价于允许销毁内存注册。执行器收到的传输携带 Unix 提交截止时间（跨机 worker 要求时钟同步），排队超时或地址准备完成时已经过期的任务不再提交 native I/O。
 
 ### 6.4 Router 取消与源端释放
 
 P 的 export grant 与 revoke 必须在其 owner 上串行处理：
 
 - revoke 先发生：未领取 export 被撤销，后到的 grant 被拒绝，D 不得开始读。
-- grant 先发生：取消只能标记撤销意图并通知 D，不能释放 P 的源资源；等待 D terminal acknowledgment。
+- grant 先发生：P 标记撤销并发送包含原因的 abort；D 立即结束业务等待并隔离资源，P 等待 release 或 300 秒期限。
 - D 的 grant 回复丢失或 D 崩溃：P 不能假定“没收到后续消息就是没开始”；沿用 unknown/quarantine 路径。
 
-因此 router guard 改成取消 handoff 的控制面请求，而不是释放显存的命令。正常释放由 D 的 terminal 结果驱动。已领取 transfer 不允许仅靠超时回收源块。未领取 export 的超时撤销使用同一个原子 grant/revoke 规则。
+D 对尚未失败的传输每 30 秒用幂等 claim 续租；P 的 grant 从最近一次续租起保留 300 秒。已撤销的 export 不接受续租，重复 revoke 不延长回收期限。D 的 release 与 P 的 abort 异步发送并有限重试；消息丢失时双方仍有本地期限兜底。全部回调绑定 transfer ID 和双方 epoch，不通过复用的 session/block ID 释放资源。
+
+传输等待上限为 180 秒，超过后先报告请求失败，再开始 300 秒隔离。模型提交/取输出超过 180 秒无进展时底层 health 返回不健康，已有 HTTP health 监测将其呈现为 503；空闲不触发。P 拒绝不健康实例上的新 claim/续租并返回原因，D 据此失败退出，无需重启。
 
 ## 7 MTP 恢复方案（已按 vLLM NIXL 修订）
 
@@ -369,14 +374,14 @@ Store 继续使用既有确定性 hash、model/cache namespace、MTP lookahead �
 
 扩展现有 `tests/pytorch/disagg`、`tests/pytorch/engine/test_cache_engine`、`tests/pytorch/paging/test_scheduler_kv_transfer.py`、compact state 和 MTP suites。只在新的 owner 没有对应测试文件时新建。优先使用参数化覆盖一组相同不变量。
 
-| 测试边界        | 必须证明的行为                                                                                                                     |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| 传输计划        | packed/row/contiguous、不同 capacity、量化附属池、state/aux/draft 的字节结果相同；共同连续 run 合并有效；碎片布局不越界            |
-| D 命中          | 部分/全命中时共享 prefix 的 sentinel 不变，RDMA 区间只覆盖缺失资源；partial block 保持私有                                         |
-| 生命周期        | 延迟传输并同时 stop/end；一个 rank 失败另一个未完成；unknown ticket、重复 callback、旧 epoch release；均不提前复用 block/state/aux |
-| P 与 Store 共存 | PD 先完成和 Store 先完成两种顺序；两者最后一个读者结束前源块不能回收；失败回调同样遵守 drain                                       |
-| boundary/MTP    | N、y1、S_N、draft lookahead 对齐；恢复无 `len(None)`，不重复/遗漏 token；尾部无效 bytes 不进入 prefix                              |
-| router          | grant/revoke 竞态、stream disconnect、两端不同 DP/EP、相同有效 TP、旧 incarnation、无 block 的 state descriptor                    |
+| 测试边界        | 必须证明的行为                                                                                                          |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 传输计划        | packed/row/contiguous、不同 capacity、量化附属池、state/aux/draft 的字节结果相同；共同连续 run 合并有效；碎片布局不越界 |
+| D 命中          | 部分/全命中时共享 prefix 的 sentinel 不变，RDMA 区间只覆盖缺失资源；partial block 保持私有                              |
+| 生命周期        | 取消后保持引用；迟到完成提前释放；299/300 秒边界；强制回收后的旧 callback/epoch 不影响新事务                            |
+| P 与 Store 共存 | PD 完成或超时仅解除自身引用，Store 的独立持有继续阻止 block/state 回收                                                  |
+| boundary/MTP    | N、y1、S_N、draft lookahead 对齐；恢复无 `len(None)`，不重复/遗漏 token；尾部无效 bytes 不进入 prefix                   |
+| router          | grant/revoke 竞态、stream disconnect、两端不同 DP/EP、相同有效 TP、旧 incarnation、无 block 的 state descriptor         |
 
 最关键的竞态测试应通过可控的未完成传输驱动真实 scheduler 的取消/释放入口，而不是仅断言 mock 方法被调用。真实 RDMA 故障测试用于补足 mock 无法证明的 native drain 语义。
 

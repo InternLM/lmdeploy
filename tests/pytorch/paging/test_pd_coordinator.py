@@ -36,7 +36,7 @@ def test_granted_export_survives_real_session_end_and_rejects_wrong_receiver():
     for reset in (scheduler.shutdown, scheduler.reset_cache_after_worker_drain):
         with pytest.raises(RuntimeError, match='PD cache is still owned'):
             reset()
-    assert owner.expire_unclaimed(float('inf')) == []
+    assert owner.expire_exports(owner.exports[handoff.transfer_id].renewed_at + 299) == []
     with pytest.raises(ValueError, match='granted receiver'):
         owner.control(PDControlRequest(action='release', **(request | dict(receiver_epoch='other'))))
     assert owner.control(PDControlRequest(action='release', **request)) is seq
@@ -49,7 +49,7 @@ def test_granted_export_survives_real_session_end_and_rejects_wrong_receiver():
 
 def test_revoke_before_grant_prevents_late_reader():
     scheduler, seq, handoff = make_export()
-    assert scheduler.pd_coordinator.expire_unclaimed(float('inf')) == [seq]
+    assert scheduler.pd_coordinator.expire_exports(float('inf')) == [seq]
     scheduler.end_session(seq.session_id)
     assert scheduler.block_manager.get_num_free_gpu_blocks() == 4
     with pytest.raises(ValueError, match='no longer available'):
@@ -86,8 +86,13 @@ def test_receive_reuses_prefix_and_cancellation_retains_private_destination(stat
     action = owner.finish_receive(seq, PDTransferResult(transfer_id='read', status=status))
     if status == 'completion_unknown':
         scheduler.end_session(2)
-        assert action == 'quarantined' and owner.failed
+        assert action == 'quarantined' and owner.snapshot()['quarantined'] == 1
         assert scheduler.block_manager.get_num_free_gpu_blocks() == free
+        assert not owner.expire_receive(seq, 'read', receive.failed_at + 299)
+        assert owner.expire_receive(seq, 'read', receive.failed_at + 300)
+        scheduler.end_session(2)
+        assert scheduler.block_manager.get_num_free_gpu_blocks() == free + 1
+        assert owner.finish_receive(seq, PDTransferResult(transfer_id='read', status='completed')) == 'stale'
     else:
         assert action == 'end'
         scheduler.end_session(2)
@@ -95,7 +100,8 @@ def test_receive_reuses_prefix_and_cancellation_retains_private_destination(stat
 
 
 @pytest.mark.parametrize('compact', [False, True])
-def test_receive_preserves_exact_private_state_through_prompt_replay(compact, monkeypatch):
+@pytest.mark.parametrize('expire', [False, True])
+def test_receive_state_lifetime_through_prompt_replay_or_expiry(compact, expire, monkeypatch):
     cache = CacheConfig(max_batches=1, block_size=4, num_gpu_blocks=8, num_cpu_blocks=0,
                         states_shapes=[((2,), torch.float32)], num_state_caches=2,
                         enable_prefix_caching=True,
@@ -115,6 +121,18 @@ def test_receive_preserves_exact_private_state_through_prompt_replay(compact, mo
         bank = scheduler.state_manager.bank_for(seq)
         assert bank.pending_load is not None and bank.loaded_input is None
     result = PDTransferResult(transfer_id='read', status='completed')
+    if expire:
+        owner = scheduler.pd_coordinator
+        assert owner.finish_receive(seq, result.model_copy(update={'status': 'completion_unknown'})) == 'quarantined'
+        assert owner.expire_receive(seq, 'read', owner.receives[seq.seq_id].failed_at + 300)
+        scheduler.end_session(2)
+        replacement = scheduler.add_session(3).add_sequence(np.arange(10))
+        scheduler.block_manager.allocate(replacement)
+        scheduler.state_manager.allocate(replacement)
+        assert replacement.logical_state == state_id
+        assert owner.finish_receive(seq, result) == 'stale'
+        assert replacement.logical_state == state_id
+        return
     assert scheduler.pd_coordinator.finish_receive(seq, result) == 'ready'
     scheduler.block_trie.allocate(seq, token_limit=9)
     seq.state.deactivate()
@@ -130,3 +148,34 @@ def test_receive_preserves_exact_private_state_through_prompt_replay(compact, mo
         assert bank.loaded_input == (bank.unit_ids[0], 9)
     assert seq.num_history_ids == 9 and seq.token_ids.tolist() == [9]
     assert seq.num_new_tokens == 0
+
+
+def test_grant_renewal_abort_and_expiry_preserve_other_owners(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr('lmdeploy.pytorch.paging.pd_coordinator.monotonic', lambda: clock[0])
+    scheduler, seq, handoff = make_export()
+    owner = scheduler.pd_coordinator
+    control = dict(transfer_id=handoff.transfer_id, engine_epoch=owner.epoch,
+                   receiver_epoch='decode', receiver_engine_id='decode-endpoint')
+    owner.control(PDControlRequest(action='claim', **control))
+    clock[0] = 390
+    owner.control(PDControlRequest(action='claim', **control))
+    assert owner.expire_exports(400) == []
+
+    # A concurrent Store save owns its own reference to the same allocation.
+    blocks = seq.logical_blocks.get_real_blocks().copy()
+    scheduler.block_manager.pin_logical_blocks(blocks)
+    scheduler.end_session(seq.session_id)
+    peer, notification = owner.notifications.pop()
+    assert peer == 'decode-endpoint' and notification.action == 'abort'
+    assert notification.reason == 'Prefill request was cancelled.'
+    clock[0] = 500
+    owner.control(PDControlRequest(action='revoke', **control))
+    assert owner.expire_exports(689) == []
+    assert owner.expire_exports(690) == [seq]
+    scheduler.end_session(seq.session_id)
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 2
+    scheduler.block_manager.release_logical_blocks(blocks)
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == 4
+    assert owner.control(PDControlRequest(action='release', **control)) is None
+    assert owner.snapshot()['forced_releases'] == 1

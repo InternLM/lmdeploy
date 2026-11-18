@@ -4,8 +4,27 @@
 
 - 用户于 2026-11-11 授权 T0–T8 逐任务实现、验证和 commit。
 - MTP 按 `vllm_pd_mtp.md` 的 prompt-tail replay：P 在 H=N−1 停止，D 从 S_H 补算最后一个真实 prompt token；P 的 sampled/draft token 不交接。
-- PD 与 Store 独立持有资源。未知 native 完成状态不得释放 block/state/MR；取消不等于完成。
+- PD 与 Store 独立持有资源。2026-11-18 用户确认 PD 采用有界隔离及 300 秒强制回收；取消不等于 DMA 完成，Store 持有不受 PD 超时影响。
 - 不引入 MultiConnector，不修改 Store 的内容寻址身份。
+
+## 2026-11-18 请求级失败恢复
+
+本节更新了后文历史测试使用的“unknown 后封锁 engine、必须重启”策略。用户确认优先保持线上可用性：PD 失败只隔离对应事务，完成后提前释放，隔离满 300 秒强制回收；不默认重启 worker、TransferEngine 或整套缓存。
+
+- D 的 native unknown、取消、源端 abort、续租失败及 180 秒传输等待超时进入有界隔离。第一次失败固定期限，重复取消不延期。已失败请求不会因迟到成功结果重新开始生成。
+- P 的 grant 每 30 秒由 D 续租；最后一次续租后 300 秒、或首次 revoke 后 300 秒回收。release/abort 有异步重试，P 放弃已领取交接时向 D 传递原因。
+- 原生任务可比事务活得更久；超时回收后只消费其迟到结果，不再修改分页资源。排队和 native 提交前检查截止时间，避免过期任务在 block 复用后才开始 I/O。
+- block、compact/legacy state 都只解除 PD 的引用；Store 或其他请求的独立持有继续生效。失败数据不发布到 prefix trie。
+- 单个 PD 故障不再关闭整个接收引擎或 Mooncake backend。模型提交/取输出 180 秒无进展时 health 报不健康；正常空闲及单个隔离事务不触发该条件。未新增逐 rank 心跳服务，沿用已有 HTTP health 并检查模型执行进展。
+- `/distserve/pd_status` 增加最老隔离年龄、累计强制回收次数；分阶段日志区分异步 release 与强制回收。
+
+边界：300 秒强制回收不证明 DMA 已结束，保留极端迟到 DMA 访问已复用地址的风险；transfer ID/epoch 防止的是过期控制消息和重复释放。整个内存池的注销仍要求 native 完成，Store 自身 unknown 策略未改变。远程 executor 的提交截止时间使用 Unix 时间，要求主机时钟同步。
+
+验证：指定 H200 容器两卡组合回归 **994 passed**，覆盖 PD、paging、compact state、sleep、MTP 输入和 Store scheduler；本机健康检查与 PD 组合 **36 passed**。本机扩大检查时无 NVIDIA 驱动的案例已转到上述 GPU 组合执行。补齐两个既有 sleep 测试构造对象缺少的 `engine_conn`，没有修改生产 sleep 行为。
+
+真实 RDMA 检查覆盖 8K/32K 的连续、未合并、碎片六种布局，每种三次传输，完整目标字节和未写区域全部一致；源进程退出后返回 `completion_unknown`，整个 pool 的提前注销仍被拒绝。该检查验证传输及失败分类，不用于宣称超时强制复用不存在迟到写入风险。
+
+GPU 测试使用指定容器中的独立 `/dev/shm/lmdeploy_pd_recovery_20261118` 副本，不替换现有安装或部署。原始输出保存在本机 `.git/pd_recovery_gpu_20261118.log`、`.git/pd_recovery_rdma_20261118.log`；完整 pre-commit 检查通过。本轮作为 T9 提交，未 push。
 
 ## T0 环境与基线
 

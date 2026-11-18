@@ -5,7 +5,7 @@ import json
 import socket
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from time import perf_counter
+from time import perf_counter, time
 
 from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
@@ -185,7 +185,13 @@ class MooncakeMigrationManagement:
     async def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
         """Keep the bounded native job alive even if its Python caller
         cancels."""
-        async with self.slots:
+        try:
+            timeout = max(0, assignment.deadline - time()) if assignment.deadline else None
+            await asyncio.wait_for(self.slots.acquire(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return PDTransferResult(transfer_id=assignment.transfer_id, status='failed_drained',
+                                    error='PD submission deadline expired waiting for a native slot.')
+        try:
             future = asyncio.get_running_loop().run_in_executor(self.executor, self._migrate, assignment)
             while True:
                 try:
@@ -194,9 +200,14 @@ class MooncakeMigrationManagement:
                     # Logical cancellation belongs to paging. Return the physical
                     # outcome before releasing the worker slot, even on shutdown.
                     continue
+        finally:
+            self.slots.release()
 
     def _migrate(self, assignment: MigrationAssignment) -> PDTransferResult:
         begin = perf_counter()
+        if assignment.deadline and time() >= assignment.deadline:
+            return PDTransferResult(transfer_id=assignment.transfer_id, status='failed_drained',
+                                    error='PD submission deadline expired before native I/O.')
         if not self.remote_url:
             raise RuntimeError(f'No connection established to remote engine {self.remote_engine_id}')
         local_addresses, remote_addresses, lengths = [], [], []
@@ -216,6 +227,9 @@ class MooncakeMigrationManagement:
         if not lengths:
             return result
         prepared = perf_counter()
+        if assignment.deadline and time() >= assignment.deadline:
+            return PDTransferResult(transfer_id=assignment.transfer_id, status='failed_drained',
+                                    error='PD submission deadline expired while preparing addresses.')
         # This is the native exception boundary. Once submission may have
         # happened, an exception does not prove that DMA has stopped.
         try:
@@ -257,7 +271,7 @@ class MooncakeBackend(MigrationBackendImpl):
     def __init__(self):
         self.links: dict[str, MooncakeMigrationManagement] = {}
         self.shared: MooncakeMigrationManagement | None = None
-        self.quarantined = False
+        self.has_unknown_completion = False
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
         link = MooncakeMigrationManagement(init_request, self.shared)
@@ -275,15 +289,15 @@ class MooncakeBackend(MigrationBackendImpl):
         self.links[remote_engine_id].connect(connect_request)
 
     async def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
-        if self.quarantined:
-            raise RuntimeError('PD transport requires restart after an undrained transfer.')
         result = await self.links[assignment.remote_engine_id].p2p_migrate(assignment, async_op=async_op)
         if result.status == 'completion_unknown':
-            self.quarantined = True
+            # Block reuse follows the scheduler's bounded quarantine policy.
+            # Whole-pool unregistration still requires physical completion.
+            self.has_unknown_completion = True
         return result
 
     def close(self):
-        if self.quarantined:
+        if self.has_unknown_completion:
             raise RuntimeError('Cannot unregister PD allocations while native completion is unknown.')
         if self.shared is None:
             return

@@ -17,6 +17,8 @@ class PDReceiveRequest(BaseModel):
     state_id: int | None = None
     auxiliary_id: int | None = None
     legacy_state_id: int | None = None
+    # Unix deadline also understood by remote executor workers. Never sent to P.
+    deadline: float = 0.0
 
 
 class PDTransferResult(BaseModel):
@@ -47,6 +49,7 @@ class MigrationAssignment(BaseModel):
     remote_engine_id: str
     batch: list[AssignmentInstruct]
     transfer_id: str = ''
+    deadline: float = 0.0
 
 
 class PDConnectionMessage(BaseModel):

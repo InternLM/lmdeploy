@@ -848,9 +848,6 @@ class Engine(EngineBase):
         before returning metrics.
         """
         pd = self.scheduler.pd_coordinator.snapshot()
-        if pd['quarantined']:
-            return dict(alive=False, message='PD receive completion is unknown; restart required.',
-                        schedule_metrics=None, pd=pd)
         if not self.req_manager.is_loop_alive():
             return dict(alive=False,
                         message='PyTorch engine request loop is not alive.',
@@ -863,6 +860,10 @@ class Engine(EngineBase):
                             schedule_metrics=None)
 
         if self._engine_loop is not None:
+            started = self._engine_loop.forward_started_at
+            if started is not None and time.monotonic() - started >= self.scheduler.pd_coordinator.transfer_timeout:
+                return dict(alive=False, message='PyTorch model execution has stopped making progress.',
+                            schedule_metrics=None, pd=pd)
             engine_loop_ok, done_tasks = self._health_check_tasks(self._engine_loop.tasks)
             if not engine_loop_ok:
                 return dict(alive=False,
