@@ -14,12 +14,12 @@ Differences from the AWQ Triton W4A16 implementation:
   ``reduce_scatter_by_tp_sizes`` when a scatter split is requested.
 """
 
+from typing import TYPE_CHECKING
+
 import torch
 
 import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch import envs as _envs
-from lmdeploy.turbomind.linear import Linear, Weight, get_linear
-from lmdeploy.turbomind.weight_format import AWQFormat
 from lmdeploy.utils import get_logger
 
 from ..awq_modules import LinearW4A16Impl
@@ -28,6 +28,26 @@ from .awq_modules import AwqLinearW4A16Impl
 from .tm_probe import turbomind_support_reason
 
 logger = get_logger('lmdeploy')
+
+if TYPE_CHECKING:
+    from lmdeploy.turbomind.linear import Linear, Weight
+
+
+def _load_turbomind_channel():
+    """Import the TurboMind linear channel, or return the blocker.
+
+    The channel modules import the native ``_turbomind`` extension at
+    module scope, so they cannot be imported on a PyTorch-only
+    installation. Callers must treat ``None`` as "route unavailable" and
+    keep the AWQ Triton fallback usable.
+    """
+    from lmdeploy import turbomind
+    if not turbomind.is_available():
+        return None, turbomind._import_error
+    from lmdeploy.turbomind.linear import get_linear
+    from lmdeploy.turbomind.weight_format import AWQFormat
+
+    return (get_linear, AWQFormat), None
 
 
 class TurbomindGemmW4A16Impl(LinearW4A16Impl):
@@ -75,6 +95,20 @@ class TurbomindGemmW4A16Impl(LinearW4A16Impl):
         except Exception:
             pass
 
+    def sleep_release(self):
+        """Free the packed handle so sleep actually releases GPU memory.
+
+        ``ModelAgent.sleep`` moves registered torch Parameters to CPU/meta,
+        but the native packed weight is not a registered tensor and would
+        otherwise stay allocated. The plan is cached, so wakeup re-packs
+        from the restored torch weights without another registry walk.
+        """
+        self._release()
+
+    def sleep_wakeup(self, qweight, scales, qzeros, bias=None):
+        """Re-pack the restored torch weights after wakeup."""
+        return self.update_weights(qweight, scales, qzeros, bias)
+
     def update_weights(
         self,
         qweight,
@@ -88,7 +122,12 @@ class TurbomindGemmW4A16Impl(LinearW4A16Impl):
         and the packed handle computes ``silu(x @ gate.T) * (x @ up.T)`` in
         one kernel call.
         """
-        self._release()
+        loaded, err = _load_turbomind_channel()
+        if loaded is None:
+            raise RuntimeError(
+                'TurboMind linear channel is unavailable on this installation.'
+            ) from err
+        get_linear, AWQFormat = loaded
 
         linear = get_linear()
         if self._plan is None:
@@ -194,13 +233,17 @@ def _build_linear_tm_gemm(spec: LinearTmGemmBuildSpec) -> LinearW4A16Impl:
             spec.in_features, spec.out_features, spec.w_bit, spec.group_size, spec.output_dtype
         )
         if reason is None:
-            logger.info(f'W4A16 GEMM routing: {label} [{shapes}] -> turbomind (backend={provider}).')
-            return TurbomindGemmW4A16Impl(
-                spec.in_features,
-                spec.out_features,
-                spec.group_size,
-                fusion_type=spec.fusion_type,
-            )
+            loaded, err = _load_turbomind_channel()
+            if loaded is None:
+                reason = f'TurboMind linear channel failed to import: {err}'
+            else:
+                logger.info(f'W4A16 GEMM routing: {label} [{shapes}] -> turbomind (backend={provider}).')
+                return TurbomindGemmW4A16Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    spec.group_size,
+                    fusion_type=spec.fusion_type,
+                )
         if provider == 'turbomind':
             from lmdeploy import turbomind
 

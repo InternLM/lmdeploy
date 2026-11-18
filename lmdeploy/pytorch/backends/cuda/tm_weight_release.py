@@ -21,7 +21,11 @@ class TorchWeightSpill:
 
     def __init__(self):
         self._spills: dict[str, tuple[torch.nn.Parameter, torch.Tensor, torch.device]] = {}
-        self._armed: set[int] = set()
+        # Live parameter objects already carrying a restore-on-touch loader.
+        # Tracking the object itself (not ``id(param)``) is required because
+        # ``register_all_parameters`` replaces Parameters on every repack and
+        # CPython may reuse the id of a discarded object.
+        self._armed: list[torch.nn.Parameter] = []
 
     def spill(self, named_params: dict[str, torch.nn.Parameter]):
         """Copy each parameter to CPU, then free its GPU storage."""
@@ -34,12 +38,16 @@ class TorchWeightSpill:
             self._spills[name] = (param, param.data.detach().to('cpu', copy=True), param.device)
             param.data = torch.empty(0, dtype=param.dtype, device=param.device)
             self._arm(param)
+        # Retire armed entries of replaced parameter generations so the
+        # tracker cannot grow without bound across hot updates.
+        live_ids = {id(p) for p, _, _ in self._spills.values()}
+        self._armed = [armed for armed in self._armed if id(armed) in live_ids]
 
     def _arm(self, param: torch.nn.Parameter):
         """Wrap the parameter loader so the first touch restores the module."""
-        if id(param) in self._armed:
+        if any(param is armed for armed in self._armed):
             return
-        self._armed.add(id(param))
+        self._armed.append(param)
         original = getattr(param, 'weight_loader', None)
 
         def loader(wrapped_param, loaded_weight, **kwargs):
