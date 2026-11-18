@@ -1,6 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """PyTorch engine configuration for GLM-5.3-Flash."""
 
+import json
+import os
+
 import torch
 
 from lmdeploy.pytorch import envs as _envs
@@ -50,10 +53,21 @@ def is_glm5_kda_layer(text_config, layer_idx: int) -> bool:
     compatibility method installed on a native Transformers config class is
     process-local and is not available in a freshly spawned worker.
     """
-    linear_layer_ids = getattr(text_config, 'linear_layer_ids', None)
-    if linear_layer_ids is None:
-        _, linear_layer_ids, _ = _resolve_glm5_linear_config(text_config)
-    return int(layer_idx) in linear_layer_ids
+    # D6: the linear_layer_ids property rebuilds an O(layers) list
+    # per call and every config read crosses a slow __getattribute__,
+    # so per-step callers made this O(layers^2) host time while the
+    # device idled. Resolve once, cache the set on the instance.
+    cached = text_config.__dict__.get('_glm5_kda_layer_set')
+    if cached is None:
+        linear_layer_ids = getattr(text_config, 'linear_layer_ids', None)
+        if linear_layer_ids is None:
+            _, linear_layer_ids, _ = _resolve_glm5_linear_config(text_config)
+        cached = frozenset(int(i) for i in linear_layer_ids)
+        try:
+            text_config.__dict__['_glm5_kda_layer_set'] = cached
+        except Exception:
+            pass
+    return int(layer_idx) in cached
 
 
 def _compat_is_kda_layer(text_config, layer_idx: int) -> bool:
@@ -229,6 +243,16 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         text_config = hf_config.text_config
         if text_config.index_kpool != 4:
             raise ValueError('GLM-5.3 currently requires index_kpool=4 for its 64-token cache owner.')
+        if (kwargs.get('device_type') in ('ascend', 'npu')
+                and model_path is not None):
+            quant_path = os.path.join(model_path, 'quant_model_description.json')
+            if os.path.isfile(quant_path):
+                with open(quant_path, encoding='utf-8') as f:
+                    hf_config.quantization_config = {
+                        'quant_method': 'smooth_quant',
+                        'quant_dtype': 'int8',
+                        'quant_description': json.load(f),
+                    }
         quant_config = getattr(hf_config, 'quantization_config', None)
         if (_envs.fp8_moe_only and quant_config is not None
                 and quant_config.get('quant_method') == 'fp8'
@@ -246,9 +270,18 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         num_spec_tokens = kwargs.get('num_spec_tokens', 0)
         if is_draft and getattr(text_config, 'num_nextn_predict_layers', 0) != 1:
             raise ValueError('GLM-5.3 MTP requires one checkpoint predictor layer.')
+        # GLM-5.3 uses the Qwen3.5 MTP proposer name at the engine
+        # boundary, while the shared DeepSeek builder only accepts its own
+        # historical ``deepseek_mtp`` spelling.  GLM owns the hybrid model
+        # configuration, so consume the proposer name here and restore the
+        # speculative model paradigm below instead of leaking it into the
+        # DeepSeek assertion.
+        deepseek_kwargs = dict(kwargs, is_draft_model=False)
+        spec_method = deepseek_kwargs.pop('spec_method', None)
         config = DeepseekV32ModelConfigBuilder.build(
-            text_config, model_path=model_path,
-            **dict(kwargs, is_draft_model=False))
+            text_config, model_path=model_path, **deepseek_kwargs)
+        if spec_method is not None:
+            config.model_paradigm = 'ar_spec'
 
         tp = kwargs.get('tp', 1)
         num_linear_layers = len(linear_layer_ids)
@@ -275,11 +308,20 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         # Store resumes on 64-token boundaries, where the KPool tail is empty.
         config.state_cache_is_indexed = kwargs.get('device_type', 'cuda') in ('cuda', 'auto')
         ring_shape = ((num_spec_tokens + 1,) if num_spec_tokens else ()) if not config.state_cache_is_indexed else ()
+        # AscendC indexes [cache, state_len, dim] lines in place; CUDA keeps
+        # the dim-first layout its kernels expect.
+        conv_shape = ((conv_kernel_size + num_spec_tokens, conv_dim)
+                      if not config.state_cache_is_indexed else
+                      (conv_dim, conv_kernel_size - 1))
+        # Ascend keeps the zero-padded partial tail of one pool; CUDA stores a
+        # raw token ring so speculative rejection can rewrite exact tokens.
+        tail_shape = ((*ring_shape, text_config.index_kpool)
+                      if not config.state_cache_is_indexed else
+                      (text_config.index_kpool + 1 + num_spec_tokens,))
         config.state_cache_specs = [
             StateCacheSpec(
                 GLM5_KDA_CONV_STATE,
-                (num_linear_layers, conv_dim,
-                 conv_kernel_size - 1 if config.state_cache_is_indexed else conv_kernel_size + num_spec_tokens),
+                (num_linear_layers, *conv_shape),
                 torch.bfloat16,
             ),
             StateCacheSpec(
@@ -289,19 +331,16 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
             ),
             StateCacheSpec(
                 GLM5_KPOOL_TAIL_K_STATE,
-                (num_full_layers, text_config.index_kpool + 1 + num_spec_tokens,
-                 text_config.index_head_dim),
+                (num_full_layers, *tail_shape, text_config.index_head_dim),
                 torch.bfloat16,
                 store_cacheable=False,
                 # Prefix checkpoints are 64-token aligned and index_kpool=4:
-                # the incomplete pool is empty at restore. Keep the runtime
-                # raw ring for chunk continuation and speculative rejection.
+                # the incomplete pool is empty at restore.
                 prefix_checkpoint=False,
             ),
             StateCacheSpec(
                 GLM5_KPOOL_TAIL_SCORE_STATE,
-                (num_full_layers, text_config.index_kpool + 1 + num_spec_tokens,
-                 text_config.index_head_dim),
+                (num_full_layers, *tail_shape, text_config.index_head_dim),
                 torch.bfloat16,
                 store_cacheable=False,
                 prefix_checkpoint=False,
@@ -315,9 +354,9 @@ class Glm5NextModelConfigBuilder(AutoModelConfigBuilder):
         ]
         config.is_gated_delta = True
         config.update_cache_config_func = update_cache_config
-        if kwargs.get('spec_method') not in (None, 'deepseek_mtp'):
-            config.prefix_caching_unsupported_reason = (
-                'GLM-5.3 prefix caching supports AR and deepseek_mtp only.')
+        config.prefix_caching_unsupported_reason = (
+            'GLM-5.3 KPool packs 4-token groups into 256-token owner blocks, '
+            'so scheduler prefix blocks cannot restore exact KPool state.')
         config.check_env_func = _check_env_glm5_next
         config.hf_config = hf_config
         config.llm_config = text_config

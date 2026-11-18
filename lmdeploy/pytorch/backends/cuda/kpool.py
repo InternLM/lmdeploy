@@ -24,10 +24,33 @@ from lmdeploy.pytorch.kernels.cuda.kpool import (
     update_raw_kpool,
     write_kpool_token_cache,
 )
-from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
-    is_sparse_index_topk_supported,
-    sparse_index_topk,
-)
+try:
+    from lmdeploy.pytorch.kernels.cuda.sparse_index_topk import (
+        is_sparse_index_topk_supported,
+        sparse_index_topk,
+    )
+except (ImportError, ModuleNotFoundError):
+    # Ascend workers import the shared GLM model module, but do not provide
+    # CUDA-only TileLang.  Keep the exact KPool contract with a Torch
+    # fallback; CUDA still uses the fused implementation above.
+    def is_sparse_index_topk_supported(k: int) -> bool:
+        return k in (512, 2048)
+
+    def sparse_index_topk(scores, q_seqlens, kv_seqlens, topk, fill=-1,
+                          descending=True, sorted=False, deterministic=False):
+        del q_seqlens, descending, deterministic
+        width = scores.size(-1)
+        k = min(int(topk), width)
+        values, indices = torch.topk(scores, k, dim=-1, largest=True,
+                                     sorted=sorted)
+        del values
+        if k < topk:
+            pad = torch.full((scores.size(0), topk - k), fill,
+                             dtype=indices.dtype, device=indices.device)
+            indices = torch.cat((indices, pad), dim=-1)
+        lengths = kv_seqlens.to(torch.int64).clamp_min(0).unsqueeze(-1)
+        return torch.where(indices < lengths, indices,
+                           torch.full_like(indices, fill))
 from lmdeploy.pytorch.nn.kpool import (
     KPOOL_PAGE_SIZE,
     kpool_compress,
@@ -35,6 +58,7 @@ from lmdeploy.pytorch.nn.kpool import (
     kpool_packed_cache_views,
     kpool_pooled_block_offsets,
     kpool_quantize_fp8,
+    kpool_score,
 )
 
 from .nsa import _get_max_score_rows
@@ -389,6 +413,12 @@ def kpool_score_contiguous_cuda(
 ) -> Tensor:
     """Score ragged history with FP8 DeepGEMM or the BF16 Torch reference."""
     _validate_query(query_fp8, query_weight, allow_bf16=True)
+    if query_fp8.device.type != 'cuda':
+        logits = kpool_score(query_fp8, query_fp8.new_ones(query_fp8.shape[:2], dtype=torch.float32),
+                             pooled_key_fp8, pooled_key_scale, query_weight)
+        return logits.masked_fill(
+            torch.arange(logits.size(1), device=logits.device)[None, :] >=
+            group_lengths.to(torch.int64)[:, None], 0)
     rows = query_fp8.size(0)
     if pooled_key_fp8.ndim != 2 or pooled_key_fp8.size(1) != query_fp8.size(2):
         raise ValueError(
@@ -439,6 +469,23 @@ def kpool_score_paged_cuda(
     is never consumed.
     """
     _validate_query(query_fp8, query_weight, allow_bf16=True)
+    if query_fp8.device.type != 'cuda':
+        keys, scales = kpool_packed_cache_views(packed_cache, query_fp8.size(-1))
+        rows = query_fp8.size(0)
+        parts = []
+        for row in range(rows):
+            blocks = pooled_block_offsets[row].to(torch.long)
+            flat_k = keys.index_select(0, blocks).reshape(-1, query_fp8.size(-1))
+            flat_s = scales.index_select(0, blocks).reshape(-1, 1)
+            count = int(group_lengths[row].item())
+            parts.append(kpool_score(query_fp8[row:row + 1],
+                                     query_fp8.new_ones((1, query_fp8.size(1)), dtype=torch.float32),
+                                     flat_k[:count], flat_s[:count], query_weight[row:row + 1]))
+        width = max((p.size(1) for p in parts), default=0)
+        out = query_fp8.new_zeros((rows, width), dtype=torch.float32)
+        for row, part in enumerate(parts):
+            out[row, :part.size(1)] = part[0]
+        return out
     rows = query_fp8.size(0)
     if packed_cache.dtype != torch.uint8 or packed_cache.ndim != 4:
         raise ValueError(

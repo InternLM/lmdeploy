@@ -178,6 +178,8 @@ class AscendOpsBackend(DlinferOpsBackend):
             GatedDeltaMetaBuildSpec,
             GatedDeltaRuleBuildSpec,
         )
+        from ...hc_prepost import HCPrePostBuildSpec
+        from ...kda import KdaBuildSpec
         from ...rejection_sampling import RejectionSamplingBuildSpec
 
         if isinstance(spec, RejectionSamplingBuildSpec):
@@ -192,6 +194,12 @@ class AscendOpsBackend(DlinferOpsBackend):
         if isinstance(spec, GatedDeltaRuleBuildSpec):
             from .gated_delta_rule import AscendGatedDeltaRuleImpl
             return AscendGatedDeltaRuleImpl()
+        if isinstance(spec, KdaBuildSpec):
+            from .kda import AscendKdaImpl
+            return AscendKdaImpl()
+        if isinstance(spec, HCPrePostBuildSpec):
+            from .hc_prepost import AscendHCPrePostImpl
+            return AscendHCPrePostImpl(spec.hc_mult, spec.sinkhorn_iters, spec.eps)
         return super().build_op(spec, enable_deterministic=enable_deterministic)
 
     @classmethod
@@ -408,17 +416,34 @@ class AscendOpsBackend(DlinferOpsBackend):
                 else:
                     return DlinferMoECommType.ALLGATHER
             elif SocVersion.is_A3():
-                if max_tokens_across_dp <= mc2_token_capacity and global_is_decoding:
+                # D3: the W8A8 ALLTOALL path is unvalidated with NZ weights and
+                # its dispatch does a per-layer .tolist() D2H sync (GLM-5.2
+                # lesson). Env-gated: route prefill through fused MC2 as well.
+                force_mc2 = os.environ.get("DLINFER_ASCEND_FORCE_MC2_PREFILL", "0") == "1"
+                if force_mc2 and max_tokens_across_dp > mc2_token_capacity:
+                    # A3 MC2 is hard-limited per rank; fall through instead of
+                    # feeding it a tiling it cannot satisfy.
+                    force_mc2 = False
+                    logger.warning(
+                        f'FORCE_MC2_PREFILL: {max_tokens_across_dp} tokens/rank '
+                        f'exceeds MC2 capacity {mc2_token_capacity}; using the '
+                        f'default prefill comm type.')
+                if (max_tokens_across_dp <= mc2_token_capacity and global_is_decoding) or (
+                    force_mc2 and ep_size > 1
+                ):
                     return DlinferMoECommType.MC2
-                else:
-                    return DlinferMoECommType.ALLTOALL
+                use_mega = os.environ.get("DLINFER_ASCEND_PREFILL_MEGA", "0") == "1"
+                if use_mega and ep_size > 1 and not global_is_decoding:
+                    # prefill through the cann mega_moe fused op; decode keeps MC2/ALLTOALL
+                    return DlinferMoECommType.MEGA
+                return DlinferMoECommType.ALLTOALL
             else:
                 raise ValueError(f'Unsupported soc_version: {SocVersion.soc_version()}')
 
         def get_pad_info(actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp, tp_size,
                          moe_comm_type):
             x_active_mask = None
-            if moe_comm_type == DlinferMoECommType.MC2:
+            if moe_comm_type in (DlinferMoECommType.MC2, DlinferMoECommType.MEGA):
                 padded_size = math.ceil(max_tokens_across_dp / tp_size) * tp_size
                 pad_size = padded_size - padded_tokens_current_rank
                 x_active_mask = torch.ones(actual_tokens_current_rank,
@@ -489,7 +514,10 @@ class AscendOpsBackend(DlinferOpsBackend):
             if not is_decoding and not is_multi_token_decoding and len(states_shapes) > 0:
                 has_initial_state = ~(q_seqlens == kv_seqlens)
                 # # Conv ring buffer: conv_state_len = conv_kernel_size + num_spec_tokens.
-                conv_state_len = states_shapes[0][0][0]
+                # State specs are layer-major: (num_layers, channels,
+                # kernel_width + speculative_tokens).  The ring length is
+                # the trailing dimension, not the layer count.
+                conv_state_len = states_shapes[0][0][-1]
                 conv_kernel_size = conv_state_len - num_spec_tokens
 
                 if num_spec_tokens > 0:

@@ -191,6 +191,12 @@ class CacheConfig:
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     kv_transfer_config: KVTransferConfig | None = None
 
+    # Scheduler per-request token ceiling (``--session-len``), used by model
+    # code to bound statically-shaped decode workspaces (e.g. the fixed-shape
+    # KPool selection of GLM-5.3-Flash).  ``None`` when the user leaves the
+    # session length unset (it then defaults to the full pool off-device).
+    session_len: int | None = None
+
     def __post_init__(self):
         """Post init."""
         assert self.dcp >= 1, 'invalid dcp'

@@ -4,9 +4,12 @@ from collections.abc import Callable
 import torch
 
 from lmdeploy.pytorch.models.patch import get_build_model_context
+from lmdeploy.utils import get_logger
 
 from .base import MoeType, SoftmaxTopK  # noqa: F401
 from .v4_fp4 import FusedMoEV4FP4  # noqa: F401
+
+logger = get_logger('lmdeploy')
 
 
 def build_fused_moe(
@@ -27,6 +30,7 @@ def build_fused_moe(
     *,
     output_scale: float = 1.0,
     fp32_acc: bool = False,
+    swiglu_limit: float = 0.0,
 ):
     """Fused moe builder."""
     quant_method = None
@@ -53,10 +57,12 @@ def build_fused_moe(
         )
 
     if quant_method == 'smooth_quant':
-        if fp32_acc or output_scale != 1.0:
-            raise NotImplementedError('W8A8 MoE does not support fp32_acc or output_scale.')
         assert not bias, 'Quant model does not support bias for now.'
-        assert act_func is None, ('Quant model does not support activation function for now.')
+        # The backend W8A8 op applies the activation itself (SwiGLU with the
+        # model's swiglu_limit); act_func is accepted and not forwarded.
+        if fp32_acc:
+            logger.warning('W8A8 MoE ignores fp32_acc; the routed reduction '
+                           'runs in the backend op\'s own accumulate mode.')
         from .w8a8 import FusedMoEW8A8
         return FusedMoEW8A8(
             hidden_dim=hidden_dim,
@@ -68,6 +74,8 @@ def build_fused_moe(
             quant_dtype=quant_config.quant_dtype,
             device=device,
             all_reduce=all_reduce,
+            output_scale=output_scale,
+            swiglu_limit=swiglu_limit,
         )
     elif quant_method == 'fp8':
         is_static_per_tensor = (

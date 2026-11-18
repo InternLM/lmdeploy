@@ -1518,6 +1518,14 @@ class BaseModelAgent:
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
         self.patched_model = patched_model
         self.build_model_ctx = build_model_ctx
+        # Fixed-shape decode KPool selection clamps its static width to the
+        # scheduler session cap; publish it before graph capture starts.
+        if type(patched_model).__name__.startswith('Glm5Next'):
+            from lmdeploy.pytorch.models.glm5_next import (
+                set_kpool_decode_session_tokens,
+            )
+            set_kpool_decode_session_tokens(
+                getattr(self.cache_config, 'session_len', None))
 
     def build_model(self):
         """Build model api."""

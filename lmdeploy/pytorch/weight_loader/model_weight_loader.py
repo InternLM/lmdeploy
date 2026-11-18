@@ -15,6 +15,11 @@ from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
 
+# Ascend ModelSlim checkpoints use this prefix instead of Hugging Face's
+# standard model.safetensors[.index.json] names.
+QUANT_SAFE_WEIGHTS_NAME = 'quant_model_weights.safetensors'
+QUANT_SAFE_WEIGHTS_INDEX_NAME = 'quant_model_weights.safetensors.index.json'
+
 
 def load_weight(param: torch.nn.Parameter, loaded_weight: torch.Tensor, **kwargs):
     """Load weight."""
@@ -46,6 +51,13 @@ def _get_weight_type(model_path: str, use_safetensors: bool = None):
         # Load from a sharded safetensors checkpoint
         weight_type = 'safetensors'
         is_sharded = True
+    elif use_safetensors is not False and osp.isfile(osp.join(model_path, QUANT_SAFE_WEIGHTS_NAME)):
+        # Ascend ModelSlim single-file safetensors checkpoint.
+        weight_type = 'safetensors'
+    elif use_safetensors is not False and osp.isfile(osp.join(model_path, QUANT_SAFE_WEIGHTS_INDEX_NAME)):
+        # Ascend ModelSlim sharded safetensors checkpoint.
+        weight_type = 'safetensors'
+        is_sharded = True
     elif osp.isfile(osp.join(model_path, WEIGHTS_NAME)):
         # Load from a PyTorch checkpoint
         weight_type = 'pytorch'
@@ -62,7 +74,9 @@ def _get_weight_type(model_path: str, use_safetensors: bool = None):
 def _get_weight_map(model_path: str, weight_type: str):
     """Get weight index."""
     if weight_type == 'safetensors':
-        load_index = osp.join(model_path, SAFE_WEIGHTS_INDEX_NAME)
+        standard_index = osp.join(model_path, SAFE_WEIGHTS_INDEX_NAME)
+        quant_index = osp.join(model_path, QUANT_SAFE_WEIGHTS_INDEX_NAME)
+        load_index = standard_index if osp.isfile(standard_index) else quant_index
     elif weight_type == 'pytorch':
         load_index = osp.join(model_path, WEIGHTS_INDEX_NAME)
     else:
@@ -78,7 +92,9 @@ def _get_weight_map(model_path: str, weight_type: str):
 def _get_weight_path(model_path: str, weight_type: str):
     """Get weight path."""
     if weight_type == 'safetensors':
-        weight_name = SAFE_WEIGHTS_NAME
+        standard_path = osp.join(model_path, SAFE_WEIGHTS_NAME)
+        weight_name = (SAFE_WEIGHTS_NAME if osp.isfile(standard_path)
+                       else QUANT_SAFE_WEIGHTS_NAME)
     elif weight_type == 'pytorch':
         weight_name = WEIGHTS_NAME
     else:
