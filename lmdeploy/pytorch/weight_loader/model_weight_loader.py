@@ -45,7 +45,8 @@ _CT_TO_AWQ_SUFFIX = {
 
 
 def new_ct_normalize_state() -> dict:
-    """Create staging state that lets one linear's tensors split across streams.
+    """Create staging state that lets one linear's tensors split across
+    streams.
 
     Pass the returned dict to consecutive ``normalize_ct_weights`` calls so a
     module whose ``weight_packed``/``weight_scale`` land in different
@@ -161,7 +162,8 @@ _GPTQ_SUFFIXES = ('qweight', 'scales', 'qzeros')
 
 
 def new_gptq_normalize_state() -> dict:
-    """Create staging state that lets one linear's tensors split across streams.
+    """Create staging state that lets one linear's tensors split across
+    streams.
 
     Pass the returned dict to consecutive ``normalize_gptq_weights`` calls so
     a module whose quant tensors land in different safetensors shards still
@@ -232,10 +234,12 @@ def normalize_gptq_weights(iterator, state: dict | None = None):
     Tensors of one linear are staged until the full triple arrives, then
     GPTQ modules convert in one ``gptq_to_awq`` call; AWQ modules pass
     through in arrival order. A module that never ships ``qzeros`` flushes
-    with a synthesized symmetric zero word when the next module starts or
-    the stream ends — exporters only drop qzeros for symmetric groups,
-    where the AWQ symmetric pad is the exact value. Peak staging memory
-    stays at the single-module bound.
+    with a synthesized symmetric zero word at the end of the complete
+    stream — exporters only drop qzeros for symmetric groups, where the
+    AWQ symmetric pad is the exact value. Staging never synthesizes early:
+    a module whose tensors straddle shard or bucket boundaries stays staged
+    until its components arrive. Peak staging memory stays at the
+    interleaving bound of the stream.
 
     With a locally owned state the stream end flushes and validates.
     Pass a shared ``state`` (see ``new_gptq_normalize_state``) to keep
@@ -250,9 +254,15 @@ def normalize_gptq_weights(iterator, state: dict | None = None):
     staged = state['staged']
     converted = state['converted']
     from lmdeploy.turbomind import gptq_repack
+    from lmdeploy.turbomind.gptq_repack import _is_sequential_g_idx
 
     for name, tensor in iterator:
         if name.endswith('g_idx'):
+            # AutoGPTQ ships an identity group-index buffer even without
+            # act-order; consume it. A reordered mapping is real act-order
+            # and cannot be served by the AWQ layout.
+            if _is_sequential_g_idx(tensor):
+                continue
             raise ValueError(f'{name}: desc_act (act-order) GPTQ checkpoints are not supported; '
                              're-quantize the checkpoint without desc_act.')
         suffix = next((s for s in _GPTQ_SUFFIXES if name.endswith(s)), None)
@@ -267,7 +277,6 @@ def normalize_gptq_weights(iterator, state: dict | None = None):
             if suffix == 'qzeros' and bool((gptq_repack.unpack_u4_lsb(tensor) == 7).all()):
                 continue
             raise ValueError(f'Duplicate quant key {name!r} after {prefix} converted.')
-        yield from _gptq_flush_staged(staged, converted, keep=prefix)
         shard = staged.setdefault(prefix, {})
         shard[suffix] = tensor
         if len(shard) == len(_GPTQ_SUFFIXES):

@@ -206,12 +206,44 @@ def test_normalizer_rejects_stray_qweight():
         list(normalize_gptq_weights(iter([('a.qweight', torch.zeros(4, 8, dtype=torch.int32))])))
 
 
-def test_normalizer_rejects_desc_act():
-    """desc_act checkpoints reorder groups; the repack assumes identity."""
+def test_normalizer_rejects_reordered_g_idx():
+    """A reordered group mapping is real act-order and must raise."""
     from lmdeploy.pytorch.weight_loader.model_weight_loader import normalize_gptq_weights
 
+    reordered = torch.tensor([1, 0, 3, 2], dtype=torch.int64)
     with pytest.raises(ValueError, match='desc_act'):
-        list(normalize_gptq_weights(iter([('layers.0.g_idx', torch.zeros(4, dtype=torch.int64))])))
+        list(normalize_gptq_weights(iter([('layers.0.g_idx', reordered)])))
+
+
+def test_normalizer_consumes_sequential_g_idx():
+    """AutoGPTQ ships identity group indices without act-order; consume them.
+
+    Rejecting every g_idx would reject standard exports produced by this repository's own GPTQ exporter.
+    """
+    from lmdeploy.pytorch.weight_loader.model_weight_loader import normalize_gptq_weights
+
+    shard = _gptq_shard('a.', seed=8)
+    identity = torch.arange(2, dtype=torch.int64)  # two groups, identity order
+    out = dict(normalize_gptq_weights(iter(shard + [('a.g_idx', identity)])))
+    assert set(out) == {'a.qweight', 'a.scales', 'a.qzeros'}
+
+
+def test_normalizer_keeps_split_module_staged_without_early_synthesis():
+    """A module whose tensors interleave with another's stays staged.
+
+    The old flush-on-next-prefix synthesized a symmetric pad for 'a' when 'b' opened; with asymmetric zeros still to
+    come that pad was wrong. The stream below must convert both modules exactly, no early synthesis.
+    """
+    from lmdeploy.pytorch.weight_loader.model_weight_loader import normalize_gptq_weights
+
+    a = _gptq_shard('a.', seed=11)
+    b = _gptq_shard('b.', seed=12)
+    interleaved = [a[0], b[0], b[1], b[2], a[1], a[2]]  # a splits around b
+    reference = dict(normalize_gptq_weights(iter(a + b)))
+    out = dict(normalize_gptq_weights(iter(interleaved)))
+    assert set(out) == set(reference)
+    for name, tensor in reference.items():
+        assert torch.equal(out[name], tensor), name
 
 
 def test_shared_state_carries_module_across_streams():
@@ -286,6 +318,65 @@ def test_gptq_quant_method_routes_through_awq_family():
     assert config.group_size == 128
     assert config.get_quant_method('model.layers.0.mlp.gate_proj', module_kind='linear') == 'awq'
     assert config.get_quant_method('model.layers.0.input_layernorm', module_kind='norm') is None
+    # GPTQ expert tensors normalize through the same suffix filter, so MoE
+    # rides the AWQ family exactly like ct group-128 does.
+    assert config.get_quant_method('model.layers.0.mlp.experts', module_kind='moe') == 'awq'
+    # An ignore list without canonical prefixes cannot be honored — refuse
+    # instead of silently quantizing ignored modules.
+    config.ignored_layers = ['lm_head']
+    with pytest.raises(ValueError, match='non-empty canonical module'):
+        config.get_quant_method(module_kind='linear')
+    assert config.get_quant_method('lm_head', module_kind='linear') is None
+
+
+def test_gptq_config_rejects_desc_act():
+    """desc_act fails at config parse with a clear message."""
+    from lmdeploy.pytorch.config import QuantizationConfig
+
+    with pytest.raises(ValueError, match='desc_act'):
+        QuantizationConfig.from_config(
+            type('Cfg', (), {'quantization_config': {
+                'quant_method': 'gptq', 'bits': 4, 'group_size': 128, 'desc_act': True
+            }})())
+
+
+def test_convert_checkpoint_gathers_shards_and_rewrites_metadata(tmp_path):
+    """The offline converter crosses shards, drops identity g_idx, and rewrites
+    the config to AWQ."""
+    import json
+    import os
+
+    from safetensors.torch import load_file, save_file
+
+    from lmdeploy.pytorch.weight_loader.model_weight_loader import normalize_gptq_weights
+
+    src = tmp_path / 'src'
+    dst = tmp_path / 'dst'
+    os.makedirs(src)
+    a = _gptq_shard('layers.0.mlp.down_proj.', seed=13)
+    save_file({a[0][0]: a[0][1], 'lm_head.weight': torch.zeros(2)},
+              str(src / 'model-00001.safetensors'))
+    # scales/qzeros of the same module live in the second shard; identity
+    # g_idx ships alongside, as AutoGPTQ writes it.
+    save_file({a[1][0]: a[1][1], a[2][0]: a[2][1],
+               'layers.0.mlp.down_proj.g_idx': torch.arange(2, dtype=torch.int64)},
+              str(src / 'model-00002.safetensors'))
+    (src / 'model.safetensors.index.json').write_text(json.dumps({'weight_map': {}}))
+    (src / 'config.json').write_text(json.dumps({
+        'quantization_config': {'quant_method': 'gptq', 'bits': 4, 'desc_act': False}}))
+
+    num_modules, err = gptq_repack.convert_checkpoint(str(src), str(dst), verify=True)
+    assert num_modules == 1 and err == 0.0
+
+    converted = load_file(str(dst / 'model.safetensors'))
+    assert 'lm_head.weight' in converted
+    assert not any(name.endswith('g_idx') for name in converted)
+    reference = dict(normalize_gptq_weights(iter(a)))
+    for suffix in ('qweight', 'scales', 'qzeros'):
+        assert torch.equal(converted[f'layers.0.mlp.down_proj.{suffix}'], reference[f'layers.0.mlp.down_proj.{suffix}'])
+    config = json.loads((dst / 'config.json').read_text())
+    assert config['quantization_config']['quant_method'] == 'awq'
+    assert not os.path.exists(dst / 'model.safetensors.index.json')
 
 
 def test_loader_flushes_leftover_through_rename_pipeline():
