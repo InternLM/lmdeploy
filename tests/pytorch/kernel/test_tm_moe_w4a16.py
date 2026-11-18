@@ -224,10 +224,12 @@ def test_route_anchors_match_triton_fused_moe():
             n, k = w.shape
             w = w.to(device)
             groups = w.float().view(n, k // 32, 32)
-            wmin = groups.amin(-1, keepdim=True)
-            wmax = groups.amax(-1, keepdim=True)
-            scale = ((wmax - wmin) / 15.0).clamp(min=1e-8)
-            codes = torch.round((groups - wmin) / scale + 8.0).clamp(0, 15).to(torch.int64)
+            # Zero-centered symmetric codes: the packed kernel decodes
+            # (code - 8) * scale, so the codes must encode (w / scale),
+            # not a min-shifted value.
+            scale = (groups.abs().amax(-1, keepdim=True) / 7.0).clamp(min=1e-8)
+            codes = torch.clamp(torch.round(groups / scale), -7, 7) + 8.0
+            codes = codes.to(torch.int64)
             shifts = torch.arange(8, device=device, dtype=torch.int64) * 4
             packed = (codes.view(n, k // 8, 8) << shifts).sum(-1).to(torch.int32)
             scales = scale.expand(n, k // 32, 32)[..., 0].to(torch.bfloat16)
@@ -492,3 +494,73 @@ def test_layer_sleep_hooks_delegate_and_keep_spill_steady_state():
     assert layer2._spill is None and gate_up2.qweight.numel() != 0
     layer2.sleep_wakeup()
     assert gate_up2.qweight.numel() != 0  # resident, fed the re-pack
+
+
+@torch.inference_mode()
+def test_grouped_route_consumes_gptq_repacked_experts():
+    """Plan acceptance 1: GPTQ-MoE rides the TM grouped route via repack.
+
+    The repack is exact bit work, so the converted tensors ARE the AWQ twin;
+    the gate proves the grouped route consumes them and matches the GPTQ
+    dequant reference elementwise.
+    """
+    num_experts, top_k, hidden, ffn, group = 8, 4, 512, 256, 128
+    device = torch.device('cuda')
+
+    from lmdeploy.turbomind import gptq_repack
+    from lmdeploy.turbomind.ct_repack import awq_dequant
+
+    def _gptq_triple(w):
+        qw, sc, qz = gptq_repack.quantize_gptq(w.to(torch.float16), sym=True)
+        qw_a, sc_a, qz_a = gptq_repack.gptq_to_awq(qw, sc, qz)
+        dequant_t = awq_dequant(qw_a, sc_a.contiguous(), qz_a).t().contiguous()  # [K, N]
+        return qw_a, sc_a.contiguous(), qz_a, dequant_t
+
+    gen = torch.Generator().manual_seed(70)
+    gate, up, down = [], [], []
+    for expert in range(num_experts):
+        wg = torch.randn(ffn, hidden, generator=gen) * (0.1 / hidden**0.5)
+        wu = torch.randn(ffn, hidden, generator=gen) * (0.1 / hidden**0.5)
+        wd = torch.randn(hidden, ffn, generator=gen) * (0.1 / ffn**0.5)
+        gate.append(_gptq_triple(wg))
+        up.append(_gptq_triple(wu))
+        down.append(_gptq_triple(wd))
+
+    fused_qw = torch.stack([torch.cat((gate[e][0], up[e][0]), dim=-1) for e in range(num_experts)])
+    fused_sc = torch.stack([torch.cat((gate[e][1], up[e][1]), dim=-1) for e in range(num_experts)])
+    fused_qz = torch.stack([torch.cat((gate[e][2], up[e][2]), dim=-1) for e in range(num_experts)])
+    down_qw = torch.stack([down[e][0] for e in range(num_experts)])
+    down_sc = torch.stack([down[e][1] for e in range(num_experts)])
+    down_qz = torch.stack([down[e][2] for e in range(num_experts)])
+
+    from lmdeploy.pytorch.backends.cuda.tm_moe_modules import TurbomindMoeW4A16Impl
+
+    impl = TurbomindMoeW4A16Impl(
+        top_k=top_k,
+        num_experts=num_experts,
+        hidden_dim=hidden,
+        ffn_dim=ffn,
+        group_size=group,
+        renormalize=True,
+        output_dtype=torch.float16,
+    )
+    impl.update_weights(fused_qw, fused_sc, fused_qz, down_qw, down_sc, down_qz)
+
+    num_tokens = 8
+    topk_ids = torch.stack([torch.randperm(num_experts, generator=gen)[:top_k] for _ in range(num_tokens)])
+    topk_weights = torch.rand(num_tokens, top_k, generator=gen) + 0.1
+    topk_weights = (topk_weights / topk_weights.sum(-1, keepdim=True)).to(device)
+    x = torch.randn(num_tokens, hidden, generator=gen, dtype=torch.float16).to(device)
+
+    out = impl.forward(x, topk_weights, topk_ids.to(device))
+    torch.cuda.synchronize()
+    gate_deq = [gate[e][3].cpu() for e in range(num_experts)]
+    up_deq = [up[e][3].cpu() for e in range(num_experts)]
+    down_deq = [down[e][3].cpu() for e in range(num_experts)]
+    reference = _reference(x, gate_deq, up_deq, down_deq, topk_ids, topk_weights, device)
+    score = _kl(out, reference)
+    agreement = (out.argmax(-1) == reference.argmax(-1)).float().mean().item()
+    assert score <= KL_THRESHOLD, f'GPTQ-repack KL {score:.3e} exceeds {KL_THRESHOLD}'
+    assert agreement >= ARGMAX_THRESHOLD, f'argmax {agreement:.3f} below threshold'
+    impl._release()
+    torch.cuda.empty_cache()

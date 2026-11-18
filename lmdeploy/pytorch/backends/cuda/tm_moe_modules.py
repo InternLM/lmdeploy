@@ -20,18 +20,37 @@ Communication stays on the python side (``moe_reduce``), identical to the
 compressed-tensors route.
 """
 
+from typing import TYPE_CHECKING
+
 import torch
 
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul
 from lmdeploy.pytorch.kernels.cuda.moe.fused_moe import _get_sorted_idx, moe_reduce
-from lmdeploy.turbomind.linear import Weight, get_linear
-from lmdeploy.turbomind.weight_format import AWQFormat
 from lmdeploy.utils import get_logger
 
 from ..tm_moe_modules import FusedMoETmW4A16BuildSpec, FusedMoETmW4A16Impl
 
 logger = get_logger('lmdeploy')
+
+if TYPE_CHECKING:
+    from lmdeploy.turbomind.linear import Weight
+
+
+def _load_turbomind_channel():
+    """Import the TurboMind channel, or return the blocker.
+
+    The channel modules dereference the native ``_turbomind`` extension at
+    module scope, so they cannot be imported on a PyTorch-only installation.
+    Callers must treat ``None`` as "route unavailable".
+    """
+    from lmdeploy import turbomind
+    if not turbomind.is_available():
+        return None, turbomind._import_error
+    from lmdeploy.turbomind.linear import Weight, get_linear
+    from lmdeploy.turbomind.weight_format import AWQFormat
+
+    return (get_linear, AWQFormat, Weight), None
 
 
 def blocked_route(topk_ids: torch.Tensor, num_experts: int):
@@ -81,6 +100,7 @@ class TurbomindMoeW4A16Impl(FusedMoETmW4A16Impl):
         ffn_dim: int,
         group_size: int,
         renormalize: bool = False,
+        output_dtype: torch.dtype | None = None,
     ):
         if top_k < 1 or num_experts < 1 or top_k > num_experts:
             raise ValueError(f'Expected 1 <= top_k <= num_experts, got {top_k} and {num_experts}')
@@ -90,6 +110,10 @@ class TurbomindMoeW4A16Impl(FusedMoETmW4A16Impl):
         self.ffn_dim = ffn_dim
         self.group_size = group_size
         self.renormalize = renormalize
+        # The activation dtype the route probed with. The scales' storage
+        # dtype is always fp16, so the weight plan must not read it to learn
+        # what input the family will see.
+        self._activation_dtype = output_dtype or torch.float16
         self._linear = None
         self._plan: dict = {}
         self._w_gate: Weight | None = None
@@ -111,6 +135,11 @@ class TurbomindMoeW4A16Impl(FusedMoETmW4A16Impl):
         """
         key = fusion_type or 'plain'
         if key not in self._plan:
+            (_, AWQFormat, _), err = _load_turbomind_channel()
+            if AWQFormat is None:
+                raise RuntimeError(
+                    'TurboMind grouped MoE channel is unavailable on this installation.'
+                ) from err
             self._plan[key] = linear.get_weight_plan(
                 weight_format=AWQFormat(block_in=self.group_size),
                 dtype=dtype,
@@ -176,8 +205,15 @@ class TurbomindMoeW4A16Impl(FusedMoETmW4A16Impl):
         gate_qzeros = gate_up_qzeros[..., :num_words]
         up_qzeros = gate_up_qzeros[..., num_words:]
 
+        loaded, err = _load_turbomind_channel()
+        if loaded is None:
+            raise RuntimeError(
+                'TurboMind grouped MoE channel is unavailable on this installation.'
+            ) from err
+        get_linear, _, _ = loaded
+
         linear = get_linear()
-        dtype = gate_up_scales.dtype
+        dtype = self._activation_dtype
         new_w13 = new_w_gate = new_w_up = new_w_down = None
         if self._fused_silu is None:
             # The probe is the pack itself: families without a fusion block
@@ -328,6 +364,7 @@ def turbomind_moe_support_reason(in_features: int, out_features: int, w_bit: int
         return 'TurboMind native modules are not built'
 
     from lmdeploy.turbomind.linear import get_linear
+    from lmdeploy.turbomind.weight_format import AWQFormat
 
     probe_dtype = torch.float16 if dtype is None else dtype
     try:
@@ -413,4 +450,5 @@ def _build_fused_moe_tm(spec: FusedMoETmW4A16BuildSpec) -> FusedMoETmW4A16Impl:
         ffn_dim=spec.ffn_dim,
         group_size=spec.group_size,
         renormalize=spec.renormalize,
+        output_dtype=spec.output_dtype,
     )
