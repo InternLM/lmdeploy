@@ -216,23 +216,29 @@ class ChatRunner:
                         streaming_tools = True
 
                     stopped_early = False
-                    if self.stop_sequences and delta_message.content:
-                        visible_text += delta_message.content
+                    if self.stop_sequences:
+                        if delta_message.content:
+                            visible_text += delta_message.content
                         match = _find_stop_match(visible_text, self.stop_sequences)
                         if match is not None:
                             stopped_early = True
                             stop_word = match[1]
                             keep = match[0] + (len(stop_word) if self.request.include_stop_str_in_output else 0)
-                        elif res.finish_reason is None:
+                        elif res.finish_reason is not None and delta_index == len(stream_deltas) - 1:
+                            # Engine is done: the held-back suffix can no longer
+                            # complete a stop word, release it. Must wait for the
+                            # last delta, an earlier one may still be followed by
+                            # the rest of a cross-delta match.
+                            keep = len(visible_text)
+                        else:
                             # A later delta can still complete a stop word from
                             # the held-back suffix; emitting that suffix now
                             # would leak the prefix of a cross-chunk match for
                             # good, since streamed text cannot be recalled.
                             keep = max(emitted, len(visible_text) - stop_holdback)
-                        else:
-                            keep = len(visible_text)
-                        delta_message.content = visible_text[:keep][emitted:]
-                        emitted = max(emitted, keep)
+                        if keep > emitted or delta_message.content:
+                            delta_message.content = visible_text[:keep][emitted:]
+                            emitted = max(emitted, keep)
 
                     is_last_delta = stopped_early or delta_index == len(stream_deltas) - 1
                     finish_reason = res.finish_reason if is_last_delta else None

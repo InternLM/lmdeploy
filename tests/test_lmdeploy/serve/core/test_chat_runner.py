@@ -489,9 +489,12 @@ def test_visible_stop_spanning_deltas_never_leaks_prefix(stream, include_stop):
 
 @pytest.mark.parametrize('stream', [False, True])
 def test_visible_stop_without_match_releases_held_back_suffix(stream):
+    # Real engines end with an empty result carrying the finish reason; the
+    # held-back suffix must be released there, not silently dropped.
     outputs = [
         _engine_output('hello wor'),
-        _engine_output('ld', finish_reason='stop'),
+        _engine_output('ld'),
+        _engine_output('', finish_reason='stop'),
     ]
     runner = _visible_stop_runner(outputs, 'END')
 
@@ -505,6 +508,52 @@ def test_visible_stop_without_match_releases_held_back_suffix(stream):
             text = result.text
         assert text == 'hello world'
         assert result.stop_sequence is None
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_visible_stop_shorter_than_holdback_releases_whole_answer(stream):
+    outputs = [
+        _engine_output('ok'),
+        _engine_output('', finish_reason='stop'),
+    ]
+    runner = _visible_stop_runner(outputs, '\n\nHuman:')
+
+    async def run():
+        if stream:
+            chunks = [chunk async for chunk in runner.stream()]
+            text = ''.join(chunk.delta_message.content or '' for chunk in chunks)
+        else:
+            text = (await runner.collect()).text
+        assert text == 'ok'
+
+    asyncio.run(run())
+
+
+def test_visible_stop_release_waits_for_last_delta_of_final_result():
+    # An earlier delta of the final engine result may still be followed by the
+    # rest of a cross-delta stop match; releasing there would leak the prefix.
+    class SplittingParser(_Parser):
+
+        def stream_chunk(self, delta_text, delta_token_ids, **kwargs):
+            if not delta_text:
+                return []
+            half = len(delta_text) // 2
+            return [(DeltaMessage(content=delta_text[:half]), False),
+                    (DeltaMessage(content=delta_text[half:]), False)]
+
+    engine = _FakeEngine([_engine_output('ab'), _engine_output('cd', finish_reason='stop')])
+    parser = SplittingParser(_request(stop='cd'))
+    runner = ChatRunner(parser.request, parser, None, engine.session_mgr.session,
+                        engine.generate(None), engine.session_mgr)
+    runner.stop_sequences = ['cd']
+
+    async def run():
+        chunks = [chunk async for chunk in runner.stream()]
+        text = ''.join(chunk.delta_message.content or '' for chunk in chunks)
+        assert text == 'ab'
+        assert chunks[-1].stop_sequence == 'cd'
 
     asyncio.run(run())
 
