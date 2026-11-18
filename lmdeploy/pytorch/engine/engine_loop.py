@@ -897,6 +897,9 @@ class EngineLoop:
 
             migration_ready = self.scheduler.schedule_migration()
             if not migration_ready and not self.scheduler.has_migration_waiting():
+                # Receive completion also signals this event. Consume that
+                # notification before waiting, otherwise an idle loop spins.
+                self.migration_event.clear()
                 await self.migration_event.wait()
             elif migration_ready:
                 self.migration_event.clear()

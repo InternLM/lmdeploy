@@ -136,3 +136,33 @@ def test_prefill_abort_before_submission_returns_reason_without_native_io():
         assert not owner.has_pending() and not prefill.pd_coordinator.has_pending()
 
     asyncio.run(run())
+
+
+def test_receive_completion_wakes_idle_migration_loop_without_spinning():
+    async def run():
+        loop = object.__new__(EngineLoop)
+        loop.stop_event = asyncio.Event()
+        loop.migration_event = asyncio.Event()
+        loop._sleep_requested = False
+        polls = []
+
+        def schedule():
+            polls.append(None)
+            # Bound the regression itself: a busy loop cannot service asyncio timeouts.
+            if len(polls) == 4:
+                loop.stop_event.set()
+            return []
+
+        loop.scheduler = SimpleNamespace(schedule_migration=schedule, has_migration_waiting=lambda: False)
+        loop.migration_event.set()
+        task = asyncio.create_task(loop.migration_loop())
+        await asyncio.sleep(0)
+        assert len(polls) == 1 and not task.done()
+        loop.migration_event.set()
+        await asyncio.sleep(0)
+        assert len(polls) == 2 and not task.done()
+        loop.stop_event.set()
+        loop.migration_event.set()
+        await task
+
+    asyncio.run(run())
