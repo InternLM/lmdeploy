@@ -1,6 +1,8 @@
-# Copyright (c) OpenMMLab. All rights reserved.
+# Copyright (c) Shanghai AI Laboratory. All rights reserved.
 import contextlib
 import os
+
+from lmdeploy.utils import get_logger
 
 
 def env_to_bool(
@@ -109,6 +111,145 @@ def set_envs():
         os.getenv = _origin_get_env
 
 
+# ---------------------------------------------------------------------------
+# Unified TurboMind kernel switch
+#
+#   LMDEPLOY_TM_KERNELS = off | auto | all | <class>=<state>[,...]
+#
+# One variable carries every grafted kernel class. A global token sets all
+# classes; a class entry overrides the global value for that class. States:
+# auto probes the capability and falls back, on forces the route and fails
+# loudly, off keeps the native implementation. When the big env leaves a
+# class open, the class legacy env decides (backward compat); a conflict
+# warns once and the big env wins.
+# ---------------------------------------------------------------------------
+_TM_KERNEL_CLASS_LEGACY_ENVS = {
+    'w4a16': 'LMDEPLOY_W4A16_GEMM_BACKEND',
+    'moe_grouped': 'LMDEPLOY_W4A16_GEMM_BACKEND',
+    'gdn': 'LMDEPLOY_GDN_BACKEND',
+    'attn_int8_kv': 'LMDEPLOY_TM_ATTN_INT8_KV',
+}
+_TM_KERNEL_CLASSES = tuple(_TM_KERNEL_CLASS_LEGACY_ENVS)
+_TM_KERNEL_STATES = ('auto', 'on', 'off')
+# Global tokens and the per-class state each one means.
+_TM_GLOBAL_TOKENS = {'off': 'off', 'auto': 'auto', 'all': 'on'}
+# Legacy provider names of LMDEPLOY_W4A16_GEMM_BACKEND map onto the same
+# states; any other value kept the native route historically and maps to off.
+_TM_LEGACY_PROVIDER_STATES = {'auto': 'auto', 'turbomind': 'on'}
+# Resolved state -> legacy provider name. Readers that still consume the
+# provider attribute (nn/linear gating, tm_gemm_modules) follow the unified
+# decision through this mapping without code changes.
+_TM_STATE_PROVIDERS = {'auto': 'auto', 'on': 'turbomind', 'off': 'triton'}
+
+logger = get_logger('lmdeploy')
+
+# One warning per (class, big-env state, legacy value) conflict.
+_tm_kernel_conflict_warned = set()
+
+
+def _tm_legacy_env_state(legacy_env, raw):
+    """Map one raw legacy env value onto the three states."""
+    if legacy_env == 'LMDEPLOY_W4A16_GEMM_BACKEND':
+        return _TM_LEGACY_PROVIDER_STATES.get(raw.strip().lower(), 'off')
+    state = raw.strip().lower()
+    return state if state in _TM_KERNEL_STATES else 'auto'
+
+
+def parse_tm_kernels(env_value=None):
+    """Parse LMDEPLOY_TM_KERNELS into per-class explicit states.
+
+    Returns one entry per known class: the state the big env sets for it
+    (global token filled in, class entry overrides), or None when the
+    class stays open for its legacy env. Parsing: ';' separates entries
+    too, class names match
+    exactly, the first entry that names a class decides it, unknown
+    classes stay silent for forward compatibility, and an invalid state
+    for a known class warns and defers that class to the global token (or
+    the legacy env when no global token is set).
+    """
+    if env_value is None:
+        env_value = os.getenv('LMDEPLOY_TM_KERNELS', '')
+    global_state = None
+    explicit = dict.fromkeys(_TM_KERNEL_CLASSES)
+    decided = set()
+    for item in env_value.replace(';', ',').split(','):
+        item = item.strip()
+        if not item:
+            continue
+        name, sep, state = item.partition('=')
+        if not sep:
+            token = item.lower()
+            if token not in _TM_GLOBAL_TOKENS:
+                logger.warning('Ignoring invalid LMDEPLOY_TM_KERNELS value %s', item)
+                continue
+            if global_state is None:
+                global_state = _TM_GLOBAL_TOKENS[token]
+            continue
+        name = name.strip()
+        if name not in explicit or name in decided:
+            continue
+        state = state.strip().lower()
+        if state not in _TM_KERNEL_STATES:
+            logger.warning('Ignoring invalid LMDEPLOY_TM_KERNELS entry %s=%s', name, state)
+            decided.add(name)
+            continue
+        explicit[name] = state
+        decided.add(name)
+    if global_state is not None:
+        for name, state in explicit.items():
+            if state is None:
+                explicit[name] = global_state
+    return explicit
+
+
+def _tm_kernel_legacy_state(cls):
+    """State the legacy env of a class asks for.
+
+    w4a16 and moe_grouped share LMDEPLOY_W4A16_GEMM_BACKEND. The lookup goes through the module attribute, the value the
+    consumers and the routing tests read; at import it equals the legacy env. attn_int8_kv keeps
+    LMDEPLOY_TM_ATTN_INT8_KV. Classes without a legacy env default to auto.
+    """
+    legacy_env = _TM_KERNEL_CLASS_LEGACY_ENVS[cls]
+    if legacy_env is None:
+        return 'auto'
+    if legacy_env == 'LMDEPLOY_W4A16_GEMM_BACKEND':
+        return _tm_legacy_env_state(legacy_env, w4a16_gemm_backend)
+    return _tm_legacy_env_state(legacy_env, os.getenv(legacy_env, 'auto'))
+
+
+def _warn_tm_kernel_conflict(cls, state, legacy_env, legacy_raw):
+    """Warn once when the big env and the legacy env disagree on a class."""
+    key = (cls, state, legacy_raw.strip())
+    if key in _tm_kernel_conflict_warned:
+        return
+    _tm_kernel_conflict_warned.add(key)
+    logger.warning('LMDEPLOY_TM_KERNELS sets %s=%s; legacy %s=%s is overridden.',
+                   cls, state, legacy_env, legacy_raw)
+
+
+def tm_kernel_state(cls):
+    """Return the resolved state of one kernel class: auto, on, or off.
+
+    Priority: the LMDEPLOY_TM_KERNELS class entry, the global big-env
+    token, the class legacy env, then auto. An explicit big-env state
+    that disagrees with an explicitly set legacy env warns once; the big
+    env wins.
+    """
+    if cls not in _TM_KERNEL_CLASS_LEGACY_ENVS:
+        raise ValueError(f'Unknown TM kernel class {cls!r}. '
+                         f'Known classes: {list(_TM_KERNEL_CLASS_LEGACY_ENVS)}')
+    state = parse_tm_kernels()[cls]
+    if state is None:
+        return _tm_kernel_legacy_state(cls)
+    legacy_env = _TM_KERNEL_CLASS_LEGACY_ENVS[cls]
+    legacy_raw = os.getenv(legacy_env) if legacy_env is not None else None
+    if legacy_raw is not None:
+        legacy_state = _tm_legacy_env_state(legacy_env, legacy_raw)
+        if legacy_state != state:
+            _warn_tm_kernel_conflict(cls, state, legacy_env, legacy_raw.strip())
+    return state
+
+
 with set_envs():
     # loader
     random_load_weight = env_to_bool('LMDEPLOY_RANDOM_LOAD_WEIGHT', True)
@@ -183,9 +324,19 @@ with set_envs():
     blocked_fp8_gemm_backend = env_to_choice('LMDEPLOY_BLOCKED_FP8_GEMM_BACKEND', 'auto',
                                              {'auto', 'deepgemm', 'gluon', 'triton'})
 
-    # W4A16 GEMM
+    # W4A16 GEMM: the legacy env stays the base value; LMDEPLOY_TM_KERNELS
+    # overrides the w4a16 class when it names it or sets a global state.
+    # The first assignment is the provisional legacy value that the
+    # resolution reads back; the second maps the resolved state onto the
+    # provider names, so readers of the attribute (nn/linear gating,
+    # tm_gemm_modules) follow the unified decision without code changes.
     w4a16_gemm_backend = env_to_choice('LMDEPLOY_W4A16_GEMM_BACKEND', 'auto',
                                        {'auto', 'triton', 'turbomind'})
+    w4a16_gemm_backend = _TM_STATE_PROVIDERS[tm_kernel_state('w4a16')]
+
+    # gated delta rule decode: class 'gdn' of the unified LMDEPLOY_TM_KERNELS
+    # matrix, legacy env LMDEPLOY_GDN_BACKEND, default auto.
+    gdn_backend = tm_kernel_state('gdn')
 
     # model agent
     skip_warmup = env_to_bool('LMDEPLOY_SKIP_WARMUP', False)
