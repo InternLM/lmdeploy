@@ -124,10 +124,9 @@ class DPForwardInputsMaker:
     async def _gather_input_state(self, has_inputs: bool, is_sleeping: bool):
         """Agree on real work and sleep before leaving the attention-TP phase.
 
-        Sleep RPCs reach TP workers independently. Even a sleeping rank must
-        enter this collective, or its peer can wait here while it enters the
-        world-wide DP metadata collective. A local sleep transition makes the
-        whole attention-TP group use dummy inputs until DP sleep rendezvous.
+        Sleep RPCs reach TP workers independently. Even a sleeping rank must enter this collective, or its peer can wait
+        here while it enters the world-wide DP metadata collective. A local sleep transition makes the whole attention-
+        TP group use dummy inputs until DP sleep rendezvous.
         """
         attn_tp_group = self.dist_ctx.attn_tp_group
         attn_tp = self.dist_ctx.dist_config.attn_tp
