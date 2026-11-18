@@ -204,3 +204,44 @@ class TestApplyRotaryComplex:
 
         assert torch.equal(q_embed, q_gt)
         assert torch.equal(k_embed, k_gt)
+
+    @pytest.mark.parametrize('inplace', [False, True])
+    @pytest.mark.parametrize('complex_mode', [False, True])
+    def test_apply_rotary_partial_rotation(self, inplace, complex_mode):
+        from lmdeploy.pytorch.kernels.cuda import apply_rotary_pos_emb
+
+        S, H, D, R = 4, 2, 64, 32
+        q = torch.randn(S, H, D, dtype=torch.float16, device='cuda')
+        k = torch.randn(S, 1, D, dtype=torch.float16, device='cuda')
+        cos_dim = R // 2 if complex_mode else R
+        cos = torch.randn(S, cos_dim, dtype=torch.float16, device='cuda')
+        sin = torch.randn(S, cos_dim, dtype=torch.float16, device='cuda')
+
+        q_rot = q[..., :R]
+        k_rot = k[..., :R]
+        if complex_mode:
+            cos_full = cos.repeat_interleave(2, dim=-1).unsqueeze(-2)
+            sin_full = sin.repeat_interleave(2, dim=-1).unsqueeze(-2)
+            q_rot_embed = q_rot * cos_full + _rotate_complex(q_rot) * sin_full
+            k_rot_embed = k_rot * cos_full + _rotate_complex(k_rot) * sin_full
+        else:
+            cos_full = cos.unsqueeze(-2)
+            sin_full = sin.unsqueeze(-2)
+            q_rot_embed = q_rot * cos_full + _rotate_half(q_rot) * sin_full
+            k_rot_embed = k_rot * cos_full + _rotate_half(k_rot) * sin_full
+
+        q_gt = torch.cat([q_rot_embed, q[..., R:]], dim=-1)
+        k_gt = torch.cat([k_rot_embed, k[..., R:]], dim=-1)
+
+        if inplace:
+            q_in, k_in = q.clone(), k.clone()
+            qo, ko = apply_rotary_pos_emb(q_in, k_in, cos, sin, q_in, k_in, complex_mode=complex_mode)
+        else:
+            qo_buf = torch.full_like(q, float('nan'))
+            ko_buf = torch.full_like(k, float('nan'))
+            qo, ko = apply_rotary_pos_emb(q, k, cos, sin, qo_buf, ko_buf, complex_mode=complex_mode)
+
+        torch.testing.assert_close(qo, q_gt)
+        torch.testing.assert_close(ko, k_gt)
+        assert torch.equal(qo[..., R:], q[..., R:])
+        assert torch.equal(ko[..., R:], k[..., R:])

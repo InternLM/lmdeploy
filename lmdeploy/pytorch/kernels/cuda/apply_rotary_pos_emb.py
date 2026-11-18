@@ -231,4 +231,11 @@ def apply_rotary_pos_emb(q: Tensor,
                                          num_warps=num_warps,
                                          num_stages=num_stages)
 
+    rotary_dim = half_size * 2
+    if q.size(-1) > rotary_dim:
+        if q_embed.data_ptr() != q.data_ptr():
+            q_embed[..., rotary_dim:].copy_(q[..., rotary_dim:])
+        if k_embed.data_ptr() != k.data_ptr():
+            k_embed[..., rotary_dim:].copy_(k[..., rotary_dim:])
+
     return q_embed, k_embed
