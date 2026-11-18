@@ -257,7 +257,10 @@ class TestTinyCtGoldenGate:
             graph_ids = [list(r.token_ids) for r in pipe(prompts, gen_config=gen_config, do_preprocess=False)]
         finally:
             pipe.close()
-        engine_config.cudagraph_capture_batch_sizes = None
+        # Clearing capture batch sizes only restores default capture sizes —
+        # the graph runner stays active. eager_mode actually disables capture,
+        # so the reference below executes eagerly.
+        engine_config.eager_mode = True
         pipe = pipeline(tiny_dir, backend_config=engine_config, log_level='WARNING')
         try:
             eager_ids = [list(r.token_ids) for r in pipe(prompts, gen_config=gen_config, do_preprocess=False)]

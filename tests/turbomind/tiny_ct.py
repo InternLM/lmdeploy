@@ -237,6 +237,9 @@ def gen_tiny_ct_hf(out_dir: str, tokenizer_src: str, seed: int = 9, num_layers: 
             f'{name}.weight_packed': packed,
             f'{name}.weight_scale': scale,
             f'{name}.weight_zero_point': zero,
+            # Real llm-compressor exports carry per-linear geometry metadata;
+            # the load path must consume it, not forward it.
+            f'{name}.weight_shape': torch.tensor([k, n], dtype=torch.int64),
         }
 
     tensors: dict[str, torch.Tensor] = {
