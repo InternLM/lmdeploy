@@ -6,6 +6,7 @@ import asyncio
 import os
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
+from threading import Event
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -58,6 +59,7 @@ class ServerContext:
     def __init__(self):
         self.async_engine: AsyncEngine | None = None
         self.health_monitor: EngineHealthMonitor | None = None
+        self.draining = Event()
         self.proxy_url: str | None = None
         self.api_server_url: str | None = None
         self.allow_terminate_by_client = False
@@ -99,6 +101,19 @@ class ServerContext:
         if session_id is None:
             return None
         return session_mgr.get(session_id, create_if_not_exists=False)
+
+
+class APIServer(uvicorn.Server):
+    """Publish frontend shutdown before Uvicorn stops accepting connections."""
+
+    def __init__(self, config: uvicorn.Config, draining: Event):
+        super().__init__(config)
+        self.draining = draining
+
+    async def shutdown(self, sockets=None):
+        self.draining.set()
+        await super().shutdown(sockets=sockets)
+
 
 def handle_torchrun():
     """To disable mmengine logging logic when using torchrun."""
@@ -196,11 +211,12 @@ def set_parsers(context: ServerContext,
 
 
 def create_lifespan_handler(backend_config: PytorchEngineConfig
-                            | TurbomindEngineConfig,
+                            | TurbomindEngineConfig | None,
                             async_engine: AsyncEngine,
                             context: ServerContext,
                             monitoring_config: dict | None = None):
     """Factory function to create a lifespan handler."""
+    enable_metrics = backend_config is not None and backend_config.enable_metrics
 
     @asynccontextmanager
     async def lifespan_handler(app: FastAPI):
@@ -209,9 +225,7 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig
         context.health_monitor = health_monitor
         try:
             async_engine.start_loop(asyncio.get_running_loop(), use_async_api=True)
-            register_to_proxy(context)
-            health_monitor.start()
-            if getattr(backend_config, 'enable_metrics', False):
+            if enable_metrics:
                 metrics_processor.start_metrics_handler(enable_metrics=True)
                 log_interval = 10.
 
@@ -233,8 +247,11 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig
                 if monitoring_config is not None:
                     await stack.enter_async_context(monitoring_server(
                         health_monitor,
-                        enable_metrics=getattr(backend_config, 'enable_metrics', False),
+                        draining=context.draining,
+                        enable_metrics=enable_metrics,
                         **monitoring_config))
+                health_monitor.start()
+                register_to_proxy(context)
                 yield
         finally:
             await health_monitor.stop()
@@ -454,7 +471,7 @@ def serve(model_path: str,
     app.include_router(create_responses_router(server_context))
     app.add_exception_handler(RequestValidationError,
                               validation_exception_handler)
-    mount_metrics(app, getattr(backend_config, 'enable_metrics', False))
+    mount_metrics(app, backend_config is not None and backend_config.enable_metrics)
 
     if allow_origins:
         app.add_middleware(
@@ -491,14 +508,22 @@ def serve(model_path: str,
             f'HINT:    Please open \033[93m\033[1m{http_or_https}://'
             f'{server_name}:{server_port}\033[0m in a browser for detailed api'
             ' usage!!!')
-    uvicorn.run(app=app,
-                host=server_name,
-                port=server_port,
-                log_level=os.getenv('UVICORN_LOG_LEVEL', 'info').lower(),
-                ssl_keyfile=ssl_keyfile,
-                ssl_certfile=ssl_certfile,
-                timeout_keep_alive=int(
-                    os.environ.get('UVICORN_TIMEOUT_KEEP_ALIVE', 5)))
+    config = uvicorn.Config(app=app,
+                            host=server_name,
+                            port=server_port,
+                            log_level=os.getenv('UVICORN_LOG_LEVEL', 'info').lower(),
+                            ssl_keyfile=ssl_keyfile,
+                            ssl_certfile=ssl_certfile,
+                            timeout_keep_alive=int(
+                                os.environ.get('UVICORN_TIMEOUT_KEEP_ALIVE', 5)))
+    server = APIServer(config, draining=server_context.draining)
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        pass
+    # Preserve uvicorn.run's non-zero exit status on failed startup.
+    if not server.started:
+        raise SystemExit(3)
 
 
 if __name__ == '__main__':

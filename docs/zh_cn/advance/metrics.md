@@ -68,6 +68,8 @@ DP 数量分配。请预留与 API 端口不重叠的监控端口；监控端口
 响应中的 `snapshot_age_seconds` 表示距最近一次快照更新经过的秒数，
 首次探测完成前为 `null`。健康和休眠快照超过 `LMDEPLOY_HEALTH_UNHEALTHY_AFTER`
 （默认 90 秒）后返回 HTTP 503，直到后台探测刷新，避免 API 事件循环停止推进时一直报告健康。
+API 监听器开始停止接收新请求时，监控端口的 `/health` 立即返回 HTTP 503，
+即使后台快照仍然健康。
 监控线程仍共享进程的 Python GIL，因此无法隔离长时间持有 GIL 的代码；
 该选项也不会加速推理或 abort 请求。
 

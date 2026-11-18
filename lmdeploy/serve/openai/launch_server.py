@@ -15,24 +15,24 @@ from .api_server import serve
 logger = get_logger('lmdeploy')
 
 
-def is_port_available(port: int) -> bool:
+def is_port_available(port: int, host: str) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(('127.0.0.1', port))
+            s.bind((host, port))
             return True
-        except Exception:
+        except OSError:
             return False
 
 
-def find_available_ports(num: int, excluded_ports: set[int] | None = None) -> list[int]:
+def find_available_ports(num: int, host: str, excluded_ports: set[int] | None = None) -> list[int]:
     """Find available port."""
 
     ports = []
     test_port = 3000
     while len(ports) < num:
         test_port += random.randint(10, 500)
-        if test_port not in (excluded_ports or ()) and is_port_available(test_port):
+        if test_port not in (excluded_ports or ()) and is_port_available(test_port, host):
             ports.append(test_port)
 
     return ports
@@ -149,19 +149,19 @@ def launch_server(num_nodes: int,
         monitoring_ports = set(range(monitoring_port, monitoring_port + dp_per_node))
 
     if proxy_url is not None and server_port is None:
-        server_port_li = find_available_ports(dp_per_node, excluded_ports=monitoring_ports)
+        server_port_li = find_available_ports(dp_per_node, server_name, excluded_ports=monitoring_ports)
     else:
         base_port = server_port if server_port is not None else 23333
         _validate_server_port_range(base_port, dp_per_node)
         server_port_li = [base_port + i for i in range(dp_per_node)]
         for port in server_port_li:
-            if not is_port_available(port):
+            if not is_port_available(port, server_name):
                 raise ValueError(f'Port {port} is not available')
 
     for port in sorted(monitoring_ports):
         if port in server_port_li:
             raise ValueError(f'Monitoring port {port} overlaps an API server port')
-        if not is_port_available(port):
+        if not is_port_available(port, server_name):
             raise ValueError(f'Monitoring port {port} is not available')
 
     for idx in range(dp_per_node):

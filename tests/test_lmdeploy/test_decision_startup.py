@@ -55,7 +55,8 @@ def server_startup(monkeypatch):
     monkeypatch.setattr(api_server, 'get_task', Mock(return_value=('llm', build)))
     monkeypatch.setattr(api_server, 'set_parsers', lambda *args: None)
     monkeypatch.setattr(api_server, 'create_lifespan_handler', lambda *args, **kwargs: None)
-    monkeypatch.setattr(api_server.uvicorn, 'run', run)
+    monkeypatch.setattr(api_server, 'APIServer', lambda config, draining: SimpleNamespace(
+        started=True, run=lambda: run(app=config.app)))
     return api_server, build, run
 
 

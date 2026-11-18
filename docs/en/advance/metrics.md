@@ -77,6 +77,8 @@ loop. It includes `snapshot_age_seconds`, the time since the last snapshot updat
 (`null` before the first completed probe). Healthy and sleeping snapshots
 expire after `LMDEPLOY_HEALTH_UNHEALTHY_AFTER` (default 90 seconds), returning HTTP
 503 until refreshed. This also covers an API loop that stops making progress.
+When the API listener starts draining, monitoring `/health` immediately returns
+HTTP 503, even if the backend snapshot is still healthy.
 The listener shares the process's Python GIL: it isolates event-loop stalls, not
 code that holds the GIL indefinitely, and does not speed up inference or abort
 requests.
