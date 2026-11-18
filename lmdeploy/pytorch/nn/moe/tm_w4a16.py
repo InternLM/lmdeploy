@@ -234,6 +234,10 @@ class FusedMoETmW4A16(FusedMoEBase):
             # Keep the torch copies resident (mirrors the dense route's MLA
             # exemption).
             return
+        self._spill_torch_weights()
+
+    def _spill_torch_weights(self):
+        """Copy the torch expert weights to CPU and free their GPU storages."""
         if self._spill is None:
             self._spill = TorchWeightSpill()
         # Bias is not supported on routed experts, so nothing stays on the
@@ -246,6 +250,46 @@ class FusedMoETmW4A16(FusedMoEBase):
             'down.scales': self.down.scales,
             'down.qzeros': self.down.qzeros,
         })
+
+    def sleep_release(self):
+        """Free the packed expert handles ahead of ``Module.to``.
+
+        The packed weights are not registered tensors, so the model move cannot free them. Modules with spilled torch
+        weights keep their CPU copies authoritative.
+        """
+        self.impl.sleep_release()
+        if self.gate_up.qweight.numel() == 0:
+            # Already spilled; the CPU copies stay authoritative.
+            return
+        if not self.release_torch_weights:
+            return
+        self._spill_torch_weights()
+
+    def sleep_wakeup(self):
+        """Restore spilled torch weights, re-pack, and re-spill.
+
+        The re-spill keeps the steady state after a sleep/wakeup cycle
+        identical to after a hot update: empty GPU storages, authoritative
+        CPU copies, and only the packed handles resident.
+        """
+        if self._spill is not None:
+            self._spill.restore()
+        if self.gate_up.qweight.numel() == 0:
+            raise RuntimeError('TurboMind W4A16 MoE weights are still spilled after wakeup; '
+                               'the module was never loaded.')
+        self.gate_up.validate_complete()
+        self.down.validate_complete()
+        self.impl.update_weights(
+            self.gate_up.qweight.data,
+            self.gate_up.scales.data,
+            self.gate_up.qzeros.data,
+            self.down.qweight.data,
+            self.down.scales.data,
+            self.down.qzeros.data,
+        )
+        if not self.release_torch_weights:
+            return
+        self._spill_torch_weights()
 
     def dispatch(self, state: dict):
         """Gather eager default-TP inputs."""

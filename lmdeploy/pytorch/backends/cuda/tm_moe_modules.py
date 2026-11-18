@@ -96,6 +96,9 @@ class TurbomindMoeW4A16Impl(FusedMoETmW4A16Impl):
         self._w_up: Weight | None = None
         self._w_down: Weight | None = None
         self._w13: Weight | None = None
+        # False until the first pack published. Hot updates must not publish
+        # while a concurrent forward may run on any engine stream.
+        self._published = False
         # None means the fusion probe has not run yet. False is sticky: the
         # SM86 u4 families have no gated-silu block, and re-probing on every
         # hot update would waste a failed pack.
@@ -137,9 +140,19 @@ class TurbomindMoeW4A16Impl(FusedMoETmW4A16Impl):
 
     def __del__(self):
         try:
-            if self._w_gate is None and self._w_up is None and self._w_down is None and self._w13 is None:
+            linear = self._linear
+            handles = (self._w_gate, self._w_up, self._w_down, self._w13)
+            if linear is None and all(weight is None for weight in handles):
                 return
-            self._release()
+            if linear is not None:
+                # GC may run with another thread-local current device; close
+                # on the device that owns the packed weights. A pack that
+                # failed mid-way leaves handles behind with no linear yet —
+                # still release them on the current device.
+                with torch.cuda.device(linear.device):
+                    self._release()
+            else:
+                self._release()
         except Exception:
             pass
 
@@ -165,12 +178,13 @@ class TurbomindMoeW4A16Impl(FusedMoETmW4A16Impl):
 
         linear = get_linear()
         dtype = gate_up_scales.dtype
+        new_w13 = new_w_gate = new_w_up = new_w_down = None
         if self._fused_silu is None:
             # The probe is the pack itself: families without a fusion block
             # (SM86 u4) reject inside fuse_weight, and the fallback packing
             # below keeps the layer on the separate w1/w3 path.
             try:
-                self._w13 = linear.fuse_weight(
+                new_w13 = linear.fuse_weight(
                     (self._expert_views(gate_qweight), self._expert_views(up_qweight)),
                     plan=self._weight_plan(linear, 'silu', dtype),
                     scales=(self._expert_views(gate_scales), self._expert_views(up_scales)),
@@ -183,37 +197,58 @@ class TurbomindMoeW4A16Impl(FusedMoETmW4A16Impl):
                 self._fused_silu = False
 
         if self._fused_silu:
-            if self._w13 is None:
-                self._w13 = linear.fuse_weight(
+            if new_w13 is None:
+                new_w13 = linear.fuse_weight(
                     (self._expert_views(gate_qweight), self._expert_views(up_qweight)),
                     plan=self._weight_plan(linear, 'silu', dtype),
                     scales=(self._expert_views(gate_scales), self._expert_views(up_scales)),
                     zeros=(self._expert_views(gate_qzeros), self._expert_views(up_qzeros)),
                 )
-            self._w_gate = self._w_up = None
         else:
             plan = self._weight_plan(linear, None, dtype)
-            self._w_gate = linear.prepare_weight(
+            new_w_gate = linear.prepare_weight(
                 self._expert_views(gate_qweight),
                 plan=plan,
                 scales=self._expert_views(gate_scales),
                 zeros=self._expert_views(gate_qzeros),
             )
-            self._w_up = linear.prepare_weight(
+            new_w_up = linear.prepare_weight(
                 self._expert_views(up_qweight),
                 plan=plan,
                 scales=self._expert_views(up_scales),
                 zeros=self._expert_views(up_qzeros),
             )
-            self._w13 = None
-        self._w_down = linear.prepare_weight(
+        new_w_down = linear.prepare_weight(
             self._expert_views(down_qweight),
             plan=self._weight_plan(linear, None, dtype),
             scales=self._expert_views(down_scales),
             zeros=self._expert_views(down_qzeros),
         )
 
+        if self._published:
+            # Hot update: a concurrent forward may execute on any engine
+            # stream. Forward reads the handle fields directly, so none of
+            # them may point at in-flight packing — publish everything only
+            # after the packing work completes.
+            torch.cuda.current_stream().synchronize()
+        else:
+            self._published = True
+
+        self._w13 = new_w13
+        self._w_gate = new_w_gate
+        self._w_up = new_w_up
+        self._w_down = new_w_down
         self._linear = linear
+
+    def sleep_release(self):
+        """Free the packed expert handles so sleep actually releases GPU
+        memory.
+
+        ``ModelAgent.sleep`` moves registered torch Parameters to CPU/meta,
+        but the packed expert weights are not registered tensors and would
+        otherwise stay allocated.
+        """
+        self._release()
 
     def forward(
         self,
