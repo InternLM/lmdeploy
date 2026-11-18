@@ -1,4 +1,4 @@
-# Copyright (c) OpenMMLab. All rights reserved.
+# Copyright (c) Shanghai AI Laboratory. All rights reserved.
 from contextlib import nullcontext
 from typing import Any
 
@@ -40,20 +40,15 @@ class AwqLinear(LinearBase):
             in_features, out_features = self._get_io_features(in_features, out_features, w_bit, group_size, colwise)
         qweight, scales, qzeros, bias = self.create_weights(in_features, out_features, w_bit, group_size, bias,
                                                             self.dtype, self.device)
-        # Provider checks must inspect the device that owns these weights.
-        device_guard = torch.cuda.device(scales.device) if scales.is_cuda else nullcontext()
-        with device_guard:
-            self.impl = get_backend().build_op(
-                LinearW4A16BuildSpec(
-                    in_features=in_features,
-                    out_features=out_features,
-                    w_bit=w_bit,
-                    group_size=group_size,
-                    bias=bias is not None,
-                    output_dtype=scales.dtype,
-                ),
-                enable_deterministic=get_build_model_context().enable_deterministic,
-            )
+        self.impl = self._build_impl(
+            in_features=in_features,
+            out_features=out_features,
+            w_bit=w_bit,
+            group_size=group_size,
+            bias=bias is not None,
+            output_dtype=scales.dtype,
+            device=scales.device,
+        )
         self.register_all_parameters(qweight, scales, qzeros, bias)
 
         self.in_features = in_features
@@ -61,6 +56,28 @@ class AwqLinear(LinearBase):
         self.w_bit = w_bit
         self.group_size = group_size
         self.elem_per_int = 32 // w_bit
+
+    def _build_impl(self, in_features: int, out_features: int, w_bit: int, group_size: int, bias: bool,
+                    output_dtype: torch.dtype, device: torch.device):
+        """Build the backend operator that serves this linear.
+
+        Subclasses override this to swap the implementation while keeping the weight layout, loaders, and forward
+        plumbing of the AWQ shape family.
+        """
+        # Provider checks must inspect the device that owns these weights.
+        device_guard = torch.cuda.device(device) if device.type == 'cuda' else nullcontext()
+        with device_guard:
+            return get_backend().build_op(
+                LinearW4A16BuildSpec(
+                    in_features=in_features,
+                    out_features=out_features,
+                    w_bit=w_bit,
+                    group_size=group_size,
+                    bias=bias,
+                    output_dtype=output_dtype,
+                ),
+                enable_deterministic=get_build_model_context().enable_deterministic,
+            )
 
     def setup_loaders(self):
         """Setup weight loaders."""
