@@ -48,6 +48,15 @@ class FusedMoETmW4A16Impl(ABC):
         """Run the routed experts and return the combined token outputs."""
         raise NotImplementedError
 
+    def sleep_release(self):
+        """Free packed native handles before ``ModelAgent.sleep`` moves the
+        model.
+
+        Backends whose packed weights are torch tensors need no work — the
+        registered parameters already travel with ``Module.to``. Native
+        packed-weight backends override this to close their handles.
+        """
+
 
 @dataclass(frozen=True)
 class FusedMoETmW4A16BuildSpec(BuildSpec[FusedMoETmW4A16Impl]):
