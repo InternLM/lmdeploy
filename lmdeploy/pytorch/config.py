@@ -110,13 +110,27 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'a
     """
     quantization_config = getattr(config.hf_config, 'quantization_config', dict())
     quant_method = quantization_config.get('quant_method', None)
-    if quant_method in ('awq', 'compressed-tensors'):
+    if quant_method == 'awq':
         # The W4A16 linear modules are fp16. A bf16 model dtype would make
         # the residual stream dtype-mismatch the quantized linears.
-        logger.debug(f'set torch_dtype to float16 for {quant_method}.')
+        logger.debug('set torch_dtype to float16 for awq.')
         config.hf_config.torch_dtype = 'float16'
         config.dtype = torch.float16
         return config
+    if quant_method == 'compressed-tensors':
+        # Guard the shape: this runs before _parse_compressed_tensors_config
+        # gets its clean ValueError, so a truthy non-Mapping must not turn
+        # into an AttributeError here.
+        config_groups = quantization_config.get('config_groups')
+        ct_weights = config_groups.get('group_0', {}).get('weights') if isinstance(config_groups, Mapping) else None
+        if isinstance(ct_weights, Mapping) and ct_weights.get('group_size') == 128:
+            # Group-128 dense linears normalize into the fp16 AWQ family at
+            # load time. Group-32 checkpoints keep their dtype: the packed
+            # ct MoE path supports bf16 activations (DeepEP requires them).
+            logger.debug('set torch_dtype to float16 for compressed-tensors group-128.')
+            config.hf_config.torch_dtype = 'float16'
+            config.dtype = torch.float16
+            return config
 
     torch_dtype = getattr(config.hf_config, 'dtype', None)
     if torch_dtype is None and hasattr(config.hf_config, 'text_config'):
