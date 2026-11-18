@@ -34,11 +34,25 @@ Example::
 
 from __future__ import annotations
 
+import json
 import os
 
 import torch
 
 from .ct_repack import AWQ_NIBBLE_ORDER, AWQ_SYMMETRIC_QZEROS_WORD, unpack_u4_lsb
+
+
+def _is_sequential_g_idx(tensor: torch.Tensor) -> bool:
+    """Whether a ``g_idx`` buffer maps groups in identity order.
+
+    AutoGPTQ registers ``arange(K) // group_size`` even without act-order,
+    so a non-decreasing run of consecutive group indices starting at zero is
+    the identity mapping. Anything else is real act-order reordering.
+    """
+    if tensor.numel() == 0 or tensor.ndim != 1:
+        return False
+    flat = tensor.flatten().long().cpu()
+    return bool((flat[0] == 0).all()) and bool(((flat[1:] - flat[:-1]) == 1).all())
 
 GROUP_SIZE = 128
 WEIGHT_DTYPE = torch.float16
@@ -160,7 +174,10 @@ def gptq_to_awq(qweight: torch.Tensor,
     codes_t = codes.t().contiguous()
     del codes
     view = codes_t.view(k, n // 8, 8)
-    awq_qweight = torch.zeros(k, n // 8, dtype=torch.int32)
+    # Hot-update IPC tensors arrive on the device; allocating here would mix
+    # CPU and CUDA operands in the first in-place OR.
+    device = qweight.device
+    awq_qweight = torch.zeros(k, n // 8, dtype=torch.int32, device=device)
     for seq_j in range(8):
         # Sequential GPTQ channel seq_j lands at nibble position
         # AWQ_NIBBLE_ORDER[seq_j].
@@ -168,7 +185,7 @@ def gptq_to_awq(qweight: torch.Tensor,
         awq_qweight |= view[..., seq_j].to(torch.int32) << (4 * nibble_pos)
 
     if qzeros is None:
-        awq_qzeros = torch.full((g, n // 8), AWQ_SYMMETRIC_QZEROS_WORD, dtype=torch.int32)
+        awq_qzeros = torch.full((g, n // 8), AWQ_SYMMETRIC_QZEROS_WORD, dtype=torch.int32, device=device)
     else:
         # Bake the +1 offset into the AWQ word: the AWQ kernels subtract the
         # unpacked value directly. A zero point of 16 overflows the nibble
@@ -178,7 +195,7 @@ def gptq_to_awq(qweight: torch.Tensor,
             raise ValueError('GPTQ zero point exceeds 15 after the +1 offset; '
                              'the AWQ 4-bit layout cannot represent it')
         zero_view = zero.reshape(g, n // 8, 8)
-        awq_qzeros = torch.zeros(g, n // 8, dtype=torch.int32)
+        awq_qzeros = torch.zeros(g, n // 8, dtype=torch.int32, device=device)
         for seq_j in range(8):
             nibble_pos = AWQ_NIBBLE_ORDER[seq_j]
             awq_qzeros |= zero_view[..., seq_j] << (4 * nibble_pos)
@@ -214,40 +231,69 @@ def convert_shard(gptq_shard: dict, verify: bool = False):
     return out, err
 
 
+def _rewrite_quant_config(config: dict) -> dict:
+    """Rewrite GPTQ quantization metadata to the AWQ layout the output uses."""
+    rewritten = dict(config)
+    quant_config = rewritten.get('quantization_config')
+    if isinstance(quant_config, dict) and quant_config.get('quant_method') == 'gptq':
+        quant_config = dict(quant_config)
+        quant_config['quant_method'] = 'awq'
+        quant_config.pop('desc_act', None)
+        rewritten['quantization_config'] = quant_config
+    return rewritten
+
+
 def convert_checkpoint(src: str, dst: str, verify: bool = False):
     """Convert a GPTQ checkpoint directory to the AutoAWQ layout.
 
-    Copies every file, rewriting safetensors shards; other files (config,
-    tokenizer) pass through byte for byte. Returns ``(num_modules,
-    max_abs_err)``.
+    Gathers quant components across all safetensors shards before
+    converting, so sharded checkpoints cannot flush partial modules. The
+    result is written as a single ``model.safetensors`` (the shard index of
+    a sharded source would go stale); the quantization config is rewritten
+    to AWQ, sequential ``g_idx`` buffers are dropped, and every other file
+    passes through byte for byte. Returns ``(num_modules, max_abs_err)``.
     """
     from safetensors.torch import load_file, save_file
 
     os.makedirs(dst, exist_ok=True)
     err = 0.0
     names = []
+    staged: dict[str, dict[str, torch.Tensor]] = {}
+    passthrough: dict[str, torch.Tensor] = {}
     for fname in sorted(os.listdir(src)):
         spath = os.path.join(src, fname)
-        dpath = os.path.join(dst, fname)
-        if not fname.endswith('.safetensors'):
-            with open(spath, 'rb') as f, open(dpath, 'wb') as g:
-                g.write(f.read())
+        if fname.endswith('.safetensors'):
+            for name, tensor in load_file(spath).items():
+                if name.endswith('g_idx'):
+                    if not _is_sequential_g_idx(tensor):
+                        raise ValueError(f'{name}: desc_act (act-order) GPTQ checkpoints are '
+                                         'not supported; re-quantize without desc_act.')
+                    continue
+                suffix = next((s for s in ('qweight', 'scales', 'qzeros') if name.endswith(s)), None)
+                if suffix is None:
+                    passthrough[name] = tensor
+                    continue
+                staged.setdefault(name[:-len(suffix)], {})[suffix] = tensor
+        elif fname.endswith('config.json'):
+            with open(spath) as f:
+                config = json.load(f)
+            with open(os.path.join(dst, fname), 'w') as f:
+                json.dump(_rewrite_quant_config(config), f)
+        elif fname.endswith('model.safetensors.index.json'):
+            # The gathered output is a single file; the stale index is dropped.
             continue
-        tensors = load_file(spath)
-        staged: dict[str, dict[str, torch.Tensor]] = {}
-        out: dict[str, torch.Tensor] = {}
-        for name, tensor in tensors.items():
-            suffix = next((s for s in ('qweight', 'scales', 'qzeros') if name.endswith(s)), None)
-            if suffix is None:
-                out[name] = tensor
-                continue
-            prefix = name[:-len(suffix)]
-            staged.setdefault(prefix, {})[suffix] = tensor
-        for prefix, shard in staged.items():
-            out_shard, shard_err = convert_shard(shard, verify=verify)
-            err = max(err, shard_err)
-            names.append(prefix)
-            for suffix, tensor in out_shard.items():
-                out[f'{prefix}{suffix}'] = tensor
-        save_file(out, dpath)
+        else:
+            with open(spath, 'rb') as f, open(os.path.join(dst, fname), 'wb') as g:
+                g.write(f.read())
+
+    out: dict[str, torch.Tensor] = dict(passthrough)
+    for prefix, shard in staged.items():
+        out_shard, shard_err = convert_shard(shard, verify=verify)
+        err = max(err, shard_err)
+        names.append(prefix)
+        for suffix, tensor in out_shard.items():
+            out[f'{prefix}{suffix}'] = tensor
+    if out:
+        save_file(out, os.path.join(dst, 'model.safetensors'))
+
     return len(names), err

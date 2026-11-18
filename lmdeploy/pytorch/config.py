@@ -1046,6 +1046,9 @@ class QuantizationConfig:
             group_size = quant_config.get('group_size', 128)
             if bits != 4:
                 raise ValueError(f'Unsupported gptq `bits`: expected 4, got {bits!r}.')
+            if quant_config.get('desc_act'):
+                raise ValueError('Unsupported gptq `desc_act`: act-order reorders groups '
+                                 'and the load-time repack assumes identity group order.')
             if quant_dtype is None:
                 quant_dtype = 'bfloat16'
         else:
@@ -1083,14 +1086,14 @@ class QuantizationConfig:
         if self.quant_method == 'gptq':
             if module_kind == 'norm':
                 return None
-            if module_kind == 'moe':
-                # No gptq MoE implementation exists; keep the raw method so
-                # the build fails loudly instead of guessing a quant family.
-                return self.quant_method
-            # Dense linears load through the AWQ family: the weight loader
-            # normalizes each GPTQ module to the canonical AWQ layout at
-            # load time (see model_weight_loader and gptq_repack).
-            if self.ignored_layers and prefix and any(prefix in layer for layer in self.ignored_layers):
+            # GPTQ streams normalize to canonical AWQ at load time (dense
+            # linears and expert tensors alike — the loader's suffix filter
+            # covers expert prefixes), so both kinds load through the AWQ
+            # family and its routes.
+            if self.ignored_layers and not prefix:
+                raise ValueError('gptq dispatch requires a non-empty canonical module '
+                                 'prefix when the checkpoint carries ignore rules')
+            if self.ignored_layers and any(prefix in layer for layer in self.ignored_layers):
                 return None
             return 'awq'
         if self.quant_method == 'compressed-tensors':
