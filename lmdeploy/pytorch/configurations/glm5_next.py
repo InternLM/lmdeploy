@@ -21,6 +21,7 @@ from .qwen3_next import _check_env_qwen3_next
 _GLM5_LINEAR_LAYER_TYPE = 'linear_attention'
 _GLM5_FULL_LAYER_TYPES = frozenset({
     'deepseek_sparse_attention',
+    'indexed_attention',
     'full_attention',
 })
 
@@ -78,7 +79,7 @@ def _set_layer_ids_compat(text_config, name: str,
 def _resolve_glm5_linear_config(text_config):
     """Normalize official and legacy GLM-5.3 hybrid-layer schemas.
 
-    Transformers 5.16 represents the hybrid layout with ``layer_types`` and
+    Transformers 5.17+ represents the hybrid layout with ``layer_types`` and
     linear-attention geometry with scalar fields.  Older checkpoints and the
     LMDeploy fallback config expose ``linear_attn_config`` plus convenience
     layer-id properties.  Keep ``layer_types`` authoritative when present and
@@ -100,7 +101,7 @@ def _resolve_glm5_linear_config(text_config):
         if invalid_types:
             raise ValueError(
                 'GLM-5.3 layer_types only supports linear_attention, '
-                'deepseek_sparse_attention, or full_attention, but got '
+                'deepseek_sparse_attention, indexed_attention, or full_attention, but got '
                 f'{invalid_types}.')
         linear_layer_ids = [
             layer_idx for layer_idx, layer_type in enumerate(layer_types)

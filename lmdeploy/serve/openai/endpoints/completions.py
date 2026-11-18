@@ -365,6 +365,7 @@ def register(router: APIRouter, server_context) -> None:
                             finish_reason=res.finish_reason,
                             logprobs=logprobs)
                         if res.cache_block_ids is not None:
+                            response_json['cache_session_id'] = sessions[gen_index].session_id
                             response_json['cache_block_ids'] = res.cache_block_ids
                             response_json['remote_token_ids'] = res.token_ids
                         yield f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n'
@@ -471,6 +472,8 @@ def register(router: APIRouter, server_context) -> None:
         ).model_dump()
 
         if with_cache:
+            # Cache ownership uses the engine's ID, not the public response ID.
+            response['cache_session_id'] = sessions[0].session_id
             response['cache_block_ids'] = cache_block_ids
             response['remote_token_ids'] = remote_token_ids
 
