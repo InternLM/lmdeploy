@@ -22,7 +22,7 @@ import pytest
 import torch
 
 from lmdeploy.turbomind import ct_repack
-from lmdeploy.turbomind.weight_format import _unpack_awq_gemm
+from lmdeploy.turbomind.ct_repack import _unpack_awq_gemm
 
 from . import tiny_ct
 

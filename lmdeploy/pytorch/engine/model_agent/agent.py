@@ -42,7 +42,9 @@ from lmdeploy.pytorch.strategies.base.model_agent import ExtraInputs, ExtraOutpu
 from lmdeploy.pytorch.utils import get_gpu_memory, monkey_patch_hf_modules_cache, wait_for_async_tasks
 from lmdeploy.pytorch.weight_loader.model_weight_loader import (
     ModelWeightLoader,
+    finalize_ct_weights,
     load_model_weights,
+    new_ct_normalize_state,
     normalize_ct_weights,
     process_weights_after_loading,
 )
@@ -450,6 +452,8 @@ class BaseModelAgent:
         self._update_params_ipc_tensor: torch.Tensor | None = None
         self._update_params_ipc_event: torch.cuda.Event | None = None
         self._checkpoint_engine_zmq_ctx: Any = None
+        # ct staging across one update transaction (buckets until finished)
+        self._ct_normalize_state: dict | None = None
 
         # disaggregated weight-update process groups, keyed by group_name
         self._model_update_group: dict[str, dist.ProcessGroup] = {}
@@ -1888,7 +1892,14 @@ class BaseModelAgent:
         """Rename one update stream for ``target``, translating ct keys."""
         renamed = ModelWeightLoader._rename_weights_iterator(weights, target)
         if self._ct_normalize():
-            renamed = normalize_ct_weights(renamed)
+            # One staging state spans the whole update transaction: a module
+            # may arrive split across buckets. Tensors handed to the
+            # normalizer own their storage, so reused IPC buffers cannot
+            # corrupt staged data. _finalize_updated_weights validates the
+            # leftovers and resets the state when the update finishes.
+            if self._ct_normalize_state is None:
+                self._ct_normalize_state = new_ct_normalize_state()
+            renamed = normalize_ct_weights(renamed, self._ct_normalize_state)
         return list(renamed)
 
     def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):
@@ -1915,6 +1926,11 @@ class BaseModelAgent:
 
     def _finalize_updated_weights(self):
         """Finalize module-specific weights and invalidate captured graphs."""
+        # An update transaction that ends with a staged-but-incomplete module
+        # is a corrupt bucket sequence: raise instead of leaving state behind.
+        if self._ct_normalize_state is not None:
+            finalize_ct_weights(self._ct_normalize_state)
+            self._ct_normalize_state = None
         model = self.patched_model.get_model() if self.patched_model is not None else None
         spec_model = self.spec_agent.get_model()
         for target in filter(None, [model, spec_model]):

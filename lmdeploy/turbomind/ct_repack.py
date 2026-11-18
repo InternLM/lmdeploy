@@ -74,6 +74,27 @@ GROUP_SIZE = 128
 BITS = 4
 WEIGHT_DTYPE = torch.float16
 
+
+def _get_u4_slices(x, dtype):
+    """Split a packed u4 tensor into its low/high nibble planes."""
+    planes = {torch.int32: 8, torch.uint8: 2}
+    xs = []
+    for _ in range(planes[x.dtype]):
+        xs.append((x & 15).to(dtype))
+        x = x >> 4
+    return xs
+
+
+def _unpack_awq_gemm(x):
+    """Unpack AWQ gemm words with the ``[0, 4, 1, 5, 2, 6, 3, 7]`` order.
+
+    Pure torch on purpose: callers on a PyTorch-only installation import
+    this module without the native extension present.
+    """
+    xs = _get_u4_slices(x, torch.uint8)
+    ys = [xs[i] for i in (0, 4, 1, 5, 2, 6, 3, 7)]
+    return torch.stack(ys, dim=-1).view(*x.shape[:-1], -1)
+
 AWQ_LAYOUT_DOC = {
     'qweight': 'int32 [K, N//8]. AWQ nibble order [0, 4, 1, 5, 2, 6, 3, 7].',
     'scales': 'float16 [G, N].',
@@ -166,11 +187,9 @@ def ct_to_awq(weight_packed: torch.Tensor,
 def awq_dequant(qweight: torch.Tensor, scales: torch.Tensor, qzeros: torch.Tensor) -> torch.Tensor:
     """Dequant AutoAWQ tensors back to float32 [N, K].
 
-    Reads through lmdeploy's own AWQ unpack, so this path matches checkpoint loading bit for bit. The import stays
-    local: the rest of the module must import without a built TurboMind extension.
+    Reads through lmdeploy's own AWQ unpack, so this path matches checkpoint loading bit for bit. The helper is
+    module-local: this module imports without a built TurboMind extension.
     """
-    from lmdeploy.turbomind.weight_format import _unpack_awq_gemm
-
     k, n8 = qweight.shape
     n = n8 * 8
     g, _ = scales.shape
