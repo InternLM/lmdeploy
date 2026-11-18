@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
+from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions, _chat_template_kwargs_from_request
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage, DeltaToolCall
 
@@ -436,3 +436,126 @@ def test_runner_snapshots_preprocessed_prompt_ids(enabled):
         await runner.close()
 
     asyncio.run(run())
+
+
+def _engine_output(response, finish_reason=None):
+    return SimpleNamespace(
+        response=response,
+        token_ids=[1],
+        input_token_len=3,
+        generate_token_len=len(response),
+        finish_reason=finish_reason,
+        cached_tokens=0,
+        logprobs=None,
+        routed_experts=None,
+        cache_block_ids=None,
+    )
+
+
+def _visible_stop_runner(outputs, stop, **request_kwargs):
+    engine = _FakeEngine(outputs)
+    parser = _Parser(_request(stop=stop, **request_kwargs))
+    runner = ChatRunner(parser.request, parser, None, engine.session_mgr.session,
+                        engine.generate(None), engine.session_mgr)
+    runner.stop_sequences = [stop] if isinstance(stop, str) else list(stop)
+    return runner
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('include_stop', [False, True])
+def test_visible_stop_spanning_deltas_never_leaks_prefix(stream, include_stop):
+    outputs = [
+        _engine_output('hi\n\nH'),
+        _engine_output('uman:'),
+        _engine_output(' tail that must never reach the client'),
+    ]
+    runner = _visible_stop_runner(outputs, '\n\nHuman:', include_stop_str_in_output=include_stop)
+
+    async def run():
+        if stream:
+            chunks = [chunk async for chunk in runner.stream()]
+            result = chunks[-1]
+            text = ''.join(chunk.delta_message.content or '' for chunk in chunks)
+        else:
+            result = await runner.collect()
+            text = result.text
+        expected = 'hi\n\nHuman:' if include_stop else 'hi'
+        assert text == expected
+        assert result.finish_reason == 'stop'
+        assert result.stop_sequence == '\n\nHuman:'
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_visible_stop_without_match_releases_held_back_suffix(stream):
+    outputs = [
+        _engine_output('hello wor'),
+        _engine_output('ld', finish_reason='stop'),
+    ]
+    runner = _visible_stop_runner(outputs, 'END')
+
+    async def run():
+        if stream:
+            chunks = [chunk async for chunk in runner.stream()]
+            result = chunks[-1]
+            text = ''.join(chunk.delta_message.content or '' for chunk in chunks)
+        else:
+            result = await runner.collect()
+            text = result.text
+        assert text == 'hello world'
+        assert result.stop_sequence is None
+
+    asyncio.run(run())
+
+
+def test_visible_stop_channel_clears_engine_stop_words():
+    context = _FakeServerContext(_Parser)
+
+    async def run():
+        runner = await ChatRunner.prepare(context, _request(stop='6'),
+                                         ChatRunnerOptions(stop_on_visible_text=True))
+        assert runner.stop_sequences == ['6']
+        assert runner.gen_config.stop_words is None
+        await runner.close()
+
+    asyncio.run(run())
+
+
+def test_visible_stop_keeps_parsed_tool_calls_with_stop_finish():
+    call = DeltaToolCall(index=0, id='call_search', function={'name': 'search', 'arguments': '{}'})
+
+    class ToolParser(_Parser):
+
+        def parse_complete(self, text, token_ids, **kwargs):
+            return 'answer END tail', [call], None
+
+    engine = _FakeEngine([_engine_output('answer END tail', finish_reason='stop')])
+    parser = ToolParser(_request(stop='END'))
+    runner = ChatRunner(parser.request, parser, None, engine.session_mgr.session,
+                        engine.generate(None), engine.session_mgr)
+    runner.stop_sequences = ['END']
+
+    async def run():
+        result = await runner.collect()
+        assert result.text == 'answer '
+        assert result.tool_calls == [call]
+        assert result.finish_reason == 'stop'
+        assert result.stop_sequence == 'END'
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    'kwargs, expected',
+    [
+        ({}, None),
+        ({'thinking': {'type': 'enabled'}}, {'enable_thinking': True}),
+        ({'thinking': {'type': 'adaptive'}}, {'enable_thinking': True}),
+        ({'thinking': {'type': 'disabled'}}, {'enable_thinking': False}),
+        ({'enable_thinking': False, 'thinking': {'type': 'enabled'}}, {'enable_thinking': False}),
+        ({'chat_template_kwargs': {'enable_thinking': True}, 'thinking': {'type': 'disabled'}},
+         {'enable_thinking': True}),
+    ])
+def test_chat_template_kwargs_map_thinking_to_enable_thinking(kwargs, expected):
+    assert _chat_template_kwargs_from_request(_request(**kwargs)) == expected

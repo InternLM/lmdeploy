@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import shortuuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
+
+from lmdeploy.serve.openai.protocol import ThinkingConfig
 
 RoutedExperts = list[list[list[int]]] | str | None
 MessageStopReason = Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'parse_error']
@@ -94,9 +96,6 @@ class ToolChoiceToolParam(BaseModel):
 ToolChoiceParam = ToolChoiceAutoParam | ToolChoiceAnyParam | ToolChoiceToolParam
 
 
-from lmdeploy.serve.openai.protocol import ThinkingConfig as ThinkingConfig
-
-
 class MessagesRequest(BaseModel):
     """Request body for ``POST /v1/messages``."""
 
@@ -107,7 +106,7 @@ class MessagesRequest(BaseModel):
     )
     max_tokens: int = Field(gt=0)
     system: str | list[ContentBlockParam] | None = None
-    stop_sequences: list[str] | None = None
+    stop_sequences: list[Annotated[str, Field(min_length=1)]] | None = None
     stream: bool = False
     temperature: float | None = None
     top_p: float | None = None

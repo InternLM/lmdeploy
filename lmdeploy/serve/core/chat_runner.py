@@ -113,6 +113,9 @@ class ChatRunner:
         )
         stop_sequences = None
         if options.stop_on_visible_text:
+            # gen_config merges request-level and server-default stop words;
+            # both are promoted to the visible-text channel together so the
+            # matched scope stays the same as the engine-level one it replaces.
             stop_sequences = list(gen_config.stop_words or []) or None
             gen_config.stop_words = None
         adapter_name = options.adapter_name
@@ -171,7 +174,9 @@ class ChatRunner:
         session."""
         streaming_tools = False
         visible_text = ''
+        emitted = 0
         stop_word = None
+        stop_holdback = max(0, max(map(len, self.stop_sequences)) - 1) if self.stop_sequences else 0
         return_token_metadata = bool(
             self.request.return_token_ids
             or self.request.logprobs
@@ -218,8 +223,16 @@ class ChatRunner:
                             stopped_early = True
                             stop_word = match[1]
                             keep = match[0] + (len(stop_word) if self.request.include_stop_str_in_output else 0)
-                            emitted_before = len(visible_text) - len(delta_message.content)
-                            delta_message.content = visible_text[:keep][emitted_before:]
+                        elif res.finish_reason is None:
+                            # A later delta can still complete a stop word from
+                            # the held-back suffix; emitting that suffix now
+                            # would leak the prefix of a cross-chunk match for
+                            # good, since streamed text cannot be recalled.
+                            keep = max(emitted, len(visible_text) - stop_holdback)
+                        else:
+                            keep = len(visible_text)
+                        delta_message.content = visible_text[:keep][emitted:]
+                        emitted = max(emitted, keep)
 
                     is_last_delta = stopped_early or delta_index == len(stream_deltas) - 1
                     finish_reason = res.finish_reason if is_last_delta else None
@@ -384,4 +397,7 @@ def _chat_template_kwargs_from_request(request: ChatCompletionRequest) -> dict |
     chat_template_kwargs = dict(request.chat_template_kwargs or {})
     if request.enable_thinking is not None and chat_template_kwargs.get('enable_thinking') is None:
         chat_template_kwargs['enable_thinking'] = request.enable_thinking
+    elif request.thinking is not None and chat_template_kwargs.get('enable_thinking') is None:
+        # Same mapping as anthropic.adapter.chat_template_kwargs_from_thinking.
+        chat_template_kwargs['enable_thinking'] = request.thinking.type != 'disabled'
     return chat_template_kwargs or None
