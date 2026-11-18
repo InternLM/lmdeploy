@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import errno
 import http.client
 import importlib
 import json
@@ -254,7 +255,6 @@ def test_monitoring_returns_503_while_api_drains_inflight_request():
     asyncio.run(asyncio.wait_for(run(), timeout=10))
 
 
-@pytest.mark.skipif(not socket.has_ipv6, reason='IPv6 is unavailable')
 @pytest.mark.parametrize('addresses', [('::1',), ('::1', '127.0.0.1')])
 def test_monitoring_binds_all_hostname_addresses(monkeypatch, addresses):
     resolve = socket.getaddrinfo
@@ -268,8 +268,13 @@ def test_monitoring_binds_all_hostname_addresses(monkeypatch, addresses):
     async def run():
         monitor = make_monitor()
         await monitor.probe_once()
-        with socket.create_server(('::1', 0), family=socket.AF_INET6) as reserved:
-            port = reserved.getsockname()[1]
+        try:
+            with socket.create_server(('::1', 0), family=socket.AF_INET6) as reserved:
+                port = reserved.getsockname()[1]
+        except OSError as exc:
+            if exc.errno in (errno.EADDRNOTAVAIL, errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT):
+                pytest.skip(f'IPv6 loopback is unavailable: {exc}')
+            raise
         async with monitoring_server(monitor, draining=threading.Event(), host='monitoring.test',
                                      port=port, enable_metrics=False):
             for host in addresses:

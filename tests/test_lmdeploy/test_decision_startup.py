@@ -338,6 +338,17 @@ def test_invalid_monitoring_port_fails_before_loading_model(server_startup, port
     run.assert_not_called()
 
 
+@pytest.mark.parametrize('monitoring_port', [None, 9300])
+def test_multiple_web_workers_are_rejected(server_startup, monkeypatch, monitoring_port):
+    api, build, run = server_startup
+    monkeypatch.setenv('WEB_CONCURRENCY', '2')
+    with pytest.raises(SystemExit) as exc:
+        api.serve('/unused', generation_config='lmdeploy', monitoring_port=monitoring_port)
+    assert exc.value.code != 0
+    run.assert_not_called()
+    build.return_value.close.assert_called_once()
+
+
 def test_monitoring_configuration_preserves_api_security(server_startup, monkeypatch):
     api, _, _ = server_startup
     lifespan = Mock()

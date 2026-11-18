@@ -516,6 +516,10 @@ def serve(model_path: str,
                             ssl_certfile=ssl_certfile,
                             timeout_keep_alive=int(
                                 os.environ.get('UVICORN_TIMEOUT_KEEP_ALIVE', 5)))
+    if config.workers > 1:
+        logger.error('Multiple Uvicorn workers are not supported. Set WEB_CONCURRENCY=1 and use --dp for replicas.')
+        server_context.async_engine.close()
+        raise SystemExit(3)
     server = APIServer(config, draining=server_context.draining)
     try:
         server.run()
