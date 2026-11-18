@@ -1702,6 +1702,9 @@ class TestModelAgentWakeup:
                 events.append((self.name, 'to', args, kwargs))
                 return self
 
+            def modules(self):
+                return iter(())
+
         class _PatchedModel:
 
             def __init__(self):
@@ -1791,6 +1794,97 @@ class TestModelAgentWakeup:
         assert 'main_reset' in events
         assert 'spec_reset' in events
         assert 'build_step_inputs' in events
+
+    def test_sleep_wakeup_wires_tm_release_around_the_model_move(self, event_loop, monkeypatch):
+        """TM layers release before ``Module.to`` on sleep and re-pack after it
+        on wakeup.
+
+        The packed native handle cannot move with the model, so it must be freed while every engine stream is quiet
+        (after the graph runner reset, before the move) and re-packed only once the parameters are back on the device.
+        """
+        from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, SleepWakeupState
+
+        events = []
+
+        class _TmLayer:
+
+            def sleep_release(self):
+                events.append('layer_sleep_release')
+
+            def sleep_wakeup(self):
+                events.append('layer_sleep_wakeup')
+
+        class _Moveable:
+
+            def __init__(self, name, layer=None):
+                self.name = name
+                self._layer = layer
+
+            def to(self, *args, **kwargs):
+                events.append((self.name, 'to'))
+                return self
+
+            def modules(self):
+                return iter(() if self._layer is None else (self._layer, ))
+
+            def parameters(self):
+                # wakeup() reads the device of the first parameter.
+                return iter([SimpleNamespace(device=SimpleNamespace(type='cpu'))])
+
+        layer = _TmLayer()
+        spec_layer = _TmLayer()
+
+        class _PatchedModel:
+
+            def __init__(self):
+                self.model = _Moveable('main_model', layer)
+
+            def reset(self):
+                events.append('main_reset')
+
+            def get_model(self):
+                return self.model
+
+        model_agent = BaseModelAgent.__new__(BaseModelAgent)
+        model_agent.state = SleepWakeupState()
+        model_agent.dist_config = SimpleNamespace(dp=1)
+        model_agent.memdecode_agent = None
+        model_agent.kv_connector = None
+        model_agent.cache_engine = object()
+        model_agent.state_cache_engine = object()
+        model_agent.patched_model = _PatchedModel()
+        model_agent.spec_agent = SimpleNamespace(
+            get_model=lambda: _Moveable('spec_model', spec_layer),
+            reset_graph_runner=lambda: events.append('spec_reset'),
+            cache_engine=None)
+        model_agent.strategy_factory = SimpleNamespace(build_step_inputs=lambda: {})
+        model_agent.reset_runtime_state = lambda: events.append('reset_runtime_state')
+        model_agent.step_inputs = {'stale': 'step_inputs'}
+        model_agent._prev_chunk_output = None
+        model_agent._prev_chunk_last_logit = None
+        model_agent._pre_in_que = asyncio.Queue()
+        model_agent._in_que = asyncio.Queue()
+        model_agent._out_que = asyncio.Queue()
+        model_agent._pending_h2d_transfers = deque()
+        model_agent._update_params_ipc_tensor = None
+        model_agent._update_params_ipc_event = None
+
+        @contextmanager
+        def _all_context():
+            yield
+
+        model_agent.all_context = _all_context
+        monkeypatch.setattr(torch.cuda, 'synchronize', lambda: None)
+        monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
+
+        event_loop.run_until_complete(model_agent.sleep(level=1))
+        assert events.index('layer_sleep_release') < events.index(('main_model', 'to'))
+        assert events.index('layer_sleep_release') < events.index(('spec_model', 'to'))
+
+        events.clear()
+        model_agent.wakeup(tags=['weights'])
+        assert events.index(('main_model', 'to')) < events.index('layer_sleep_wakeup')
+        assert events.index(('spec_model', 'to')) < events.index('layer_sleep_wakeup')
 
     def test_dp_kv_cache_wakeup_warms_before_releasing_forward_task(self):
         from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, SleepWakeupState
@@ -2230,3 +2324,41 @@ def test_update_routes_before_renaming(weight_update_agent, monkeypatch, entry, 
         for (actual_name, actual_tensor), (name, tensor) in zip(loaded[tag], expected_weights):
             assert actual_name == 'renamed.' + name
             torch.testing.assert_close(actual_tensor, tensor)
+
+
+@pytest.mark.parametrize('finished', [False, True])
+@pytest.mark.parametrize('prefix', ['model.layers.', 'model.language_model.layers.'])
+def test_update_params_finalizes_weights_only_on_finished_bucket(weight_update_agent, monkeypatch, finished, prefix):
+    """A finished update bucket finalizes weights; a partial bucket does not.
+
+    TurboMind repacking closes the native allocations that captured CUDA
+    graphs reference, so the final bucket must run
+    ``_finalize_updated_weights`` (which resets the graph runner) before
+    inference resumes.
+    """
+    agent = weight_update_agent
+
+    def model(tag):
+        return SimpleNamespace(rename_weight=lambda n: 'renamed.' + n,
+                               load_weights=lambda weights: None)
+
+    finalize_calls = []
+    agent.patched_model = SimpleNamespace(get_model=lambda: model('main'))
+    agent.spec_agent.get_model = lambda: model('draft')
+    agent._finalize_updated_weights = lambda: finalize_calls.append('finalize')
+    bucket = FlattenedTensorBucket(
+        named_tensors=[(f'{prefix}5.enorm.weight', torch.tensor([2.]))])
+    agent.all_context = nullcontext
+    agent._update_params_ipc_tensor = bucket.get_flattened_tensor()
+    agent._update_params_ipc_event = Mock()
+    monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
+    payload = pybase64.b64encode(pickle.dumps({'metadata': bucket.metadata})).decode()
+    agent.update_params(UpdateParamsRequest(serialized_named_tensors=payload,
+                                            load_format='flattened_bucket', finished=finished))
+    assert finalize_calls == (['finalize'] if finished else [])
+    if finished:
+        # IPC plumbing resets with the finalized weights.
+        assert agent._update_params_ipc_event is None
+        assert agent._update_params_ipc_tensor is None
+    else:
+        assert agent._update_params_ipc_event.record.call_count == 1

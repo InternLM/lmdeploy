@@ -380,3 +380,127 @@ def test_nn_module_spill_and_loader_restore():
     module.update_weights()
     out_repaked = module._forward_default(x, all_reduce=False, tp_sizes=None).cpu()
     assert torch.equal(out_first, out_repaked)
+
+
+# ---------------------------------------------------------------------------
+# sleep / wakeup: release the native handle, restore, and re-pack.
+# ---------------------------------------------------------------------------
+
+
+@cuda_required
+def test_impl_sleep_release_frees_packed_handle():
+    """sleep_release closes the native weight; nothing else frees it."""
+    if not _supported_on_device(512, 256):
+        pytest.skip('registry rejects the shape on this device')
+
+    k, n, group_size = 512, 256, 128
+    qw, sc, qz, _ = _random_awq(k, n, group_size, seed=8)
+
+    impl = TurbomindGemmW4A16Impl(k, n, group_size)
+    impl.update_weights(qw, sc, qz)
+    torch.cuda.synchronize()
+    assert impl._weight is not None
+
+    impl.sleep_release()
+    torch.cuda.synchronize()
+    # The packed weight is a native allocation outside the torch allocator;
+    # the observable release is the closed handle itself.
+    assert impl._weight is None
+    assert impl._linear is None
+
+    # A released impl repacks from the restored sources on wakeup.
+    impl.sleep_wakeup(qw, sc, qz)
+    x = torch.randn(4, k, dtype=torch.float16, device='cuda')
+    out = impl.forward(x, qw, sc, qz).squeeze(0).cpu()
+
+    reference = TurbomindGemmW4A16Impl(k, n, group_size)
+    reference.update_weights(qw, sc, qz)
+    expected = reference.forward(x, qw, sc, qz).squeeze(0).cpu()
+    assert torch.equal(out, expected)
+
+
+@cuda_required
+def test_nn_module_sleep_wakeup_roundtrip():
+    """A layer survives sleep: spill survives, wakeup restores and re-packs."""
+    from lmdeploy.pytorch.nn.linear.tm_gemm import TmGemmLinear
+
+    k, n, group_size = 512, 256, 128
+    qw, sc, qz, bias = _random_awq(k, n, group_size, seed=9)
+    module = TmGemmLinear(k, n, 4, group_size, bias=True, device='cuda')
+    module.qweight.data.copy_(qw)
+    module.scales.data.copy_(sc)
+    module.qzeros.data.copy_(qz)
+    module.bias.data.copy_(bias)
+    x = torch.randn(4, k, dtype=torch.float16, device='cuda')
+
+    module.update_weights()
+    torch.cuda.synchronize()
+    out_first = module._forward_default(x, all_reduce=False, tp_sizes=None).cpu()
+    assert module._spill is not None
+
+    # Sleep: the native handle drops and the spill stays authoritative.
+    module.sleep_release()
+    torch.cuda.synchronize()
+    assert module.impl._weight is None
+    assert module.qweight.data.numel() == 0
+    spill_bytes = module._spill.resident_bytes
+    expected_bytes = qw.numel() * 4 + sc.numel() * 2 + qz.numel() * 4
+    assert spill_bytes >= expected_bytes
+
+    # Wakeup: restore, re-pack, and re-spill — the steady state matches the
+    # post-hot-update state (empty GPU storages, CPU copies authoritative),
+    # and forward is bit-exact.
+    module.sleep_wakeup()
+    torch.cuda.synchronize()
+    assert module.impl._weight is not None
+    assert module.qweight.data.numel() == 0
+    assert module._spill.resident_bytes >= expected_bytes
+    out_wakeup = module._forward_default(x, all_reduce=False, tp_sizes=None).cpu()
+    assert torch.equal(out_first, out_wakeup)
+
+    # Sleep/wakeup stays repeatable.
+    module.sleep_release()
+    module.sleep_wakeup()
+    out_again = module._forward_default(x, all_reduce=False, tp_sizes=None).cpu()
+    assert torch.equal(out_first, out_again)
+
+
+@cuda_required
+def test_nn_module_sleep_release_keeps_resident_weights():
+    """An MLA-style module (release_torch_weights=False) keeps its torch copies
+    resident.
+
+    Its registered parameters travel with ``Module.to`` during sleep, so
+    sleep_release drops only the native handle; wakeup re-packs from the
+    restored resident copies without touching a spill.
+    """
+    from lmdeploy.pytorch.nn.linear.tm_gemm import TmGemmLinear
+
+    k, n, group_size = 512, 256, 128
+    qw, sc, qz, bias = _random_awq(k, n, group_size, seed=10)
+    # release_torch_weights=False mirrors MLA-absorbed modules: update_weights
+    # keeps the torch copies resident.
+    module = TmGemmLinear(k, n, 4, group_size, bias=True, device='cuda', release_torch_weights=False)
+    module.qweight.data.copy_(qw)
+    module.scales.data.copy_(sc)
+    module.qzeros.data.copy_(qz)
+    module.bias.data.copy_(bias)
+
+    module.update_weights()
+    assert module._spill is None
+    assert module.qweight.data.numel() != 0
+
+    # The native handle drops, but the torch copies stay registered: they
+    # travel with ``Module.to`` during sleep and feed the re-pack on wakeup.
+    module.sleep_release()
+    torch.cuda.synchronize()
+    assert module.impl._weight is None
+    assert module._spill is None
+    assert module.qweight.data.numel() != 0
+
+    module.sleep_wakeup()
+    torch.cuda.synchronize()
+    assert module.impl._weight is not None
+    assert torch.equal(module.qweight.data.cpu(), qw.cpu())
+    assert torch.equal(module.scales.data.cpu(), sc.cpu())
+    assert torch.equal(module.qzeros.data.cpu(), qz.cpu())

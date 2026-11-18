@@ -82,6 +82,51 @@ class TmGemmLinearMixin:
             )
         )
 
+    def sleep_release(self):
+        """Release the native packed handle ahead of ``Module.to``.
+
+        The packed weight is not a registered tensor, so the model move cannot free it. Modules with spilled torch
+        weights keep their CPU copies authoritative; resident modules (never packed, or kept for MLA absorption) leave
+        the registered copies to travel with the model move.
+        """
+        if not isinstance(self.impl, TurbomindGemmW4A16Impl):
+            return
+        self.impl.sleep_release()
+        if self.qweight is None or self.qweight.numel() == 0:
+            # Already spilled; the CPU copies stay authoritative.
+            return
+        if not self.release_torch_weights:
+            # MLA absorption reads the registered torch copies; they move
+            # with the model, so no spill is needed.
+            return
+        if self._spill is None:
+            self._spill = TorchWeightSpill()
+        self._spill.spill(dict(qweight=self.qweight, scales=self.scales, qzeros=self.qzeros))
+
+    def sleep_wakeup(self):
+        """Restore spilled torch weights, re-pack, and re-spill.
+
+        The re-spill keeps the steady state after a sleep/wakeup cycle
+        identical to after a hot update: empty GPU storages, authoritative
+        CPU copies, and only the packed handle resident.
+        """
+        if not isinstance(self.impl, TurbomindGemmW4A16Impl):
+            return
+        if self._spill is not None:
+            self._spill.restore()
+        if self.qweight.numel() == 0:
+            raise RuntimeError(
+                'TurboMind W4A16 weights are still spilled after wakeup; '
+                'the module was never loaded.'
+            )
+        self.impl.sleep_wakeup(self.qweight, self.scales, self.qzeros, self.bias)
+        if not self.release_torch_weights:
+            # MLA absorption reads the registered torch copies; keep them.
+            return
+        if self._spill is None:
+            self._spill = TorchWeightSpill()
+        self._spill.spill(dict(qweight=self.qweight, scales=self.scales, qzeros=self.qzeros))
+
 
 class TmGemmLinear(TmGemmLinearMixin, AwqLinear):
     """W4a16 linear that prefers the TurboMind GEMM kernel.
