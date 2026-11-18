@@ -8,6 +8,13 @@ import shortuuid
 from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
 
 
+class ThinkingConfig(BaseModel):
+    """Thinking mode; separate ``budget_tokens`` enforcement is unsupported."""
+
+    type: Literal['enabled', 'disabled', 'adaptive']
+    budget_tokens: int | None = Field(default=None, gt=0)
+
+
 class ErrorResponse(BaseModel):
     """Error responses."""
     message: str
@@ -215,6 +222,11 @@ class ChatCompletionRequest(BaseModel):
     seed: int | None = None
     min_new_tokens: int | None = Field(default=None, examples=[None])
     min_p: float | None = None
+    thinking: ThinkingConfig | None = Field(
+        default=None,
+        description='Thinking-mode configuration; maps to enable_thinking unless explicitly set.',
+        validation_alias=AliasChoices('thinking', AliasPath('extra_body', 'thinking')),
+    )
     enable_thinking: bool | None = Field(  # will be deprecated in the future
         default=None,
         validation_alias=AliasChoices('enable_thinking', AliasPath('extra_body', 'enable_thinking')),

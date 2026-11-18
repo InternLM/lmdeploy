@@ -88,6 +88,7 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
                 ChatRunnerOptions(
                     input_ids=resolved_input_ids,
                     do_preprocess=resolved_input_ids is None,
+                    stop_on_visible_text=bool(request.stop_sequences),
                 ),
             )
         except RequestError as error:
