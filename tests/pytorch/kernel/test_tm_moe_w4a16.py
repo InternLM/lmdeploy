@@ -385,3 +385,110 @@ def test_auto_route_falls_back_on_bf16(monkeypatch):
     assert reason is not None, 'SM86 has no bf16 u4 family, the route must decline'
     reason = tm_moe_route(group_size=128, w_bit=4, dtype=torch.float16, hidden_dim=4096, ffn_dim=2048)
     assert reason is None, f'fp16 GLM geometry should route to turbomind, got: {reason}'
+
+
+@torch.inference_mode()
+def test_sleep_release_frees_handles_and_repack_restores():
+    """sleep_release closes the packed expert handles; re-pack reproduces the
+    logits.
+
+    The packed handles are not registered tensors, so sleep must free them explicitly or they stay resident across the
+    whole sleep window.
+    """
+    num_experts, top_k, hidden, ffn, group = 8, 4, 512, 256, 128
+    device = torch.device('cuda')
+    gate = _ExpertSet(num_experts, ffn, hidden, group, device, 400)
+    up = _ExpertSet(num_experts, ffn, hidden, group, device, 500)
+    down = _ExpertSet(num_experts, hidden, ffn, group, device, 600)
+
+    from lmdeploy.pytorch.backends.cuda.tm_moe_modules import TurbomindMoeW4A16Impl
+
+    impl = TurbomindMoeW4A16Impl(
+        top_k=top_k,
+        num_experts=num_experts,
+        hidden_dim=hidden,
+        ffn_dim=ffn,
+        group_size=group,
+        renormalize=True,
+    )
+    fused = _fused_gate_up(gate, up)
+    impl.update_weights(fused[0], fused[1], fused[2], down.qweight, down.scales, down.qzeros)
+    assert impl._published
+
+    gen = torch.Generator().manual_seed(1200)
+    x = torch.randn(2, hidden, generator=gen, dtype=torch.float16).to(device)
+    topk_ids = torch.stack([torch.randperm(num_experts, generator=gen)[:top_k] for _ in range(2)])
+    topk_weights = torch.rand(2, top_k, generator=gen) + 0.1
+    topk_weights = (topk_weights / topk_weights.sum(-1, keepdim=True)).to(device)
+    out_first = impl.forward(x, topk_weights, topk_ids.to(device)).cpu()
+    torch.cuda.synchronize()
+
+    impl.sleep_release()
+    assert impl._w13 is None and impl._w_gate is None and impl._w_up is None and impl._w_down is None
+    assert impl._linear is None
+
+    # A sleep/wakeup cycle re-packs from the restored torch weights.
+    impl.update_weights(fused[0], fused[1], fused[2], down.qweight, down.scales, down.qzeros)
+    out_second = impl.forward(x, topk_weights, topk_ids.to(device)).cpu()
+    assert torch.equal(out_first, out_second)
+    impl._release()
+    torch.cuda.empty_cache()
+
+
+def test_layer_sleep_hooks_delegate_and_keep_spill_steady_state():
+    """The MoE layer hooks drive release/restore/re-pack/re-spill in order.
+
+    This is the seam the agent walk reaches (`modules()` getattr); reverting the layer hooks must fail here even though
+    the impl-level test stays green.
+    """
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.nn.moe.tm_w4a16 import FusedMoETmW4A16, TmMoeWeights
+
+    events = []
+    layer = FusedMoETmW4A16.__new__(FusedMoETmW4A16)
+    torch.nn.Module.__init__(layer)
+    layer.impl = SimpleNamespace(
+        sleep_release=lambda: events.append('impl_release'),
+        update_weights=lambda *args: events.append('impl_update'),
+    )
+    layer.release_torch_weights = True
+    layer._spill = None
+
+    gate_up = TmMoeWeights(2, 8, 16, 8, 'gate_up', torch.device('cpu'))
+    down = TmMoeWeights(2, 16, 8, 8, 'down', torch.device('cpu'))
+    gate_up._loaded_parts = gate_up._expected_keys()
+    down._loaded_parts = down._expected_keys()
+    layer.gate_up = gate_up
+    layer.down = down
+
+    layer.sleep_release()
+    assert events == ['impl_release']
+    assert gate_up.qweight.numel() == 0 and down.qweight.numel() == 0
+    resident = layer._spill.resident_bytes
+    assert resident > 0
+
+    layer.sleep_wakeup()
+    assert events == ['impl_release', 'impl_update']
+    # Restored for the re-pack, then re-spilled: the steady state matches a
+    # hot update (empty storages, CPU copies authoritative).
+    assert gate_up.qweight.numel() == 0 and down.qweight.numel() == 0
+    assert layer._spill.resident_bytes >= resident
+
+    # MLA-style exemption keeps the torch copies resident.
+    layer2 = FusedMoETmW4A16.__new__(FusedMoETmW4A16)
+    torch.nn.Module.__init__(layer2)
+    layer2.impl = SimpleNamespace(sleep_release=lambda: events.append('impl_release'),
+                                  update_weights=lambda *args: events.append('impl_update'))
+    layer2.release_torch_weights = False
+    layer2._spill = None
+    gate_up2 = TmMoeWeights(2, 8, 16, 8, 'gate_up', torch.device('cpu'))
+    down2 = TmMoeWeights(2, 16, 8, 8, 'down', torch.device('cpu'))
+    gate_up2._loaded_parts = gate_up2._expected_keys()
+    down2._loaded_parts = down2._expected_keys()
+    layer2.gate_up = gate_up2
+    layer2.down = down2
+    layer2.sleep_release()
+    assert layer2._spill is None and gate_up2.qweight.numel() != 0
+    layer2.sleep_wakeup()
+    assert gate_up2.qweight.numel() != 0  # resident, fed the re-pack
