@@ -122,7 +122,11 @@ class MemDecodeAgent:
                 build_model_ctx=memory_build_model_ctx,
             )
             if not empty_init:
-                load_model_weights(self.model, self.memdecode_config.memory_model_path, device=self.device)
+                quant_config = self.model_config.quant_config
+                normalize_ct = (getattr(quant_config, 'quant_method', None) == 'compressed-tensors'
+                                and getattr(quant_config, 'group_size', None) == 128)
+                load_model_weights(self.model, self.memdecode_config.memory_model_path, device=self.device,
+                                   normalize_ct=normalize_ct)
 
     def _build_model_context(self, build_model_ctx=None):
         """Build context for memory model."""

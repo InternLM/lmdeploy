@@ -35,6 +35,9 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
     weights = group.get('weights')
     expected_weights = {
         'num_bits': 4,
+        # Group 32 is the pre-existing packed ct layout (MoE experts);
+        # group 128 dense linears normalize to the canonical AWQ layout at
+        # load time.
         'group_size': 32,
         'strategy': 'group',
         'symmetric': True,
@@ -44,6 +47,11 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
     if not isinstance(weights, Mapping):
         raise ValueError('Compressed-tensors `group_0.weights` must be an object.')
     for key, expected in expected_weights.items():
+        if key == 'group_size':
+            if weights.get(key) not in (32, 128):
+                raise ValueError(f'Unsupported compressed-tensors `{key}`: expected 32 or 128, '
+                                 f'got {weights.get(key)!r}.')
+            continue
         if weights.get(key) != expected:
             raise ValueError(
                 f'Unsupported compressed-tensors `{key}`: expected {expected!r}, got {weights.get(key)!r}.')
@@ -89,8 +97,10 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'a
     """
     quantization_config = getattr(config.hf_config, 'quantization_config', dict())
     quant_method = quantization_config.get('quant_method', None)
-    if quant_method == 'awq':
-        logger.debug('set torch_dtype to float16 for awq.')
+    if quant_method in ('awq', 'compressed-tensors'):
+        # The W4A16 linear modules are fp16. A bf16 model dtype would make
+        # the residual stream dtype-mismatch the quantized linears.
+        logger.debug(f'set torch_dtype to float16 for {quant_method}.')
         config.hf_config.torch_dtype = 'float16'
         config.dtype = torch.float16
         return config
@@ -1049,10 +1059,24 @@ class QuantizationConfig:
         if self.quant_method == 'compressed-tensors':
             if module_kind == 'norm':
                 return None
-            if not prefix:
-                raise ValueError('compressed-tensors dispatch requires a non-empty canonical module prefix')
-            is_ignored = any(_matches_compressed_tensors_ignore(rule, prefix) for rule in self.ignored_layers)
-            return None if is_ignored else self.quant_method
+            is_ignored = bool(prefix) and any(_matches_compressed_tensors_ignore(rule, prefix)
+                                              for rule in self.ignored_layers)
+            if is_ignored:
+                return None
+            if not prefix and self.ignored_layers:
+                raise ValueError('compressed-tensors dispatch requires a non-empty canonical module '
+                                 'prefix when the checkpoint carries ignore rules')
+            if module_kind == 'linear':
+                # Group-128 dense linears load through the AWQ family: the
+                # weight loader normalizes each ct module to the canonical
+                # AWQ layout at load time (see model_weight_loader). Group 32
+                # keeps the packed ct modules. Most model patches build
+                # linears without a prefix, so ignore-rule matching is
+                # skipped. Checkpoints with ignore rules must pass prefixes.
+                if self.group_size == 128:
+                    return 'awq'
+                return self.quant_method
+            return self.quant_method
         if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
             quant_method = None
             return quant_method

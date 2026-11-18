@@ -41,6 +41,7 @@ from lmdeploy.pytorch.utils import get_gpu_memory, monkey_patch_hf_modules_cache
 from lmdeploy.pytorch.weight_loader.model_weight_loader import (
     ModelWeightLoader,
     load_model_weights,
+    normalize_ct_weights,
     process_weights_after_loading,
 )
 from lmdeploy.serve.openai.protocol import (
@@ -1512,7 +1513,10 @@ class BaseModelAgent:
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
-            load_model_weights(patched_model, model_path, device=device)
+            quant_config = self.model_config.quant_config
+            normalize_ct = (getattr(quant_config, 'quant_method', None) == 'compressed-tensors'
+                            and getattr(quant_config, 'group_size', None) == 128)
+            load_model_weights(patched_model, model_path, device=device, normalize_ct=normalize_ct)
         if adapters is not None:
             logger.debug(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
@@ -1787,6 +1791,23 @@ class BaseModelAgent:
         """Route HF-named update tensors before model-specific renaming."""
         return self.spec_agent.split_updated_weights(weights)
 
+    def _ct_normalize(self):
+        """Whether weight streams of this model carry group-128 ct keys.
+
+        Group-128 dense ct checkpoints normalize to the canonical AWQ layout at load time; group-32 packed ct keys (MoE
+        experts) are consumed raw and must pass through untouched.
+        """
+        quant_config = self.model_config.quant_config
+        return (getattr(quant_config, 'quant_method', None) == 'compressed-tensors'
+                and getattr(quant_config, 'group_size', None) == 128)
+
+    def _renamed_update_weights(self, weights, target):
+        """Rename one update stream for ``target``, translating ct keys."""
+        renamed = ModelWeightLoader._rename_weights_iterator(weights, target)
+        if self._ct_normalize():
+            renamed = normalize_ct_weights(renamed)
+        return list(renamed)
+
     def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):
         """Load one externally supplied bucket into the target and draft
         models."""
@@ -1797,7 +1818,7 @@ class BaseModelAgent:
                                             (spec_model, draft_weights, 'draft')]:
             if target is None or not target_weights:
                 continue
-            renamed = list(ModelWeightLoader._rename_weights_iterator(target_weights, target))
+            renamed = self._renamed_update_weights(target_weights, target)
             logger.info(f'{op_name}: {tag}_num_tensors={len(renamed)}')
             target.load_weights(iter(renamed))
 
@@ -1965,7 +1986,7 @@ class BaseModelAgent:
                 if m is None or not w:
                     continue
 
-                w = list(ModelWeightLoader._rename_weights_iterator(w, m))
+                w = self._renamed_update_weights(w, m)
                 logger.debug(f'Update_params: {tag}_num_tensors={len(w)}')
                 m.load_weights(iter(w))
 

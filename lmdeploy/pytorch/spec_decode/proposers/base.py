@@ -122,7 +122,9 @@ class BaseSpecProposer:
         )
         logger.debug('loading weights for draft model.')
         if not empty_init:
-            load_model_weights(patched_model, model_path, device=self.device)
+            normalize_ct = (getattr(model_config.quant_config, 'quant_method', None) == 'compressed-tensors'
+                            and getattr(model_config.quant_config, 'group_size', None) == 128)
+            load_model_weights(patched_model, model_path, device=self.device, normalize_ct=normalize_ct)
         self.model = patched_model
         self.target_model = target_model
 
