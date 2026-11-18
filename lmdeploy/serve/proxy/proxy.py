@@ -101,7 +101,7 @@ class NodeManager:
         if config_path is not None:
             self.config_path = config_path
         if osp.exists(self.config_path) and self.cache_status:
-            with open(self.config_path) as config_file:
+            with open(self.config_path, encoding='utf-8') as config_file:
                 if os.path.getsize(self.config_path) > 0:
                     logger.info(f'loading node configuration: {self.config_path}')
                     config = json.load(config_file)
@@ -141,7 +141,7 @@ class NodeManager:
         for _, status in nodes.items():
             status.latency = deque(list(status.latency)[-LATENCY_DEQUE_LEN:])
         if self.cache_status:
-            with open(self.config_path, 'w') as config_file:  # update cfg yml
+            with open(self.config_path, 'w', encoding='utf-8') as config_file:  # update cfg yml
                 json.dump({
                     node_url: node_status.model_dump_json()
                     for node_url, node_status in nodes.items()

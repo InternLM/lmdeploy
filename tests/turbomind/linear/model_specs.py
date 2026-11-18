@@ -104,7 +104,7 @@ def _make_model(config: dict[str, Any]) -> ModelSpec:
 
 
 def load_model_specs(path: Path = MODEL_SPECS_PATH) -> tuple[ModelSpec, ...]:
-    config = yaml.safe_load(path.read_text())
+    config = yaml.safe_load(path.read_text(encoding='utf-8'))
     models = tuple(_make_model(model) for model in config['models'])
     names = tuple(model.name for model in models)
     if len(names) != len(set(names)):
