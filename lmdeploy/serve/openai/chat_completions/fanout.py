@@ -30,9 +30,10 @@ class _FanoutResponseError(Exception):
 class _FanoutRequest:
     """Give each recursive endpoint call an isolated JSON payload."""
 
-    def __init__(self, request: Request, payload: dict):
+    def __init__(self, request: Request, payload: dict, choice_index: int):
         self._request = request
         self._payload = payload
+        self._trace_choice_index = choice_index
 
     def __getattr__(self, name):
         """Delegate request attributes not overridden by this wrapper."""
@@ -125,7 +126,7 @@ async def _invoke_choices(
         choice_payload.update(n=1, session_id=-1, seed=choice_request.seed)
         response = await endpoint(
             choice_request,
-            _FanoutRequest(raw_request, choice_payload),
+            _FanoutRequest(raw_request, choice_payload, index),
         )
         if isinstance(response, Response) and not isinstance(
                 response, StreamingResponse):

@@ -1,0 +1,83 @@
+{
+  "status": "platform change specification; not deployed",
+  "service": "lmdeploy-full",
+  "engine": "lmdeploy",
+  "role": "full",
+  "span_mapping": {
+    "llm_request": "model.router",
+    "inference": "model.inference",
+    "prefill": "model.prefill",
+    "decode": "model.decode"
+  },
+  "add_span_names": [
+    "model.inference"
+  ],
+  "allowed_attributes": [
+    "request.id",
+    "session.id",
+    "trace.context.missing",
+    "http.request.method",
+    "url.path",
+    "http.route",
+    "http.response.status_code",
+    "gen_ai.provider.name",
+    "gen_ai.operation.name",
+    "gen_ai.request.model",
+    "gen_ai.response.model",
+    "gen_ai.usage.input_tokens",
+    "gen_ai.usage.output_tokens",
+    "gen_ai.usage.cached_tokens",
+    "gen_ai.latency.time_to_first_token",
+    "gen_ai.latency.e2e",
+    "lmdeploy.prompt_index",
+    "lmdeploy.backend",
+    "lmdeploy.finish_reason",
+    "lmdeploy.queue_seconds",
+    "lmdeploy.store_lookup_seconds",
+    "lmdeploy.store_matched_tokens",
+    "lmdeploy.kv_load_seconds",
+    "lmdeploy.kv_loaded_tokens",
+    "lmdeploy.kv_load_status",
+    "lmdeploy.outcome",
+    "lmdeploy.http_total_seconds",
+    "lmdeploy.first_output_seconds",
+    "lmdeploy.reasoning_first_seconds",
+    "lmdeploy.reasoning_last_seconds",
+    "lmdeploy.content_first_seconds",
+    "lmdeploy.reasoning_to_content_seconds",
+    "lmdeploy.max_output_gap_seconds",
+    "lmdeploy.handle_wait_seconds",
+    "lmdeploy.tpot_seconds",
+    "lmdeploy.token_counts_complete",
+    "lmdeploy.preprocess_seconds",
+    "lmdeploy.choice_index",
+    "lmdeploy.base_model"
+  ],
+  "events": [
+    "request.received",
+    "llm.first_token",
+    "llm.stream.end",
+    "error"
+  ],
+  "latency_unit": "seconds; float",
+  "timestamps": "Unix epoch nanoseconds",
+  "session_policy": "x-session-id first; x-openclaw-session-key only without affinity; affinity normalization and injection as x-session-id belong to gateway, never export or hash raw affinity in engine",
+  "resource_allowed_attributes": [
+    "service.name",
+    "service.instance.id",
+    "deployment.environment",
+    "k8s.cluster.name",
+    "k8s.namespace.name",
+    "k8s.pod.name",
+    "k8s.node.name",
+    "inference.engine",
+    "inference.role"
+  ],
+  "span_parent_mapping": {
+    "inference": "llm_request",
+    "prefill": "llm_request",
+    "decode": "llm_request"
+  },
+  "batch_phase_correlation": "lmdeploy.prompt_index and optional lmdeploy.choice_index; phase parents are the HTTP/router span",
+  "service_configuration": "lmdeploy-full by default; register any configured service.name in the platform exact allowlist before deployment"
+}
