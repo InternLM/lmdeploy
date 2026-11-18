@@ -352,6 +352,24 @@ def test_load_binding_error_rolls_back_destinations_without_hiding_error(setup_l
     assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
 
 
+def test_load_handoff_failure_can_retry_without_leaking_lease(setup_load, monkeypatch):
+    paging, store = setup_load(auxiliary=True)
+    seq = paging.add_session(0).add_sequence(torch.arange(73))
+    blocks = paging.block_manager.get_num_free_gpu_blocks()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(paging.kv_load_coordinator, 'track_prefill', Mock(side_effect=RuntimeError('handoff failed')))
+        with pytest.raises(RuntimeError, match='handoff failed'):
+            paging.schedule(is_prefill=True)
+    assert not store._pending_loads and not store._compact_loads
+    assert not paging.state_manager._accesses and not paging.state_manager._banks
+    assert seq.status == MessageStatus.WAITING and seq.logical_state == -1
+    assert seq.num_blocks == 0 and paging.block_manager.get_num_free_gpu_blocks() == blocks
+    assert paging.schedule(is_prefill=True).running == []
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert store.client.lookup.call_count == 1
+
+
 @pytest.mark.parametrize('role', ['kv_consumer', 'kv_both'])
 @pytest.mark.parametrize('action', ['failure', 'stop', 'end'])
 def test_pressure_load_failure_or_cancel_keeps_lease_until_all_ranks(setup_load, role, action):
