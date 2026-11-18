@@ -50,11 +50,11 @@ class TorchWeightSpill:
         self._armed.append(param)
         original = getattr(param, 'weight_loader', None)
 
-        def loader(wrapped_param, loaded_weight, **kwargs):
+        def loader(wrapped_param, *args, **kwargs):
             self.restore()
             if original is None:
                 return None
-            return original(wrapped_param, loaded_weight, **kwargs)
+            return original(wrapped_param, *args, **kwargs)
 
         param.weight_loader = loader
 

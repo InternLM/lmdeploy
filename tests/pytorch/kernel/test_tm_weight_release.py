@@ -82,3 +82,23 @@ def test_prune_drops_replaced_generations():
     spill.spill(dict(qweight=second))
     assert all(armed is second for armed in spill._armed)
     assert [name for name in spill._spills] == ['qweight']
+
+
+def test_armed_loader_forwards_positional_args():
+    """The restore wrapper must forward positional loader arguments.
+
+    Vision QKV loaders are called as ``weight_loader(param, loaded_weight,
+    shard_id)``; dropping positional args raises TypeError on the first
+    touch of a spilled projection.
+    """
+    spill = TorchWeightSpill()
+    param = torch.nn.Parameter(torch.empty(8), requires_grad=False)
+    calls = []
+    param.weight_loader = lambda p, loaded_weight, shard_id=None: calls.append((loaded_weight, shard_id))
+    spill.spill(dict(qweight=param))
+
+    loaded = torch.arange(8, dtype=torch.float32)
+    param.weight_loader(param, loaded, 'q')
+    assert calls and calls[0][1] == 'q'
+    assert torch.equal(calls[0][0], loaded)
+    assert param.data.numel() == 8  # restore ran before the original loader

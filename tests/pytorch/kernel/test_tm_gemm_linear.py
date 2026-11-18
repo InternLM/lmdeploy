@@ -240,6 +240,30 @@ def test_hot_update_syncs_and_repacks():
     assert torch.equal(out_first, out_second)
 
 
+@cuda_required
+def test_forward_converts_non_fp16_activations():
+    """Non-fp16 activations keep the AWQ Triton contract: fp16 compute in,
+    caller dtype out."""
+    if not _supported_on_device(512, 256):
+        pytest.skip('registry rejects the shape on this device')
+
+    k, n, group_size = 512, 256, 128
+    qw, sc, qz, _ = _random_awq(k, n, group_size, seed=6)
+    x_fp16 = torch.randn(4, k, dtype=torch.float16, device='cuda')
+    x_bf16 = x_fp16.bfloat16()
+
+    impl = TurbomindGemmW4A16Impl(k, n, group_size)
+    impl.update_weights(qw, sc, qz)
+    with torch.no_grad():
+        # The documented contract: non-fp16 input is converted to fp16 for
+        # the native call and the output is cast back to the caller dtype.
+        manual = impl.forward(x_bf16.half(), qw, sc, qz).squeeze(0).bfloat16()
+        out_bf16 = impl.forward(x_bf16, qw, sc, qz).squeeze(0)
+
+    assert out_bf16.dtype == torch.bfloat16
+    assert torch.equal(out_bf16, manual)
+
+
 # ---------------------------------------------------------------------------
 # batched rejection, bias, and builder routing.
 # ---------------------------------------------------------------------------
