@@ -6,6 +6,7 @@ import socket
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from time import perf_counter, time
+from typing import TYPE_CHECKING
 
 from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
@@ -18,6 +19,9 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
 )
 from lmdeploy.pytorch.disagg.messages import DistServeRegisterMRMessage, MigrationAssignment, PDTransferResult
 from lmdeploy.utils import get_logger
+
+if TYPE_CHECKING:
+    from mooncake.engine import ScatterTransferTicket
 
 logger = get_logger('lmdeploy')
 
@@ -103,7 +107,8 @@ class MooncakeMigrationManagement:
         self.executor = shared.executor if shared is not None else ThreadPoolExecutor(max_workers=2,
                                                                                      thread_name_prefix='pd-transfer')
         self.slots = shared.slots if shared is not None else asyncio.Semaphore(2)
-        self.pending_tickets = shared.pending_tickets if shared is not None else []
+        self.pending_jobs = shared.pending_jobs if shared is not None else set()
+        self.pending_tickets = shared.pending_tickets if shared is not None else set()
         self.has_drain_ticket = hasattr(self.engine, 'scatter_transfer_sync_read_with_ticket')
 
     def _initialize_p2p(self, init_request: DistServeInitRequest):
@@ -191,23 +196,61 @@ class MooncakeMigrationManagement:
         except asyncio.TimeoutError:
             return PDTransferResult(transfer_id=assignment.transfer_id, status='failed_drained',
                                     error='PD submission deadline expired waiting for a native slot.')
+        loop = asyncio.get_running_loop()
         try:
-            future = asyncio.get_running_loop().run_in_executor(self.executor, self._migrate, assignment)
-            while True:
-                try:
-                    return await asyncio.shield(future)
-                except asyncio.CancelledError:
-                    # Logical cancellation belongs to paging. Return the physical
-                    # outcome before releasing the worker slot, even on shutdown.
-                    continue
+            future = loop.run_in_executor(self.executor, self._migrate, assignment)
+            self.pending_jobs.add(future)
+            try:
+                result, ticket = await self._wait_native(future)
+            finally:
+                self.pending_jobs.remove(future)
         finally:
             self.slots.release()
+        if ticket is None:
+            return result
+        if result.status != 'completion_unknown':
+            self.pending_tickets.remove(ticket)
+            return result
 
-    def _migrate(self, assignment: MigrationAssignment) -> PDTransferResult:
+        # An unknown ticket owns native work; dropping it can block with the GIL
+        # held. Poll without occupying a submission slot or a native thread while
+        # idle, so an unhealthy peer does not prevent healthy transfers.
+        begin = perf_counter()
+        try:
+            while not ticket.drained:
+                try:
+                    await asyncio.sleep(0.1)
+                except asyncio.CancelledError:
+                    pass
+                await self._wait_native(loop.run_in_executor(self.executor, ticket.drain, 0))
+        except Exception as error:
+            result.error = f'Mooncake scatter drain failed: {error}'
+            return result
+        result.status = ticket.status.name.lower()
+        result.error = '' if result.status == 'completed' else 'Mooncake scatter read failed after draining.'
+        self.pending_tickets.remove(ticket)
+        if PROFILE_PHASES:
+            trace_phase('pd_native_drain', transfer_id=assignment.transfer_id, rank=self.rank,
+                        drain_ms=(perf_counter() - begin) * 1000, status=result.status)
+        return result
+
+    @staticmethod
+    async def _wait_native(future):
+        # Paging owns logical cancellation and its 300-second deadline. Shield
+        # each native Future directly: a child Task would also be cancelled by
+        # worker shutdown, losing the physical outcome and releasing its slot.
+        while True:
+            try:
+                return await asyncio.shield(future)
+            except asyncio.CancelledError:
+                if future.cancelled():
+                    raise
+
+    def _migrate(self, assignment: MigrationAssignment) -> tuple[PDTransferResult, 'ScatterTransferTicket | None']:
         begin = perf_counter()
         if assignment.deadline and time() >= assignment.deadline:
             return PDTransferResult(transfer_id=assignment.transfer_id, status='failed_drained',
-                                    error='PD submission deadline expired before native I/O.')
+                                    error='PD submission deadline expired before native I/O.'), None
         if not self.remote_url:
             raise RuntimeError(f'No connection established to remote engine {self.remote_engine_id}')
         local_addresses, remote_addresses, lengths = [], [], []
@@ -219,17 +262,19 @@ class MooncakeMigrationManagement:
                     or task.source_offset + task.length > local['length']
                     or task.target_offset + task.length > remote['length']):
                 raise ValueError('PD transfer exceeds its registered allocation.')
-            local_addresses.append(local['addr'] + task.source_offset)
-            remote_addresses.append(remote['addr'] + task.target_offset)
-            lengths.append(task.length)
+            if not self.has_drain_ticket:
+                local_addresses.append(local['addr'] + task.source_offset)
+                remote_addresses.append(remote['addr'] + task.target_offset)
+                lengths.append(task.length)
             fragments.setdefault(key, []).append(task)
         result = PDTransferResult(transfer_id=assignment.transfer_id, status='completed')
-        if not lengths:
-            return result
+        if not fragments:
+            return result, None
         prepared = perf_counter()
         if assignment.deadline and time() >= assignment.deadline:
             return PDTransferResult(transfer_id=assignment.transfer_id, status='failed_drained',
-                                    error='PD submission deadline expired while preparing addresses.')
+                                    error='PD submission deadline expired while preparing addresses.'), None
+        ticket = None
         # This is the native exception boundary. Once submission may have
         # happened, an exception does not prove that DMA has stopped.
         try:
@@ -243,11 +288,10 @@ class MooncakeMigrationManagement:
                     [[t.source_offset for t in fragments[k]] for k in keys],
                     [[t.target_offset for t in fragments[k]] for k in keys],
                     [[t.length for t in fragments[k]] for k in keys])
-                if not ticket.drained:
-                    self.pending_tickets.append(ticket)
-                    result.status = 'completion_unknown'
-                elif str(ticket.status).split('.')[-1] != 'COMPLETED':
-                    result.status = 'failed_drained'
+                self.pending_tickets.add(ticket)
+                result.status = ticket.status.name.lower()
+                if result.status != 'completed':
+                    result.error = f'Mooncake scatter read to {self.remote_url}: {result.status}.'
             else:
                 code = self.engine.batch_transfer_sync_read(self.remote_url, local_addresses, remote_addresses,
                                                            lengths)
@@ -258,10 +302,10 @@ class MooncakeMigrationManagement:
             result.status = 'completion_unknown'
             result.error = str(error)
         if PROFILE_PHASES:
-            trace_phase('pd_native', transfer_id=assignment.transfer_id, rank=self.rank, segments=len(lengths),
-                        bytes=sum(lengths), address_ms=(prepared - begin) * 1000,
+            trace_phase('pd_native', transfer_id=assignment.transfer_id, rank=self.rank, segments=len(assignment.batch),
+                        bytes=sum(task.length for task in assignment.batch), address_ms=(prepared - begin) * 1000,
                         native_ms=(perf_counter() - prepared) * 1000, status=result.status)
-        return result
+        return result, ticket
 
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.Mooncake.name)
@@ -297,7 +341,8 @@ class MooncakeBackend(MigrationBackendImpl):
         return result
 
     def close(self):
-        if self.has_unknown_completion:
+        if self.has_unknown_completion or (self.shared is not None
+                                           and (self.shared.pending_jobs or self.shared.pending_tickets)):
             raise RuntimeError('Cannot unregister PD allocations while native completion is unknown.')
         if self.shared is None:
             return

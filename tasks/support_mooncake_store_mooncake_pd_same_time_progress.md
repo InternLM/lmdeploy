@@ -7,6 +7,17 @@
 - PD 与 Store 独立持有资源。2026-11-18 用户确认 PD 采用有界隔离及 300 秒强制回收；取消不等于 DMA 完成，Store 持有不受 PD 超时影响。
 - 不引入 MultiConnector，不修改 Store 的内容寻址身份。
 
+## 2026-11-18 Mooncake 0.3.14 升级
+
+Docker 构建和安装阶段的 Mooncake pin 升至 0.3.14。PD 使用 grouped scatter ticket，区分明确 drained 与 unknown；未知 ticket 后台排空，迟到终态提前释放 PD 引用。整个 pool 注销同时检查运行中的 native Future 和未完成 ticket。保留请求级 300 秒回收，不自动重启 worker/TransferEngine。
+
+实机部署还发现并修复迁移通知的空闲循环空转，避免 D 的推理及 health RPC 被饿死；独立提交 `a4dfe9a5`。新旧性能基线都包含此修复。
+
+- 指定 H200 容器最终 GPU 回归 **897 passed**；真实 RDMA 字节校验、源进程退出后 `failed_drained`、同一接收端 TransferEngine 从新源恢复均通过。
+- 32 次取消、D 在生成阶段保存新增 KV 并由 P 加载、native 连接拒绝后的请求恢复均通过；源端 grant 真实等待 **301.51 秒**后回收 8 个 block，无需重启。
+- 8K/32K 六个逐 token 对照通过；129-token 的三例差异在新旧包中都存在，根因仍未解决。新版 GSM8K **99/100** 为冒烟结果。
+- 传输及端到端性能存在波动，不能声称全面提速。完整分阶段数据、暖机口径、版本依据和验证边界集中在 [升级报告](mooncake_0314_pd_upgrade.md)，不在本进展文档重复展开。
+
 ## 2026-11-18 请求级失败恢复
 
 本节更新了后文历史测试使用的“unknown 后封锁 engine、必须重启”策略。用户确认优先保持线上可用性：PD 失败只隔离对应事务，完成后提前释放，隔离满 300 秒强制回收；不默认重启 worker、TransferEngine 或整套缓存。

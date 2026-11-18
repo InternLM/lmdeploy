@@ -286,9 +286,13 @@ stateDiagram-v2
 
 `Quarantined` 只影响该事务，不封锁整个 engine 或 Mooncake backend。状态接口公开隔离事务数、最老隔离年龄、pinned blocks 和累计强制回收数。隔离从第一次取消、失败或完成状态不明开始计时，300 秒后回收；新错误不刷新期限。底层调用尚未返回时继续持有其 Future，迟到结果不再操作已回收事务的分页资源。
 
-Mooncake 最新 [TransferEngine API](https://github.com/kvcache-ai/Mooncake/blob/main/docs/source/api-reference/python/transfer-engine.md) 已描述 drainable scatter ticket，并区分 `COMPLETED`、`FAILED_DRAINED`、`COMPLETION_UNKNOWN`。未知状态要求继续持有两端 buffer 和 registration。目标容器是否具备该接口、或现有 batch sync API 是否提供等价保证，必须在 T0 核实，不能从 API 的 “sync” 名称推断。
+Mooncake **0.3.14** 的 [TransferEngine API](https://github.com/kvcache-ai/Mooncake/blob/v0.3.14/docs/source/api-reference/python/transfer-engine.md) 提供 drainable scatter ticket，并区分 `COMPLETED`、`FAILED_DRAINED`、`COMPLETION_UNKNOWN`。Docker 的构建和安装阶段统一固定该版本，CUDA 13 使用 `mooncake-transfer-engine-cuda13`。PD 仍使用 classic RDMA，不切换 TENT，也不与 Store 强行共用 TransferEngine。
 
-当前旧版接口没有 drain 查询能力，返回 unknown 时使用上述有界隔离，不引入默认重启。整个 pool 的注销/显存卸载仍需确认 native 完成；请求 block 的超时复用并不等价于允许销毁内存注册。执行器收到的传输携带 Unix 提交截止时间（跨机 worker 要求时钟同步），排队超时或地址准备完成时已经过期的任务不再提交 native I/O。
+worker 按 allocation 组织 scatter ranges，不再同时构造旧 batch API 的扁平地址数组。首次同步等待未完成时，持有该操作的 ticket，并在后台每 100 ms 调用一次 `drain(0)`；不在 Python event loop 中阻塞等待，不让未完成 ticket 长期占用提交 slot 或线程。确认终态后将结果沿现有 executor Future 返回，scheduler 提前解除对应 PD 引用。整个传输超过 180 秒、取消或源端 abort 时仍按既有策略进入 300 秒隔离；强制回收后迟到完成只消费结果，不再操作分页资源。
+
+ticket 不等价于取消句柄，不能丢弃未终结 ticket：其 native 析构可能持有 GIL 等待 DMA。后台继续 drain 并持有 allocation 的注册；仍在运行的 native Future、未终结 ticket 或无 ticket 的 unknown 都拒绝整个 pool 的注销。首次 native 调用尚未返回时也不能卸载其 allocation。明确 drained 后才删除 ticket，避免“曾经 unknown”永久阻止已安全的卸载。没有增加默认 worker/TransferEngine 重启或全局连接重建。
+
+旧版接口仍保留兼容路径：没有 drain 查询能力时，负返回值或异常使用上述有界隔离。请求 block 的超时复用并不等价于允许销毁内存注册。执行器收到的传输携带 Unix 提交截止时间（跨机 worker 要求时钟同步），排队超时或地址准备完成时已经过期的任务不再提交 native I/O。版本依据和实机结果见 [0.3.14 升级验证](mooncake_0314_pd_upgrade.md)。
 
 ### 6.4 Router 取消与源端释放
 

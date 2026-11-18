@@ -1,8 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Exercise real GPU RDMA bytes, fragmented plans and undrained peer failure.
+"""Exercise real GPU RDMA bytes, fragmented plans and peer failure recovery.
 
-Run in a disposable process: --fail-peer deliberately quarantines the receiver,
-which exits without unregistering or recycling its allocations.
+With scatter tickets, --fail-peer checks failed-drained completion and reads from a replacement peer using the same
+receiver engine. Older APIs cannot prove drain and exit without unregistering their allocations.
 """
 import argparse
 import asyncio
@@ -117,17 +117,48 @@ async def receive(args, pipe, source):
     source.join(30)
     assert source.exitcode == 0
     if args.fail_peer:
-        assignment.batch = assignment.batch[:1]
-        result = await backend.p2p_migrate(assignment)
-        assert result.status == 'completion_unknown', result
+        start = time.perf_counter()
+        result = await backend.p2p_migrate(assignment.model_copy(update=dict(batch=assignment.batch[:1])))
+        failure_ms = (time.perf_counter() - start) * 1000
+        expected_status = 'failed_drained' if backend.shared.has_drain_ticket else 'completion_unknown'
+        assert result.status == expected_status, result
+        if result.status == 'completion_unknown':
+            try:
+                backend.close()
+            except RuntimeError as error:
+                assert 'unknown' in str(error)
+            else:
+                raise AssertionError('Undrained allocations were unregistered.')
+            print(json.dumps(dict(peer_failure=result.model_dump(), failure_ms=failure_ms,
+                                  allocations_retained=True)), flush=True)
+            os._exit(0)
+
+        engine = backend.shared.engine
+        ctx = mp.get_context('spawn')
+        parent, child = ctx.Pipe()
+        replacement = ctx.Process(target=source_process, args=(child, args.source_gpu))
+        replacement.start()
         try:
-            backend.close()
-        except RuntimeError as error:
-            assert 'unknown' in str(error)
-        else:
-            raise AssertionError('Undrained allocations were unregistered.')
-        print(json.dumps(dict(peer_failure=result.model_dump(), allocations_retained=True)), flush=True)
-        os._exit(0)
+            assert parent.poll(60), 'Replacement peer did not publish its endpoint.'
+            backend.p2p_connect('source', parent.recv())
+            expected = {name: pools[0].tensor.cpu() for name, pools in groups.items()}
+            for pools in groups.values():
+                pools[0].tensor.fill_(255)
+            torch.cuda.synchronize()
+            recovered = await backend.p2p_migrate(assignment.model_copy(update=dict(transfer_id='replacement')))
+            assert recovered.status == 'completed', recovered
+            assert backend.shared.engine is engine
+            for name, pools in groups.items():
+                assert torch.equal(pools[0].tensor.cpu(), expected[name]), name
+            parent.send('stop')
+            replacement.join(30)
+            assert replacement.exitcode == 0
+        finally:
+            if replacement.is_alive():
+                replacement.terminate()
+            replacement.join(10)
+        print(json.dumps(dict(peer_failure=result.model_dump(), failure_ms=failure_ms,
+                              recovered_without_engine_restart=True, bytes_equal=True)), flush=True)
     backend.close()
 
 
