@@ -15,6 +15,7 @@ from lmdeploy.serve.utils.server_utils import AuthenticationMiddleware
 from lmdeploy.utils import get_logger
 
 logger = get_logger('lmdeploy')
+_THREAD_JOIN_TIMEOUT = 5
 
 
 def mount_metrics(app: FastAPI, enable_metrics: bool):
@@ -77,7 +78,15 @@ async def monitoring_server(health_monitor: EngineHealthMonitor,
         with ExitStack() as stack:
             sockets = [stack.enter_context(sock.dup()) for sock in listener.sockets]
             server = uvicorn.Server(config)
-            thread = Thread(target=server.run, kwargs={'sockets': sockets}, name='lmdeploy-monitoring', daemon=True)
+
+            def run():
+                try:
+                    server.run(sockets=sockets)
+                finally:
+                    if not server.should_exit:
+                        logger.error('Monitoring server exited unexpectedly.')
+
+            thread = Thread(target=run, name='lmdeploy-monitoring', daemon=True)
             thread.start()
             try:
                 while not server.started:
@@ -89,6 +98,8 @@ async def monitoring_server(health_monitor: EngineHealthMonitor,
                 yield port
             finally:
                 server.should_exit = True
-                # Join during lifespan shutdown so cancellation cannot leave a
-                # listener behind. Uvicorn bounds in-flight request shutdown above.
-                thread.join()
+                # Bound the wait even if a handler blocks the monitoring loop.
+                thread.join(timeout=_THREAD_JOIN_TIMEOUT)
+                if thread.is_alive():
+                    logger.error('Monitoring thread did not stop within %s seconds; continuing engine cleanup.',
+                                 _THREAD_JOIN_TIMEOUT)

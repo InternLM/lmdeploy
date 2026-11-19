@@ -194,6 +194,64 @@ def test_bind_failure_closes_engine_during_api_startup(monkeypatch):
     asyncio.run(run())
 
 
+def test_stuck_monitoring_thread_does_not_block_engine_cleanup(monkeypatch):
+    api = importlib.import_module('lmdeploy.serve.openai.api_server')
+    monitoring = importlib.import_module('lmdeploy.serve.monitoring')
+    release = threading.Event()
+    error = Mock()
+
+    def stuck(server, sockets):
+        server.started = True
+        release.wait(3)
+
+    monkeypatch.setattr(uvicorn.Server, 'run', stuck)
+    monkeypatch.setattr(monitoring, '_THREAD_JOIN_TIMEOUT', 0.01)
+    monkeypatch.setattr(monitoring.logger, 'error', error)
+    engine = SimpleNamespace(start_loop=Mock(), close=Mock(), is_sleeping=False,
+                             health_probe=AsyncMock(return_value=dict(status='healthy', message='ready')))
+
+    async def run():
+        lifespan = api.create_lifespan_handler(None, engine, api.ServerContext(),
+                                               monitoring_config=dict(host='127.0.0.1', port=0))
+        async with lifespan(None):
+            thread = next(t for t in threading.enumerate() if t.name == 'lmdeploy-monitoring')
+        try:
+            engine.close.assert_called_once()
+            assert thread.is_alive()
+            assert 'continuing engine cleanup' in error.call_args.args[0]
+        finally:
+            release.set()
+            thread.join(timeout=1)
+
+    asyncio.run(run())
+
+
+def test_monitoring_logs_unexpected_thread_exit(monkeypatch):
+    monitoring = importlib.import_module('lmdeploy.serve.monitoring')
+    exit_monitor = threading.Event()
+    error = Mock()
+
+    def stop(server, sockets):
+        server.started = True
+        exit_monitor.wait(3)
+
+    monkeypatch.setattr(uvicorn.Server, 'run', stop)
+    monkeypatch.setattr(monitoring.logger, 'error', error)
+
+    async def run():
+        draining = threading.Event()
+        async with monitoring_server(make_monitor(), draining=draining, host='127.0.0.1',
+                                     port=0, enable_metrics=False):
+            thread = next(t for t in threading.enumerate() if t.name == 'lmdeploy-monitoring')
+            exit_monitor.set()
+            thread.join(timeout=1)
+            assert not thread.is_alive()
+            error.assert_called_once_with('Monitoring server exited unexpectedly.')
+            assert not draining.is_set()
+
+    asyncio.run(run())
+
+
 def test_monitoring_preserves_access_logger(monkeypatch):
     access = logging.getLogger('uvicorn.access')
     handler = logging.NullHandler()
