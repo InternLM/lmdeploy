@@ -170,7 +170,7 @@ class TestParse:
                                 'dynamic': False,
                             })
         }
-        with pytest.raises(ValueError, match='dynamic input'):
+        with pytest.raises(ValueError, match='static per-tensor W8A8 input scales are unsupported'):
             _parse_compressed_tensors_config(config)
 
     def test_float_rejects_int_weights(self):
