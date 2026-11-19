@@ -50,8 +50,10 @@ const Family u4_d_128{18, 190, kHalf, kHalf, 128, 8, 1, 1, true, false, supports
 const Family u4_g_128{19, 189, kHalf, kHalf, 128, 8, 1, 1, true, true, supports_u4<128, kHalf>, pack_u4<128, true>};
 const Family mxfp4{20, 200, kBfloat16, kBfloat16, 32, 8, 1, 1, true, true, supports_mxfp4, mxfp4_packer};
 
-// NVFP4: E2M1 weights + per-group-16 half scales (global folded on the Python
-// side). fp16 compute: the fragment dequant reads uint16 scales as half.
+// NVFP4: E2M1 weights + per-group-16 scales, consumed natively on SM80+: raw
+// e4m3 scales are widened to fp16 (exact) by the bridge and the per-tensor
+// global scale reaches the GEMM epilogue, which multiplies the output by it.
+// fp16 compute: the fragment dequant reads uint16 scales as half.
 // Reuses the MXFP4 kernel tiling list (same packed-A orientation, dense and
 // grouped), with align_k tightened from 32 to the NVFP4 group size 16.
 const Family nvfp4{40, 201, kHalf, kHalf, 16, 8, 1, 1, true, true, supports_nvfp4, nvfp4_packer};

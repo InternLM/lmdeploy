@@ -49,7 +49,8 @@ const Family mxfp4{12, 190, kHalf, kHalf, 32, 8, 1, 1, true, true, supports_mxfp
 constexpr auto nvfp4_packer =
     pack_nvfp4<Sm75, kRowMajor, HMMA_16816 | OPERAND_B | 1, kColMajor, HMMA_16816 | OPERAND_V | 1>;
 
-// Dense NVFP4: E2M1 weights (B) + per-group-16 half scales (V), flat layout.
+// Dense NVFP4: E2M1 weights (B) + per-group-16 half scales (V, exact-widened
+// raw e4m3), flat layout; the per-tensor global scale reaches the epilogue.
 const Family nvfp4{13, 190, kHalf, kHalf, 16, 8, 1, 1, true, false, supports_nvfp4, nvfp4_packer};
 
 // Grouped NVFP4 (MoE experts): blocked A (group_axis = 0), same E2M1 packed-B +
