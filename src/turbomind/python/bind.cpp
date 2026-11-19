@@ -3,6 +3,7 @@
 #include <array>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
@@ -265,9 +266,47 @@ ft::DataType getDataType(DLDataType data_type)
     throw py::value_error("unsupported DLPack dtype");
 }
 
-std::shared_ptr<Tensor> FromDLPack(const py::object& object)
+// Export one producer tensor through the DLPack protocol. When the consumer
+// stream is known, pass it to ``__dlpack__``: stream-aware producers (torch)
+// then record the exchange on that stream. A no-stream export assumes the
+// legacy default stream as the consumer; on torch builds inside the
+// pytorch/pytorch#150217..#163242 window that mapping makes the producing
+// thread issue legacy-default-stream work, so a consumer running on any other
+// stream — notably CUDA graph capture — synchronizes and the capture is
+// invalidated. Producers without ``__dlpack_device__`` or without the
+// ``stream`` keyword keep the legacy no-stream behavior.
+py::object ExportDLPack(const py::object& object, std::optional<std::uintptr_t> stream)
 {
-    py::capsule capsule   = object.attr("__dlpack__")();
+    // Stream pointer 0 is the legacy default stream: the no-stream export
+    // already names it as the consumer, and producers reject the literal 0.
+    if (!stream.has_value() || *stream == 0) {
+        return object.attr("__dlpack__")();
+    }
+    bool is_cuda = true;
+    if (py::hasattr(object, "__dlpack_device__")) {
+        py::tuple device = object.attr("__dlpack_device__")();
+        if (device.size() >= 1) {
+            is_cuda = device[0].cast<int>() == static_cast<int>(DLDeviceType::kDLCUDA);
+        }
+    }
+    if (!is_cuda) {
+        return object.attr("__dlpack__")();
+    }
+    try {
+        return object.attr("__dlpack__")(py::arg("stream") = static_cast<unsigned long long>(*stream));
+    }
+    catch (const py::error_already_set& e) {
+        if (!e.matches(PyExc_TypeError)) {
+            throw;
+        }
+        // Producer predates the stream keyword; legacy semantics apply.
+        return object.attr("__dlpack__")();
+    }
+}
+
+std::shared_ptr<Tensor> FromDLPack(const py::object& object, std::optional<std::uintptr_t> stream)
+{
+    py::capsule capsule   = ExportDLPack(object, stream);
     auto*       managed   = static_cast<DLManagedTensor*>(PyCapsule_GetPointer(capsule.ptr(), kDlTensorCapsuleName));
     auto&       dl_tensor = managed->dl_tensor;
 
@@ -642,7 +681,7 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "copy_from",
             [](Tensor& self, const py::object& object) {
-                auto src = FromDLPack(object);
+                auto src = FromDLPack(object, std::nullopt);
                 TM_CHECK_EQ(self.byte_size(), src->byte_size()) << self << " " << *src;
                 safe_memcpy(self.raw_data(), src->raw_data(), self.byte_size());
             },
@@ -650,7 +689,7 @@ PYBIND11_MODULE(_turbomind, m)
         .def(
             "copy_from",
             [](Tensor& self, const py::object& object, std::uintptr_t stream_ptr) {
-                auto src = FromDLPack(object);
+                auto src = FromDLPack(object, stream_ptr);
                 TM_CUDA_CHECK(cudaMemcpyAsync(self.raw_data(),
                                               src->raw_data(),
                                               self.byte_size(),
@@ -695,7 +734,7 @@ PYBIND11_MODULE(_turbomind, m)
             },
             "dtype"_a,
             "shape"_a);
-    m.def("from_dlpack", &FromDLPack, "tensor"_a);
+    m.def("from_dlpack", &FromDLPack, "tensor"_a, "stream"_a = py::none());
     m.def(
         "generic_copy_on_stream",
         [](std::shared_ptr<Tensor> src, std::shared_ptr<Tensor> dst, std::uintptr_t stream_ptr) {

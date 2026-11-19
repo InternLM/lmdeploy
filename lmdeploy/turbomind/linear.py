@@ -47,6 +47,27 @@ def _to_torch_dtype(dtype):
     return next(torch_dtype for torch_dtype, name in _TORCH_TO_TM_NAME.items() if dtype == getattr(_tm.DataType, name))
 
 
+def _from_dlpack(tensor, device: torch.device):
+    """Import a tensor on the stream the native kernels will run on.
+
+    The consuming stream is the current Torch stream of ``device``: execution
+    activates the device context bound to that stream. Exporting with it keeps
+    torch's stream-aware DLPack exchange capture-safe — a no-stream export
+    assumes the legacy default stream as the consumer, which on torch builds
+    inside the pytorch/pytorch#150217..#163242 window makes torch issue
+    legacy-default-stream work during CUDA graph capture and invalidates the
+    capture. CPU tensors take the legacy export (the protocol forbids a
+    stream there and the native side never imports them into a graph).
+    """
+    if tensor.device.type == 'cuda':
+        stream = torch.cuda.current_stream(device)
+        # Stream pointer 0 (legacy default stream) is what a no-stream export
+        # already names as the consumer, and producers reject the literal 0.
+        if stream.cuda_stream != 0:
+            return _tm.from_dlpack(tensor, stream.cuda_stream)
+    return _tm.from_dlpack(tensor)
+
+
 def _apply_bridge(tensor: torch.Tensor, kind: str, bridge, output_dim: int) -> torch.Tensor:
     """Expand one weight component to the kernel's quantization blocking."""
     if kind not in ('scales', 'zeros'):
@@ -438,16 +459,15 @@ class Linear:
     ) -> ExecPlan:
         """Select an immutable execution plan for an input and prepared
         weight."""
-        tm = _tm
         stream = torch.cuda.current_stream(self.device)
         with torch.cuda.device(self.device):
             workspace = self._workspace(stream)
         impl = self._impl.get_exec_plan(
             workspace,
             weight._impl,
-            tm.from_dlpack(x),
-            None if indices is None else tm.from_dlpack(indices),
-            None if offsets is None else tm.from_dlpack(offsets),
+            _from_dlpack(x, self.device),
+            None if indices is None else _from_dlpack(indices, self.device),
+            None if offsets is None else _from_dlpack(offsets, self.device),
         )
         if impl is None:
             raise NotImplementedError('no GEMM kernel accepts the execution problem')
@@ -489,11 +509,11 @@ class Linear:
             self._impl.forward_dense(
                 self._workspace(torch.cuda.current_stream(self.device)),
                 exec_plan._impl,
-                _tm.from_dlpack(x),
+                _from_dlpack(x, self.device),
                 weight._impl,
-                _tm.from_dlpack(out),
-                None if input_scales is None else _tm.from_dlpack(input_scales),
-                None if out_scales is None else _tm.from_dlpack(out_scales),
+                _from_dlpack(out, self.device),
+                None if input_scales is None else _from_dlpack(input_scales, self.device),
+                None if out_scales is None else _from_dlpack(out_scales, self.device),
             )
         return out, out_scales
 
@@ -515,13 +535,13 @@ class Linear:
             self._impl.forward_moe(
                 self._workspace(torch.cuda.current_stream(self.device)),
                 exec_plan._impl,
-                _tm.from_dlpack(x),
+                _from_dlpack(x, self.device),
                 weight._impl,
-                None if indices is None else _tm.from_dlpack(indices),
-                _tm.from_dlpack(offsets),
-                _tm.from_dlpack(out),
-                None if input_scales is None else _tm.from_dlpack(input_scales),
-                None if out_scales is None else _tm.from_dlpack(out_scales),
+                None if indices is None else _from_dlpack(indices, self.device),
+                _from_dlpack(offsets, self.device),
+                _from_dlpack(out, self.device),
+                None if input_scales is None else _from_dlpack(input_scales, self.device),
+                None if out_scales is None else _from_dlpack(out_scales, self.device),
             )
         return out, out_scales
 
@@ -538,11 +558,10 @@ class Linear:
     ) -> tuple[ExecPlan, torch.Tensor, torch.Tensor | None]:
         """Measure feasible kernels and return the selected execution plan and
         outputs."""
-        tm = _tm
-        input_impl = tm.from_dlpack(x)
-        indices_impl = None if indices is None else tm.from_dlpack(indices)
-        offsets_impl = None if offsets is None else tm.from_dlpack(offsets)
-        input_scales_impl = None if input_scales is None else tm.from_dlpack(input_scales)
+        input_impl = _from_dlpack(x, self.device)
+        indices_impl = None if indices is None else _from_dlpack(indices, self.device)
+        offsets_impl = None if offsets is None else _from_dlpack(offsets, self.device)
+        input_scales_impl = None if input_scales is None else _from_dlpack(input_scales, self.device)
         with self._activate():
             output_spec = self._impl._get_output_spec(weight._impl, input_impl, indices_impl)
             out, out_scales = self._allocate_output(output_spec, out, out_scales)
@@ -552,9 +571,9 @@ class Linear:
                 weight._impl,
                 indices_impl,
                 offsets_impl,
-                tm.from_dlpack(out),
+                _from_dlpack(out, self.device),
                 input_scales_impl,
-                None if out_scales is None else tm.from_dlpack(out_scales),
+                None if out_scales is None else _from_dlpack(out_scales, self.device),
             )
         if impl is None:
             raise NotImplementedError('no GEMM kernel accepts the execution problem')

@@ -161,7 +161,10 @@ class CUDASingleGraphRunner:
         padded_kwargs = self._bind_inputs(**kwargs)
         capture_stream = torch.cuda.current_stream() if self._use_graph else None
 
-        # warmup
+        # warmup — must run on `capture_stream`: operators keep stream-bound
+        # state (e.g. the TM grouped GEMM's per-stream workspace, whose
+        # construction synchronizes) and a first call inside the capture would
+        # invalidate it. `_capture_model` captures on exactly this stream.
         warmup_output = self._model_forward(**padded_kwargs)
         warmup_buffers = self.model.make_output_buffers(warmup_output)
 
