@@ -450,8 +450,14 @@ class FP8Format(WeightFormat):
         out_dim = weight.shape[-1]    # N (output)
         # After normalize() the tensors are transposed to TM layout: weight
         # [K, N], and the per-channel scale [N, 1] becomes [1, N].
-        if scales.shape != (1, out_dim) or in_dim % self.block_in != 0:
+        if scales.shape != (1, out_dim):
+            # Blocked scales ([K//128, N//128]) are left untouched.
             return tensors
+        if in_dim % self.block_in != 0:
+            # Expanding past a partial last K-group would compute wrong
+            # numerics silently; the kernel alignment requires whole groups.
+            raise ValueError(f'Per-channel FP8 scales require K % {self.block_in} == 0, '
+                             f'got K={in_dim}.')
         kgroups = in_dim // self.block_in
         tensors = dict(tensors)
         tensors['scales'] = scales.expand(kgroups, out_dim).contiguous()

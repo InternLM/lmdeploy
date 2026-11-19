@@ -56,8 +56,9 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
     input_activations = group.get('input_activations')
     if input_activations is not None:
         if input_activations.get('dynamic') is not True:
-            raise ValueError('Compressed-tensors float formats support only dynamic input '
-                             'activation quantization; static scales are not supported.')
+            raise ValueError('Compressed-tensors float formats support only dynamic (per-token) input '
+                             'activation quantization; static per-tensor W8A8 input scales are '
+                             'unsupported and rejected here.')
     if group.get('output_activations') is not None:
         raise ValueError('Compressed-tensors output activation quantization is not supported.')
 
@@ -1080,6 +1081,7 @@ class QuantizationConfig:
         bits = None
         group_size = None
         ignored_layers = None
+        ct_format = None
 
         if quant_method == 'awq':
             bits = quant_config.get('bits', 4)

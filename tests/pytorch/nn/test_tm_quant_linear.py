@@ -130,6 +130,27 @@ class TestCtFp8Linear:
         assert out.dtype == torch.bfloat16
         assert err < 1e-2 * ref.abs().max().item() + 0.05, err
 
+    def test_blocked_lane_matches_reference(self):
+        torch.manual_seed(0)
+        K, N = 512, 256
+        module = TmQuantLinear(K, N, lane='ct_fp8', fp8_blocked=True, bias=False,
+                               device=torch.device('cuda')).cuda()
+        assert module.weight_scale.shape == (2, 4)  # [N/128, K/128]
+        w = (torch.randn(N, K) * 0.05).to(torch.float8_e4m3fn).cuda()
+        # Blocked checkpoint scales: [ceil(N/128), ceil(K/128)], one scale
+        # per output block per input group.
+        s = (torch.rand(N // 128, K // 128).bfloat16() * 0.01 + 0.005).cuda()
+        module.weight.data.copy_(w)
+        module.weight_scale.data.copy_(s)
+        module.update_weights()
+
+        x = torch.randn(8, K, dtype=torch.bfloat16, device='cuda')
+        out = module(x)
+        expanded = s.float().repeat_interleave(128, dim=0).repeat_interleave(128, dim=1)[:N, :K]
+        ref = x.float() @ (w.float() * expanded).T
+        err = (out.float() - ref).abs().max().item()
+        assert err < 1e-2 * ref.abs().max().item() + 0.05, err
+
     def test_param_names_match_checkpoint_suffixes(self):
         module = TmQuantLinear(256, 64, lane='ct_fp8', bias=False, device=torch.device('cuda'))
         names = dict(module.named_parameters())
@@ -137,6 +158,11 @@ class TestCtFp8Linear:
         assert names['weight'].dtype == torch.float8_e4m3fn
         assert names['weight_scale'].shape == (64, 1)
         assert names['weight_scale'].dtype == torch.bfloat16
+
+    def test_blocked_tp_is_rejected(self):
+        with pytest.raises(NotImplementedError, match='Blocked CT FP8 TP sharding'):
+            TmQuantLinear(256, 64, lane='ct_fp8', fp8_blocked=True, bias=False, device=torch.device('cuda'),
+                          is_tp=True)
 
 
 class TestEnvGates:

@@ -67,6 +67,15 @@ def test_blocked_finalize_untouched():
     assert out['scales'].shape == (16, 4)
 
 
+def test_per_channel_finalize_requires_aligned_k():
+    fmt = FP8Format(block_out=1)
+    K, N = 200, 512  # K not divisible by 128
+    weight = torch.randn(K, N)
+    scales = torch.randn(1, N)
+    with pytest.raises(ValueError, match='K % 128 == 0'):
+        fmt.finalize({'weight': weight, 'scales': scales})
+
+
 def test_converter_builds_per_channel_fp8():
     fmts = _build_quantized_formats('compressed-tensors', 128, fp8_block_out=1)
     assert len(fmts) == 1 and isinstance(fmts[0], FP8Format)
