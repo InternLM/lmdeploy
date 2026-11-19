@@ -278,6 +278,11 @@ def normalize_gptq_weights(iterator, state: dict | None = None):
                 continue
             raise ValueError(f'Duplicate quant key {name!r} after {prefix} converted.')
         shard = staged.setdefault(prefix, {})
+        if not owns_state:
+            # Update buckets deliver views into reused IPC buffers; a module
+            # whose scales land in a later bucket would convert from a stale
+            # view. The ct normalizer makes the same defensive copy.
+            tensor = tensor.clone()
         shard[suffix] = tensor
         if len(shard) == len(_GPTQ_SUFFIXES):
             staged.pop(prefix)

@@ -89,7 +89,7 @@ def validate_gptq_geometry(qweight: torch.Tensor, scales: torch.Tensor, qzeros: 
 
 def _gptq_sym_qzeros(qweight: torch.Tensor, g: int) -> torch.Tensor:
     """Synthesize the symmetric GPTQ zero word (stored zero point 8 - 1)."""
-    return torch.full((g, qweight.shape[-1]), 0x77777777, dtype=torch.int32, device=qweight.device)
+    return torch.full((g, qweight.shape[-1] // 8), 0x77777777, dtype=torch.int32, device=qweight.device)
 
 
 def gptq_dequant(qweight: torch.Tensor, scales: torch.Tensor, qzeros: torch.Tensor) -> torch.Tensor:
@@ -274,7 +274,7 @@ def convert_checkpoint(src: str, dst: str, verify: bool = False):
                     passthrough[name] = tensor
                     continue
                 staged.setdefault(name[:-len(suffix)], {})[suffix] = tensor
-        elif fname.endswith('config.json'):
+        elif fname == 'config.json':
             with open(spath) as f:
                 config = json.load(f)
             with open(os.path.join(dst, fname), 'w') as f:
