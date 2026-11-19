@@ -5,6 +5,8 @@ Only the common state propagation is LMDeploy-owned. Gate scans, WY transforms a
 installed FLA implementations. Neither entry point gathers initial states nor stages/scatters dense final states. The
 caller owns destination validation and supplies prebuilt packed chunk metadata.
 """
+import os
+
 import torch
 from fla.modules.l2norm import l2norm_fwd
 from fla.ops.common.chunk_o import chunk_fwd_o
@@ -17,6 +19,9 @@ from fla.ops.utils import chunk_local_cumsum
 from fla.ops.utils.constant import RCP_LN2
 
 from .indexed_chunk_state import indexed_chunk_state_fwd
+from .kda_gate_prefix import FIXED_PREFIX
+
+_ALIGN_INTRA_TF32X3 = os.getenv('GLM53_ALIGN_KDA_INTRA_TF32X3', '0').lower() in {'1', 'true', 'yes', 'on'}
 
 
 @torch.inference_mode()
@@ -61,12 +66,20 @@ def indexed_chunk_kda(q, k, v, g, beta, pool, input_ids, final_ids, *, A_log=Non
     if use_beta_sigmoid_in_kernel:
         beta = fused_beta_sigmoid(beta, scale=1.0)
     if use_gate_in_kernel:
-        g = kda_gate_chunk_cumsum(g=g, A_log=A_log, dt_bias=dt_bias, scale=RCP_LN2,
-                                  lower_bound=lower_bound, **common)
+        gate_prefix = kda_gate_chunk_cumsum
+        if FIXED_PREFIX:
+            from .kda_gate_prefix import fixed_kda_gate_chunk_cumsum
+            gate_prefix = fixed_kda_gate_chunk_cumsum
+        g = gate_prefix(g=g, A_log=A_log, dt_bias=dt_bias, scale=RCP_LN2,
+                        lower_bound=lower_bound, **common)
     else:
         g = chunk_local_cumsum(g, scale=RCP_LN2, **common)
-    w, u, _, kg, aqk, _ = chunk_kda_fwd_intra(q=q, k=k, v=v, gk=g, beta=beta, scale=scale,
-                                            safe_gate=safe_gate, disable_recompute=False, **common)
+    intra = chunk_kda_fwd_intra
+    if _ALIGN_INTRA_TF32X3:
+        from .fla_dot_precision import fp32_dot_function
+        intra = fp32_dot_function(intra, 'tf32x3')
+    w, u, _, kg, aqk, _ = intra(q=q, k=k, v=v, gk=g, beta=beta, scale=scale,
+                              safe_gate=safe_gate, disable_recompute=False, **common)
     h, v_new = indexed_chunk_state_fwd(
         kg, w, u, pool, input_ids, final_ids, gk=g, state_v_first=state_v_first,
         cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, chunk_offsets=chunk_offsets,

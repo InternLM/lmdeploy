@@ -39,6 +39,10 @@ class HcPrePost(nn.Module):
         x_fp32: torch.Tensor | None = None,
         projection_weight: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        from .glm53_alignment import ALIGN_FORWARD, hc_pre
+        if ALIGN_FORWARD and x.is_cuda and norm_weight is not None:
+            return hc_pre(x, hc_fn, hc_scale, hc_base, norm_weight,
+                          self.impl.sinkhorn_iters, self.impl.eps, norm_eps)
         from lmdeploy.pytorch.nn.norm import rms_scale
         hidden_states, dtype = x, x.dtype
         if x_fp32 is not None:

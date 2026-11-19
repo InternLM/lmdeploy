@@ -247,6 +247,8 @@ with set_envs():
 
     # Set before startup: use unrotated BF16 KPool queries/cache instead of FP8.
     glm53_kpool_bf16 = env_to_bool('LMDEPLOY_GLM53_KPOOL_BF16', False)
+    glm53_kda_fixed_projection = env_to_bool('LMDEPLOY_GLM53_KDA_FIXED_PROJECTION', False)
+    glm53_kda_fixed_o_proj = env_to_bool('LMDEPLOY_GLM53_KDA_FIXED_O_PROJ', False)
 
     # cudagraph
     # fake capture flag for debug cudagraph padding behavior

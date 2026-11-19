@@ -727,8 +727,14 @@ class Glm5NextLinearAttention(nn.Module):
                 past_key_value: Sequence[torch.Tensor],
                 kda_metadata: GatedDeltaMeta) -> torch.Tensor:
         mixed_qkv = self.qkv_proj(hidden_states)
-        raw_beta = self.b_proj(hidden_states)
-        raw_gate, norm_gate = self.fg_b_proj(self.fg_a_proj(hidden_states))
+        if envs.glm53_kda_fixed_projection:
+            from lmdeploy.pytorch.nn.glm53_alignment import kda_gate_projections
+            raw_beta, raw_gate, norm_gate = kda_gate_projections(
+                hidden_states, self.b_proj, self.fg_a_proj,
+                self.f_b_proj, self.g_b_proj, self.fg_b_proj)
+        else:
+            raw_beta = self.b_proj(hidden_states)
+            raw_gate, norm_gate = self.fg_b_proj(self.fg_a_proj(hidden_states))
 
         core_output = self.kda(
             mixed_qkv=mixed_qkv,
@@ -751,6 +757,9 @@ class Glm5NextLinearAttention(nn.Module):
         core_output = self.o_norm(core_output.reshape(-1, self.head_dim),
                                   norm_gate.reshape(-1, self.head_dim))
         core_output = core_output.view(output_shape).flatten(-2, -1)
+        if envs.glm53_kda_fixed_o_proj:
+            from lmdeploy.pytorch.nn.glm53_alignment import kda_output_projection
+            return kda_output_projection(core_output, self.o_proj)
         return self.o_proj(core_output)
 
 
@@ -1569,6 +1578,12 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
     # Padding changes BF16 projection rounding. Preserve the original GEMM
     # row count; partial prefill buckets retain the eager numerical path.
     piecewise_cuda_graph_token_padding = False
+
+    def get_logits(self, hidden_states: torch.Tensor):
+        from lmdeploy.pytorch.nn.glm53_alignment import ALIGN_FORWARD, aligned_linear
+        if ALIGN_FORWARD:
+            return aligned_linear(hidden_states, self.lm_head.weight, self.lm_head.bias)
+        return super().get_logits(hidden_states)
 
     packed_modules_mapping = {
         'fg_a_proj': ['f_a_proj', 'g_a_proj'],

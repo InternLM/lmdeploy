@@ -1,10 +1,18 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
+
 import torch
+import torch.nn.functional as F
 import triton
 import triton.language as tl
 from torch import Tensor
 
 from .utils import get_device_props
+
+
+_GLM53_NATIVE_RMS_NORM = os.getenv('LMDEPLOY_GLM53_NATIVE_RMS_NORM', '0').lower() in {
+    '1', 'true', 'yes', 'on'
+}
 
 
 @triton.jit
@@ -87,6 +95,20 @@ def rms_norm(hidden_states: Tensor,
     assert weight.stride(-1) == 1
     feat_size = weight.shape[0]
     assert hidden_states.size(-1) == feat_size
+
+    if (_GLM53_NATIVE_RMS_NORM and hidden_states.is_cuda
+            and hidden_states.dtype == weight.dtype == torch.bfloat16
+            and feat_size in (512, 1536) and eps == 1e-5 and residual is None):
+        # XTuner's native BF16 latent norm is aten.rms_norm. Reusing that
+        # operator preserves its dtype-dependent rounding, including strided
+        # Q/KV slices from the merged A projection. Pass BF16 tensors directly
+        # and keep the native operator's token-row geometry too.
+        result = F.rms_norm(hidden_states.reshape(-1, feat_size),
+                            (feat_size,), weight, eps).view_as(hidden_states)
+        if out is not None:
+            out.copy_(result)
+            return out
+        return result
 
     origin_dim = hidden_states.dim()
     if out is None:
