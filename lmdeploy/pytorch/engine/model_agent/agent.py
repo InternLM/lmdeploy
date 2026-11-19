@@ -729,7 +729,11 @@ class BaseModelAgent:
             origin_logits = logits
             logits, raw_logprobs = await logits_processor(origin_logits)
             next_token_ids = logits_processor.sampling(logits)
-            await logits_processor.accept_guided_tokens(next_token_ids)
+            # A non-final prefill chunk generates nothing: committing its sampled
+            # token would advance the guided-decoding grammar and constrain the
+            # real last chunk. Compact-state paths never sample a mid chunk.
+            if not (inputs.is_chunk and not inputs.is_last_chunk):
+                await logits_processor.accept_guided_tokens(next_token_ids)
             logprobs = logits_processor.compute_logprobs(raw_logprobs, next_token_ids)
             if logprobs is not None:
                 logprobs = BatchedLogProbs(
