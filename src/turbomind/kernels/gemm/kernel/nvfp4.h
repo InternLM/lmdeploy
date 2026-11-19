@@ -43,9 +43,9 @@ template<class Arch, Order WeightOrder, uint32_t WeightPack, Order QParamOrder, 
 void pack_nvfp4(LinearWeight& linear, cudaStream_t stream)
 {
     // Dense layout: E2M1 weights are the packed B operand, half scales are V.
-    // Both modes arrive here with half scales: folded (SM75) or exact-widened
-    // raw e4m3 (SM80+). `global_scale`, when present, is untouched by packing
-    // and consumed by the epilogue.
+    // Every NVFP4 family arrives with raw e4m3 scales exact-widened to half;
+    // `global_scale`, when present, is untouched by packing and consumed by
+    // the epilogue.
     PackWeight(linear, GetImpl<Arch, WeightOrder, WeightPack, uint16_t, uint4_t>(), stream);
     PackQParams(
         linear, GetImpl<Arch, QParamOrder, QParamPack, uint16_t, uint16_t>(), QuantDesc{QuantType::kK, 16}, stream);
