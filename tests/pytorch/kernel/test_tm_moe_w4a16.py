@@ -564,3 +564,278 @@ def test_grouped_route_consumes_gptq_repacked_experts():
     assert agreement >= ARGMAX_THRESHOLD, f'argmax {agreement:.3f} below threshold'
     impl._release()
     torch.cuda.empty_cache()
+
+
+# ---------------------------------------------------------------------------
+# EP (expert parallelism) fill-in: rank-local weights, global->local slot
+# remap, and the plain gather/reduce EP branch.
+#
+
+
+def _ep_dist_context(ep: int, ep_rank: int, dp: int = 1):
+    """Single-process fake EP context.
+
+    Mirrors ``DistContext.build`` for a real EP rank: the moe-TP group is a
+    rank-0 stub (moe_tp==1 under EP), so no real collective ever fires.
+    """
+    from lmdeploy.pytorch.config import DistConfig
+    from lmdeploy.pytorch.distributed import DistContext, DistGroup
+
+    return DistContext(rank=ep_rank,
+                       dp_rank=0,
+                       ep_rank=ep_rank,
+                       dist_config=DistConfig(ep=ep, dp=dp),
+                       moe_tp_group=DistGroup(rank=0))
+
+
+def get_ep_manager(context):
+    """Push a fake dist context onto the DistManager stack."""
+    from lmdeploy.pytorch.distributed import get_dist_manager
+
+    return get_dist_manager().context(context)
+
+
+def _build_ep_layer(ep: int, ep_rank: int, num_experts: int, hidden: int, ffn: int, group: int, device,
+                    dp: int = 1, all_reduce: bool = False):
+    """Construct the module under the rank's EP view."""
+    from lmdeploy.pytorch.distributed import get_dist_manager
+    from lmdeploy.pytorch.nn.moe.tm_w4a16 import FusedMoETmW4A16
+
+    rank_ctx = _ep_dist_context(ep, ep_rank, dp)
+    with get_dist_manager().context(rank_ctx):
+        layer = FusedMoETmW4A16(
+            hidden_dim=hidden,
+            ffn_dim=ffn,
+            num_experts=num_experts,
+            top_k=2,
+            renormalize=True,
+            dtype=torch.float16,
+            device=device,
+            all_reduce=all_reduce,
+            group_size=group,
+            layer_idx=0,
+        )
+    return layer, rank_ctx
+
+
+_FEED_STREAMS = ('gate_up.qweight', 'gate_up.scales', 'gate_up.qzeros', 'down.qweight', 'down.scales', 'down.qzeros')
+
+
+def _feed_experts(layer, gate, up, down, num_global_experts, rank_ctx):
+    """Drive the real ``weight_loader`` path with global expert ids.
+
+    Every rank sees the full checkpoint stream; the loader must keep only
+    the rank-local experts (foreign keys are skipped) and ``update_weights``
+    must then find its local ledger complete.
+    """
+    from lmdeploy.pytorch.distributed import get_dist_manager
+
+    sources = {
+        'gate_up.qweight': (layer.gate_up.qweight, gate.qweight),
+        'gate_up.scales': (layer.gate_up.scales, gate.scales),
+        'gate_up.qzeros': (layer.gate_up.qzeros, gate.qzeros),
+        'down.qweight': (layer.down.qweight, down.qweight),
+        'down.scales': (layer.down.scales, down.scales),
+        'down.qzeros': (layer.down.qzeros, down.qzeros),
+    }
+    with get_dist_manager().context(rank_ctx):
+        for expert in range(num_global_experts):
+            for key in _FEED_STREAMS:
+                param, stacked = sources[key]
+                # gate_up carries two shards per part; down carries one.
+                for shard_id in (('down', ) if key.startswith('down') else ('gate', 'up')):
+                    param.weight_loader(param, stacked[expert], expert_id=expert, shard_id=shard_id)
+        layer.update_weights()
+
+
+@torch.inference_mode()
+def test_ep_loader_filters_foreign_experts_and_maps_local_slots():
+    """Loader keeps only rank-local experts; missing local keys raise.
+
+    Rank 1 of EP=2 over 4 experts owns global experts {2, 3} in local slots
+    {0, 1}: foreign tensors are skipped silently, local tensors land in the
+    mapped slot, and ``validate_complete`` stays loud about missing locals.
+    """
+    from lmdeploy.pytorch.nn.moe.tm_w4a16 import TmMoeWeights
+
+    device = torch.device('cpu')
+    with get_ep_manager(_ep_dist_context(2, 1)):
+        weights = TmMoeWeights(4, 16, 32, 8, 'gate_up', device)
+        assert weights.expert_list == [2, 3]
+        assert weights.expert_map == {2: 0, 3: 1}
+        assert weights.qweight.shape[0] == 2
+
+        # Foreign experts 0/1: skipped without touching the ledger.
+        weights.weight_loader(weights.qweight, torch.ones(16, 2, dtype=torch.int32), expert_id=0, shard_id='gate')
+        weights.weight_loader(weights.qweight, torch.ones(16, 2, dtype=torch.int32), expert_id=1, shard_id='up')
+        assert weights._loaded_parts == set()
+
+        # Out-of-range global ids still raise loudly.
+        with pytest.raises(ValueError, match='global expert_id'):
+            weights.weight_loader(weights.qweight, torch.ones(16, 2, dtype=torch.int32), expert_id=4,
+                                  shard_id='gate')
+
+        # Local experts land in their mapped slots.
+        weights.weight_loader(weights.qweight, torch.ones(16, 2, dtype=torch.int32), expert_id=2, shard_id='gate')
+        assert bool((weights.qweight.data[0, :, 0:2] == 1).all())
+        weights.weight_loader(weights.qweight, torch.full((16, 2), 3, dtype=torch.int32), expert_id=3, shard_id='gate')
+        assert bool((weights.qweight.data[1, :, 0:2] == 3).all())
+
+        # Expert 3's remaining shards are missing: completeness must fail.
+        with pytest.raises(RuntimeError, match='Incomplete AWQ gate_up weights'):
+            weights.validate_complete()
+
+        for expert in (2, 3):
+            for shard_id in ('gate', 'up'):
+                weights.weight_loader(weights.scales, torch.zeros(2, 16), expert_id=expert, shard_id=shard_id)
+                weights.weight_loader(weights.qzeros, torch.zeros(2, 2, dtype=torch.int32), expert_id=expert,
+                                      shard_id=shard_id)
+            weights.weight_loader(weights.qweight, torch.zeros(16, 2, dtype=torch.int32), expert_id=expert,
+                                  shard_id='up')
+        weights.validate_complete()
+
+    # EP=1 keeps the identity view.
+    plain = TmMoeWeights(4, 16, 32, 8, 'gate_up', device)
+    assert plain.expert_list == [0, 1, 2, 3] and plain.expert_map == {e: e for e in range(4)}
+    assert plain.qweight.shape[0] == 4
+
+    with get_ep_manager(_ep_dist_context(2, 0)):
+        with pytest.raises(ValueError, match='divisible by EP=2'):
+            TmMoeWeights(3, 16, 32, 8, 'gate_up', device)
+
+
+@pytest.mark.parametrize('num_tokens', [1, 64])
+@torch.inference_mode()
+def test_ep2_rank_modules_match_tp_monolith(num_tokens):
+    """EP=2 (two in-process rank modules over disjoint expert subsets) vs the
+    TP-only monolith, aligned within 1e-6.
+
+    Each rank builds through the full loader path (foreign experts skipped),
+    serves the same full token batch, and the manual fp16 combine mirrors
+    the single EP-group all-reduce ``combine`` performs in deployment.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip('requires CUDA')
+    device = torch.device('cuda')
+    num_experts, top_k, hidden, ffn, group = 4, 2, 512, 256, 128
+
+    gate = _ExpertSet(num_experts, ffn, hidden, group, device, 1100)
+    up = _ExpertSet(num_experts, ffn, hidden, group, device, 1200)
+    down = _ExpertSet(num_experts, hidden, ffn, group, device, 1300)
+
+    layer0, ctx0 = _build_ep_layer(2, 0, num_experts, hidden, ffn, group, device)
+    layer1, ctx1 = _build_ep_layer(2, 1, num_experts, hidden, ffn, group, device)
+    monolith, ctxm = _build_ep_layer(1, 0, num_experts, hidden, ffn, group, device)
+    try:
+        assert layer0.expert_list == [0, 1] and layer0.first_local_expert == 0
+        assert layer1.expert_list == [2, 3] and layer1.first_local_expert == 2
+        assert layer0.gate_up.qweight.shape[0] == 2 and monolith.gate_up.qweight.shape[0] == 4
+
+        _feed_experts(layer0, gate, up, down, num_experts, ctx0)
+        _feed_experts(layer1, gate, up, down, num_experts, ctx1)
+        _feed_experts(monolith, gate, up, down, num_experts, ctxm)
+
+        gen = torch.Generator().manual_seed(4400)
+        topk_ids = torch.stack([torch.randperm(num_experts, generator=gen)[:top_k] for _ in range(num_tokens)])
+        topk_weights = torch.rand(num_tokens, top_k, generator=gen) + 0.1
+        topk_weights = (topk_weights / topk_weights.sum(-1, keepdim=True)).to(device)
+        topk_ids = topk_ids.to(device)
+        x = (torch.randn(num_tokens, hidden, generator=gen, dtype=torch.float16) * 0.5).to(device)
+        split = (topk_ids[:, 0] // 2) != (topk_ids[:, 1] // 2)
+        assert bool(split.any()), 'test lost its cross-rank route coverage'
+
+        def _run(layer, rank_ctx):
+            with get_ep_manager(rank_ctx):
+                return layer.forward(x, topk_weights, topk_ids)
+
+        combined = _run(layer0, ctx0) + _run(layer1, ctx1)
+        monolith_out = _run(monolith, ctxm)
+        torch.cuda.synchronize()
+
+        max_diff = (combined.float() - monolith_out.float()).abs().max().item()
+        print(f'EP2-vs-monolith tokens={num_tokens} split={int(split.sum())} max|diff|={max_diff:.3e}')
+        assert max_diff <= 1e-6, f'EP=2 partials diverge from the monolith by {max_diff:.3e}'
+        torch.testing.assert_close(combined.float(), monolith_out.float(), atol=1e-6, rtol=1e-6)
+    finally:
+        for layer, rank_ctx in ((layer0, ctx0), (layer1, ctx1), (monolith, ctxm)):
+            with get_ep_manager(rank_ctx):
+                layer.impl.sleep_release()
+        torch.cuda.empty_cache()
+
+
+def test_ep_combine_sums_partials_over_ep_group(monkeypatch):
+    """The EP combine performs exactly one all-reduce over the EP group."""
+    from lmdeploy.pytorch.nn.moe.base import MoeType
+    from lmdeploy.pytorch.nn.moe.tm_w4a16 import FusedMoETmW4A16
+
+    layer = FusedMoETmW4A16.__new__(FusedMoETmW4A16)
+    layer.ep = 2
+    layer.all_reduce = True
+    sentinel = object()
+    layer.ep_group = sentinel
+
+    calls = []
+
+    def fake_all_reduce(tensor, group=None):
+        calls.append(group)
+        tensor.add_(1.0)
+
+    monkeypatch.setattr(torch.distributed, 'all_reduce', fake_all_reduce)
+    hidden = torch.zeros(4, 8)
+    out = layer.combine({'hidden_states': hidden, 'moe_type': MoeType.Default})
+    assert out['hidden_states'] is hidden and bool((hidden == 1).all())
+    assert calls == [sentinel]
+
+    # The reduce respects the model's all_reduce=False intent.
+    layer.all_reduce = False
+    hidden.zero_()
+    out = layer.combine({'hidden_states': hidden, 'moe_type': MoeType.Default})
+    assert calls == [sentinel] and bool((hidden == 0).all())
+
+    # DeepEP batch types stay a loud boundary.
+    with pytest.raises(NotImplementedError, match='does not support MoE mode'):
+        layer.all_reduce = True
+        layer.combine({'hidden_states': hidden, 'moe_type': MoeType.DSAsyncPrefill})
+
+
+@pytest.mark.parametrize(('dist_kwargs', 'num_experts', 'message'), [
+    ({
+        'ep': 2
+    }, 3, 'divisible by EP=2'),
+    ({
+        'ep': 2,
+        'dp': 2
+    }, 4, 'requires dp=1'),
+    ({
+        'ep': 2,
+        'enable_eplb': True
+    }, 4, 'does not support EPLB'),
+    ({
+        'ep': 2,
+        'enable_microbatch': True
+    }, 4, 'does not support microbatch'),
+])
+def test_ep_build_guards_stay_loud(dist_kwargs, num_experts, message):
+    """EP build-time guards: indivisible experts, DP attention, EPLB and
+    microbatch keep their loud raises."""
+    if not torch.cuda.is_available():
+        pytest.skip('requires CUDA')
+    device = torch.device('cuda')
+    from lmdeploy.pytorch.config import DistConfig
+    from lmdeploy.pytorch.distributed import DistContext, DistGroup
+    from lmdeploy.pytorch.nn.moe.tm_w4a16 import FusedMoETmW4A16
+
+    dist_config = DistConfig(**dist_kwargs)
+    ctx = DistContext(rank=0, dp_rank=0, ep_rank=0, dist_config=dist_config, moe_tp_group=DistGroup(rank=0))
+    with get_ep_manager(ctx):
+        with pytest.raises(RuntimeError, match=message):
+            FusedMoETmW4A16(
+                hidden_dim=512,
+                ffn_dim=256,
+                num_experts=num_experts,
+                top_k=2,
+                dtype=torch.float16,
+                device=device,
+                group_size=128,
+                layer_idx=0,
+            )
