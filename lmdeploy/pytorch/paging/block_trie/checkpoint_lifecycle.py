@@ -70,6 +70,10 @@ class StateCheckpointLifecycle:
         self._state_manager = state_manager
         self._index = index
         self._snapshot_match_data = snapshot_match_data
+        # Cumulative frozen partial-KV blocks freed by checkpoint lifecycle
+        # actions. These frees bypass BlockTrie.evict(), so the trie needs this
+        # total to report every evicted block exactly once.
+        self.num_frozen_blocks_released = 0
 
     def prepare_restore_batch(self, seqs: list[SchedulerSequence]) -> CheckpointCopyPlan:
         """Pin selected restores and expose their logical copy pairs."""
@@ -368,6 +372,7 @@ class StateCheckpointLifecycle:
         self._unindex_checkpoint(node)
         if checkpoint.frozen_block_id >= 0:
             self._allocator.free(np.array([checkpoint.frozen_block_id], dtype=np.int64))
+            self.num_frozen_blocks_released += 1
         if checkpoint.slot < 0:
             if checkpoint.published:
                 self._warn_unexpected_state(
@@ -532,6 +537,7 @@ class StateCheckpointLifecycle:
         self._unindex_checkpoint(node)
         if not is_partial and checkpoint.frozen_block_id >= 0:
             self._allocator.free(np.array([checkpoint.frozen_block_id], dtype=np.int64))
+            self.num_frozen_blocks_released += 1
             frozen_block_id = -1
 
         checkpoint.step = step
