@@ -1172,3 +1172,68 @@ class TestPagedAttentionFP16vsQuant42(TestPagedAttentionBase):
         # Note: SNR is low due to scale differences between FP16 and quant42
         # (quant42 outputs in original domain after inverse rotation, but with different scale)
         # The important thing is that cosine similarity is high
+
+
+class TestPagedAttentionQuantMultiToken:
+    """Quantized KV cache with more than one query token per request.
+
+    The launcher accepts ``num_tokens = batch * seq_len``, but the quantized
+    first-step kernel used to index both the query rows and the split-k
+    scratch by ``cur_batch`` (the request id). Every query token of a request
+    then read request 0's row and most scratch rows were never written.
+    """
+
+    @pytest.mark.parametrize('nbits', [8, 4])
+    def test_quantized_multi_query_tokens(self, nbits):
+        from lmdeploy.pytorch.kernels.cuda import flash_attn_with_kvcache
+
+        if not torch.cuda.is_available():
+            pytest.skip('requires CUDA (or TRITON_INTERPRET=1 with a CUDA-capable torch)')
+
+        torch.manual_seed(0)
+        B, S, H, HK, D, BS = 2, 4, 4, 2, 32, 16
+        kv_dim = D if nbits == 8 else D // 2
+        quant_scale = 1 / 8
+
+        # Constant values along the context make attention exact: every query
+        # token must return its own request's dequantized value vector.
+        codes = torch.arange(D, device='cuda', dtype=torch.uint8) % 16
+        codes_request1 = codes.clone()
+        codes_request1[0] = 8  # distinct first coordinate for request 1
+        if nbits == 8:
+            vc_codes = torch.stack([codes, codes_request1])
+            k_cache = torch.ones(B, BS, HK, kv_dim, device='cuda', dtype=torch.uint8)
+        else:
+            # two 4-bit values per byte; raw dim d -> byte d % (D // 2), shift (d // (D // 2)) * 4
+            def _pack4(x):
+                return (x[..., :D // 2] | (x[..., D // 2:] << 4)).contiguous()
+
+            vc_codes = torch.stack([_pack4(codes), _pack4(codes_request1)])
+            k_cache = torch.full((B, BS, HK, kv_dim), 0x11, device='cuda', dtype=torch.uint8)
+        v_cache = vc_codes[:, None].expand(B, BS, HK, kv_dim).contiguous()
+
+        scales_zeros = torch.zeros(B, BS, HK, 2, device='cuda', dtype=torch.float16)
+        scales_zeros[..., 0] = quant_scale
+        q = torch.zeros(B * S, H, D, device='cuda', dtype=torch.float16)
+        page_table = torch.tensor([[0], [1]], device='cuda', dtype=torch.int32)
+        kv_seqlens = torch.full((B, ), BS, device='cuda', dtype=torch.int32)
+
+        out = flash_attn_with_kvcache(q,
+                                      k_cache,
+                                      v_cache,
+                                      cache_seqlens=kv_seqlens,
+                                      page_table=page_table,
+                                      max_seqlen_q=S,
+                                      k_scales_zeros=scales_zeros,
+                                      v_scales_zeros=scales_zeros,
+                                      quant_policy=nbits)
+
+        if nbits == 4:
+            # unpack the two nibbles of each byte back into the raw value dim
+            raw_codes = torch.stack([vc_codes & 0xF, (vc_codes >> 4) & 0xF], dim=-1).flatten(-1)
+        else:
+            raw_codes = vc_codes
+        expected = (raw_codes.float() * quant_scale)
+        expected = expected[:, None, None, :].expand(B, S, H, D).reshape(B * S, H, D)
+
+        torch.testing.assert_close(out.float(), expected, atol=1e-3, rtol=0)
