@@ -86,7 +86,13 @@ from .qwen3_vl import Qwen3VLInputProcessor
 from .utils.cudagraph import PiecewiseCudaGraphMixin
 from .utils.model import build_embedding, vlm_model
 
-Glm5NextVisionRMSNorm = RMSNorm
+from ._glm53_vision_xt_patch_chengqinxiu import ENABLED as _VISION_XT_PATCH_EMBED
+from ._glm53_vision_xt_norm_chengqinxiu import get_vision_rms_norm_class, vision_qk_norm_eps
+from ._glm53_vision_fa3_chengqinxiu import build_vision_flash_attention
+from ._glm53_vision_rope_fma_off_chengqinxiu import build_vision_rope_fma_off
+from ._glm53_vision_projector_ln_chengqinxiu import build_vision_projector_norm, vision_projector_norm_input
+
+Glm5NextVisionRMSNorm = get_vision_rms_norm_class(RMSNorm)
 
 
 def _build_glm53_latent_norm(hidden_size: int, eps: float,
@@ -128,6 +134,8 @@ class Glm5NextVisionPatchEmbed(Glm4vVisionPatchEmbed):
     """Patch embedding with SGLang's unfold-plus-linear reduction order."""
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if _VISION_XT_PATCH_EMBED:
+            return super().forward(hidden_states)
         target_dtype = self.proj.weight.dtype
         hidden_states = hidden_states.view(
             -1,
@@ -156,14 +164,16 @@ class Glm5NextVisionAttention(Glm4vVisionAttention):
         # Reuse LMDeploy's QKV/row-parallel projections and rotary operator.
         # Vision weights stay in BF16 even when the language tower is block-FP8.
         super().__init__(config, dtype=dtype, device=device)
+        self.attention = build_vision_flash_attention(self.attention)
         self.apply_rotary_pos_emb = ApplyRotaryEmb(enable_fp32_compute=True)
+        self.apply_rotary_pos_emb = build_vision_rope_fma_off(self.apply_rotary_pos_emb)
         self.q_norm = Glm5NextVisionRMSNorm(self.head_dim,
-                                           eps=self.qk_norm_eps,
+                                           eps=vision_qk_norm_eps(config.rms_norm_eps, self.qk_norm_eps),
                                            quant_config=None,
                                            dtype=dtype,
                                            device=device)
         self.k_norm = Glm5NextVisionRMSNorm(self.head_dim,
-                                           eps=self.qk_norm_eps,
+                                           eps=vision_qk_norm_eps(config.rms_norm_eps, self.qk_norm_eps),
                                            quant_config=None,
                                            dtype=dtype,
                                            device=device)
@@ -248,7 +258,7 @@ class Glm5NextVisionPatchMerger(nn.Module):
                               bias=False,
                               dtype=dtype,
                               device=device)
-        self.post_projection_norm = LayerNorm(dim, eps=1e-6, dtype=torch.float32, device=device)
+        self.post_projection_norm = build_vision_projector_norm(LayerNorm, dim, dtype=dtype, device=device)
         nn.init.zeros_(self.post_projection_norm.bias)
         self.gate_up_proj = build_merged_colwise_linear(
             in_features=dim,
@@ -272,7 +282,7 @@ class Glm5NextVisionPatchMerger(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.proj(hidden_states)
-        hidden_states = self.post_projection_norm(hidden_states.float()).to(hidden_states.dtype)
+        hidden_states = self.post_projection_norm(vision_projector_norm_input(hidden_states)).to(hidden_states.dtype)
         hidden_states = self.act1(hidden_states)
         hidden_states = self.gate_up_proj(hidden_states)
         hidden_states = _glm_swiglu_impl(hidden_states,
