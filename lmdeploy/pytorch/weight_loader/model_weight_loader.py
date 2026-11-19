@@ -471,6 +471,18 @@ def process_weights_after_loading(model: torch.nn.Module):
         if not hasattr(mod, 'update_weights'):
             continue
         mod.update_weights()
+        # Routes that pack into native channels (e.g. the TM mxfp4 MoE)
+        # spill their raw torch storages to CPU inside update_weights.
+        # The freed GPU segments stay in PyTorch's caching allocator, so
+        # the native side's later allocations would cudaMalloc fresh
+        # memory on top and can OOM. Release the cache — but only when a
+        # spill actually emptied a parameter, so ordinary loads never pay
+        # the cudaFree sweep. The sweep sits inside the loop on purpose:
+        # one post-pass sweep cannot bound the later modules' native
+        # allocations against the already-cached segments, so spilling
+        # models accept an O(spilling modules) load-time cost.
+        if any(param.numel() == 0 for param in mod.parameters()):
+            torch.cuda.empty_cache()
 
     # Keep this as a second pass. Standard loading creates online-FP8 weights
     # and scales, then update_weights() finalizes their backend representation.
