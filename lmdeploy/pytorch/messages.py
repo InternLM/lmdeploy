@@ -697,6 +697,8 @@ class SchedulerSequence:
 
     # Prefix-cache tokens accepted by the scheduler that are present in the current request prompt.
     cached_tokens: int = 0
+    # API usage follows P's cache reuse; D's local paging statistics stay separate.
+    remote_prefill_cached_tokens: int | None = None
 
     def __post_init__(self):
         """Post init."""

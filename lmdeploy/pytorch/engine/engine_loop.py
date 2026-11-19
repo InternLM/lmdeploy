@@ -483,15 +483,18 @@ class EngineLoop:
             if num_draft_tokens is not None and model_inputs is None and self.config.enable_metrics:
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens.item())
+            cached_tokens = msg.cached_tokens
+            if msg.remote_prefill_cached_tokens is not None:
+                cached_tokens = msg.remote_prefill_cached_tokens
             req_metrics = RequestMetrics(new_token_timestamp,
                                          msg.engine_events,
                                          spec_info=spec_info,
-                                         cached_tokens=msg.cached_tokens)
+                                         cached_tokens=cached_tokens)
             if PROFILE_PHASES and (model_inputs is not None or finish):
                 trace_phase('engine_output', role=self.config.role.name, session_id=session_id, seq_id=msg.seq_id,
                             first=model_inputs is not None, finished=finish, token_timestamp=new_token_timestamp,
                             input_tokens=msg.input_end_pos, output_tokens=len(token_ids),
-                            cached_tokens=msg.cached_tokens,
+                            cached_tokens=cached_tokens, local_cached_tokens=msg.cached_tokens,
                             events=[(event.type.name, event.timestamp) for event in msg.engine_events])
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,

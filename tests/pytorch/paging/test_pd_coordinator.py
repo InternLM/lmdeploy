@@ -12,16 +12,37 @@ from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
 
 
-def make_export():
+def make_export(cached_tokens=0):
     cache = CacheConfig(max_batches=2, block_size=4, num_gpu_blocks=4, num_cpu_blocks=0)
     scheduler = Scheduler(SchedulerConfig(max_batches=2, max_session_len=32), cache,
                           SequenceMeta(4, strategy=ARSequenceStrategy()))
     seq = scheduler.add_session(1).add_sequence(np.arange(8), preserve_cache=True)
     seq.pd_prompt_tokens = np.arange(9)
     seq.pd_prefix_length = 8
+    seq.cached_tokens = cached_tokens
     scheduler.block_manager.allocate(seq)
     handoff = scheduler.pd_coordinator.publish(seq, 'schema', [])
     return scheduler, seq, handoff
+
+
+@pytest.mark.parametrize('cached_tokens', [0, 4])
+def test_handoff_preserves_prefill_cache_hits_separately_from_imported_history(cached_tokens):
+    _, _, handoff = make_export(cached_tokens)
+    assert handoff.prefill_cached_tokens == cached_tokens
+    cache = CacheConfig(max_batches=1, block_size=4, num_gpu_blocks=4, num_cpu_blocks=0)
+    scheduler = Scheduler(SchedulerConfig(max_batches=1, max_session_len=32), cache,
+                          SequenceMeta(4, strategy=ARSequenceStrategy()))
+    migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill',
+                                 remote_session_id=1, handoff=handoff)
+    seq = scheduler.add_session(2).add_sequence(np.arange(9), migration_request=migration)
+    assert scheduler.schedule_migration() == [seq]
+    result = PDTransferResult(transfer_id=handoff.transfer_id, status='completed')
+    assert scheduler.pd_coordinator.finish_receive(seq, result) == 'ready'
+    assert seq.num_history_ids == 8
+    assert seq.remote_prefill_cached_tokens == cached_tokens
+    assert seq.cached_tokens == 0
+    seq.update_token_ids(np.arange(2))
+    assert seq.remote_prefill_cached_tokens is None
 
 
 def test_granted_export_survives_real_session_end_and_rejects_wrong_receiver():

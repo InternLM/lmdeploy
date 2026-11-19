@@ -117,6 +117,7 @@ class PDCoordinator:
         self._release_receive(receive, success=success)
         if success:
             seq.set_step(receive.request.handoff.valid_token_count)
+            seq.remote_prefill_cached_tokens = receive.request.handoff.prefill_cached_tokens
             seq.migration_request = None
             seq.kv_token_limit = None
             return 'ready'
@@ -162,6 +163,7 @@ class PDCoordinator:
         handoff = PDHandoff(transfer_id=uuid4().hex, engine_epoch=self.epoch, session_id=seq.session_id,
                             cache_schema=cache_schema,
                             prompt_digest=prompt_digest(seq, tokens), prompt_token_count=len(tokens),
+                            prefill_cached_tokens=seq.cached_tokens,
                             valid_token_count=boundary, block_size=seq.block_size, block_ids=physical,
                             state_ids=state_ids if compact and boundary else [], auxiliary_id=auxiliary,
                             legacy_state_id=legacy)

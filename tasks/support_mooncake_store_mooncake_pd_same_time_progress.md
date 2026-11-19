@@ -7,6 +7,12 @@
 - PD 与 Store 独立持有资源。2026-11-18 用户确认 PD 采用有界隔离及 300 秒强制回收；取消不等于 DMA 完成，Store 持有不受 PD 超时影响。
 - 不引入 MultiConnector，不修改 Store 的内容寻址身份。
 
+## 2026-11-19 P 采样与缓存统计
+
+P 原有逻辑已跳过 draft 采样和后续 proposal forward，本轮进一步跳过纯 PD 交接批次的 target lm-head/采样，保留必要 MTP KV 前向。参考 vLLM #54222，将 P 的真实缓存命中数随 handoff 传给 D，修复冷请求因导入 KV 而报告接近 100% 的问题；流式响应和请求级 Prometheus 统计一并验证。
+
+H200 回归 **873 passed**；六个缓存场景前后 **384/384 输出 IDs 相同**，8K/32K 的 PD/直接推理对照、32 次取消、D 生成阶段 Store 保存并由 P 恢复均通过。充分预热后 TTFT 均值 664.28 → 656.35 ms，TPOT 基本不变，不能声称显著提速。详细证据和冷 graph 排除过程集中在 [验证报告](mooncake_pd_mtp_cache_usage.md)。
+
 ## 2026-11-18 Mooncake 0.3.14 升级
 
 Docker 构建和安装阶段的 Mooncake pin 升至 0.3.14。PD 使用 grouped scatter ticket，区分明确 drained 与 unknown；未知 ticket 后台排空，迟到终态提前释放 PD 引用。整个 pool 注销同时检查运行中的 native Future 和未完成 ticket。保留请求级 300 秒回收，不自动重启 worker/TransferEngine。

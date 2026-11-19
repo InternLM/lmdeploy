@@ -34,6 +34,9 @@ def test_handoff_requires_exact_prefix_and_real_replay_tail():
                   state_ids=[7, 11], auxiliary_id=2)
     handoff = PDHandoff(**fields)
     assert PDHandoff.model_validate_json(handoff.model_dump_json()) == handoff
+    assert handoff.prefill_cached_tokens == 0
+    with pytest.raises(ValueError, match='cache hits'):
+        PDHandoff(**(fields | dict(prefill_cached_tokens=66)))
     with pytest.raises(ValueError, match='prompt tail'):
         PDHandoff(**(fields | dict(valid_token_count=66)))
     with pytest.raises(ValueError, match='exactly'):

@@ -109,6 +109,8 @@ class PDHandoff(BaseModel):
     prompt_digest: str
     prompt_token_count: int = Field(gt=0)
     valid_token_count: int = Field(ge=0)
+    # Reused prompt tokens on P, excluding this request's P-to-D transfer.
+    prefill_cached_tokens: int = Field(default=0, ge=0)
     block_size: int = Field(gt=0)
     block_ids: list[int]
     state_ids: list[int] = Field(default_factory=list)
@@ -119,6 +121,8 @@ class PDHandoff(BaseModel):
     def validate_boundary(self):
         if self.valid_token_count >= self.prompt_token_count:
             raise ValueError('PD requires a nonempty original prompt tail for decode replay.')
+        if self.prefill_cached_tokens > self.valid_token_count:
+            raise ValueError('PD cache hits cannot exceed the exported prefix.')
         expected = (self.valid_token_count + self.block_size - 1) // self.block_size
         if self.block_ids and len(self.block_ids) != expected:
             raise ValueError('PD block table must describe exactly the exported prefix.')
