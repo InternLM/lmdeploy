@@ -349,8 +349,8 @@ def test_sleep_shuts_down_connector_before_dropping_cache(monkeypatch):
     agent.dist_config = SimpleNamespace(dp=1)
     agent.state = SimpleNamespace(is_sleeping=False,
                                   to_sleep=SimpleNamespace(clear=lambda: events.append('sleep-clear')))
-    model = SimpleNamespace(to=lambda **kwargs: events.append('model-to'))
-    spec_model = SimpleNamespace(to=lambda **kwargs: events.append('spec-model-to'))
+    model = SimpleNamespace(to=lambda **kwargs: events.append('model-to'), modules=list)
+    spec_model = SimpleNamespace(to=lambda **kwargs: events.append('spec-model-to'), modules=list)
     agent.patched_model = SimpleNamespace(get_model=lambda: model)
     agent.spec_agent = SimpleNamespace(get_model=lambda: spec_model, cache_engine=object())
     agent.reset_graph_runner = lambda: events.append('reset-graph')
