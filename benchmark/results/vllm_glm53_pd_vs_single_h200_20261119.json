@@ -1,0 +1,4338 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-19",
+  "host": "ailab@gpu-l-lg-cmc-h-h200-0382",
+  "container": "vllm_image_process",
+  "hardware": [
+    "0, NVIDIA H200, 595.71.05, 143771 MiB",
+    "1, NVIDIA H200, 595.71.05, 143771 MiB",
+    "2, NVIDIA H200, 595.71.05, 143771 MiB",
+    "3, NVIDIA H200, 595.71.05, 143771 MiB",
+    "4, NVIDIA H200, 595.71.05, 143771 MiB",
+    "5, NVIDIA H200, 595.71.05, 143771 MiB",
+    "6, NVIDIA H200, 595.71.05, 143771 MiB",
+    "7, NVIDIA H200, 595.71.05, 143771 MiB"
+  ],
+  "versions": {
+    "vllm-router": "0.1.17",
+    "nixl": "1.5.0",
+    "nixl-cu12": "1.5.0",
+    "mooncake-transfer-engine-cuda13": "0.3.13.post1",
+    "nixl-cu13": "1.5.0",
+    "vllm": "0.32.0",
+    "torch": "2.13.0+cu130"
+  },
+  "client_versions": {
+    "evalscope": "1.8.1",
+    "transformers": "5.5.0",
+    "tokenizers": "0.22.2",
+    "aiohttp": "3.14.3"
+  },
+  "model_checkpoint": "3f1971b7b5f7a528c9c4ef6212c8785298a8c24a",
+  "inputs": {
+    "/mnt/shared-storage-user/ailab-sys/caikun/code/accuracy/multi_turn/run_glm53_shorttask_382_full_kvcache.sh": {
+      "sha256": "8b02f6a9ab1cfdd0f00bcce9cf84b5b7e13dfce951fd8215cfdc22244d3e27be",
+      "bytes": 738
+    },
+    "/mnt/shared-storage-user/ailab-sys/caikun/code/accuracy/multi_turn/glm53_flash_swe_smith_32k_4k_5turn_n8_seed1124.json": {
+      "sha256": "5c4f7d61e065d0757698d43542c9bdc706eca501f754b660fc0138119387ecef",
+      "bytes": 1465023
+    },
+    "/home/caikun/.local/lib/python3.10/site-packages/evalscope/perf/core/http_client.py": {
+      "sha256": "45cb82edd96fec4521a0ed4b81ff737393176dbeb4b87f60c495b6e693298d0e",
+      "bytes": 6164
+    }
+  },
+  "original_scripts": {
+    "prefill.sh": {
+      "content": "export CUDA_VISIBLE_DEVICES=0,1,2,3\nexport VLLM_SSM_CONV_STATE_LAYOUT=DS\nexport LLM_KV_CACHE_LAYOUT=HND\n\n\nexport VLLM_NIXL_SIDE_CHANNEL_PORT=5557\nexport VLLM_NIXL_SIDE_CHANNEL_HOST=`hostname -i`\nexport PREFILL_NODE_1=`hostname -i`\nexport PREFILL_DP_RPC_PORT=29100\n\n\nexport NCCL_SOCKET_IFNAME=bond0\nexport NCCL_IB_HCA=\"=mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7\"\nexport NCCL_IB_GID_INDEX=3\nexport NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=bond0\nexport NVSHMEM_IB_GID_INDEX=3\nexport NCCL_DEBUG=WARN\nexport GLOO_SOCKET_IFNAME=bond0\n\n\nexport UCX_NET_DEVICES=mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1\nexport UCX_IB_GID_INDEX=3\n\n\nVLLM_ENGINE_READY_TIMEOUT_S=1800 vllm serve /mnt/nvme2n1/models/models--zai-org--GLM-5.3-Flash/models--zai-org--GLM-5.3-Flash/snapshots/3f1971b7b5f7a528c9c4ef6212c8785298a8c24a/ \\\n  --host 0.0.0.0 \\\n  --port 8001 \\\n  --served-model-name glm53-flash \\\n  --kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_producer\",\"kv_load_failure_policy\":\"fail\"}' \\\n  --data-parallel-size 4 \\\n  --data-parallel-size-local 4 \\\n  --data-parallel-start-rank 0 \\\n  --data-parallel-address $PREFILL_NODE_1 \\\n  --data-parallel-rpc-port $PREFILL_DP_RPC_PORT \\\n  --enable-expert-parallel \\\n  --no-disable-hybrid-kv-cache-manager \\\n  --compilation-config '{\"cudagraph_mm_encoder\": true}' \\\n  --max-model-len 512000 \\\n  --max-num-batched-tokens 8192 \\\n  --max-num-seqs 256 \\\n  --gpu-memory-utilization 0.92 \\\n  --tool-call-parser glm47 \\\n  --enable-auto-tool-choice \\\n  --reasoning-parser glm47 \\\n  --enable-prefix-caching \\\n  --prefix-match-unit 64 \\\n  --block-size 64 \\\n  --max-num-batched-tokens 8192 \\\n  --max-num-seqs 32 \\\n  --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":5}'\n",
+      "sha256": "8190b864db30b72d05375952c74bfa74fba2018eca39bbadc1738d0491992084"
+    },
+    "decode.sh": {
+      "content": "export CUDA_VISIBLE_DEVICES=4,5,6,7\nexport VLLM_SSM_CONV_STATE_LAYOUT=DS\nexport LLM_KV_CACHE_LAYOUT=HND\n\n\nexport VLLM_NIXL_SIDE_CHANNEL_PORT=6558\nexport VLLM_NIXL_SIDE_CHANNEL_HOST=`hostname -i`\nexport DECODE_NODE_1=`hostname -i`\nexport DECODE_DP_RPC_PORT=29200\n\n\nexport NCCL_SOCKET_IFNAME=bond0\nexport NCCL_IB_HCA=\"=mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7\"\nexport NCCL_IB_GID_INDEX=3\nexport NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=bond0\nexport NVSHMEM_IB_GID_INDEX=3\nexport NCCL_DEBUG=WARN\nexport GLOO_SOCKET_IFNAME=bond0\n\n\nexport UCX_NET_DEVICES=mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1\nexport UCX_IB_GID_INDEX=3\n\n\nVLLM_ENGINE_READY_TIMEOUT_S=1800 vllm serve /mnt/nvme2n1/models/models--zai-org--GLM-5.3-Flash/models--zai-org--GLM-5.3-Flash/snapshots/3f1971b7b5f7a528c9c4ef6212c8785298a8c24a/ \\\n  --host 0.0.0.0 \\\n  --port 8002 \\\n  --served-model-name glm53-flash \\\n  --kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_consumer\",\"kv_load_failure_policy\":\"fail\"}' \\\n  --data-parallel-size 4 \\\n  --data-parallel-size-local 4 \\\n  --data-parallel-start-rank 0 \\\n  --data-parallel-address $DECODE_NODE_1 \\\n  --data-parallel-rpc-port $DECODE_DP_RPC_PORT \\\n  --enable-expert-parallel \\\n  --no-disable-hybrid-kv-cache-manager \\\n  --compilation-config '{\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}' \\\n  --max-model-len 512000 \\\n  --max-num-batched-tokens 8192 \\\n  --max-num-seqs 256 \\\n  --gpu-memory-utilization 0.92 \\\n  --tool-call-parser glm47 \\\n  --enable-auto-tool-choice \\\n  --reasoning-parser glm47 \\\n  --enable-prefix-caching \\\n  --prefix-match-unit 64 \\\n  --block-size 64 \\\n  --max-num-batched-tokens 256 \\\n  --max-num-seqs 32 \\\n  --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":5}'\n",
+      "sha256": "6ec46bb75e6f939ca8d6fbbdfcdc6663df90bf890606a3dee3da0c123f370bc2"
+    },
+    "router.sh": {
+      "content": "export PREFILL_NODE_1=`hostname -i`\nexport DECODE_NODE_1=`hostname -i`\n\n\nvllm-router --policy consistent_hash \\\n    --vllm-pd-disaggregation \\\n    --prefill http://$PREFILL_NODE_1:8001 \\\n    --decode http://$DECODE_NODE_1:8002 \\\n    --host 0.0.0.0 \\\n    --port 30000 \\\n    --intra-node-data-parallel-size 4\n",
+      "sha256": "1e665eceb7bb25c8909734eb2e6b95df70d80d82b9d8887129b65e1500142541"
+    },
+    "single/router.sh": {
+      "content": "vllm-router \\\n  --host 0.0.0.0 \\\n  --port 8000 \\\n  --policy consistent_hash \\\n  --prometheus-host 0.0.0.0 \\\n  --prometheus-port 6700 \\\n  --intra-node-data-parallel-size 4 \\\n  --worker-urls http://127.0.0.1:8100 http://127.0.0.1:8102 \\\n  --worker-startup-timeout-secs 1800 \\\n  --request-timeout-secs 18000 \\\n  --disable-retries\n",
+      "sha256": "e2b66017c84e4212724296f7d78fa5bf42c4f218a4db70594f04416ec4944dc5"
+    },
+    "single/vllm_p0.sh": {
+      "content": "export CUDA_VISIBLE_DEVICES=0,1,2,3\n\nMODEL_DIR=\"/mnt/nvme2n1/models/models--zai-org--GLM-5.3-Flash/models--zai-org--GLM-5.3-Flash/snapshots/3f1971b7b5f7a528c9c4ef6212c8785298a8c24a/\"\nvllm serve \"$MODEL_DIR\" \\\n  --host 0.0.0.0 \\\n  --port 8100 \\\n  --served-model-name glm53-flash \\\n  --enable-expert-parallel \\\n  --data-parallel-size 4 \\\n  --data-parallel-size-local 4 \\\n  --enable-prefix-caching \\\n  --prefix-match-unit 64 \\\n  --block-size 64 \\\n  --max-model-len 512000 \\\n  --max-num-batched-tokens 8192 \\\n  --max-num-seqs 16 \\\n  --no-enable-flashinfer-autotune \\\n  --tool-call-parser glm47 \\\n  --enable-auto-tool-choice \\\n  --reasoning-parser glm47 \\\n  --trust-remote-code \\\n  --enable-prompt-tokens-details \\\n  --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":5}'\n",
+      "sha256": "7e6f7b37187fc05a48818fd7e71c71820186783704bbe4d5eeb8a1648e1d96b9"
+    },
+    "single/vllm_p1.sh": {
+      "content": "export CUDA_VISIBLE_DEVICES=4,5,6,7\n\nMODEL_DIR=\"/mnt/nvme2n1/models/models--zai-org--GLM-5.3-Flash/models--zai-org--GLM-5.3-Flash/snapshots/3f1971b7b5f7a528c9c4ef6212c8785298a8c24a/\"\nvllm serve \"$MODEL_DIR\" \\\n  --host 0.0.0.0 \\\n  --port 8102 \\\n  --served-model-name glm53-flash \\\n  --enable-expert-parallel \\\n  --data-parallel-size 4 \\\n  --data-parallel-size-local 4 \\\n  --enable-prefix-caching \\\n  --prefix-match-unit 64 \\\n  --block-size 64 \\\n  --max-model-len 512000 \\\n  --max-num-batched-tokens 8192 \\\n  --max-num-seqs 16 \\\n  --no-enable-flashinfer-autotune \\\n  --tool-call-parser glm47 \\\n  --enable-auto-tool-choice \\\n  --reasoning-parser glm47 \\\n  --trust-remote-code \\\n  --enable-prompt-tokens-details \\\n  --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":5}'\n",
+      "sha256": "8d83ab751fe788028ec92b705883043d092278e1d281fb3e14dc126e73175d8a"
+    }
+  },
+  "normalized_single_scripts": {
+    "single_0.sh": "set -euo pipefail\nexport VLLM_SSM_CONV_STATE_LAYOUT=DS\nexport LLM_KV_CACHE_LAYOUT=HND\nexport NCCL_SOCKET_IFNAME=bond0\nexport NCCL_IB_HCA=\"=mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7\"\nexport NCCL_IB_GID_INDEX=3\nexport NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=bond0\nexport NVSHMEM_IB_GID_INDEX=3\nexport NCCL_DEBUG=WARN\nexport GLOO_SOCKET_IFNAME=bond0\nexport UCX_NET_DEVICES=mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1\nexport UCX_IB_GID_INDEX=3\nexport CUDA_VISIBLE_DEVICES=0,1,2,3\n\nMODEL_DIR=\"/mnt/nvme2n1/models/models--zai-org--GLM-5.3-Flash/models--zai-org--GLM-5.3-Flash/snapshots/3f1971b7b5f7a528c9c4ef6212c8785298a8c24a/\"\nvllm serve \"$MODEL_DIR\" \\\n  --host 0.0.0.0 \\\n  --port 8100 \\\n  --served-model-name glm53-flash \\\n  --enable-expert-parallel \\\n  --data-parallel-size 4 \\\n  --data-parallel-size-local 4 \\\n  --enable-prefix-caching \\\n  --prefix-match-unit 64 \\\n  --block-size 64 \\\n  --max-model-len 512000 \\\n  --max-num-batched-tokens 8192 \\\n  --max-num-seqs 32 \\\n  --enable-flashinfer-autotune \\\n  --tool-call-parser glm47 \\\n  --enable-auto-tool-choice \\\n  --reasoning-parser glm47 \\\n  --trust-remote-code \\\n  --enable-prompt-tokens-details \\\n  --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":5}' \\\n  --gpu-memory-utilization 0.92 \\\n  --compilation-config '{\"cudagraph_mm_encoder\": true}' \\\n  --data-parallel-rpc-port 29300\n",
+    "single_1.sh": "set -euo pipefail\nexport VLLM_SSM_CONV_STATE_LAYOUT=DS\nexport LLM_KV_CACHE_LAYOUT=HND\nexport NCCL_SOCKET_IFNAME=bond0\nexport NCCL_IB_HCA=\"=mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7\"\nexport NCCL_IB_GID_INDEX=3\nexport NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=bond0\nexport NVSHMEM_IB_GID_INDEX=3\nexport NCCL_DEBUG=WARN\nexport GLOO_SOCKET_IFNAME=bond0\nexport UCX_NET_DEVICES=mlx5_0:1,mlx5_1:1,mlx5_2:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_7:1\nexport UCX_IB_GID_INDEX=3\nexport CUDA_VISIBLE_DEVICES=4,5,6,7\n\nMODEL_DIR=\"/mnt/nvme2n1/models/models--zai-org--GLM-5.3-Flash/models--zai-org--GLM-5.3-Flash/snapshots/3f1971b7b5f7a528c9c4ef6212c8785298a8c24a/\"\nvllm serve \"$MODEL_DIR\" \\\n  --host 0.0.0.0 \\\n  --port 8102 \\\n  --served-model-name glm53-flash \\\n  --enable-expert-parallel \\\n  --data-parallel-size 4 \\\n  --data-parallel-size-local 4 \\\n  --enable-prefix-caching \\\n  --prefix-match-unit 64 \\\n  --block-size 64 \\\n  --max-model-len 512000 \\\n  --max-num-batched-tokens 8192 \\\n  --max-num-seqs 32 \\\n  --enable-flashinfer-autotune \\\n  --tool-call-parser glm47 \\\n  --enable-auto-tool-choice \\\n  --reasoning-parser glm47 \\\n  --trust-remote-code \\\n  --enable-prompt-tokens-details \\\n  --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":5}' \\\n  --gpu-memory-utilization 0.92 \\\n  --compilation-config '{\"cudagraph_mm_encoder\": true}' \\\n  --data-parallel-rpc-port 29400\n"
+  },
+  "router_arguments": {
+    "pd": [
+      "vllm-router",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "30010",
+      "--policy",
+      "round_robin",
+      "--prefill-policy",
+      "round_robin",
+      "--decode-policy",
+      "round_robin",
+      "--vllm-pd-disaggregation",
+      "--prefill",
+      "http://10.102.98.154:8001",
+      "--decode",
+      "http://10.102.98.154:8002",
+      "--intra-node-data-parallel-size",
+      "4",
+      "--prometheus-port",
+      "29010",
+      "--prometheus-host",
+      "0.0.0.0",
+      "--disable-retries"
+    ],
+    "pd_hash": [
+      "vllm-router",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "30010",
+      "--policy",
+      "consistent_hash",
+      "--intra-node-data-parallel-size",
+      "4",
+      "--prometheus-port",
+      "29010",
+      "--prometheus-host",
+      "0.0.0.0",
+      "--disable-retries",
+      "--worker-startup-timeout-secs",
+      "1800",
+      "--prefill-policy",
+      "consistent_hash",
+      "--decode-policy",
+      "consistent_hash",
+      "--vllm-pd-disaggregation",
+      "--prefill",
+      "http://10.102.98.154:8001",
+      "--decode",
+      "http://10.102.98.154:8002"
+    ],
+    "single": [
+      "vllm-router",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "30010",
+      "--policy",
+      "round_robin",
+      "--intra-node-data-parallel-size",
+      "4",
+      "--prometheus-port",
+      "29010",
+      "--prometheus-host",
+      "0.0.0.0",
+      "--disable-retries",
+      "--worker-startup-timeout-secs",
+      "1800",
+      "--worker-urls",
+      "http://10.102.98.154:8100",
+      "http://10.102.98.154:8102"
+    ],
+    "single_hash": [
+      "vllm-router",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "30010",
+      "--policy",
+      "consistent_hash",
+      "--intra-node-data-parallel-size",
+      "4",
+      "--prometheus-port",
+      "29010",
+      "--prometheus-host",
+      "0.0.0.0",
+      "--disable-retries",
+      "--worker-startup-timeout-secs",
+      "1800",
+      "--worker-urls",
+      "http://10.102.98.154:8100",
+      "http://10.102.98.154:8102"
+    ],
+    "pd_rewarm": [
+      "vllm-router",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "30010",
+      "--policy",
+      "round_robin",
+      "--intra-node-data-parallel-size",
+      "4",
+      "--prometheus-port",
+      "29010",
+      "--prometheus-host",
+      "0.0.0.0",
+      "--disable-retries",
+      "--worker-startup-timeout-secs",
+      "1800",
+      "--prefill-policy",
+      "round_robin",
+      "--decode-policy",
+      "round_robin",
+      "--vllm-pd-disaggregation",
+      "--prefill",
+      "http://10.102.98.154:8001",
+      "--decode",
+      "http://10.102.98.154:8002"
+    ],
+    "single_rewarm": [
+      "vllm-router",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "30010",
+      "--policy",
+      "round_robin",
+      "--intra-node-data-parallel-size",
+      "4",
+      "--prometheus-port",
+      "29010",
+      "--prometheus-host",
+      "0.0.0.0",
+      "--disable-retries",
+      "--worker-startup-timeout-secs",
+      "1800",
+      "--worker-urls",
+      "http://10.102.98.154:8100",
+      "http://10.102.98.154:8102"
+    ]
+  },
+  "workload": {
+    "conversations": 8,
+    "turns_per_conversation": 5,
+    "first_turn_user_tokens": 32768,
+    "later_turn_user_tokens": 4096,
+    "output_tokens_per_request": 512,
+    "concurrency": 8,
+    "rate": 8,
+    "seed": 1124,
+    "temperature": 0,
+    "ignore_eos": true,
+    "history": "user messages only; all 40 serialized request bodies match across runs",
+    "warmup_business_rounds": {
+      "pd": 2,
+      "pd_hash": 2,
+      "single": 2,
+      "single_hash": 2,
+      "pd_rewarm": 4,
+      "single_rewarm": 4
+    },
+    "measured_rounds_per_case": 3,
+    "cache_history": "pd -> pd_hash; restart as single -> single_hash -> single_rewarm; restore PD -> pd_rewarm"
+  },
+  "measurement": {
+    "ttft_ms": "client first_chunk_latency * 1000; request-weighted mean",
+    "tpot_ms": "client time_per_output_token * 1000; request-weighted mean",
+    "output_tps": "sum completion tokens / sum per-round (last completion - first request start)",
+    "cache_hit_ratio": "sum delta prefix_cache_hits_total / sum delta prefix_cache_queries_total; P only for PD",
+    "server_metrics_scope": "41 requests per round, including one hello connection probe; client results contain only the 40 business requests",
+    "phase_metrics": "server histograms; not a request-aligned additive decomposition of client TTFT"
+  },
+  "primary_comparisons": {
+    "round_robin": [
+      "pd_rewarm",
+      "single_rewarm"
+    ],
+    "consistent_hash_stable_session": [
+      "pd_hash",
+      "single_hash"
+    ]
+  },
+  "results": {
+    "pd": {
+      "requests": 120,
+      "success": 120,
+      "ttft_ms": {
+        "n": 120,
+        "mean": 2056.7579829046736,
+        "p50": 1298.2440314954147,
+        "p99": 5954.857567466097,
+        "max": 6008.555277949199
+      },
+      "tpot_ms": {
+        "n": 120,
+        "mean": 5.691610620589396,
+        "p50": 5.635576084148642,
+        "p99": 7.56918573190245,
+        "max": 7.810759978458183
+      },
+      "latency_ms": {
+        "n": 120,
+        "mean": 4965.171010025854,
+        "p50": 4359.699499502312,
+        "p99": 9095.07514573168,
+        "max": 9364.837200031616
+      },
+      "output_tps": 679.5316261342074,
+      "prefix_hit_ratio": 0.6355424508221987,
+      "prefix_queries": 4921377.0,
+      "prefix_hits": 3127744.0,
+      "computed_prefill_tokens_per_server_call": 14583.382113821139,
+      "rounds": [
+        {
+          "name": "pd_measure1",
+          "run": "measure1",
+          "elapsed_s": 28.240002013975754,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1860.5079122440657,
+            "p50": 1037.114501465112,
+            "p99": 5881.598749239929,
+            "max": 5970.054894918576
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.7214642633067045,
+            "p50": 5.7068606859087625,
+            "p99": 7.740674513317426,
+            "max": 7.810759978458183
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1120768.0,
+              "prefix_hit_ratio": 0.6832039081744804,
+              "success": 41.0,
+              "computed_prefill_tokens": 519732.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 10.0,
+                "2": 11.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 197.61607487027237,
+                "request_prefill_time_seconds": 1242.1058748008275,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 1242.1058748008275,
+                "time_to_first_token_seconds": 1585.3900909423828
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1451520.0,
+              "prefix_hit_ratio": 0.8848034135934166,
+              "success": 41.0,
+              "computed_prefill_tokens": 519732.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 25020.0,
+              "accepted_draft_tokens": 16064.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 10.0,
+                "2": 11.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 66.71767918075003,
+                "request_prefill_time_seconds": 49.68191556087354,
+                "request_decode_time_seconds": 2950.569012134177,
+                "request_inference_time_seconds": 3000.2509276950504,
+                "time_to_first_token_seconds": 188.48926265065262,
+                "nixl_xfer_time_seconds": 21.691512195122094,
+                "nixl_post_time_seconds": 1.5893658536585353
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 14189959040.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795078779.2594395,
+          "end": 1795078821.729298
+        },
+        {
+          "name": "pd_measure2",
+          "run": "measure2",
+          "elapsed_s": 30.38909944903571,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 2124.4392523774877,
+            "p50": 1310.430454555899,
+            "p99": 5887.754645689856,
+            "max": 6008.555277949199
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.603906046678886,
+            "p50": 5.586438049009132,
+            "p99": 7.025184567560717,
+            "max": 7.305432996100249
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1010240.0,
+              "prefix_hit_ratio": 0.6158276433607911,
+              "success": 41.0,
+              "computed_prefill_tokens": 630260.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 11.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 236.77183428733815,
+                "request_prefill_time_seconds": 1444.9363639805374,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 1444.9363639805374,
+                "time_to_first_token_seconds": 1837.5300430670015
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1464960.0,
+              "prefix_hit_ratio": 0.8929960377933557,
+              "success": 41.0,
+              "computed_prefill_tokens": 630260.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 25030.0,
+              "accepted_draft_tokens": 16071.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 11.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 66.28870886818665,
+                "request_prefill_time_seconds": 49.73540759486396,
+                "request_decode_time_seconds": 2893.604535654914,
+                "request_inference_time_seconds": 2943.339943249778,
+                "time_to_first_token_seconds": 192.21919920386338,
+                "nixl_xfer_time_seconds": 21.442414634146477,
+                "nixl_post_time_seconds": 1.5352682926829282
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 13867827584.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795078821.8547878,
+          "end": 1795078866.6879122
+        },
+        {
+          "name": "pd_measure3",
+          "run": "measure3",
+          "elapsed_s": 31.786116368020885,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 2185.3267840924673,
+            "p50": 1451.5059814439155,
+            "p99": 5815.17797938548,
+            "max": 5890.0689609581605
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.749461551782595,
+            "p50": 5.706659104805367,
+            "p99": 7.178173649918521,
+            "max": 7.202798483570684
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 996736.0,
+              "prefix_hit_ratio": 0.6075958009313247,
+              "success": 41.0,
+              "computed_prefill_tokens": 643764.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 11.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 236.08270446520027,
+                "request_prefill_time_seconds": 1482.7504237977469,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 1482.7504237977469,
+                "time_to_first_token_seconds": 1895.6948489677616
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1532160.0,
+              "prefix_hit_ratio": 0.9339591587930509,
+              "success": 41.0,
+              "computed_prefill_tokens": 643764.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 25415.0,
+              "accepted_draft_tokens": 15975.0,
+              "calls_by_rank": {
+                "0": 11.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 61.687179818385985,
+                "request_prefill_time_seconds": 53.13652790174252,
+                "request_decode_time_seconds": 2949.978508782096,
+                "request_inference_time_seconds": 3003.1150366838383,
+                "time_to_first_token_seconds": 191.71749091729885,
+                "nixl_xfer_time_seconds": 19.89509756097549,
+                "nixl_post_time_seconds": 1.3789512195121953
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 12257170304.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795078866.8089857,
+          "end": 1795078912.454408
+        },
+        {
+          "name": "pd_warm1",
+          "run": "warm1",
+          "elapsed_s": 35.02646965999156,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 3499.7033562365687,
+            "p50": 3586.820724012796,
+            "p99": 6242.872498484794,
+            "max": 6348.237850004807
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.517463011035163,
+            "p50": 5.354987162483379,
+            "p99": 7.408471620026994,
+            "max": 7.41300659883884
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 588864.0,
+              "prefix_hit_ratio": 0.35896294878445606,
+              "success": 41.0,
+              "computed_prefill_tokens": 1051636.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 11.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 256.8271534017673,
+                "request_prefill_time_seconds": 2632.001021831501,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 2632.001021831501,
+                "time_to_first_token_seconds": 3173.9218002412376
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 564480.0,
+              "prefix_hit_ratio": 0.3440902163974398,
+              "success": 41.0,
+              "computed_prefill_tokens": 1051636.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 25390.0,
+              "accepted_draft_tokens": 15997.0,
+              "calls_by_rank": {
+                "0": 11.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 57.130860119331174,
+                "request_prefill_time_seconds": 51.04009216515029,
+                "request_decode_time_seconds": 2841.963007410125,
+                "request_inference_time_seconds": 2893.0030995752754,
+                "time_to_first_token_seconds": 182.8440456855588,
+                "nixl_xfer_time_seconds": 18.242707317073354,
+                "nixl_post_time_seconds": 3.4231951219512182
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 35450635136.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795078688.0956419,
+          "end": 1795078737.0491023
+        },
+        {
+          "name": "pd_warm2",
+          "run": "warm2",
+          "elapsed_s": 27.49870205600746,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1909.8313496331684,
+            "p50": 1154.8645635484718,
+            "p99": 5667.66202630708,
+            "max": 5697.045045904815
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.657435106991794,
+            "p50": 5.499829822939814,
+            "p99": 7.800043704037859,
+            "max": 8.076146849405582
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1145344.0,
+              "prefix_hit_ratio": 0.6981850811266846,
+              "success": 41.0,
+              "computed_prefill_tokens": 495156.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 11.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 228.1223859910558,
+                "request_prefill_time_seconds": 1243.7304408266775,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 1243.7304408266775,
+                "time_to_first_token_seconds": 1628.9344938789927
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1223040.0,
+              "prefix_hit_ratio": 0.7455288021944529,
+              "success": 41.0,
+              "computed_prefill_tokens": 495156.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 24940.0,
+              "accepted_draft_tokens": 16079.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 11.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 65.60365392304048,
+                "request_prefill_time_seconds": 51.11215790597404,
+                "request_decode_time_seconds": 2919.2746726841465,
+                "request_inference_time_seconds": 2970.38683059012,
+                "time_to_first_token_seconds": 189.80260011626453,
+                "nixl_xfer_time_seconds": 22.126268292682944,
+                "nixl_post_time_seconds": 2.0690487804878046
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 19666193792.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795078737.2538948,
+          "end": 1795078779.1280465
+        }
+      ]
+    },
+    "pd_hash": {
+      "requests": 120,
+      "success": 120,
+      "ttft_ms": {
+        "n": 120,
+        "mean": 404.29598475069116,
+        "p50": 397.26045553106815,
+        "p99": 584.1993845847903,
+        "max": 919.2490539280698
+      },
+      "tpot_ms": {
+        "n": 120,
+        "mean": 6.967424344902783,
+        "p50": 6.9553387045373665,
+        "p99": 8.716717249212182,
+        "max": 9.525608035340293
+      },
+      "latency_ms": {
+        "n": 120,
+        "mean": 3964.649824996013,
+        "p50": 3930.174489505589,
+        "p99": 4841.036474679131,
+        "max": 5202.362059964798
+      },
+      "output_tps": 931.9284610732295,
+      "prefix_hit_ratio": 0.9974964324009317,
+      "prefix_queries": 4921377.0,
+      "prefix_hits": 4909056.0,
+      "computed_prefill_tokens_per_server_call": 101.17073170731707,
+      "rounds": [
+        {
+          "name": "pd_hash_measure1",
+          "run": "measure1",
+          "elapsed_s": 22.124174421071075,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 409.8100214789156,
+            "p50": 390.9913814859465,
+            "p99": 764.8110620770601,
+            "max": 919.2490539280698
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 6.989502475965803,
+            "p50": 7.0211675596503635,
+            "p99": 8.286873417767039,
+            "max": 8.305568342578256
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1636352.0,
+              "prefix_hit_ratio": 0.9974964324009317,
+              "success": 41.0,
+              "computed_prefill_tokens": 4148.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 6.0,
+                "2": 15.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.04058576575139674,
+                "request_prefill_time_seconds": 69.54430702437715,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 69.54430702437715,
+                "time_to_first_token_seconds": 138.68693607609447
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1576960.0,
+              "prefix_hit_ratio": 0.9612679061261811,
+              "success": 41.0,
+              "computed_prefill_tokens": 4148.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 25290.0,
+              "accepted_draft_tokens": 16019.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 20.0,
+                "2": 15.0,
+                "3": 1.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 73.20586060423678,
+                "request_prefill_time_seconds": 55.550199547191944,
+                "request_decode_time_seconds": 3557.351943832345,
+                "request_inference_time_seconds": 3612.9021433795374,
+                "time_to_first_token_seconds": 204.51688766479492,
+                "nixl_xfer_time_seconds": 23.35885365853637,
+                "nixl_post_time_seconds": 1.2984634146341485
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 11183398784.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795079128.0535355,
+          "end": 1795079164.2301452
+        },
+        {
+          "name": "pd_hash_measure2",
+          "run": "measure2",
+          "elapsed_s": 22.21532927302178,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 398.8849719025893,
+            "p50": 384.8380235140212,
+            "p99": 502.2246370196808,
+            "max": 510.23068104404956
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 6.944104865503884,
+            "p50": 6.928319591935907,
+            "p99": 8.497174508036288,
+            "max": 8.759597845379183
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1636352.0,
+              "prefix_hit_ratio": 0.9974964324009317,
+              "success": 41.0,
+              "computed_prefill_tokens": 4148.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 6.0,
+                "2": 15.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.04051534867868191,
+                "request_prefill_time_seconds": 69.57217037859486,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 69.57217037859486,
+                "time_to_first_token_seconds": 142.32830303471263
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1576960.0,
+              "prefix_hit_ratio": 0.9612679061261811,
+              "success": 41.0,
+              "computed_prefill_tokens": 4148.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 25070.0,
+              "accepted_draft_tokens": 16058.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 20.0,
+                "2": 15.0,
+                "3": 1.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 72.68920545352668,
+                "request_prefill_time_seconds": 56.210213726977024,
+                "request_decode_time_seconds": 3556.6780631680313,
+                "request_inference_time_seconds": 3612.8882768950084,
+                "time_to_first_token_seconds": 202.41918796446265,
+                "nixl_xfer_time_seconds": 22.213926829268388,
+                "nixl_post_time_seconds": 1.2828780487804858
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 11183398784.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795079164.3568673,
+          "end": 1795079200.6713142
+        },
+        {
+          "name": "pd_hash_measure3",
+          "run": "measure3",
+          "elapsed_s": 21.588303606957197,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 404.19296087056864,
+            "p50": 404.3133180239238,
+            "p99": 569.0489094471559,
+            "max": 598.4951679129153
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 6.968665693238662,
+            "p50": 6.962135806178525,
+            "p99": 9.138845995438983,
+            "max": 9.525608035340293
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1636352.0,
+              "prefix_hit_ratio": 0.9974964324009317,
+              "success": 41.0,
+              "computed_prefill_tokens": 4148.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 6.0,
+                "2": 15.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.04007067622208014,
+                "request_prefill_time_seconds": 70.89430679817026,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 70.89430679817026,
+                "time_to_first_token_seconds": 144.99335754208448
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1576960.0,
+              "prefix_hit_ratio": 0.9612679061261811,
+              "success": 41.0,
+              "computed_prefill_tokens": 4148.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 25005.0,
+              "accepted_draft_tokens": 16075.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 20.0,
+                "2": 15.0,
+                "3": 1.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 71.01159033978857,
+                "request_prefill_time_seconds": 55.71129391106164,
+                "request_decode_time_seconds": 3569.5115004825157,
+                "request_inference_time_seconds": 3625.2227943935773,
+                "time_to_first_token_seconds": 203.62055010911894,
+                "nixl_xfer_time_seconds": 23.148658536585362,
+                "nixl_post_time_seconds": 1.283926829268294
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 11183398784.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795079200.8097656,
+          "end": 1795079235.8838167
+        },
+        {
+          "name": "pd_hash_warm1",
+          "run": "warm1",
+          "elapsed_s": 25.6050158549333,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 967.7421716362005,
+            "p50": 703.1082804896869,
+            "p99": 4080.963316698325,
+            "max": 4661.14246007055
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 6.555850888817041,
+            "p50": 6.406387757307645,
+            "p99": 8.234066809864746,
+            "max": 8.362355307127311
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1419328.0,
+              "prefix_hit_ratio": 0.8652017514610241,
+              "success": 41.0,
+              "computed_prefill_tokens": 221172.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 6.0,
+                "2": 15.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 37.423099550168686,
+                "request_prefill_time_seconds": 528.9619039835,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 528.9619039835,
+                "time_to_first_token_seconds": 677.8935804599669
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1559040.0,
+              "prefix_hit_ratio": 0.950344407192929,
+              "success": 41.0,
+              "computed_prefill_tokens": 221172.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 25040.0,
+              "accepted_draft_tokens": 16063.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 20.0,
+                "2": 15.0,
+                "3": 1.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 78.38629181610375,
+                "request_prefill_time_seconds": 58.13809193489028,
+                "request_decode_time_seconds": 3368.846892129357,
+                "request_inference_time_seconds": 3426.9849840642473,
+                "time_to_first_token_seconds": 213.69279884710545,
+                "nixl_xfer_time_seconds": 25.769243902439044,
+                "nixl_post_time_seconds": 1.3487560975609725
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 11612907392.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795079052.1655529,
+          "end": 1795079092.2402487
+        },
+        {
+          "name": "pd_hash_warm2",
+          "run": "warm2",
+          "elapsed_s": 21.693227434996516,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 412.71418222459033,
+            "p50": 401.66151348967105,
+            "p99": 545.9687130060047,
+            "max": 564.209052012302
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 6.901023279012768,
+            "p50": 6.802631955007874,
+            "p99": 8.236196464797437,
+            "max": 8.288489019501874
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1636352.0,
+              "prefix_hit_ratio": 0.9974964324009317,
+              "success": 41.0,
+              "computed_prefill_tokens": 4148.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 6.0,
+                "2": 15.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.03915702606119761,
+                "request_prefill_time_seconds": 70.16263770439275,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 70.16263770439275,
+                "time_to_first_token_seconds": 148.57065386888456
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1576960.0,
+              "prefix_hit_ratio": 0.9612679061261811,
+              "success": 41.0,
+              "computed_prefill_tokens": 4148.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 24925.0,
+              "accepted_draft_tokens": 16078.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 20.0,
+                "2": 15.0,
+                "3": 1.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 74.61519357634754,
+                "request_prefill_time_seconds": 57.31745759343229,
+                "request_decode_time_seconds": 3528.4754170513734,
+                "request_inference_time_seconds": 3585.7928746448056,
+                "time_to_first_token_seconds": 206.30809155906118,
+                "nixl_xfer_time_seconds": 24.484487804878054,
+                "nixl_post_time_seconds": 1.31121951219512
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 11183398784.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795079092.3672724,
+          "end": 1795079127.9233983
+        }
+      ]
+    },
+    "single": {
+      "requests": 120,
+      "success": 120,
+      "ttft_ms": {
+        "n": 120,
+        "mean": 1462.542943705921,
+        "p50": 854.8654270125553,
+        "p99": 3662.624956901418,
+        "max": 3790.5598990619183
+      },
+      "tpot_ms": {
+        "n": 120,
+        "mean": 7.6689565622530855,
+        "p50": 6.82400897944459,
+        "p99": 19.127928884508584,
+        "max": 21.133953589242527
+      },
+      "latency_ms": {
+        "n": 120,
+        "mean": 5381.379747017248,
+        "p50": 5387.410555558745,
+        "p99": 10897.866949979216,
+        "max": 11324.192240019329
+      },
+      "output_tps": 666.3549033137193,
+      "prefix_hit_ratio": 0.6011305496291781,
+      "prefix_queries": 4921500.0,
+      "prefix_hits": 2958464.0,
+      "computed_prefill_tokens_per_server_call": 15959.642276422765,
+      "rounds": [
+        {
+          "name": "single_measure1",
+          "run": "measure1",
+          "elapsed_s": 32.940650830976665,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1676.5289304865291,
+            "p50": 1299.0864035091363,
+            "p99": 3723.24707291089,
+            "max": 3790.5598990619183
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 8.700207413293588,
+            "p50": 7.652124283728673,
+            "p99": 20.724379687650682,
+            "max": 21.133953589242527
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 828443.0,
+              "prefix_hits": 420736.0,
+              "prefix_hit_ratio": 0.5078635464359045,
+              "success": 21.0,
+              "computed_prefill_tokens": 407707.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 12915.0,
+              "accepted_draft_tokens": 8184.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 6.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.03879002871967498,
+                "request_prefill_time_seconds": 1526.2125120276498,
+                "request_decode_time_seconds": 5043.9349468797445,
+                "request_inference_time_seconds": 6570.147458907394,
+                "time_to_first_token_seconds": 1658.4345272609166
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 812057.0,
+              "prefix_hits": 437120.0,
+              "prefix_hit_ratio": 0.538287336972651,
+              "success": 20.0,
+              "computed_prefill_tokens": 374937.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 11530.0,
+              "accepted_draft_tokens": 7963.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.046532042324543,
+                "request_prefill_time_seconds": 1455.9483755379915,
+                "request_decode_time_seconds": 3799.9674745835364,
+                "request_inference_time_seconds": 5255.915850121528,
+                "time_to_first_token_seconds": 1567.8149223327637
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079575.2378054,
+          "end": 1795079622.2783563
+        },
+        {
+          "name": "single_measure2",
+          "run": "measure2",
+          "elapsed_s": 29.6684648769442,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1407.435206050286,
+            "p50": 660.1734349969774,
+            "p99": 3662.1689440927003,
+            "max": 3663.0581690697
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 7.411745451176594,
+            "p50": 6.465690368909476,
+            "p99": 14.523311422357732,
+            "max": 15.051871195523008
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 816071.0,
+              "prefix_hits": 439936.0,
+              "prefix_hit_ratio": 0.5390903487564195,
+              "success": 20.0,
+              "computed_prefill_tokens": 376135.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 11710.0,
+              "accepted_draft_tokens": 7911.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.02683578059077263,
+                "request_prefill_time_seconds": 1501.9819490611553,
+                "request_decode_time_seconds": 4120.955910533667,
+                "request_inference_time_seconds": 5622.937859594822,
+                "time_to_first_token_seconds": 1640.7391786575317
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 824429.0,
+              "prefix_hits": 570304.0,
+              "prefix_hit_ratio": 0.6917563550044941,
+              "success": 21.0,
+              "computed_prefill_tokens": 254125.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 12625.0,
+              "accepted_draft_tokens": 8237.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 6.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.04778891092255002,
+                "request_prefill_time_seconds": 976.0564472526312,
+                "request_decode_time_seconds": 3489.652939495586,
+                "request_inference_time_seconds": 4465.709386748218,
+                "time_to_first_token_seconds": 1077.2230625152588
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079622.3911057,
+          "end": 1795079665.9043047
+        },
+        {
+          "name": "single_measure3",
+          "run": "measure3",
+          "elapsed_s": 29.59400262206327,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1303.664694580948,
+            "p50": 764.5340475137345,
+            "p99": 3205.505103371106,
+            "max": 3267.552158096805
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 6.894916822289074,
+            "p50": 6.167468567603904,
+            "p99": 11.909000262344227,
+            "max": 12.050165598865766
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 820205.0,
+              "prefix_hits": 577088.0,
+              "prefix_hit_ratio": 0.7035899561694942,
+              "success": 21.0,
+              "computed_prefill_tokens": 243117.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 12840.0,
+              "accepted_draft_tokens": 8204.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 6.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.03990344703197479,
+                "request_prefill_time_seconds": 943.5545562633446,
+                "request_decode_time_seconds": 3029.317989856714,
+                "request_inference_time_seconds": 3972.8725461200593,
+                "time_to_first_token_seconds": 1059.62069829305
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 820295.0,
+              "prefix_hits": 513280.0,
+              "prefix_hit_ratio": 0.6257261107284574,
+              "success": 20.0,
+              "computed_prefill_tokens": 307015.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 11635.0,
+              "accepted_draft_tokens": 7928.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.033292826265096664,
+                "request_prefill_time_seconds": 1306.257953401655,
+                "request_decode_time_seconds": 4064.3650935962796,
+                "request_inference_time_seconds": 5370.623046997935,
+                "time_to_first_token_seconds": 1443.1679725646973
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079666.008386,
+          "end": 1795079709.2234955
+        },
+        {
+          "name": "single_warm1",
+          "run": "warm1",
+          "elapsed_s": 42.727105885976925,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 2548.4450453834143,
+            "p50": 2885.3434909833595,
+            "p99": 3856.33602344431,
+            "max": 3914.214487071149
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 9.23881404333768,
+            "p50": 8.337996931520607,
+            "p99": 17.93633213787068,
+            "max": 18.00521304115558
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 824295.0,
+              "prefix_hits": 188096.0,
+              "prefix_hit_ratio": 0.22819015037092302,
+              "success": 20.0,
+              "computed_prefill_tokens": 636199.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 11830.0,
+              "accepted_draft_tokens": 7888.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.05498221144080162,
+                "request_prefill_time_seconds": 2398.7379719503224,
+                "request_decode_time_seconds": 3773.5087015666068,
+                "request_inference_time_seconds": 6172.246673516929,
+                "time_to_first_token_seconds": 2507.6855182647705
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 816205.0,
+              "prefix_hits": 165888.0,
+              "prefix_hit_ratio": 0.2032430578102315,
+              "success": 21.0,
+              "computed_prefill_tokens": 650317.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 13005.0,
+              "accepted_draft_tokens": 8173.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 6.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.03828454230512891,
+                "request_prefill_time_seconds": 2303.581490669222,
+                "request_decode_time_seconds": 5590.751866410886,
+                "request_inference_time_seconds": 7894.333357080107,
+                "time_to_first_token_seconds": 2424.3550300598145
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079471.7789018,
+          "end": 1795079528.3618731
+        },
+        {
+          "name": "single_warm2",
+          "run": "warm2",
+          "elapsed_s": 32.11347457196098,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1997.1254601696273,
+            "p50": 2638.8970554689877,
+            "p99": 3722.7559039602056,
+            "max": 3736.503159045242
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 7.921775840571398,
+            "p50": 6.59262269374016,
+            "p99": 17.207448226527294,
+            "max": 20.130312303308973
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 820248.0,
+              "prefix_hits": 305408.0,
+              "prefix_hit_ratio": 0.37233617149935144,
+              "success": 20.0,
+              "computed_prefill_tokens": 514840.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 12425.0,
+              "accepted_draft_tokens": 7785.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.03163795918226242,
+                "request_prefill_time_seconds": 2109.8422395065427,
+                "request_decode_time_seconds": 4366.119085904211,
+                "request_inference_time_seconds": 6475.9613254107535,
+                "time_to_first_token_seconds": 2252.204215526581
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 820252.0,
+              "prefix_hits": 409152.0,
+              "prefix_hit_ratio": 0.4988125600425235,
+              "success": 21.0,
+              "computed_prefill_tokens": 411100.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 12735.0,
+              "accepted_draft_tokens": 8225.0,
+              "calls_by_rank": {
+                "0": 6.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.05303811104524703,
+                "request_prefill_time_seconds": 1467.504511276881,
+                "request_decode_time_seconds": 3775.286092201159,
+                "request_inference_time_seconds": 5242.79060347804,
+                "time_to_first_token_seconds": 1590.8579031626384
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079528.4636385,
+          "end": 1795079575.1372821
+        }
+      ]
+    },
+    "single_hash": {
+      "requests": 120,
+      "success": 120,
+      "ttft_ms": {
+        "n": 120,
+        "mean": 178.4954474288194,
+        "p50": 179.3466864619404,
+        "p99": 256.8823621340562,
+        "max": 262.68432999495417
+      },
+      "tpot_ms": {
+        "n": 120,
+        "mean": 6.107403895158086,
+        "p50": 6.0128322445947875,
+        "p99": 7.804114434703157,
+        "max": 8.066619389395205
+      },
+      "latency_ms": {
+        "n": 120,
+        "mean": 3299.3788378546014,
+        "p50": 3250.3826760221273,
+        "p99": 4168.704873325769,
+        "max": 4317.20911199227
+      },
+      "output_tps": 1064.6861284920765,
+      "prefix_hit_ratio": 0.9975495275830539,
+      "prefix_queries": 4921500.0,
+      "prefix_hits": 4909440.0,
+      "computed_prefill_tokens_per_server_call": 98.04878048780488,
+      "rounds": [
+        {
+          "name": "single_hash_measure1",
+          "run": "measure1",
+          "elapsed_s": 19.1624027939979,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 181.50052282144316,
+            "p50": 181.61860847612843,
+            "p99": 250.81937988521528,
+            "max": 262.68432999495417
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 6.148607295062101,
+            "p50": 6.137431342562081,
+            "p99": 7.631661569334679,
+            "max": 7.663777802247051
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 1025162.0,
+              "prefix_hits": 1022464.0,
+              "prefix_hit_ratio": 0.9973682208275375,
+              "success": 25.0,
+              "computed_prefill_tokens": 2698.0,
+              "generation_tokens": 12800.0,
+              "preemptions": 0.0,
+              "draft_tokens": 15040.0,
+              "accepted_draft_tokens": 9808.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 0.0,
+                "3": 15.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.023066997528076172,
+                "request_prefill_time_seconds": 81.91868521273136,
+                "request_decode_time_seconds": 3246.414743810892,
+                "request_inference_time_seconds": 3328.3334290236235,
+                "time_to_first_token_seconds": 167.25852012634277
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 615338.0,
+              "prefix_hits": 614016.0,
+              "prefix_hit_ratio": 0.9978515872577348,
+              "success": 16.0,
+              "computed_prefill_tokens": 1322.0,
+              "generation_tokens": 8192.0,
+              "preemptions": 0.0,
+              "draft_tokens": 10220.0,
+              "accepted_draft_tokens": 6153.0,
+              "calls_by_rank": {
+                "0": 16.0,
+                "1": 0.0,
+                "2": 0.0,
+                "3": 0.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.018776627257466316,
+                "request_prefill_time_seconds": 65.64132170751691,
+                "request_decode_time_seconds": 3019.08715616446,
+                "request_inference_time_seconds": 3084.728477871977,
+                "time_to_first_token_seconds": 136.2176388502121
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079828.3654146,
+          "end": 1795079861.532136
+        },
+        {
+          "name": "single_hash_measure2",
+          "run": "measure2",
+          "elapsed_s": 19.2850580989616,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 175.1766480738297,
+            "p50": 176.40386149287224,
+            "p99": 207.06673591514118,
+            "max": 208.6044930620119
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 6.120414857343914,
+            "p50": 6.025856614469163,
+            "p99": 7.849943543528707,
+            "max": 8.066619389395205
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 1025162.0,
+              "prefix_hits": 1022464.0,
+              "prefix_hit_ratio": 0.9973682208275375,
+              "success": 25.0,
+              "computed_prefill_tokens": 2698.0,
+              "generation_tokens": 12800.0,
+              "preemptions": 0.0,
+              "draft_tokens": 14970.0,
+              "accepted_draft_tokens": 9827.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 0.0,
+                "3": 15.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.022369474172592163,
+                "request_prefill_time_seconds": 80.13487063348293,
+                "request_decode_time_seconds": 3231.7134649306536,
+                "request_inference_time_seconds": 3311.8483355641365,
+                "time_to_first_token_seconds": 158.3011531829834
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 615338.0,
+              "prefix_hits": 614016.0,
+              "prefix_hit_ratio": 0.9978515872577348,
+              "success": 16.0,
+              "computed_prefill_tokens": 1322.0,
+              "generation_tokens": 8192.0,
+              "preemptions": 0.0,
+              "draft_tokens": 10255.0,
+              "accepted_draft_tokens": 6156.0,
+              "calls_by_rank": {
+                "0": 16.0,
+                "1": 0.0,
+                "2": 0.0,
+                "3": 0.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.019416678696870804,
+                "request_prefill_time_seconds": 66.46975502371788,
+                "request_decode_time_seconds": 3047.9460435453802,
+                "request_inference_time_seconds": 3114.415798569098,
+                "time_to_first_token_seconds": 134.06912982463837
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079861.6330605,
+          "end": 1795079894.9253223
+        },
+        {
+          "name": "single_hash_measure3",
+          "run": "measure3",
+          "elapsed_s": 19.25968711602036,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 178.80917139118537,
+            "p50": 179.58919145166874,
+            "p99": 246.7360245354939,
+            "max": 262.65765400603414
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 6.053189533068243,
+            "p50": 5.85770876914146,
+            "p99": 7.763225622356682,
+            "max": 7.837032904044713
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 1025162.0,
+              "prefix_hits": 1022464.0,
+              "prefix_hit_ratio": 0.9973682208275375,
+              "success": 25.0,
+              "computed_prefill_tokens": 2698.0,
+              "generation_tokens": 12800.0,
+              "preemptions": 0.0,
+              "draft_tokens": 14925.0,
+              "accepted_draft_tokens": 9830.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 0.0,
+                "3": 15.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.022772103548049927,
+                "request_prefill_time_seconds": 83.83568033576012,
+                "request_decode_time_seconds": 3186.229240298271,
+                "request_inference_time_seconds": 3270.0649206340313,
+                "time_to_first_token_seconds": 161.52581214904785
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 615338.0,
+              "prefix_hits": 614016.0,
+              "prefix_hit_ratio": 0.9978515872577348,
+              "success": 16.0,
+              "computed_prefill_tokens": 1322.0,
+              "generation_tokens": 8192.0,
+              "preemptions": 0.0,
+              "draft_tokens": 9990.0,
+              "accepted_draft_tokens": 6208.0,
+              "calls_by_rank": {
+                "0": 16.0,
+                "1": 0.0,
+                "2": 0.0,
+                "3": 0.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.022551510483026505,
+                "request_prefill_time_seconds": 67.1182181686163,
+                "request_decode_time_seconds": 2922.543352935463,
+                "request_inference_time_seconds": 2989.6615711040795,
+                "time_to_first_token_seconds": 140.97270369529724
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079895.0240798,
+          "end": 1795079928.8524559
+        },
+        {
+          "name": "single_hash_warm1",
+          "run": "warm1",
+          "elapsed_s": 25.266310491017066,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 835.7198372134008,
+            "p50": 513.3436839678325,
+            "p99": 3546.816882269922,
+            "max": 3910.45474994462
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 7.395736635483778,
+            "p50": 7.008019841591411,
+            "p99": 11.060278653267428,
+            "max": 11.209925530257829
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 1025162.0,
+              "prefix_hits": 871040.0,
+              "prefix_hit_ratio": 0.8496608340925629,
+              "success": 25.0,
+              "computed_prefill_tokens": 154122.0,
+              "generation_tokens": 12800.0,
+              "preemptions": 0.0,
+              "draft_tokens": 15005.0,
+              "accepted_draft_tokens": 9817.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 0.0,
+                "3": 15.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.02076759934425354,
+                "request_prefill_time_seconds": 632.967539280653,
+                "request_decode_time_seconds": 3824.760827049613,
+                "request_inference_time_seconds": 4457.728366330266,
+                "time_to_first_token_seconds": 761.8918895721436
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 615338.0,
+              "prefix_hits": 515840.0,
+              "prefix_hit_ratio": 0.8383035014902379,
+              "success": 16.0,
+              "computed_prefill_tokens": 99498.0,
+              "generation_tokens": 8192.0,
+              "preemptions": 0.0,
+              "draft_tokens": 10345.0,
+              "accepted_draft_tokens": 6125.0,
+              "calls_by_rank": {
+                "0": 16.0,
+                "1": 0.0,
+                "2": 0.0,
+                "3": 0.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 153.59351958613843,
+                "request_prefill_time_seconds": 606.0257467906922,
+                "request_decode_time_seconds": 3751.7442198004574,
+                "request_inference_time_seconds": 4357.76996659115,
+                "time_to_first_token_seconds": 843.3903157711029
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079754.286915,
+          "end": 1795079794.361626
+        },
+        {
+          "name": "single_hash_warm2",
+          "run": "warm2",
+          "elapsed_s": 19.044802281074226,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 176.9436770817265,
+            "p50": 177.15104500530288,
+            "p99": 251.46627931389955,
+            "max": 266.6807600762695
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 6.055530135804804,
+            "p50": 6.072117472609683,
+            "p99": 8.034836763494198,
+            "max": 8.398315939212075
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 1025162.0,
+              "prefix_hits": 1022464.0,
+              "prefix_hit_ratio": 0.9973682208275375,
+              "success": 25.0,
+              "computed_prefill_tokens": 2698.0,
+              "generation_tokens": 12800.0,
+              "preemptions": 0.0,
+              "draft_tokens": 14755.0,
+              "accepted_draft_tokens": 9873.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 0.0,
+                "3": 15.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.02308674156665802,
+                "request_prefill_time_seconds": 80.86241006851196,
+                "request_decode_time_seconds": 3213.4870644658804,
+                "request_inference_time_seconds": 3294.3494745343924,
+                "time_to_first_token_seconds": 156.93174362182617
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 615338.0,
+              "prefix_hits": 614016.0,
+              "prefix_hit_ratio": 0.9978515872577348,
+              "success": 16.0,
+              "computed_prefill_tokens": 1322.0,
+              "generation_tokens": 8192.0,
+              "preemptions": 0.0,
+              "draft_tokens": 10090.0,
+              "accepted_draft_tokens": 6185.0,
+              "calls_by_rank": {
+                "0": 16.0,
+                "1": 0.0,
+                "2": 0.0,
+                "3": 0.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.021696905605494976,
+                "request_prefill_time_seconds": 65.8297878690064,
+                "request_decode_time_seconds": 2984.476360375993,
+                "request_inference_time_seconds": 3050.3061482449993,
+                "time_to_first_token_seconds": 140.06130397319794
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079794.4631426,
+          "end": 1795079828.26833
+        }
+      ]
+    },
+    "pd_rewarm": {
+      "requests": 120,
+      "success": 120,
+      "ttft_ms": {
+        "n": 120,
+        "mean": 2093.735849165629,
+        "p50": 1561.6703089908697,
+        "p99": 5980.621132755186,
+        "max": 5992.155823041685
+      },
+      "tpot_ms": {
+        "n": 120,
+        "mean": 5.701245830689884,
+        "p50": 5.624322381636962,
+        "p99": 7.859684063580504,
+        "max": 8.036621730071138
+      },
+      "latency_ms": {
+        "n": 120,
+        "mean": 5007.07246864816,
+        "p50": 4495.625046489295,
+        "p99": 9054.473870195216,
+        "max": 9770.52491006907
+      },
+      "output_tps": 679.1004439671692,
+      "prefix_hit_ratio": 0.6347751858880146,
+      "prefix_queries": 4921377.0,
+      "prefix_hits": 3123968.0,
+      "computed_prefill_tokens_per_server_call": 14614.081300813008,
+      "rounds": [
+        {
+          "name": "pd_rewarm_measure1",
+          "run": "measure1",
+          "elapsed_s": 29.379457353032194,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1856.6870100970846,
+            "p50": 1002.2340700379573,
+            "p99": 5879.550022804178,
+            "max": 5992.155823041685
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.686201025386033,
+            "p50": 5.557338540044061,
+            "p99": 7.46798681125998,
+            "max": 7.515245954936221
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1116672.0,
+              "prefix_hit_ratio": 0.6807070460157797,
+              "success": 41.0,
+              "computed_prefill_tokens": 523828.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 11.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 182.4224387272829,
+                "request_prefill_time_seconds": 1259.0210051616518,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 1259.0210051616518,
+                "time_to_first_token_seconds": 1580.843192775075
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1505280.0,
+              "prefix_hit_ratio": 0.9175739103931728,
+              "success": 41.0,
+              "computed_prefill_tokens": 523828.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 24945.0,
+              "accepted_draft_tokens": 16092.0,
+              "calls_by_rank": {
+                "0": 11.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 66.3498134874716,
+                "request_prefill_time_seconds": 49.59067647776953,
+                "request_decode_time_seconds": 2922.5069737379868,
+                "request_inference_time_seconds": 2972.0976502157564,
+                "time_to_first_token_seconds": 186.8688362400706,
+                "nixl_xfer_time_seconds": 22.230000000000018,
+                "nixl_post_time_seconds": 1.612000000000001
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 12901433216.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795080620.5819817,
+          "end": 1795080663.4031918
+        },
+        {
+          "name": "pd_rewarm_measure2",
+          "run": "measure2",
+          "elapsed_s": 28.79131291504018,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 2149.567360302899,
+            "p50": 1604.319894046057,
+            "p99": 5860.854002330452,
+            "max": 5940.59223192744
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.706909375250205,
+            "p50": 5.867134290678999,
+            "p99": 6.955456398593793,
+            "max": 7.178769706394851
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1021440.0,
+              "prefix_hit_ratio": 0.6226550008259883,
+              "success": 41.0,
+              "computed_prefill_tokens": 619060.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 11.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 250.3797647247954,
+                "request_prefill_time_seconds": 1425.4628279496258,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 1425.4628279496258,
+                "time_to_first_token_seconds": 1855.878638058174
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1559040.0,
+              "prefix_hit_ratio": 0.950344407192929,
+              "success": 41.0,
+              "computed_prefill_tokens": 619060.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 25240.0,
+              "accepted_draft_tokens": 16029.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 11.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 68.75442690783883,
+                "request_prefill_time_seconds": 50.1962301843777,
+                "request_decode_time_seconds": 2944.6520040311466,
+                "request_inference_time_seconds": 2994.848234215524,
+                "time_to_first_token_seconds": 197.64282063740055,
+                "nixl_xfer_time_seconds": 21.943170731707312,
+                "nixl_post_time_seconds": 1.480463414634146
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 11612907392.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795080663.5189362,
+          "end": 1795080706.1601818
+        },
+        {
+          "name": "pd_rewarm_measure3",
+          "run": "measure3",
+          "elapsed_s": 32.30185501999222,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 2274.9531770969043,
+            "p50": 1730.7386795291677,
+            "p99": 5878.344868230633,
+            "max": 5990.010628011078
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.710627091433415,
+            "p50": 5.497629609580449,
+            "p99": 7.990094164508047,
+            "max": 8.036621730071138
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 985856.0,
+              "prefix_hit_ratio": 0.600963510822276,
+              "success": 41.0,
+              "computed_prefill_tokens": 654644.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 10.0,
+                "2": 11.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 212.62876385050575,
+                "request_prefill_time_seconds": 1562.266342114748,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 1562.266342114748,
+                "time_to_first_token_seconds": 1961.9548902278993
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1572480.0,
+              "prefix_hit_ratio": 0.958537031392868,
+              "success": 41.0,
+              "computed_prefill_tokens": 654644.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 24855.0,
+              "accepted_draft_tokens": 16116.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 10.0,
+                "2": 11.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 63.256859234193485,
+                "request_prefill_time_seconds": 50.74084672804286,
+                "request_decode_time_seconds": 2866.8151963047867,
+                "request_inference_time_seconds": 2917.5560430328296,
+                "time_to_first_token_seconds": 190.30227312227575,
+                "nixl_xfer_time_seconds": 20.008097560975607,
+                "nixl_post_time_seconds": 1.4444146341463426
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 11290775936.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795080706.2883615,
+          "end": 1795080752.9351094
+        },
+        {
+          "name": "pd_rewarm_warm1",
+          "run": "warm1",
+          "elapsed_s": 31.920634848996997,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 2922.892505125492,
+            "p50": 2822.2878054948524,
+            "p99": 6355.73204102926,
+            "max": 6379.785042954609
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.435599215019316,
+            "p50": 5.392982575376272,
+            "p99": 6.8045573424864125,
+            "max": 6.836467356249734
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 756672.0,
+              "prefix_hit_ratio": 0.46125627034872557,
+              "success": 41.0,
+              "computed_prefill_tokens": 883828.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 11.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 325.99014175556056,
+                "request_prefill_time_seconds": 2096.8082010200837,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 2096.8082010200837,
+                "time_to_first_token_seconds": 2618.81074672792
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 734720.0,
+              "prefix_hit_ratio": 0.44786345626333435,
+              "success": 41.0,
+              "computed_prefill_tokens": 883828.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 24800.0,
+              "accepted_draft_tokens": 16129.0,
+              "calls_by_rank": {
+                "0": 11.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 62.455434806463195,
+                "request_prefill_time_seconds": 51.35454732652118,
+                "request_decode_time_seconds": 2797.623005536635,
+                "request_inference_time_seconds": 2848.977552863156,
+                "time_to_first_token_seconds": 184.24933131148174,
+                "nixl_xfer_time_seconds": 20.227,
+                "nixl_post_time_seconds": 3.0676097560975606
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 31370303360.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795080451.2960837,
+          "end": 1795080497.194388
+        },
+        {
+          "name": "pd_rewarm_warm2",
+          "run": "warm2",
+          "elapsed_s": 27.56117381795775,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1982.5928192585707,
+            "p50": 1399.206145957578,
+            "p99": 5947.164155984065,
+            "max": 6044.88439601846
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.6031707392794985,
+            "p50": 5.666352678960601,
+            "p99": 6.853205779667146,
+            "max": 6.87260654802323
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1054720.0,
+              "prefix_hit_ratio": 0.6429420058654316,
+              "success": 41.0,
+              "computed_prefill_tokens": 585780.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 11.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 195.62393613159657,
+                "request_prefill_time_seconds": 1331.644583856914,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 1331.644583856914,
+                "time_to_first_token_seconds": 1694.4264202583126
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1124480.0,
+              "prefix_hit_ratio": 0.6854495580615666,
+              "success": 41.0,
+              "computed_prefill_tokens": 585780.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 24930.0,
+              "accepted_draft_tokens": 16088.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 11.0,
+                "2": 10.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 66.89041085177804,
+                "request_prefill_time_seconds": 51.90394655233476,
+                "request_decode_time_seconds": 2890.9162394702435,
+                "request_inference_time_seconds": 2942.820186022578,
+                "time_to_first_token_seconds": 190.40371150505254,
+                "nixl_xfer_time_seconds": 22.116658536585366,
+                "nixl_post_time_seconds": 2.4572439024390245
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 22028491136.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795080497.3213143,
+          "end": 1795080538.8439665
+        },
+        {
+          "name": "pd_rewarm_warm3",
+          "run": "warm3",
+          "elapsed_s": 25.718555659987032,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1651.4819863514276,
+            "p50": 866.8850284884684,
+            "p99": 5883.304156456143,
+            "max": 6012.23413401749
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.629646125873332,
+            "p50": 5.580238983355857,
+            "p99": 6.884317096070352,
+            "max": 6.946123815907089
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1178176.0,
+              "prefix_hit_ratio": 0.71819899186752,
+              "success": 41.0,
+              "computed_prefill_tokens": 462324.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 10.0,
+                "2": 11.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 188.89807841581543,
+                "request_prefill_time_seconds": 1065.7405426680316,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 1065.7405426680316,
+                "time_to_first_token_seconds": 1378.0442970555002
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1438080.0,
+              "prefix_hit_ratio": 0.8766107893934776,
+              "success": 41.0,
+              "computed_prefill_tokens": 462324.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 24555.0,
+              "accepted_draft_tokens": 16149.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 10.0,
+                "2": 11.0,
+                "3": 10.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 68.67372912422913,
+                "request_prefill_time_seconds": 49.25243929028511,
+                "request_decode_time_seconds": 2905.9841248956395,
+                "request_inference_time_seconds": 2955.2365641859246,
+                "time_to_first_token_seconds": 187.9911713483857,
+                "nixl_xfer_time_seconds": 22.41814634146341,
+                "nixl_post_time_seconds": 1.811512195121952
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 14512090496.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795080538.9647145,
+          "end": 1795080579.3004718
+        },
+        {
+          "name": "pd_rewarm_warm4",
+          "run": "warm4",
+          "elapsed_s": 26.858288891031407,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1633.5200671252096,
+            "p50": 869.0688079805113,
+            "p99": 5835.024204483489,
+            "max": 5955.199924996123
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 5.778678364283087,
+            "p50": 5.8085239716074675,
+            "p99": 7.4399595329088735,
+            "max": 7.5279690333006
+          },
+          "endpoints": {
+            "http://10.102.98.154:8001": {
+              "prefix_queries": 1640459.0,
+              "prefix_hits": 1157632.0,
+              "prefix_hit_ratio": 0.7056756676027868,
+              "success": 41.0,
+              "computed_prefill_tokens": 482868.0,
+              "generation_tokens": 41.0,
+              "preemptions": 0.0,
+              "draft_tokens": 0.0,
+              "accepted_draft_tokens": 0.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 11.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 182.5198758756969,
+                "request_prefill_time_seconds": 1047.0986938694627,
+                "request_decode_time_seconds": 0.0,
+                "request_inference_time_seconds": 1047.0986938694627,
+                "time_to_first_token_seconds": 1357.030031157703
+              },
+              "nixl": {
+                "transfers": 0.0,
+                "bytes": 0.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            },
+            "http://10.102.98.154:8002": {
+              "prefix_queries": 1640500.0,
+              "prefix_hits": 1447040.0,
+              "prefix_hit_ratio": 0.8820725388601036,
+              "success": 41.0,
+              "computed_prefill_tokens": 482868.0,
+              "generation_tokens": 20992.0,
+              "preemptions": 0.0,
+              "draft_tokens": 25330.0,
+              "accepted_draft_tokens": 16008.0,
+              "calls_by_rank": {
+                "0": 10.0,
+                "1": 10.0,
+                "2": 10.0,
+                "3": 11.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 67.84703632498659,
+                "request_prefill_time_seconds": 48.7563492866551,
+                "request_decode_time_seconds": 2990.315721165843,
+                "request_inference_time_seconds": 3039.072070452498,
+                "time_to_first_token_seconds": 184.97469948559274,
+                "nixl_xfer_time_seconds": 21.09714634146341,
+                "nixl_post_time_seconds": 1.8456097560975606
+              },
+              "nixl": {
+                "transfers": 41.0,
+                "bytes": 14297336192.0,
+                "failed": 0.0,
+                "expired": 0.0
+              }
+            }
+          },
+          "begin": 1795080579.4270248,
+          "end": 1795080620.4623816
+        }
+      ]
+    },
+    "single_rewarm": {
+      "requests": 120,
+      "success": 120,
+      "ttft_ms": {
+        "n": 120,
+        "mean": 1330.164521902528,
+        "p50": 704.7680644900538,
+        "p99": 3258.3313547610305,
+        "max": 3279.3204960180447
+      },
+      "tpot_ms": {
+        "n": 120,
+        "mean": 7.33633266824701,
+        "p50": 6.396486264208802,
+        "p99": 13.327284204666986,
+        "max": 14.151749681132808
+      },
+      "latency_ms": {
+        "n": 120,
+        "mean": 5079.03051537675,
+        "p50": 5210.738783003762,
+        "p99": 8830.027889914345,
+        "max": 9048.788156011142
+      },
+      "output_tps": 676.4031852782468,
+      "prefix_hit_ratio": 0.641820583155542,
+      "prefix_queries": 4921500.0,
+      "prefix_hits": 3158720.0,
+      "computed_prefill_tokens_per_server_call": 14331.544715447155,
+      "rounds": [
+        {
+          "name": "single_rewarm_measure1",
+          "run": "measure1",
+          "elapsed_s": 31.095681654056534,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1420.439079136122,
+            "p50": 920.1729279593565,
+            "p99": 3148.065740984166,
+            "max": 3178.899085964076
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 7.207321832373414,
+            "p50": 6.485479763219654,
+            "p99": 12.726845953819922,
+            "max": 13.319609332702134
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 820218.0,
+              "prefix_hits": 482688.0,
+              "prefix_hit_ratio": 0.5884874508972004,
+              "success": 21.0,
+              "computed_prefill_tokens": 337530.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 13030.0,
+              "accepted_draft_tokens": 8169.0,
+              "calls_by_rank": {
+                "0": 6.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.029001118881361827,
+                "request_prefill_time_seconds": 1314.600151209604,
+                "request_decode_time_seconds": 3780.9986055252098,
+                "request_inference_time_seconds": 5095.598756734814,
+                "time_to_first_token_seconds": 1444.361346108573
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 820282.0,
+              "prefix_hits": 537024.0,
+              "prefix_hit_ratio": 0.6546821702780263,
+              "success": 20.0,
+              "computed_prefill_tokens": 283258.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 12405.0,
+              "accepted_draft_tokens": 7768.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.03396822139620781,
+                "request_prefill_time_seconds": 1167.9309443570673,
+                "request_decode_time_seconds": 3617.0814622193575,
+                "request_inference_time_seconds": 4785.012406576425,
+                "time_to_first_token_seconds": 1281.7256569862366
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795080113.2986906,
+          "end": 1795080158.7900698
+        },
+        {
+          "name": "single_rewarm_measure2",
+          "run": "measure2",
+          "elapsed_s": 29.025097989011556,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1380.0214861519635,
+            "p50": 729.8576179309748,
+            "p99": 3249.411572716199,
+            "max": 3279.3204960180447
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 7.353996085951883,
+            "p50": 6.361260566493194,
+            "p99": 12.375659454696395,
+            "max": 12.409909058557258
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 824300.0,
+              "prefix_hits": 478528.0,
+              "prefix_hit_ratio": 0.5805265073395608,
+              "success": 21.0,
+              "computed_prefill_tokens": 345772.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 12915.0,
+              "accepted_draft_tokens": 8192.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 6.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.028426182411965872,
+                "request_prefill_time_seconds": 1257.2287064755249,
+                "request_decode_time_seconds": 4250.01336705117,
+                "request_inference_time_seconds": 5507.242073526695,
+                "time_to_first_token_seconds": 1392.840408143543
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 816200.0,
+              "prefix_hits": 548288.0,
+              "prefix_hit_ratio": 0.67175692232296,
+              "success": 20.0,
+              "computed_prefill_tokens": 267912.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 11920.0,
+              "accepted_draft_tokens": 7869.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.0377151183784008,
+                "request_prefill_time_seconds": 1126.0001429356635,
+                "request_decode_time_seconds": 3260.502288211137,
+                "request_inference_time_seconds": 4386.5024311468005,
+                "time_to_first_token_seconds": 1254.852306842804
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795080158.8881378,
+          "end": 1795080202.1812406
+        },
+        {
+          "name": "single_rewarm_measure3",
+          "run": "measure3",
+          "elapsed_s": 30.712618745979853,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1190.0330004194984,
+            "p50": 566.1602524342015,
+            "p99": 3230.559238656424,
+            "max": 3271.396882017143
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 7.447680086415733,
+            "p50": 6.355904867993795,
+            "p99": 13.830910253968662,
+            "max": 14.151749681132808
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 828416.0,
+              "prefix_hits": 486144.0,
+              "prefix_hit_ratio": 0.5868355995055624,
+              "success": 21.0,
+              "computed_prefill_tokens": 342272.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 12820.0,
+              "accepted_draft_tokens": 8206.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 6.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.027141312048548742,
+                "request_prefill_time_seconds": 1266.5857909513372,
+                "request_decode_time_seconds": 4617.997603490949,
+                "request_inference_time_seconds": 5884.583394442286,
+                "time_to_first_token_seconds": 1389.8180666423978
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 812084.0,
+              "prefix_hits": 626048.0,
+              "prefix_hit_ratio": 0.770915324030519,
+              "success": 20.0,
+              "computed_prefill_tokens": 186036.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 11795.0,
+              "accepted_draft_tokens": 7915.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.04126233980059624,
+                "request_prefill_time_seconds": 783.8402759283781,
+                "request_decode_time_seconds": 2974.551304522902,
+                "request_inference_time_seconds": 3758.39158045128,
+                "time_to_first_token_seconds": 876.2741804122925
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795080202.2861729,
+          "end": 1795080247.378746
+        },
+        {
+          "name": "single_rewarm_warm1",
+          "run": "warm1",
+          "elapsed_s": 29.492962200078182,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1670.3511968662497,
+            "p50": 1269.7673765360378,
+            "p99": 3858.4554242365994,
+            "max": 3863.0112579558045
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 7.422918892528638,
+            "p50": 6.74104758213892,
+            "p99": 12.546429577141858,
+            "max": 12.568645148744002
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 820309.0,
+              "prefix_hits": 342592.0,
+              "prefix_hit_ratio": 0.4176377438258022,
+              "success": 20.0,
+              "computed_prefill_tokens": 477717.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 11700.0,
+              "accepted_draft_tokens": 7924.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.028433557599782944,
+                "request_prefill_time_seconds": 1974.973682127893,
+                "request_decode_time_seconds": 3540.823641605675,
+                "request_inference_time_seconds": 5515.797323733568,
+                "time_to_first_token_seconds": 2098.358917236328
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 820191.0,
+              "prefix_hits": 539776.0,
+              "prefix_hit_ratio": 0.6581101231298563,
+              "success": 21.0,
+              "computed_prefill_tokens": 280415.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 12755.0,
+              "accepted_draft_tokens": 8227.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 6.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.026700663424673532,
+                "request_prefill_time_seconds": 1022.9864033559959,
+                "request_decode_time_seconds": 4047.210429750738,
+                "request_inference_time_seconds": 5070.196833106733,
+                "time_to_first_token_seconds": 1138.137249719529
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079936.3926983,
+          "end": 1795079981.1428776
+        },
+        {
+          "name": "single_rewarm_warm2",
+          "run": "warm2",
+          "elapsed_s": 30.684694623108953,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1443.0122427467722,
+            "p50": 894.5186880882829,
+            "p99": 3248.2071518641897,
+            "max": 3251.895867055282
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 7.756944771391547,
+            "p50": 7.36367798338821,
+            "p99": 15.382213916990871,
+            "max": 16.81671896676028
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 820199.0,
+              "prefix_hits": 446016.0,
+              "prefix_hit_ratio": 0.5437899826749362,
+              "success": 20.0,
+              "computed_prefill_tokens": 374183.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 12285.0,
+              "accepted_draft_tokens": 7810.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.025874655693769455,
+                "request_prefill_time_seconds": 1451.3613866642118,
+                "request_decode_time_seconds": 4095.2428526245058,
+                "request_inference_time_seconds": 5546.6042392887175,
+                "time_to_first_token_seconds": 1590.8131003379822
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 820301.0,
+              "prefix_hits": 513536.0,
+              "prefix_hit_ratio": 0.6260336144902907,
+              "success": 21.0,
+              "computed_prefill_tokens": 306765.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 13225.0,
+              "accepted_draft_tokens": 8117.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 6.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.03222810725371043,
+                "request_prefill_time_seconds": 1067.1080517626942,
+                "request_decode_time_seconds": 3852.8790065930007,
+                "request_inference_time_seconds": 4919.987058355694,
+                "time_to_first_token_seconds": 1190.1443685804095
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795079981.2581527,
+          "end": 1795080026.4766183
+        },
+        {
+          "name": "single_rewarm_warm3",
+          "run": "warm3",
+          "elapsed_s": 27.522393572959118,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1170.0063992437208,
+            "p50": 631.3281515031122,
+            "p99": 3162.058278733166,
+            "max": 3235.15405098442
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 6.57114949509198,
+            "p50": 6.095224115364217,
+            "p99": 11.460135303163872,
+            "max": 11.766479275901958
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 816025.0,
+              "prefix_hits": 570880.0,
+              "prefix_hit_ratio": 0.699586409730094,
+              "success": 20.0,
+              "computed_prefill_tokens": 245145.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 11975.0,
+              "accepted_draft_tokens": 7871.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.02747839316725731,
+                "request_prefill_time_seconds": 1027.0305903628469,
+                "request_decode_time_seconds": 3207.579019572586,
+                "request_inference_time_seconds": 4234.609609935433,
+                "time_to_first_token_seconds": 1132.1105480194092
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 824475.0,
+              "prefix_hits": 589248.0,
+              "prefix_hit_ratio": 0.7146948057854998,
+              "success": 21.0,
+              "computed_prefill_tokens": 235227.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 12905.0,
+              "accepted_draft_tokens": 8194.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 6.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.035156895007405965,
+                "request_prefill_time_seconds": 927.2957037956942,
+                "request_decode_time_seconds": 3582.651508883351,
+                "request_inference_time_seconds": 4509.947212679045,
+                "time_to_first_token_seconds": 1040.5790919349306
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795080026.5840125,
+          "end": 1795080068.2507992
+        },
+        {
+          "name": "single_rewarm_warm4",
+          "run": "warm4",
+          "elapsed_s": 30.007542437990196,
+          "output_tokens": 20480,
+          "ttft_ms": {
+            "n": 40,
+            "mean": 1484.1294638317777,
+            "p50": 994.787756470032,
+            "p99": 3327.903627315536,
+            "max": 3340.956822037697
+          },
+          "tpot_ms": {
+            "n": 40,
+            "mean": 7.813836746393938,
+            "p50": 6.657867095070489,
+            "p99": 14.11803195820055,
+            "max": 14.535288778890049
+          },
+          "endpoints": {
+            "http://10.102.98.154:8100": {
+              "prefix_queries": 816094.0,
+              "prefix_hits": 396672.0,
+              "prefix_hit_ratio": 0.4860616546623306,
+              "success": 20.0,
+              "computed_prefill_tokens": 419422.0,
+              "generation_tokens": 10240.0,
+              "preemptions": 0.0,
+              "draft_tokens": 11830.0,
+              "accepted_draft_tokens": 7902.0,
+              "calls_by_rank": {
+                "0": 5.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.027133803814649582,
+                "request_prefill_time_seconds": 1696.2375479750335,
+                "request_decode_time_seconds": 4494.60068019107,
+                "request_inference_time_seconds": 6190.838228166103,
+                "time_to_first_token_seconds": 1819.5258498191833
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            },
+            "http://10.102.98.154:8102": {
+              "prefix_queries": 824406.0,
+              "prefix_hits": 568640.0,
+              "prefix_hit_ratio": 0.6897572312671184,
+              "success": 21.0,
+              "computed_prefill_tokens": 255766.0,
+              "generation_tokens": 10752.0,
+              "preemptions": 0.0,
+              "draft_tokens": 13535.0,
+              "accepted_draft_tokens": 8077.0,
+              "calls_by_rank": {
+                "0": 6.0,
+                "1": 5.0,
+                "2": 5.0,
+                "3": 5.0
+              },
+              "means_ms": {
+                "request_queue_time_seconds": 0.0383893826178142,
+                "request_prefill_time_seconds": 955.6804679866348,
+                "request_decode_time_seconds": 3538.4544975878225,
+                "request_inference_time_seconds": 4494.134965574458,
+                "time_to_first_token_seconds": 1051.5093689873106
+              },
+              "nixl": {
+                "transfers": 0,
+                "bytes": 0,
+                "failed": 0,
+                "expired": 0
+              }
+            }
+          },
+          "begin": 1795080068.3568125,
+          "end": 1795080113.1987915
+        }
+      ]
+    }
+  },
+  "validation": {
+    "measured_requests": 720,
+    "all_business_requests": 1360,
+    "request_audit": {
+      "runs": [
+        {
+          "name": "pd_hash_measure1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079128.0535355,
+          "end": 1795079164.2301452
+        },
+        {
+          "name": "pd_hash_measure2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079164.3568673,
+          "end": 1795079200.6713142
+        },
+        {
+          "name": "pd_hash_measure3",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079200.8097656,
+          "end": 1795079235.8838167
+        },
+        {
+          "name": "pd_hash_warm1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079052.1655529,
+          "end": 1795079092.2402487
+        },
+        {
+          "name": "pd_hash_warm2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079092.3672724,
+          "end": 1795079127.9233983
+        },
+        {
+          "name": "pd_measure1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795078779.2594395,
+          "end": 1795078821.729298
+        },
+        {
+          "name": "pd_measure2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795078821.8547878,
+          "end": 1795078866.6879122
+        },
+        {
+          "name": "pd_measure3",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795078866.8089857,
+          "end": 1795078912.454408
+        },
+        {
+          "name": "pd_rewarm_measure1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080620.5819817,
+          "end": 1795080663.4031918
+        },
+        {
+          "name": "pd_rewarm_measure2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080663.5189362,
+          "end": 1795080706.1601818
+        },
+        {
+          "name": "pd_rewarm_measure3",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080706.2883615,
+          "end": 1795080752.9351094
+        },
+        {
+          "name": "pd_rewarm_warm1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080451.2960837,
+          "end": 1795080497.194388
+        },
+        {
+          "name": "pd_rewarm_warm2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080497.3213143,
+          "end": 1795080538.8439665
+        },
+        {
+          "name": "pd_rewarm_warm3",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080538.9647145,
+          "end": 1795080579.3004718
+        },
+        {
+          "name": "pd_rewarm_warm4",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080579.4270248,
+          "end": 1795080620.4623816
+        },
+        {
+          "name": "pd_warm1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795078688.0956419,
+          "end": 1795078737.0491023
+        },
+        {
+          "name": "pd_warm2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795078737.2538948,
+          "end": 1795078779.1280465
+        },
+        {
+          "name": "single_hash_measure1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079828.3654146,
+          "end": 1795079861.532136
+        },
+        {
+          "name": "single_hash_measure2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079861.6330605,
+          "end": 1795079894.9253223
+        },
+        {
+          "name": "single_hash_measure3",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079895.0240798,
+          "end": 1795079928.8524559
+        },
+        {
+          "name": "single_hash_warm1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079754.286915,
+          "end": 1795079794.361626
+        },
+        {
+          "name": "single_hash_warm2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079794.4631426,
+          "end": 1795079828.26833
+        },
+        {
+          "name": "single_measure1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079575.2378054,
+          "end": 1795079622.2783563
+        },
+        {
+          "name": "single_measure2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079622.3911057,
+          "end": 1795079665.9043047
+        },
+        {
+          "name": "single_measure3",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079666.008386,
+          "end": 1795079709.2234955
+        },
+        {
+          "name": "single_rewarm_measure1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080113.2986906,
+          "end": 1795080158.7900698
+        },
+        {
+          "name": "single_rewarm_measure2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080158.8881378,
+          "end": 1795080202.1812406
+        },
+        {
+          "name": "single_rewarm_measure3",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080202.2861729,
+          "end": 1795080247.378746
+        },
+        {
+          "name": "single_rewarm_warm1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079936.3926983,
+          "end": 1795079981.1428776
+        },
+        {
+          "name": "single_rewarm_warm2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079981.2581527,
+          "end": 1795080026.4766183
+        },
+        {
+          "name": "single_rewarm_warm3",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080026.5840125,
+          "end": 1795080068.2507992
+        },
+        {
+          "name": "single_rewarm_warm4",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795080068.3568125,
+          "end": 1795080113.1987915
+        },
+        {
+          "name": "single_warm1",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079471.7789018,
+          "end": 1795079528.3618731
+        },
+        {
+          "name": "single_warm2",
+          "requests": 40,
+          "success": 40,
+          "output_tokens": 20480,
+          "begin": 1795079528.4636385,
+          "end": 1795079575.1372821
+        }
+      ],
+      "identical_request_bodies_all_runs": true,
+      "body_sha256": [
+        "06b19bf8adacfe1b416c2adae1d00437bf66636257ebb0659842f17c98a5fc7e",
+        "1db3a043fe2c08ffd7c72eb8d98cb5cdcfb14e6a48e76003f1d8d898c4e13888",
+        "2b695e2766c1882d659038c06c02509b937b371f5005d8b1b2a011a18290e2c1",
+        "32a51bb8458eefecb0657a399bb0a813e513b836109ccfac9bf6e8ea3129c99d",
+        "3417d7ceb3e15489b617eafaf6d7f013c4582043b8c7bcfa3d0ac94959706279",
+        "35455248a169e31d562e2b875cd1e394d2d6da8400c3e0b135077d4fd4a6259f",
+        "3a3d80f6d6090c6a194772b1b2aacff23baeab245dff20d5b13dcb54737f363b",
+        "42e4327214ad830bb15b8447355e2b86946d1df71a4fdc25c011b12019d467dc",
+        "488309ee935a983fdb13a1121e67fbae366f8568bcfc307bad790579def776a2",
+        "5f35d5cfe82aa3fb3a7ad6c005a349e53a0b0b4e0600dd8140ba1c7477baf327",
+        "5f9c6b42f492aae06ea006df68a731dc21deaaa75298b438196510d0363b2879",
+        "61243b704b767da0a4cfb8134bdd4683040d6faa8851183dc350e7e804dac1fb",
+        "651633da91d25a8ea4b0a4ab075921f23d0073d232cb5d695a21b8a0ed93c2a3",
+        "6c5a6b23e1c6b33529527fc7575375eb6e51ae21eee151bcda18e79b2e15020c",
+        "6ddf06c2ea6f2692b339d2566a6e2c2c0c6362cede141e6354e46d6dab6e9f1d",
+        "7754b4ce8c74536faa95f9ec5d39af634c305546e7243c9e5c5c1b1c0ad997dd",
+        "7fa0faf6d7d0fc65b071f4f20a47933a5b475030660226d7dec87759f0cdac73",
+        "9babdd33a21d071efbb963e93c8db9ee9a47111b470d61b4fd6a3eddb8b4a735",
+        "9bfefa6f9d073c35857f95b9d1fa0a0e26bfcdce7b9a232bdc3e53d62bdaf26f",
+        "a305c3f39ffa8339ccf6bf54be638f1fca1b84b58d53b06e99a505fd6b6caa6f",
+        "ae1f27157927820e5e0e7a7f93c76d4b6d575175a4d9bb1a7fa7b6e720a8f065",
+        "b1682c70cabfb1ce5ad3de83718b7a46306b2e1951e54257c60beccfb94f3af8",
+        "b20f0e45a3218dec196930556c4136994d2592375f2d353ba3f8943bf84d8ac0",
+        "b50a4338ba0c4567e4901071ab8c9756dfbfd981d434853b6bd98ea6b4d73630",
+        "b711e7d13928a7f24243e1657252e7b43e97f5e37f8cc4b73e366003c885a43a",
+        "bcab1a909fc52f31820e9be3bcc92c75dbc96206fed7ee971367486854069da2",
+        "bcdd3a72be0051557f4b3ccc6cd6b263968985647a5590a4c32aec473b79a728",
+        "c3b1fe94416bab90f48361e070ab4fc414d79ec3490958994c5138ee07726e5d",
+        "ca24e317fd45dbff67024b689ce53840f64c3c2df6ed0ae16623f39fe6da5335",
+        "cbd0adf5a0d665ccae7565de413d8c0ab3a9cae967bb38156f6085a8dcfcb44e",
+        "d948b46eb1c43755b08cbf7f82b8d517d82580d0a80132bb71d389497fe7953b",
+        "e0a30ccf5cb25ce5279dfcfad52c7bfa7eaa5bb9159a2fc6a54c47275b81182a",
+        "e20e4dd1837aed3625814f260d926a52879afe8feadb824896ea038345449098",
+        "e3cff439cf162a338076ff561beda156bd6222611c00e704a12416e60d610dd3",
+        "e76ed6b88dee87964a051888507ce75c9e72094c9ae1c8e1833bff72569cc213",
+        "e8212e9ed3a9569d5d08612d3d65c313b4d02cf7b83559c01bb41c32b9fa7060",
+        "e8b0ce4f9b884d0b603813f3a7264a376056503cf8b58bc6bc4f841e54394010",
+        "ebf255f6e192faa7f6e750ea5526e2e83edc07747b91c538bf74369f1868cffb",
+        "f3682c5f1c3e3e9ef0abd4ad003f8d4e00817e3ab0b6f6aa6710a26a53e7abd4",
+        "fa6220a6fb9837e87b6a590b2ee6051917a58a08c020015a5f26013ca920e1cd"
+      ],
+      "stable_session_keys": [
+        "280bf58b64155ddf2b03274ba85039aecc989ec9e938edb9ff2af76a0e18f64f",
+        "348c817ea6967b28218fbe4ae568afbe9f72e534d015f0734d4337c6bf2a0ed7",
+        "4857b16b4dce3040d32c145a011320c9d46f05a113bb80fa176f5385736b17f6",
+        "dd3bf6b2351339cee8733acae8943f973a53a3b85752e437baf6af3c0eff6d31",
+        "757137899c51d9f38e7566e53823fbd10238eaf0d65e65c7722bc83ecff74dcc",
+        "5d87a03207eb9bede523c2be8555e7d6fc36d88613c4e59649a88198742f23a8",
+        "6bf11580393e12d0330ac767e0e5b3b89fe0ed8fc92973ad0753de90e02491cf",
+        "8908a23db2bdd044cdaf760b889480aace3a26ea5890d81ca98fffbfc5ea181b"
+      ],
+      "user_messages_only": true,
+      "original_client_and_dataset_unchanged": true
+    },
+    "log_audit": {
+      "pd": {
+        "first_measurement_utc": 1795078779.2594395,
+        "last_measurement_utc": 1795078912.454408,
+        "last_graph_capture_utc": 1795076800.0,
+        "graph_capture_completions_during_measurements": 0,
+        "error_lines_during_measurements": [],
+        "capture_completions": [
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP3_EP3 pid=113804) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP2_EP2 pid=113803) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP1_EP1 pid=113798) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP0_EP0 pid=113797) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076799.0,
+            "line": "(Worker_DP1_EP1 pid=113798) INFO 11-19 08:26:39 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076799.0,
+            "line": "(Worker_DP2_EP2 pid=113803) INFO 11-19 08:26:39 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076800.0,
+            "line": "(Worker_DP3_EP3 pid=113804) INFO 11-19 08:26:40 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076800.0,
+            "line": "(Worker_DP0_EP0 pid=113797) INFO 11-19 08:26:40 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP2_EP2 pid=116063) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 3 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP0_EP0 pid=116065) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 3 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP1_EP1 pid=116064) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 4 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP3_EP3 pid=116062) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 3 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP0_EP0 pid=116065) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP2_EP2 pid=116063) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP3_EP3 pid=116062) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP1_EP1 pid=116064) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          }
+        ]
+      },
+      "pd_hash": {
+        "first_measurement_utc": 1795079128.0535355,
+        "last_measurement_utc": 1795079235.8838167,
+        "last_graph_capture_utc": 1795076800.0,
+        "graph_capture_completions_during_measurements": 0,
+        "error_lines_during_measurements": [],
+        "capture_completions": [
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP3_EP3 pid=113804) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP2_EP2 pid=113803) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP1_EP1 pid=113798) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP0_EP0 pid=113797) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076799.0,
+            "line": "(Worker_DP1_EP1 pid=113798) INFO 11-19 08:26:39 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076799.0,
+            "line": "(Worker_DP2_EP2 pid=113803) INFO 11-19 08:26:39 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076800.0,
+            "line": "(Worker_DP3_EP3 pid=113804) INFO 11-19 08:26:40 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_logs/prefill.log",
+            "time_utc": 1795076800.0,
+            "line": "(Worker_DP0_EP0 pid=113797) INFO 11-19 08:26:40 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP2_EP2 pid=116063) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 3 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP0_EP0 pid=116065) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 3 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP1_EP1 pid=116064) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 4 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP3_EP3 pid=116062) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 3 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP0_EP0 pid=116065) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP2_EP2 pid=116063) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP3_EP3 pid=116062) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_logs/decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP1_EP1 pid=116064) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          }
+        ]
+      },
+      "single": {
+        "first_measurement_utc": 1795079575.2378054,
+        "last_measurement_utc": 1795079709.2234955,
+        "last_graph_capture_utc": 1795079448.0,
+        "graph_capture_completions_during_measurements": 0,
+        "error_lines_during_measurements": [],
+        "capture_completions": [
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP3_EP3 pid=130964) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP1_EP1 pid=130947) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP2_EP2 pid=130965) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP0_EP0 pid=130966) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP1_EP1 pid=130947) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP2_EP2 pid=130965) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP3_EP3 pid=130964) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP0_EP0 pid=130966) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP3_EP3 pid=131164) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP1_EP1 pid=131163) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP2_EP2 pid=131166) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP0_EP0 pid=131165) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP3_EP3 pid=131164) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP0_EP0 pid=131165) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP2_EP2 pid=131166) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP1_EP1 pid=131163) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          }
+        ]
+      },
+      "single_hash": {
+        "first_measurement_utc": 1795079828.3654146,
+        "last_measurement_utc": 1795079928.8524559,
+        "last_graph_capture_utc": 1795079448.0,
+        "graph_capture_completions_during_measurements": 0,
+        "error_lines_during_measurements": [],
+        "capture_completions": [
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP3_EP3 pid=130964) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP1_EP1 pid=130947) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP2_EP2 pid=130965) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP0_EP0 pid=130966) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP1_EP1 pid=130947) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP2_EP2 pid=130965) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP3_EP3 pid=130964) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP0_EP0 pid=130966) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP3_EP3 pid=131164) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP1_EP1 pid=131163) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP2_EP2 pid=131166) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP0_EP0 pid=131165) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP3_EP3 pid=131164) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP0_EP0 pid=131165) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP2_EP2 pid=131166) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP1_EP1 pid=131163) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          }
+        ]
+      },
+      "single_rewarm": {
+        "first_measurement_utc": 1795080113.2986906,
+        "last_measurement_utc": 1795080247.378746,
+        "last_graph_capture_utc": 1795079448.0,
+        "graph_capture_completions_during_measurements": 0,
+        "error_lines_during_measurements": [],
+        "capture_completions": [
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP3_EP3 pid=130964) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP1_EP1 pid=130947) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP2_EP2 pid=130965) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079413.0,
+            "line": "(Worker_DP0_EP0 pid=130966) INFO 11-19 09:10:13 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP1_EP1 pid=130947) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP2_EP2 pid=130965) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP3_EP3 pid=130964) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_0.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP0_EP0 pid=130966) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP3_EP3 pid=131164) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP1_EP1 pid=131163) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP2_EP2 pid=131166) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079412.0,
+            "line": "(Worker_DP0_EP0 pid=131165) INFO 11-19 09:10:12 [model_runner.py:1127] Graph capturing finished in 23 secs, took 18.84 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP3_EP3 pid=131164) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP0_EP0 pid=131165) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP2_EP2 pid=131166) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          },
+          {
+            "file": "single_1.log",
+            "time_utc": 1795079448.0,
+            "line": "(Worker_DP1_EP1 pid=131163) INFO 11-19 09:10:48 [model_runner.py:1127] Graph capturing finished in 28 secs, took 17.53 GiB"
+          }
+        ]
+      },
+      "pd_rewarm": {
+        "first_measurement_utc": 1795080620.5819817,
+        "last_measurement_utc": 1795080752.9351094,
+        "last_graph_capture_utc": 1795080424.0,
+        "graph_capture_completions_during_measurements": 0,
+        "error_lines_during_measurements": [],
+        "capture_completions": [
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP3_EP3 pid=113804) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP2_EP2 pid=113803) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP1_EP1 pid=113798) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795076747.0,
+            "line": "(Worker_DP0_EP0 pid=113797) INFO 11-19 08:25:47 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795076799.0,
+            "line": "(Worker_DP1_EP1 pid=113798) INFO 11-19 08:26:39 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795076799.0,
+            "line": "(Worker_DP2_EP2 pid=113803) INFO 11-19 08:26:39 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795076800.0,
+            "line": "(Worker_DP3_EP3 pid=113804) INFO 11-19 08:26:40 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795076800.0,
+            "line": "(Worker_DP0_EP0 pid=113797) INFO 11-19 08:26:40 [model_runner.py:1127] Graph capturing finished in 26 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795080372.0,
+            "line": "(Worker_DP3_EP3 pid=146650) INFO 11-19 09:26:12 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795080372.0,
+            "line": "(Worker_DP1_EP1 pid=146645) INFO 11-19 09:26:12 [model_runner.py:1127] Graph capturing finished in 25 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795080372.0,
+            "line": "(Worker_DP2_EP2 pid=146651) INFO 11-19 09:26:12 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795080372.0,
+            "line": "(Worker_DP0_EP0 pid=146654) INFO 11-19 09:26:12 [model_runner.py:1127] Graph capturing finished in 24 secs, took 18.84 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795080424.0,
+            "line": "(Worker_DP3_EP3 pid=146650) INFO 11-19 09:27:04 [model_runner.py:1127] Graph capturing finished in 27 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795080424.0,
+            "line": "(Worker_DP0_EP0 pid=146654) INFO 11-19 09:27:04 [model_runner.py:1127] Graph capturing finished in 27 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795080424.0,
+            "line": "(Worker_DP2_EP2 pid=146651) INFO 11-19 09:27:04 [model_runner.py:1127] Graph capturing finished in 27 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_rewarm_prefill.log",
+            "time_utc": 1795080424.0,
+            "line": "(Worker_DP1_EP1 pid=146645) INFO 11-19 09:27:04 [model_runner.py:1127] Graph capturing finished in 27 secs, took 17.53 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP2_EP2 pid=116063) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 3 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP0_EP0 pid=116065) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 3 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP1_EP1 pid=116064) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 4 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795076728.0,
+            "line": "(Worker_DP3_EP3 pid=116062) INFO 11-19 08:25:28 [model_runner.py:1127] Graph capturing finished in 3 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP0_EP0 pid=116065) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP2_EP2 pid=116063) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP3_EP3 pid=116062) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795076764.0,
+            "line": "(Worker_DP1_EP1 pid=116064) INFO 11-19 08:26:04 [model_runner.py:1127] Graph capturing finished in 9 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795080350.0,
+            "line": "(Worker_DP1_EP1 pid=146863) INFO 11-19 09:25:50 [model_runner.py:1127] Graph capturing finished in 4 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795080351.0,
+            "line": "(Worker_DP0_EP0 pid=146869) INFO 11-19 09:25:51 [model_runner.py:1127] Graph capturing finished in 4 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795080351.0,
+            "line": "(Worker_DP2_EP2 pid=146864) INFO 11-19 09:25:51 [model_runner.py:1127] Graph capturing finished in 4 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795080351.0,
+            "line": "(Worker_DP3_EP3 pid=146870) INFO 11-19 09:25:51 [model_runner.py:1127] Graph capturing finished in 4 secs, took 0.79 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795080373.0,
+            "line": "(Worker_DP2_EP2 pid=146864) INFO 11-19 09:26:13 [model_runner.py:1127] Graph capturing finished in 7 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795080373.0,
+            "line": "(Worker_DP1_EP1 pid=146863) INFO 11-19 09:26:13 [model_runner.py:1127] Graph capturing finished in 7 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795080373.0,
+            "line": "(Worker_DP0_EP0 pid=146869) INFO 11-19 09:26:13 [model_runner.py:1127] Graph capturing finished in 7 secs, took 0.87 GiB"
+          },
+          {
+            "file": "pd_rewarm_decode.log",
+            "time_utc": 1795080373.0,
+            "line": "(Worker_DP3_EP3 pid=146870) INFO 11-19 09:26:13 [model_runner.py:1127] Graph capturing finished in 7 secs, took 0.87 GiB"
+          }
+        ]
+      }
+    },
+    "preemptions": 0,
+    "nixl_failures": 0,
+    "nixl_expired_requests": 0,
+    "restored_original_deployment": {
+      "started_at": 1795080255.2885683,
+      "processes": {
+        "prefill": {
+          "pid": 141842,
+          "created": 1795080255.13
+        },
+        "decode": {
+          "pid": 141843,
+          "created": 1795080255.13
+        }
+      },
+      "original_scripts_unchanged": true,
+      "validation": {
+        "checked_at": 1795080783.4181275,
+        "backend_health": {
+          "8001": 200,
+          "8002": 200,
+          "30000": 200
+        },
+        "router_health": 200,
+        "completion_tokens": 64,
+        "original_router_preserved": true,
+        "test_router_stopped": true,
+        "original_scripts_unchanged": true
+      }
+    }
+  },
+  "local_raw_directory": "/data/code/lmdeploy/.git/vllm_pd_compare_20261119",
+  "remote_raw_archive": "/mnt/nvme1n1/ml_research/caikun/dev/code/v6/lmdeploy/runs/hybrid_attn/glm53_flash/vllm_pd/logs/benchmark_20261119/vllm_pd_compare_20261119.tar.gz",
+  "raw_archive_sha256": "5876ba5f715407d7a8e139e0a1b01e2fbec1f9bdd351fe0812fef465eb9eebeb",
+  "harness_sha256": {
+    "run.py": "ce9aee6698a85f17ebc58852c49e92ebf23a739d07e32ad2616fb0ce66e6b2cf",
+    "run_workload.sh": "aff6c298f1e49e387aa1f49efcad832f5f4f91aba7d938d35fb1e7323d4dea23",
+    "evalscope_session.py": "5b73c42dc6ee820ab764ce99356bab1013930090dddaf6d940ea9dd02ce655c3",
+    "router.py": "91d2827e57ac2cfda0ff6d84cba85df6d65fa0713936a35b5ee11a7b340f2b46",
+    "analyze.py": "95a1370d68ab27e741f761d9c2729606f59ff6e1b6fc383e2966020e84e1154c",
+    "audit.py": "2f12271178cf89a79197a51680054a0741729fc8ed094215ce88815ce0520e4c",
+    "log_audit.py": "084940b34462c8d08fff00415ec34b643b3fa15f88b552dd0fca6d32b87c2ac1"
+  }
+}
