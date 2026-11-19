@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import copy
 import json
 
 import pytest
@@ -99,6 +100,90 @@ def _walk_formats(value):
     elif isinstance(value, list):
         for child in value:
             yield from _walk_formats(child)
+
+
+def _named_call(tool_parser, name):
+    arguments = {'city': 'Paris'} if name == 'get_weather' else {'timezone': 'UTC'}
+    if tool_parser == 'qwen3':
+        return '<tool_call>\n' + json.dumps({'name': name, 'arguments': arguments}) + '\n</tool_call>'
+    if tool_parser == 'intern-s1':
+        return '<|action_start|><|plugin|>' + json.dumps({'name': name, 'parameters': arguments}) + '<|action_end|>'
+    key, value = next(iter(arguments.items()))
+    if tool_parser == 'qwen3coder':
+        return f'<tool_call>\n<function={name}>\n<parameter={key}>\n{value}\n</parameter>\n</function>\n</tool_call>'
+    return f'<tool_call>{name}<arg_key>{key}</arg_key><arg_value>{value}</arg_value></tool_call>'
+
+
+@pytest.mark.parametrize('tool_parser', ['qwen3', 'qwen3coder', 'glm47', 'intern-s1'])
+@pytest.mark.parametrize('reasoning', [False, True])
+def test_named_choice_requires_exactly_one_selected_call(configured_parser, xgrammar_compiler, tool_parser, reasoning):
+    parser = configured_parser(tool_parser=tool_parser, reasoning=reasoning,
+                               tool_choice={'type': 'function', 'function': {'name': 'get_weather'}})
+    assert parser.request.response_format is not None
+    xgr, compiler = xgrammar_compiler
+    grammar = compile_response_format(compiler, parser.request.response_format)
+    separator = '\n\n' if tool_parser in ('qwen3', 'qwen3coder', 'intern-s1') else ''
+    prefix = 'Need to check.</think>' + separator if reasoning else ''
+    selected = _named_call(tool_parser, 'get_weather')
+    other = _named_call(tool_parser, 'get_time')
+    for suffix, expected in [('', False), ('Hello', False), (selected, True), (other, False),
+                             (selected + '\n' + selected, False)]:
+        matcher = xgr.GrammarMatcher(grammar)
+        accepted = matcher.accept_string(prefix + suffix) and matcher.accept_token(0)
+        assert accepted is expected, (tool_parser, reasoning, suffix)
+
+
+@pytest.mark.parametrize('tool_parser', [
+    'qwen2d5', 'qwen3', 'qwen3coder', 'kimi-k2', 'glm47',
+    'deepseek-v32', 'deepseek-v4', 'interns2-preview', 'intern-s1',
+])
+@pytest.mark.parametrize('reasoning', [False, True])
+def test_builtin_named_formats_compile(configured_parser, xgrammar_compiler, tool_parser, reasoning):
+    parser = configured_parser(tool_parser=tool_parser, reasoning=reasoning,
+                               tool_choice={'type': 'function', 'function': {'name': 'get_weather'}})
+    response_format = parser.request.response_format
+    assert response_format is not None
+    assert 'get_weather' in str(response_format)
+    assert 'get_time' not in str(response_format)
+    xgr, compiler = xgrammar_compiler
+    assert isinstance(compile_response_format(compiler, response_format), xgr.CompiledGrammar)
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('reasoning', [False, True])
+def test_named_choice_overrides_json_without_mutating_request(configured_parser, reasoning, stream):
+    request = _request(tool_choice={'type': 'function', 'function': {'name': 'get_weather'}},
+                       response_format={'type': 'json_object'},
+                       chat_template_kwargs={'enable_thinking': reasoning})
+    original = copy.deepcopy(request.model_dump())
+    parser = configured_parser(request=request, tool_parser='glm47', reasoning=reasoning)
+    text = ('Checking.</think>' if reasoning else '') + _named_call('glm47', 'get_weather')
+    if stream:
+        deltas = parser.stream_chunk(text, [], final=True)
+        calls = parser.tool_parser.build_tool_calls([call for delta, _ in deltas for call in delta.tool_calls or []])
+        reason = ''.join(delta.reasoning_content or '' for delta, _ in deltas)
+    else:
+        _, calls, reason = parser.parse_complete(text)
+    assert len(calls or []) == 1
+    assert calls[0].function.name == 'get_weather'
+    assert json.loads(calls[0].function.arguments) == {'city': 'Paris'}
+    assert (reason or '') == ('Checking.' if reasoning else '')
+    assert parser.request.response_format['type'] == 'structural_tag'
+    assert request.model_dump() == original
+
+
+@pytest.mark.parametrize('tools', [None, [], _tools()[1:], [_tools()[0], _tools()[0]]])
+@pytest.mark.parametrize('tool_parser', ['glm47', 'intern-s1'])
+def test_named_choice_rejects_missing_or_ambiguous_tool(configured_parser, tools, tool_parser):
+    with pytest.raises(ValueError):
+        configured_parser(tools=tools, tool_parser=tool_parser,
+                          tool_choice={'type': 'function', 'function': {'name': 'get_weather'}})
+
+
+def test_named_choice_rejects_unsupported_parser(configured_parser):
+    with pytest.raises(ValueError, match='does not support.*named'):
+        configured_parser(tool_parser='llama3',
+                          tool_choice={'type': 'function', 'function': {'name': 'get_weather'}})
 
 
 @pytest.mark.parametrize(

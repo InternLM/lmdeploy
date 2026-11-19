@@ -283,7 +283,6 @@ def test_auto_routing_preserves_request_and_history(context):
 
 @pytest.mark.parametrize('kwargs', [
     {'tool_choice': 'none'},
-    {'tool_choice': {'type': 'function', 'function': {'name': 'terminal'}}},
     {'tools': None},
     {'tool_parser': None},
     {'tool_parser': 'qwen3'},

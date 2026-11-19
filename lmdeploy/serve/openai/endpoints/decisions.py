@@ -13,6 +13,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 from starlette.datastructures import Headers
 
+from lmdeploy.intern_decision_encoding import ReservedDecisionMarkerError
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.openai.decision_protocol import (
     OpenAIDecisionRequest,
@@ -23,9 +24,11 @@ from lmdeploy.serve.openai.decision_protocol import (
 from lmdeploy.serve.openai.errors import create_error_response, create_request_error_response
 from lmdeploy.serve.parsers.decision_assets import MAX_TOTAL_BYTES, AssetError, unpack_multipart
 from lmdeploy.serve.parsers.decision_parser import DecisionParser
+from lmdeploy.serve.processors.multimodal import UnsupportedMultimodalInputError
 from lmdeploy.serve.utils.request_cleanup import cleanup_result_generators
 from lmdeploy.serve.utils.server_utils import validate_json_request
 from lmdeploy.utils import get_logger
+from lmdeploy.vl.media.base import MediaInputError
 
 logger = get_logger('lmdeploy')
 
@@ -134,7 +137,10 @@ class _SystemoneRoute(_DecisionRoute):
                             body = json.loads(raw)
                         except (ValueError, UnicodeError, RecursionError):
                             raise AssetError('Malformed JSON request body.') from None
-                    return json.dumps(body).encode('utf-8')
+                    try:
+                        return json.dumps(body, allow_nan=False).encode('utf-8')
+                    except ValueError:
+                        raise AssetError('Non-finite numbers are not allowed in the request body.') from None
 
                 request._body = await asyncio.to_thread(normalize)
                 request.scope['headers'] = [(key, value) for key, value in request.scope['headers']
@@ -174,8 +180,21 @@ async def _score_request(server_context, parser: DecisionParser, raw_request=Non
     generator = None
     output = None
     try:
-        prepared = await server_context.async_engine.preprocess(
-            inputs.messages, session, gen_config=inputs.gen_config, **inputs.preprocess_kwargs)
+        try:
+            prepared = await server_context.async_engine.preprocess(
+                inputs.messages, session, gen_config=inputs.gen_config, **inputs.preprocess_kwargs)
+        except RequestError as exc:
+            # Decision inputs have already passed wire and media validation.
+            # Keep explicit input errors, but do not expose unexpected failures
+            # that the shared preprocessing layer wraps as client errors.
+            cause = exc.__cause__
+            internal_failure = (exc.code == ErrorCode.PREPROCESS_FAILED and not isinstance(cause, MediaInputError))
+            wrapped_failure = (exc.code == ErrorCode.INVALID_REQUEST and isinstance(cause, (TypeError, ValueError))
+                               and not isinstance(cause, UnsupportedMultimodalInputError))
+            if internal_failure or wrapped_failure:
+                logger.exception('[decisions] internal request preprocessing failure')
+                raise RequestError(ErrorCode.INTERNAL_ERROR) from exc
+            raise
         # Marker positions and logprob_start_len depend on the expanded multimodal input.
         parser.finalize_input(prepared)
 
@@ -223,7 +242,7 @@ def register(router: APIRouter, server_context) -> None:
             raise
         except RequestError as e:
             return create_request_error_response(e)
-        except ValueError as e:
+        except (ReservedDecisionMarkerError, UnsupportedMultimodalInputError) as e:
             return create_error_response(HTTPStatus.BAD_REQUEST, str(e))
         except Exception:
             logger.exception('[decisions] decision request failed')

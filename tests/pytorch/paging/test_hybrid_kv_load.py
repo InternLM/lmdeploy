@@ -629,7 +629,9 @@ def test_rejected_hybrid_admission_releases_tentative_local_restore(make_schedul
 
 
 @pytest.mark.parametrize('outcome', ['success', 'worker-failure', 'cancel', 'missing-r3'])
-def test_remote_r3_publishes_only_after_all_ranks_and_returns_full_history(make_scheduler, outcome):
+@pytest.mark.parametrize('routed_experts_start_len', [0, 8, 16, 21])
+def test_remote_r3_publishes_only_after_all_ranks_and_returns_full_history(
+        make_scheduler, outcome, routed_experts_start_len):
     import numpy as np
 
     from lmdeploy.pytorch.engine.engine_instance import EngineInstance
@@ -667,8 +669,11 @@ def test_remote_r3_publishes_only_after_all_ranks_and_returns_full_history(make_
     seq.append_routed_experts(suffix)
     complete = np.concatenate((routes, suffix), axis=0)
     response = SimpleNamespace(type=ResponseType.FINISH, data={'routed_experts': seq.all_routed_experts.get_real()})
-    result = EngineInstance._get_extra_outputs(SimpleNamespace(_enable_transfer_obj_ref=False), response, 22)
-    np.testing.assert_array_equal(result['routed_experts'], complete)
+    result = EngineInstance._get_extra_outputs(
+        SimpleNamespace(_enable_transfer_obj_ref=False), response, 22, routed_experts_start_len)
+    np.testing.assert_array_equal(result['routed_experts'], complete[routed_experts_start_len:])
+    # Response cropping must not truncate the restored prefix used by later cache operations.
+    np.testing.assert_array_equal(seq.all_routed_experts.get_real(), complete)
 
 
 @pytest.fixture

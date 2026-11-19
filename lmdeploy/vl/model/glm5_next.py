@@ -3,43 +3,23 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
 import torch
-from transformers import AutoProcessor, AutoTokenizer
+from transformers import AutoProcessor
 
+from lmdeploy.pytorch.multimodal.data_type import get_image_mrope_pos_ids, make_multimodal_content_hash
 from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.model.base import (
     VISION_MODELS,
     MultimodalSpecialTokens,
     VisionModel,
 )
+from lmdeploy.vl.model.image_cache import ImageProcessorCache, ProcessedImage
 from lmdeploy.vl.model.preprocess_utils import (
     get_expanded_mm_items,
-    get_override_size,
+    get_processor_kwargs,
 )
-
-
-def _processor_kwargs(config: dict[str, Any]) -> dict[str, Any]:
-    """Translate GLM-5 token budgets to the GLM-4V pixel contract."""
-    config = dict(config)
-    for key in ('image_processor_type', 'video_processor_type',
-                'patch_expand_factor'):
-        config.pop(key, None)
-    min_tokens = config.pop('min_image_tokens', None)
-    max_tokens = config.pop('max_image_tokens', None)
-    patch_size = int(config.get('patch_size', 14))
-    merge_size = int(config.get('merge_size', 2))
-    temporal_patch_size = int(config.get('temporal_patch_size', 2))
-    pixels_per_token = temporal_patch_size * (patch_size * merge_size)**2
-    if min_tokens is not None or max_tokens is not None:
-        config['size'] = {
-            'shortest_edge': int(min_tokens or 1) * pixels_per_token,
-            'longest_edge': int(max_tokens or min_tokens) * pixels_per_token,
-        }
-    return config
 
 
 @VISION_MODELS.register_module()
@@ -47,47 +27,21 @@ class GLM5NextVisionModel(VisionModel):
     """Prepare GLM-5.3 images/videos for the native PyTorch vision tower."""
 
     _arch = ['Glm5NextForConditionalGeneration']
+    supports_image_cache = True
 
     @classmethod
     def match(cls, config):
         arch = config.architectures[0] if config.architectures else None
         return arch in cls._arch and getattr(config, 'vision_config', None) is not None
 
-    def _build_compat_processor(self, trust_remote_code: bool):
-        """Build from public GLM-4V components on pre-GLM-5 Transformers."""
-        from transformers.models.glm4v.image_processing_glm4v import (
-            Glm4vImageProcessor,
-        )
-        from transformers.models.glm4v.processing_glm4v import Glm4vProcessor
-        from transformers.models.glm4v.video_processing_glm4v import (
-            Glm4vVideoProcessor,
-        )
-
-        config_path = Path(self.model_path) / 'processor_config.json'
-        processor_config = json.loads(config_path.read_text(encoding='utf-8'))
-        image_processor = Glm4vImageProcessor(
-            **_processor_kwargs(processor_config['image_processor']))
-        video_processor = Glm4vVideoProcessor(
-            **_processor_kwargs(processor_config['video_processor']))
-        tokenizer = AutoTokenizer.from_pretrained(
-            self.model_path, trust_remote_code=trust_remote_code)
-        return Glm4vProcessor(
-            image_processor=image_processor,
-            tokenizer=tokenizer,
-            video_processor=video_processor,
-            chat_template=getattr(tokenizer, 'chat_template', None),
-        )
-
     def build_preprocessor(self, trust_remote_code: bool = False):
-        try:
-            processor = AutoProcessor.from_pretrained(
-                self.model_path, trust_remote_code=trust_remote_code)
-        except (ImportError, ValueError):
-            processor = None
+        processor = AutoProcessor.from_pretrained(
+            self.model_path, trust_remote_code=trust_remote_code)
         if not (hasattr(processor, 'image_processor')
                 and hasattr(processor, 'video_processor')):
-            processor = self._build_compat_processor(trust_remote_code)
+            raise ValueError('GLM-5.3 requires a native image/video processor from transformers>=5.17.0.')
         self.processor = processor
+        self.image_cache = ImageProcessorCache()
 
         self.image_token = processor.image_token
         self.video_token = processor.video_token
@@ -221,12 +175,55 @@ class GLM5NextVisionModel(VisionModel):
                 expanded.append(token)
         return torch.tensor(expanded, dtype=torch.long)
 
+    def _preprocess_image(self, image, image_kwargs: dict) -> ProcessedImage:
+        output = self.processor.image_processor(images=[image], return_tensors='pt', **image_kwargs)
+        pixels = self._postprocess_mm_output(output['pixel_values'], self.mm_feature_dtype)
+        grid = output['image_grid_thw'][0].clone()
+        meta = dict(grid_thw=grid, image_token_id=self.image_token_id)
+        content_hash = make_multimodal_content_hash(pixels, meta, get_image_mrope_pos_ids(grid))
+        return ProcessedImage(pixels, grid, content_hash)
+
+    def _preprocess_images(self, images, input_prompt, mm_processor_kwargs):
+        image_kwargs = get_processor_kwargs(self.processor.image_processor,
+                                            (mm_processor_kwargs or {}).get('image'), modality='image')
+        processed = self.image_cache.process(images, self._preprocess_image, self.mm_feature_dtype, image_kwargs)
+
+        if isinstance(input_prompt, str):
+            # Images are already processed, so tokenize without the full
+            # processor's image/placeholder validation. Expand the special-token
+            # IDs below instead of constructing a huge repeated text.
+            input_prompt = self.processor.tokenizer(text=[input_prompt], padding=True,
+                                                    return_tensors='pt')['input_ids'][0].tolist()
+        if input_prompt.count(self.image_token_id) != len(processed):
+            raise ValueError('GLM image placeholders must match the number of images')
+        merge_length = self.processor.image_processor.merge_size**2
+        input_ids, multimodal = [], []
+        image_index = 0
+        for token in input_prompt:
+            if token != self.image_token_id:
+                input_ids.append(token)
+                continue
+            item = processed[image_index]
+            num_tokens = int(item.image_grid_thw.prod().item()) // merge_length
+            start = len(input_ids)
+            input_ids.extend([self.image_token_id] * num_tokens)
+            multimodal.append(dict(modality=Modality.IMAGE,
+                                   pixel_values=item.pixel_values,
+                                   image_grid_thw=item.image_grid_thw,
+                                   content_hash=item.content_hash,
+                                   offset=(start, len(input_ids)),
+                                   image_token_id=self.image_token_id))
+            image_index += 1
+        return dict(input_ids=input_ids, multimodal=multimodal)
+
     def preprocess(self,
                    messages: list[dict],
                    input_prompt: str | list[int],
                    mm_processor_kwargs: dict[str, Any] | None = None):
         mm_items = self.collect_multimodal_items(messages)
         modalities = {item[0] for item in mm_items}
+        if self.backend == 'pytorch' and modalities == {Modality.IMAGE}:
+            return self._preprocess_images([item[1] for item in mm_items], input_prompt, mm_processor_kwargs)
         is_raw_video = (not isinstance(input_prompt, str)
                         and Modality.VIDEO in modalities)
         is_mixed = {Modality.IMAGE, Modality.VIDEO} <= modalities
@@ -244,27 +241,17 @@ class GLM5NextVisionModel(VisionModel):
         kwargs: dict[str, Any] = {}
         if raw_images:
             kwargs['images'] = raw_images
+            kwargs['images_kwargs'] = get_processor_kwargs(self.processor.image_processor,
+                                                           mm_processor_kwargs.get('image'), modality='image')
         if raw_videos:
             kwargs['videos'] = raw_videos
-            kwargs['videos_kwargs'] = {
-                'video_metadata': video_metadatas,
-                'do_resize': True,
-                'do_sample_frames': False,
-            }
-        image_size = get_override_size(self.processor.image_processor,
-                                       mm_processor_kwargs.get('image'),
-                                       modality='image')
-        if image_size is not None:
-            kwargs['images_kwargs'] = {'size': image_size}
-        if raw_videos:
-            video_size = get_override_size(self.processor.video_processor,
-                                           mm_processor_kwargs.get('video'),
-                                           modality='video')
-            if video_size is not None:
-                kwargs['videos_kwargs']['size'] = video_size
+            videos_kwargs = get_processor_kwargs(self.processor.video_processor,
+                                                  mm_processor_kwargs.get('video'), modality='video')
+            videos_kwargs.setdefault('do_resize', True)
+            videos_kwargs.update(video_metadata=video_metadatas, do_sample_frames=False)
+            kwargs['videos_kwargs'] = videos_kwargs
 
-        input_text = input_prompt if isinstance(input_prompt, str) else ''
-        outputs = self.processor(text=[input_text],
+        outputs = self.processor(text=None if is_raw_video else [input_prompt],
                                  padding=True,
                                  return_tensors='pt',
                                  **kwargs)

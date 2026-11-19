@@ -1,7 +1,7 @@
 # Intern-Decision
 
 Intern-Decision 系列（0.8B、2B、4B）通过**打分**而不是生成来回答结构化问题。一个 Systemone 请求包含
-`state`、最多 16 个 `questions` 和可选图片 `assets`。模型读取一个以 JSON 骨架结尾的提示，骨架中每个问题对应一个 `<decision>`
+`state`、最多 32 个 `questions` 和可选图片 `assets`。模型读取一个以 JSON 骨架结尾的提示，骨架中每个问题对应一个 `<decision>`
 标记；取每个标记前一位置的 logits，并限定在该问题的答案符号（`A`、`B`……）上，即得到答案分布。
 
 LMDeploy 在 PyTorch 引擎上以 `intern-decision` 任务提供该模型。模型检查点本身是普通的 Qwen3.5 视觉语言模型，任务只是在其上增加协议层。
@@ -197,6 +197,21 @@ dtype；普通 Qwen3.5 生成使用原模型实现及其 norm dtype。本次实�
 每个图片资源都必须被引用；最多允许展开 8 次图片引用，重复引用也计入次数。
 仅支持静态 PNG/JPEG 文件，每个文件不超过 16 MiB，原始宽高均须在 280–1568 像素之间。
 Base64 必须采用带标准填充的规范编码，不能带 data URL 前缀。HTTP 请求体不超过 32 MiB，不接受图片 URL 或本地路径。
+
+`score` 问题的 `criteria` 必须是有序数组；对象形式（包括数字键映射）返回 422。
+分数是从 0 开始的数组位置的概率加权平均；标签 `"1"` 到 `"10"` 不会把刻度改为从 1 开始。
+Choice 和 noul 问题仍使用对象形式的 criteria。
+
+未知顶层请求字段会被接受后忽略，不会下传给引擎；`seed` 不提供随机种子控制，`x_trace_id` 不提供追踪功能。
+已知字段仍执行严格校验；已移除的 `images` 字段仍返回 422，并提示使用 `assets`。
+
+JSON 请求体中的数值必须有限，包括 state、instructions 和 criteria 内的嵌套数值。
+非有限字面量（`NaN`、`Infinity`、`-Infinity`）及溢出的 `1e400` 会在进入引擎前返回 400；
+multipart 的 JSON `request` 部分同样适用。带引号的 `"NaN"` 等字符串仍是合法内容。
+
+两个决策端点遇到 tokenizer、预处理或评分的非预期内部故障时返回 500，详细原因只记入服务端日志。
+明确的输入错误保留对应 4xx 状态；引擎不可用时返回 503。
+
 使用 multipart 上传时，第一个部分必须是名为 `request`、内容类型为 `application/json` 的请求数据；
 图片资源通过 `part` 引用各自独立的文件部分。文件内容优先于 `data_base64`；省略 `format` 时根据文件内容推断格式。
 
@@ -205,6 +220,12 @@ Base64 必须采用带标准填充的规范编码，不能带 data URL 前缀。
 超过大小限制返回 413。该端点不接受旧的 `images` 字段。
 
 响应包含 `model`、`answers` 和 `usage`；评分答案的 `legend` 保留原始 JSON 值和图片引用。
+Systemone 的 confidence 从温度校准后的概率按固定的
+[TypeSafe 公式](https://docs.typesafe.ai/confidence#how-confidence-is-calculated)计算：Choice 衡量最大概率超出均匀分布的程度，
+Score 衡量概率相对最可能等级的加权距离。均匀分布的 confidence 为 0，概率集中在单个结果时为 1。
+本地约定单选项或单刻度也返回 1；Noul 没有 confidence 字段。
+此响应转换不改变概率、score 数值或 `/v1/decisions` 的 confidence。
+
 `usage.input_tokens` 包含视觉 token。`usage.output_tokens` 统计 assistant 答案骨架分词后的 token 数，
 其中包含决策标记，不表示实际生成的 token 数。图片仅作为输入依据，不随响应返回。
 
@@ -255,7 +276,7 @@ HTTP 下载在流式读取时执行 10 MiB 上限，`Content-Length` 声明超�
 重复引用占据独立的位置。编译器会将 input 中的实际图片统一放在状态与问题定义文本之前，因此保留的是文本引用关系，
 并不保持图文 token 的交错位置。仅含一条字符串内容消息时，提示与直接传入字符串相同，响应映射规则也相同。
 
-当前子集支持 1–16 个问题、字符串或内容块数组形式的题目说明、2–62 个不重复的字符串或布尔选项，以及 2–62 个评分等级。
+当前子集支持 1–32 个问题、字符串或内容块数组形式的题目说明、2–62 个不重复的字符串或布尔选项，以及 2–62 个评分等级。
 62 个评分等级是对齐参考部署仓库的本地扩展，OpenAI 官方当前文档的上限仍为 10。
 答案按请求顺序以数组返回。题目名称可以省略或为 `null`；显式提供的名称必须非空白且不重复。
 未命名时响应中的名称为 `null`。字符串选项值不能为空白，顶层字符串 `input` 不能为空字符串。
@@ -352,7 +373,7 @@ OpenAI 格式与 Systemone 格式均将 assistant 答案骨架分词后的 token
   此限制不影响普通生成服务。
 - 图片展开后必须小于引擎会话长度（即模型自身的上下文长度，除非用 `--session-len` 覆盖）；
   超限输入会被拒绝，不会截断。
-- Systemone 请求包含 1–16 个问题，每个 `choice` 或 `score` 问题有 1–62 个选项，按请求顺序分配答案符号，
+- Systemone 请求包含 1–32 个问题，每个 `choice` 或 `score` 问题有 1–62 个选项，按请求顺序分配答案符号，
   响应中恢复原始选项名称。
 - Systemone 的 `model` 可以省略或为空字符串，也可填写服务模型名、`InternLM/<服务模型名>` 或
   `internlm/<转为小写的服务模型名>`。如需使用简短名称，请显式设置 `--model-name`。

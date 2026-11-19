@@ -194,7 +194,11 @@ class ChatCompletionRequest(BaseModel):
         examples=[None],
         deprecated='max_tokens is deprecated in favor of the max_completion_tokens field',
     )
-    stop: str | list[str] | None = Field(default=None, examples=[None])
+    stop: str | list[str] | None = Field(
+        default=None,
+        description=('Single-token stop strings are handled by the engine. The GLM token-ID chat parser also '
+                     'supports multi-token stops in assistant content.'),
+        examples=[None])
 
     stream: bool | None = False
     stream_options: StreamOptions | None = Field(default=None, examples=[None])
@@ -267,6 +271,11 @@ class ChatCompletionRequest(BaseModel):
     return_routed_experts: bool | None = Field(
         default=False,
         description=('Whether to return MoE routed expert indices in the response.'),
+    )
+    routed_experts_start_len: int = Field(
+        default=0, ge=0, strict=True,
+        validation_alias=AliasChoices('routed_experts_start_len', AliasPath('extra_body', 'routed_experts_start_len')),
+        description='Absolute start position of returned routing rows; does not limit prefix caching.',
     )
 
 
@@ -627,6 +636,7 @@ class GenerateReqInput(BaseModel):
     spaces_between_special_tokens: bool | None = True
     include_stop_str_in_output: bool | None = False
     return_routed_experts: bool | None = False
+    routed_experts_start_len: int = Field(default=0, ge=0, strict=True)
     repetition_ngram_size: int = Field(default=0, ge=0)
     repetition_ngram_threshold: int = Field(default=0, ge=0)
     # kwargs for media IO

@@ -385,12 +385,58 @@ echo "Host IP addresses:"
 hostname -I
 ```
 
+## 增量返回 routed experts（PyTorch）
+
+MoE router replay 需要先开启 `PytorchEngineConfig.enable_return_routed_experts`
+（服务端 CLI 为 `--enable-return-routed-experts`），再在请求中设置
+`return_routed_experts=True`。可选参数 `routed_experts_start_len` 指定返回路由的起始行：
+
+- 支持 Python `GenerationConfig`、`/generate`、`/v1/chat/completions` 和
+  [`/v1/messages`](./api_server_anthropic.md)；chat
+  支持顶层字段和嵌套 `extra_body`。本字段是 LMDeploy 扩展，
+  不是 OpenAI 或 Anthropic 标准字段；不支持 TurboMind 后端。
+- 默认 `0`，保持全量返回。必须是非负整数（不接受布尔值、浮点数或字符串），
+  且不能超过 tokenization、chat template 和多模态展开后的实际输入长度。
+- 设处理后的 prompt 长度为 `P`、生成长度为 `G`，正常返回行范围为
+  `[routed_experts_start_len, P + G - 1)`。最后生成的 token 尚未参与模型前向。
+  切片后没有剩余行时返回空数组；原本无路由数据时仍不返回数据。该字段不会自动开启路由采集。
+- 在最终 finish/cancel 输出处裁剪；使用 Ray shared store 时在 put 前裁剪，
+  本地数组输出同样裁剪，返回数据的表示方式不变。不修改 prefix-cache 匹配、缓存路由历史、
+  GPU 采集或 target/MTP accepted-route 筛选。缓存命中可以超过此偏移，它不是缓存边界。
+
+例如，OpenAI 客户端可使用以下扩展参数，仅请求从位置 4 开始的路由行
+（处理后的 prompt 至少需要 4 tokens）：
+
+```python
+extra_body = {
+    'return_routed_experts': True,
+    'routed_experts_start_len': 4,
+}
+# 将 extra_body=extra_body 传给 client.chat.completions.create(...)。
+```
+
+`/generate` 将两个字段直接放在 JSON 请求体中；Python 使用
+`GenerationConfig(return_routed_experts=True, routed_experts_start_len=4)`。
+
+Partial continuation 示例：输入 `A B C`，生成 `D E` 后暂停，客户端已保留
+`A B C D` 的 4 行路由。续跑输入 `A B C D E` 时，偏移应设为 **4，而不是 5**；
+若继续生成 `F G`，仅返回 `E F` 的路由，拼接后恢复完整 6 行。
+只有历史路由恰好覆盖未修改的 token 前缀时，才使用 `len(resumed_prompt_ids) - 1`。
+客户端须校验长度并拼接，本 PR 不实现客户端续跑逻辑；编辑历史或插入 tool tokens
+需要额外连续性检查。旧服务端可能忽略新字段，客户端须检查返回长度，不能直接拼接旧全量响应。
+
+该选项只减少重复返回的路由行，不减少 GPU→CPU 全量采集、内部缓存或训练所需的最终完整历史。
+
 ## FAQ
 
 1. 当返回结果结束原因为 `"finish_reason":"length"`，这表示回话长度超过最大值。如需调整会话支持的最大长度，可以通过启动`api_server`时，设置`--session_len`参数大小。
 
 2. 当服务端显存 OOM 时，可以适当减小启动服务时的 `backend_config` 的 `cache_max_entry_count` 大小
 
-3. 关于停止符，我们只支持编码后为单个 index 的字符。此外，可能存在多种 index 都会解码出带有停止符的结果。对于这种情况，如果这些 index 数量太多，我们只会采用 tokenizer 编码出的 index。而如果你想要编码后为多个 index 的停止符，可以考虑在流式客户端做字符串匹配，匹配成功后跳出流式循环即可。
+3. API 服务如何处理请求中 `stop` 字段指定的停止串？
+
+   - **单 token 停止串。** 如果模型的 tokenizer 将停止串单独编码为一个 token，引擎生成任一匹配的 token ID 就会停止。词表里可能有多个条目都包含这段文字。如果候选 ID 超过 5 个，LMDeploy 只保留单独解码后恰好等于停止串的 ID，最多保留 5 个。如果没有留下候选 ID，则使用停止串自身编码得到的 ID。模型用多个 token 拼出相同文字时，不会触发这项 ID 检查。
+   - **GLM 聊天请求中的多 token 停止串。** 在 `/v1/chat/completions` 启用 GLM 的 token ID 解析器且 `ignore_eos` 为默认值 `false` 时，服务端会在助手正文 `content` 中匹配这些停止串，即使它们跨越多个输出批次。例如，请求传入 `stop=["STOP_HERE"]` 后，模型在思考或工具调用中提到 `STOP_HERE` 可以继续生成。如果正文是 `answerSTOP_HEREtail`，默认只返回 `answer`。流式和非流式请求都支持，同一请求中的单 token 停止串仍由引擎按 ID 判断。
+   - **客户端匹配。** 对于 `/v1/completions`，以及未启用上述 GLM 正文匹配的 `/v1/chat/completions` 请求，服务端会跳过多 token 停止串。需要遇到这类字符串就停止时，可以使用流式客户端，每收到一批就检查已拼接的文本，匹配成功后退出读取循环。这样也能识别从上一批末尾延续到下一批开头的停止串。
 
 4. 自定义对话模板，请参考[chat_template.md](../advance/chat_template.md)

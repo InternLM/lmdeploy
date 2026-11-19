@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
+from math import gcd
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -587,7 +588,12 @@ class BuildModelContext:
         """Infer DeepEP low-latency max dispatch tokens per rank."""
         if self.max_batch_size <= 0:
             return 128
-        return self.max_batch_size * (1 + self.num_spec_tokens)
+        num_tokens = self.max_batch_size * (1 + self.num_spec_tokens)
+        ep_size, _ = dist.get_ep_world_rank()
+        # DeepGEMM masked TMA tiles must not cross expert M partitions.
+        # Smallest per-rank alignment making capacity * ep_size a multiple of 128.
+        alignment = 128 // gcd(ep_size, 128)
+        return (num_tokens + alignment - 1) // alignment * alignment
 
 
 class StepContextManager(CtxMgrBase[StepContext]):

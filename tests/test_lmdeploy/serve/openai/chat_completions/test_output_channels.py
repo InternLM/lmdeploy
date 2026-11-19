@@ -100,3 +100,71 @@ def test_answer_channels(chat_endpoint, hf_media_template, api, mode, stream):
             assert data['usage']['output_tokens_details']['thinking_tokens'] == 0
     assert text == expected
     assert context.session_manager.sessions == {}
+
+
+@pytest.mark.parametrize('api', ['chat/completions', 'responses', 'messages'])
+@pytest.mark.parametrize('stream', [False, True])
+def test_named_tool_grammar_reaches_generation(chat_endpoint, hf_media_template, api, stream):
+    _, context = chat_endpoint
+    context.async_engine.chat_template = hf_media_template()
+
+    class Parser(BaseResponseParser):
+        pass
+
+    Parser.set_parsers('default', 'glm47')
+    context.response_parser_cls = Parser
+    original_generate = context.async_engine.generate
+    tool = dict(name='lookup', parameters=dict(type='object', properties={'key': {'type': 'string'}}, required=['key']))
+
+    def generate(request, **kwargs):
+        async def results():
+            async for result in original_generate(request, **kwargs):
+                result.response = '<tool_call>lookup<arg_key>key</arg_key><arg_value>test</arg_value></tool_call>'
+                yield result
+        return results()
+
+    context.async_engine.generate = generate
+    messages = [dict(role='user', content='Hello')]
+    payload = dict(model='fake-model', stream=stream)
+    if api == 'responses':
+        payload.update(input=messages, tools=[dict(type='function', **tool)],
+                       tool_choice=dict(type='function', name='lookup'), reasoning=dict(effort='none'),
+                       text=dict(format=dict(type='json_object')))
+    elif api == 'messages':
+        payload.update(messages=messages, max_tokens=64, thinking=dict(type='disabled'),
+                       tools=[dict(name='lookup', input_schema=tool['parameters'])],
+                       tool_choice=dict(type='tool', name='lookup'))
+    else:
+        payload.update(messages=messages, tools=[dict(type='function', function=tool)],
+                       tool_choice=dict(type='function', function=dict(name='lookup')),
+                       chat_template_kwargs=dict(enable_thinking=False), response_format=dict(type='json_object'))
+    app = FastAPI()
+    register(app, context)
+    app.include_router(create_responses_router(context))
+    app.include_router(create_anthropic_router(context))
+    with TestClient(app) as client:
+        response = client.post('/v1/' + api, json=payload, headers={'anthropic-version': '2023-06-01'})
+    assert response.status_code == 200, response.text
+    assert context.async_engine.gen_configs[0].response_format['type'] == 'structural_tag'
+    if stream:
+        events = [json.loads(line[6:]) for line in response.text.split('\n')
+                  if line.startswith('data: ') and line != 'data: [DONE]']
+        if api == 'chat/completions':
+            calls = [t for event in events for choice in event.get('choices', [])
+                     for t in choice['delta'].get('tool_calls') or [] if t.get('function', {}).get('name')]
+        elif api == 'responses':
+            calls = [item for item in events[-1]['response']['output'] if item['type'] == 'function_call']
+        else:
+            calls = [event['content_block'] for event in events if event['type'] == 'content_block_start'
+                     and event['content_block']['type'] == 'tool_use']
+    else:
+        data = response.json()
+        if api == 'chat/completions':
+            calls = data['choices'][0]['message']['tool_calls']
+        elif api == 'responses':
+            calls = [item for item in data['output'] if item['type'] == 'function_call']
+        else:
+            calls = [item for item in data['content'] if item['type'] == 'tool_use']
+    assert len(calls) == 1
+    assert (calls[0]['function']['name'] if api == 'chat/completions' else calls[0]['name']) == 'lookup'
+    assert context.session_manager.sessions == {}
