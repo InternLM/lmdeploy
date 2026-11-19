@@ -105,15 +105,18 @@ def test_nvfp4_native_forward_matches_reference():
         })
         assert torch.equal(finalized['scales'].view(torch.uint8), scale.to(torch.float8_e4m3fn).view(torch.uint8))
         epilogue_scale = finalized['global_scale']
+        assert torch.allclose(epilogue_scale, torch.reciprocal(global_scale.reshape(1).float()), rtol=0, atol=0)
 
         linear = get_linear()
         with linear._activate():
             plan = linear.get_weight_plan(weight_format=fmt, dtype=torch.float16)
+            # prepare_weight finalizes internally: the raw checkpoint
+            # global scale (a divisor) goes in as-is.
             weight = linear.prepare_weight(
                 bits.cuda(),
                 plan=plan,
                 scales=scale.to(torch.float8_e4m3fn).cuda(),
-                global_scale=epilogue_scale.cuda(),
+                global_scale=global_scale.reshape(1).cuda(),
             )
             x = torch.randn(M, K, device='cuda', dtype=torch.float16)
             exec_plan, out, _ = linear.tune(x, weight)
