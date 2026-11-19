@@ -243,4 +243,39 @@ struct Config_MXF4 {
         template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 32, 1, EpiM, EpiN, FusePrefetch>::Kernel;
 };
 
+// NVFP4: E2M1 codes as the packed A operand with per-group-16 half scales.
+// Identical orientation to `Config_MXF4` (weights packed on A, activations on
+// B), but the scales are 16-bit floats (global scale pre-folded on the Python
+// side), so the UV operand widens from uint8 (e8m0) to uint16 (half) and the
+// K-group size shrinks from 32 to 16. Compute type is `half`: the fragment
+// dequant (`Transform_HMMA_16816::dequant`) reads uint16 scales as half iff
+// the fragments are half.
+template<class Arch, class T>
+struct Config_NVFP4 {
+    template<class Config_,
+             int   Stages,
+             Order Raster,
+             class PolicyA,
+             class PolicyB,
+             bool SplitK,
+             int  EpiM         = -1,
+             int  EpiN         = -1,
+             bool FusePrefetch = true,
+             int  GroupAxis    = 1,
+             int  OperandN     = 16>
+    using Type = typename Sm80_s16816<Arch,
+                                      T,
+                                      kRowMajor,
+                                      Operand_A_Pack<fp4_e2m1_t, kColMajor, 1>,
+                                      Transform_HMMA_16816<0, 1>,
+                                      Operand_UV_Pack<uint16_t, false>,
+                                      Operand_B<T, kRowMajor, OperandN>,
+                                      Transform_Default,
+                                      VoidOperand,
+                                      kColMajor,
+                                      T,
+                                      GroupAxis>::
+        template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 16, 1, EpiM, EpiN, FusePrefetch>::Kernel;
+};
+
 }  // namespace turbomind::gemm::sm80_s16816
