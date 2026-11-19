@@ -139,3 +139,17 @@ def test_nvfp4_converter_mapping():
 
     with pytest.raises(ValueError, match='unknown model_format'):
         _build_quantized_formats('not-a-format', None)
+
+
+def test_nvfp4_finalize_underflow_raises_instead_of_flushing():
+    fmt = NVFP4Format()
+    tensors = {
+        'weight': torch.zeros((4, 1), dtype=torch.uint8),
+        'scales': torch.tensor([[1.0, 2.0]], dtype=torch.float32),
+        'global_scale': torch.tensor([1e12], dtype=torch.float32),
+    }
+
+    # 1e-12 and 2e-12 are below the fp16 subnormal minimum (5.96e-8): the
+    # fold would silently flush them to zero, which is weight corruption.
+    with pytest.raises(ValueError, match='flushed to zero'):
+        fmt.finalize(tensors)
