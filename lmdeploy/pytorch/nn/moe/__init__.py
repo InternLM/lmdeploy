@@ -217,5 +217,39 @@ def build_fused_moe(
             group_size=quant_config.group_size,
             layer_idx=layer_idx,
         )
+    elif quant_method == 'mxfp4':
+        # The mxfp4 MoE combination routes to the TurboMind grouped MXFP4
+        # channel. No fallback lane exists on SM80: serving without the
+        # grouped kernel would need the checkpoint dequantized offline, so
+        # both a declined probe and the backend env set off raise.
+        if output_scale != 1.0:
+            raise NotImplementedError('MXFP4 MoE does not support output_scale.')
+        from lmdeploy.pytorch.backends.cuda.tm_moe_modules import tm_mxfp4_route
+
+        reason = tm_mxfp4_route(
+            dtype=dtype,
+            hidden_dim=hidden_dim,
+            ffn_dim=ffn_dim,
+            prefix=prefix,
+        )
+        if reason is not None:
+            raise RuntimeError(
+                'MXFP4 routed experts require the TurboMind grouped-GEMM route, which is unavailable: '
+                f'{reason}.')
+        from .tm_mxfp4 import FusedMoETmMXFP4
+        return FusedMoETmMXFP4(
+            hidden_dim=hidden_dim,
+            ffn_dim=ffn_dim,
+            num_experts=num_experts,
+            top_k=top_k,
+            bias=bias,
+            renormalize=renormalize,
+            dtype=dtype,
+            device=device,
+            all_reduce=all_reduce,
+            group_size=quant_config.group_size,
+            layer_idx=layer_idx,
+            act_func=act_func,
+        )
     else:
         raise RuntimeError(f'Unsupported quant method: {quant_method}')
