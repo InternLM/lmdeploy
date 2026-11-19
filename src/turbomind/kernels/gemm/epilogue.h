@@ -185,6 +185,11 @@ struct EpilogueParam {
 
     MatrixCombination_v3 combine_mat;
 
+    // Optional per-group scale multiplied into the output (NVFP4 global
+    // scale; one scalar per GEMM group). Null ptr keeps the plain alpha/beta
+    // path.
+    MatrixParam global_scale{};
+
     bool silu_act;
 };
 
@@ -422,6 +427,19 @@ struct Epilogue_ {
         // Scale(scale_SC{}, mode_SC{}, delta_cs, tmp_C, param.scale_S, param.scale_C, tile_offset.w, cs0, pred);
 
         param.combine_mat((Tc*)0, constant<kMode>{}, tmp_C, cs0, tile_offset.w, delta_cs, pred);
+
+        if (param.global_scale.ptr) {
+            const MatrixData g            = resolve<float, kMode>(param.global_scale, tile_offset.w);
+            const float      global_scale = __ldg((const float*)g.ptr.ptr);
+            PRAGMA_UNROLL
+            for (int s = 0; s < S; ++s) {
+                PRAGMA_UNROLL
+                for (int c = 0; c < C; ++c) {
+                    using namespace ops;
+                    tmp_C[s][c] = tmp_C[s][c] * global_scale;
+                }
+            }
+        }
 
         const MatrixData c = resolve<Tc, kMode>(param.c, tile_offset.w);
 
