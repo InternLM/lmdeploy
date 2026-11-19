@@ -263,7 +263,7 @@ def test_build_model_honors_supplied_context_and_empty_init(monkeypatch):
         calls.append(('build', model_config, device, build_model_ctx))
         return built_model
 
-    def fake_load_model_weights(model, model_path, device=None):
+    def fake_load_model_weights(model, model_path, device=None, normalize_ct=False):
         calls.append(('load', model, model_path, device))
 
     monkeypatch.setattr(agent_module, 'build_patched_model', fake_build_patched_model)
