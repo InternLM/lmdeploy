@@ -65,8 +65,17 @@ class TmQuantLinearMixin:
             assert in_features % 128 == 0, f'CT FP8 requires in_features % 128 == 0, got {in_features}'
             assert out_features % 2 == 0, f'CT FP8 requires out_features % 2 == 0, got {out_features}'
             params['weight'] = torch.empty((out_features, in_features), dtype=_FP8_DTYPE, device=device)
-            scale_cols = 1 if self._fp8_block_out == 1 else in_features // 128
-            params['weight_scale'] = torch.empty((out_features, scale_cols), dtype=compute_dtype, device=device)
+            if self._fp8_block_out == 1:
+                # Per-channel checkpoint scales: [N, 1] (FP8Format(block_out=1)
+                # expands them to the kernel's [K//128, N] layout in
+                # finalize).
+                scale_shape = (out_features, 1)
+            else:
+                # 128-blocked checkpoint scales follow the format's accepts
+                # convention: [ceil(N/128), ceil(K/128)] (one scale per
+                # output block per input group).
+                scale_shape = ((out_features + 127) // 128, (in_features + 127) // 128)
+            params['weight_scale'] = torch.empty(scale_shape, dtype=compute_dtype, device=device)
         params['bias'] = torch.empty((out_features, ), dtype=compute_dtype, device=device) if bias else None
         return params
 
@@ -109,11 +118,18 @@ class TmQuantLinearMixin:
             weight_key, scale_key = 'weight_packed', 'weight_scale'
             gs = getattr(self, 'weight_global_scale')
             global_scales = [gs[i:i + 1] for i in range(self.num_shards)]
+            scale_slices = slices
         else:
             weight_key, scale_key = 'weight', 'weight_scale'
             global_scales = None
+            if self._fp8_block_out == 1:
+                scale_slices = slices
+            else:
+                # Blocked scales are [ceil(N/128), ceil(K/128)]: one row per
+                # output block, so shard boundaries move in 128 blocks.
+                scale_slices = [((start + 127) // 128, (end + 127) // 128) for start, end in slices]
         weights = [getattr(self, weight_key)[start:end] for start, end in slices]
-        scales = [getattr(self, scale_key)[start:end] for start, end in slices]
+        scales = [getattr(self, scale_key)[start:end] for start, end in scale_slices]
         biases = ([getattr(self, 'bias')[start:end] for start, end in slices]
                   if getattr(self, 'bias', None) is not None else None)
         return weights, scales, global_scales, biases
@@ -203,6 +219,11 @@ class TmQuantLinear(TmQuantLinearMixin, LinearBase):
         self.fp8_blocked = fp8_blocked
         self.tm_prefix = prefix
         self.bias_flag = bias
+        if fp8_blocked and is_tp:
+            # Builders coerce is_tp down before construction, so a module
+            # asked for TP sharding genuinely has tp > 1.
+            raise NotImplementedError('Blocked CT FP8 TP sharding is not implemented; '
+                                      'serve blocked float-quantized checkpoints with tp=1.')
         self.init_tp_args(is_tp, all_reduce, colwise, layer_type)
         self.num_shards = getattr(self, 'num_shards', 1)
         if self.is_tp and not out_features_local:
