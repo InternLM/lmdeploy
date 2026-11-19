@@ -105,10 +105,6 @@ class PrefixCacheStats:
     """Prefix caching stats."""
     num_query_tokens: int = 0
     num_hit_tokens: int = 0
-    # Cumulative count of trie-owned blocks freed by eviction. Excluded from
-    # reset/snapshot/restore: evictions are real side effects, not tentative
-    # match state that can be rolled back.
-    num_evicted_blocks: int = 0
 
     def reset(self):
         self.num_query_tokens = 0
@@ -180,6 +176,11 @@ class BlockTrie:
         )
         self._kv_lifecycle = KVBlockLifecycle(self.allocator, self._state_checkpoints)
         self.stats = PrefixCacheStats()
+        # Cumulative trie-owned KV leaves freed by eviction. Kept out of
+        # ``PrefixCacheStats`` because that struct is the tentative-match state
+        # compared for equality across scheduling rollbacks, while evictions are
+        # a real, monotonic side effect.
+        self._kv_evicted_blocks = 0
 
     @property
     def leaves(self):
@@ -204,6 +205,11 @@ class BlockTrie:
         self._state_checkpoints.finish_cancelled_forwards_after_worker_drain()
         self.clear()
         self.stats.reset()
+
+    @property
+    def num_evicted_blocks(self) -> int:
+        """Cumulative blocks evicted, including checkpoint-frozen partial blocks."""
+        return self._kv_evicted_blocks + self._state_checkpoints.num_frozen_blocks_released
 
     def _record_match_stats(self, seq: SchedulerSequence, query_tokens: int, hit_tokens: int = 0):
         """Record a user-visible prefix-cache match attempt."""
@@ -750,7 +756,11 @@ class BlockTrie:
             return 0
 
         evicted = self._state_checkpoints.evict_frozen_checkpoints(max_num_blocks)
+        kv_evicted = 0
         if evicted < max_num_blocks:
-            evicted += self._kv_lifecycle.evict(max_num_blocks - evicted)
-        self.stats.num_evicted_blocks += evicted
-        return evicted
+            kv_evicted = self._kv_lifecycle.evict(max_num_blocks - evicted)
+        # Frozen-block releases are already counted by the checkpoint lifecycle
+        # (they also happen outside this method under state pressure), so only
+        # trie-owned leaf frees are accumulated here to avoid double counting.
+        self._kv_evicted_blocks += kv_evicted
+        return evicted + kv_evicted
