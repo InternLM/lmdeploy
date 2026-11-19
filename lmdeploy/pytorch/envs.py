@@ -126,6 +126,12 @@ def set_envs():
 _TM_KERNEL_CLASS_LEGACY_ENVS = {
     'w4a16': 'LMDEPLOY_W4A16_GEMM_BACKEND',
     'moe_grouped': 'LMDEPLOY_W4A16_GEMM_BACKEND',
+    # NVFP4 W4A16 lane (ct nvfp4-pack-quantized checkpoints; SM80 family).
+    # No legacy env: the class defaults to auto (capability-based).
+    'nvfp4': None,
+    # CT float-quantized FP8 lane (per-channel / blocked, e.g. Ornith).
+    # No legacy env: the class defaults to auto.
+    'ct_fp8': None,
 }
 _TM_KERNEL_CLASSES = tuple(_TM_KERNEL_CLASS_LEGACY_ENVS)
 _TM_KERNEL_STATES = ('auto', 'on', 'off')
