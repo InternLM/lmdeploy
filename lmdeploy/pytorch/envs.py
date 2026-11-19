@@ -126,8 +126,6 @@ def set_envs():
 _TM_KERNEL_CLASS_LEGACY_ENVS = {
     'w4a16': 'LMDEPLOY_W4A16_GEMM_BACKEND',
     'moe_grouped': 'LMDEPLOY_W4A16_GEMM_BACKEND',
-    'gdn': 'LMDEPLOY_GDN_BACKEND',
-    'attn_int8_kv': 'LMDEPLOY_TM_ATTN_INT8_KV',
 }
 _TM_KERNEL_CLASSES = tuple(_TM_KERNEL_CLASS_LEGACY_ENVS)
 _TM_KERNEL_STATES = ('auto', 'on', 'off')
@@ -206,8 +204,7 @@ def _tm_kernel_legacy_state(cls):
     """State the legacy env of a class asks for.
 
     w4a16 and moe_grouped share LMDEPLOY_W4A16_GEMM_BACKEND. The lookup goes through the module attribute, the value the
-    consumers and the routing tests read; at import it equals the legacy env. attn_int8_kv keeps
-    LMDEPLOY_TM_ATTN_INT8_KV. Classes without a legacy env default to auto.
+    consumers and the routing tests read. Classes without a legacy env default to auto.
     """
     legacy_env = _TM_KERNEL_CLASS_LEGACY_ENVS[cls]
     if legacy_env is None:
@@ -333,10 +330,6 @@ with set_envs():
     w4a16_gemm_backend = env_to_choice('LMDEPLOY_W4A16_GEMM_BACKEND', 'auto',
                                        {'auto', 'triton', 'turbomind'})
     w4a16_gemm_backend = _TM_STATE_PROVIDERS[tm_kernel_state('w4a16')]
-
-    # gated delta rule decode: class 'gdn' of the unified LMDEPLOY_TM_KERNELS
-    # matrix, legacy env LMDEPLOY_GDN_BACKEND, default auto.
-    gdn_backend = tm_kernel_state('gdn')
 
     # model agent
     skip_warmup = env_to_bool('LMDEPLOY_SKIP_WARMUP', False)
