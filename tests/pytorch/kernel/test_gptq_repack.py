@@ -73,6 +73,20 @@ def test_gptq_to_awq_synthesizes_symmetric_zeros():
     assert bool((qz == AWQ_SYMMETRIC_QZEROS_WORD).all())
 
 
+def test_gptq_to_awq_verify_accepts_synthesized_symmetric_zeros():
+    """Verify=True must not reject the synthesized symmetric zero words.
+
+    The synthesized pad has shape (g, n//8) — int32 words, matching real qzeros geometry — so the internal dequant
+    verification passes instead of crashing on a (g, n) tensor.
+    """
+    w = _make_weight(64, 256, seed=2)
+    qweight, scales, _ = gptq_repack.quantize_gptq(w, sym=True)
+    awq_qw, awq_sc, awq_qz = gptq_repack.gptq_to_awq(qweight, scales, verify=True)
+    assert awq_qw.shape == (256, 64 // 8)
+    from lmdeploy.turbomind.ct_repack import AWQ_SYMMETRIC_QZEROS_WORD
+    assert bool((awq_qz == AWQ_SYMMETRIC_QZEROS_WORD).all())
+
+
 def test_tm_normalize_matches_gptq_dequant():
     """The TurboMind GPTQFormat normalize path agrees with this library."""
     if not turbomind.is_available():
@@ -282,6 +296,45 @@ def test_shared_state_carries_module_across_streams():
     assert list(finalize_gptq_weights(state)) == []
 
 
+def test_update_path_clones_staged_tensors_against_buffer_reuse():
+    """The update path (shared state) must clone staged tensors.
+
+    Update buckets deliver views into a reused IPC buffer: when a module's
+    scales arrive in a later bucket than its weights, the conversion would
+    otherwise run on the buffer's current (corrupted) contents instead of
+    the tensors as loaded.
+    """
+    from lmdeploy.pytorch.weight_loader.model_weight_loader import (
+        finalize_gptq_weights,
+        new_gptq_normalize_state,
+        normalize_gptq_weights,
+    )
+
+    full = dict(_gptq_shard('layers.0.mlp.', seed=3))
+    reference = dict(normalize_gptq_weights(iter(_gptq_shard('layers.0.mlp.', seed=3))))
+    state = new_gptq_normalize_state()
+
+    buf = full['layers.0.mlp.qweight']
+    shard_a = list(normalize_gptq_weights(iter([
+        ('layers.0.mlp.qweight', buf),
+        ('layers.0.mlp.qzeros', full['layers.0.mlp.qzeros']),
+    ]), state))
+    assert shard_a == []
+
+    # The IPC buffer is reused for the next bucket: corrupt it in place.
+    buf.copy_(torch.zeros_like(buf))
+
+    shard_b = dict(normalize_gptq_weights(iter([
+        ('layers.0.mlp.scales', full['layers.0.mlp.scales']),
+    ]), state))
+    assert set(shard_b) == {
+        'layers.0.mlp.qweight', 'layers.0.mlp.scales', 'layers.0.mlp.qzeros'
+    }
+    for name in ('layers.0.mlp.qweight', 'layers.0.mlp.scales', 'layers.0.mlp.qzeros'):
+        assert torch.equal(shard_b[name], reference[name]), name
+    assert list(finalize_gptq_weights(state)) == []
+
+
 def test_finalize_flushes_missing_qzeros_and_rejects_strays():
     """Finalize mirrors end-of-stream: synthesize pads, reject scales-less strays."""
     from lmdeploy.pytorch.weight_loader.model_weight_loader import (
@@ -364,9 +417,15 @@ def test_convert_checkpoint_gathers_shards_and_rewrites_metadata(tmp_path):
     (src / 'model.safetensors.index.json').write_text(json.dumps({'weight_map': {}}))
     (src / 'config.json').write_text(json.dumps({
         'quantization_config': {'quant_method': 'gptq', 'bits': 4, 'desc_act': False}}))
+    # Only the exact basename is rewritten; sibling configs pass through
+    # byte for byte.
+    (src / 'tokenizer_config.json').write_text('{"do_sample": true}')
+    (src / 'generation_config.json').write_text('{"max_length": 20}')
 
     num_modules, err = gptq_repack.convert_checkpoint(str(src), str(dst), verify=True)
     assert num_modules == 1 and err == 0.0
+    assert (dst / 'tokenizer_config.json').read_text() == '{"do_sample": true}'
+    assert (dst / 'generation_config.json').read_text() == '{"max_length": 20}'
 
     converted = load_file(str(dst / 'model.safetensors'))
     assert 'lm_head.weight' in converted
