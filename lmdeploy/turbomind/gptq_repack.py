@@ -46,13 +46,21 @@ def _is_sequential_g_idx(tensor: torch.Tensor) -> bool:
     """Whether a ``g_idx`` buffer maps groups in identity order.
 
     AutoGPTQ registers ``arange(K) // group_size`` even without act-order,
-    so a non-decreasing run of consecutive group indices starting at zero is
-    the identity mapping. Anything else is real act-order reordering.
+    so the identity mapping is any constant-run buffer whose runs tile the
+    columns consecutively from group zero — pure ``arange`` is the
+    ``group_size == 1`` special case. Anything else is real act-order
+    reordering.
     """
     if tensor.numel() == 0 or tensor.ndim != 1:
         return False
     flat = tensor.flatten().long().cpu()
-    return bool((flat[0] == 0).all()) and bool(((flat[1:] - flat[:-1]) == 1).all())
+    if int(flat[0]) != 0:
+        return False
+    nonzero = (flat != 0).nonzero()
+    run_len = int(nonzero[0]) if len(nonzero) else tensor.numel()
+    if run_len == 0 or tensor.numel() % run_len:
+        return False
+    return bool(torch.equal(flat, torch.arange(tensor.numel(), dtype=flat.dtype) // run_len))
 
 GROUP_SIZE = 128
 WEIGHT_DTYPE = torch.float16
