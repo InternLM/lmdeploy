@@ -161,6 +161,7 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.moe_intermediate_size
@@ -191,6 +192,7 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
             renormalize=self.renormalize,
             dtype=dtype,
             device=device,
+            quant_config=quantization_config,
             all_reduce=False,
         )
 
@@ -231,7 +233,12 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
 
         shared_states = self.shared_expert(hidden_states)
         shared_states = F.sigmoid(self.shared_expert_gate(hidden_states)) * shared_states
-        out_states += shared_states
+        # The quantized W4A16 linears return [1, m, n] for 2D input (both the
+        # AWQ and TurboMind GEMM impls promote, per their "always 3D"
+        # contract) while the fused experts stay [m, n]; normalize the add so
+        # the shape no longer depends on which backend impl the selector
+        # picked.
+        out_states += shared_states.reshape(out_states.shape)
         out_states = out_states.reshape(batch_size, sequence_length, -1)
 
         if self._all_reduce:
@@ -497,6 +504,17 @@ class Qwen2MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
+            if (('.experts.' in name or 'shared_expert' in name)
+                    and name.endswith('.bias')):
+                # GPTQ checkpoints emit bias tensors even for the bias-free
+                # expert linears (e.g. Qwen1.5-MoE-A2.7B-GPTQ-Int4); dropping
+                # a verified-zero bias is numerically exact, a non-zero one
+                # has no destination parameter and must fail loudly.
+                if loaded_weight.abs().max() != 0:
+                    raise ValueError(
+                        f'non-zero expert bias has no destination parameter: '
+                        f'{name}')
+                continue
 
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
@@ -509,5 +527,12 @@ class Qwen2MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                     load_weight(param, loaded_weight, shard_id=shard_id)
                     break
                 else:
-                    param = params_dict[name]
+                    param = params_dict.get(name)
+                    if param is None:
+                        if name.endswith('.bias') and loaded_weight.abs().max() == 0:
+                            # Verified-zero bias with no destination parameter
+                            # (GPTQ artifact, e.g. self_attn.o_proj.bias);
+                            # dropping it is numerically exact.
+                            continue
+                        raise KeyError(name)
                     load_weight(param, loaded_weight)
