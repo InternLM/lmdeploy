@@ -227,6 +227,39 @@ def test_async_forward_disabled_path_keeps_one_sampling_projection():
     assert 'input_logits' not in output
 
 
+@pytest.mark.parametrize('num_spec_tokens', [0, 5])
+def test_pd_prefix_skips_lm_head_and_sampling_but_retains_mtp_hidden_states(num_spec_tokens):
+    from lmdeploy.pytorch.strategies.ar.model_agent import ARModelAgentStrategy
+    from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecModelAgentStrategy
+
+    inputs = _input_logprob_model_inputs([10, 11, 12, 13], None)
+    inputs.skip_sampling = True
+    hidden = torch.randn(1, 4, 3)
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.agent_strategy = ARSpecModelAgentStrategy(num_spec_tokens) if num_spec_tokens else ARModelAgentStrategy()
+    agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+    agent.spec_agent._enabled = num_spec_tokens > 0
+
+    async def forward(*args, **kwargs):
+        return dict(hidden_states=hidden)
+
+    agent.async_forward = forward
+    agent.get_logits = Mock(side_effect=AssertionError('PD prefix must not project the lm head'))
+    agent.spec_agent.async_sampling_logits = Mock(side_effect=AssertionError('PD prefix must not sample'))
+    output = asyncio.run(agent._async_model_forward(inputs, return_logits=True))
+    assert output['logits'] is None
+    extra = agent.agent_strategy.make_extra_inputs([], inputs)
+    extra = agent.agent_strategy.slice_extra_inputs(extra, inputs, output)
+    token, logprobs, output_ids, extra = asyncio.run(agent.async_sampling_logits(None, inputs, extra, None))
+    assert token.shape == (1,) and logprobs is None
+    if num_spec_tokens:
+        assert extra.target_hidden_states is hidden
+        assert extra.target_logits is None
+        assert output_ids is extra.output_token_ids
+        assert extra.output_token_ids.shape == (1, 1)
+        assert extra.output_draft_token_ids.shape == (1, num_spec_tokens)
+
+
 @pytest.mark.parametrize('mode', ['raw_logits', 'raw_logprobs'])
 @pytest.mark.parametrize('num_logprobs', [0, 1, 2])
 def test_input_compaction_matches_shared_reference(mode, num_logprobs):
@@ -1114,7 +1147,7 @@ def test_async_model_forward_preserves_cache_inputs_through_forward_impl():
     from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 
     model_inputs = SimpleNamespace(
-        is_dummy=False, is_decoding=False, logits_indices=None, seq_logit_length=None)
+        is_dummy=False, is_decoding=False, logits_indices=None, seq_logit_length=None, skip_sampling=False)
     cache_inputs = CacheCheckpointInputs(kv_restore_plan=torch.tensor([[1], [2]]))
     hidden_states = torch.ones(1, 1, 2)
     seen = []
@@ -1747,6 +1780,7 @@ class TestModelAgentWakeup:
         model_agent.dist_config = SimpleNamespace(dp=1)
         model_agent.memdecode_agent = None
         model_agent.kv_connector = None
+        model_agent.pd_runtime = None
         model_agent.cache_engine = object()
         model_agent.state_cache_engine = object()
         model_agent.patched_model = _PatchedModel()
@@ -1967,6 +2001,7 @@ class TestMemDecodeModelAgentLifecycle:
         agent.dist_config = SimpleNamespace(dp=1)
         agent.patched_model = object()
         agent.kv_connector = None
+        agent.pd_runtime = None
         agent.cache_engine = object()
         agent.state_cache_engine = object()
         agent._checkpoint_engine_zmq_ctx = None

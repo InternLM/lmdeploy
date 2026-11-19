@@ -605,6 +605,40 @@ def test_inputs_maker_resumes_completed_migrations_before_selecting_work(method_
     ]
 
 
+@pytest.mark.parametrize('second', ['pd', 'ordinary', 'logits', 'logprobs'])
+def test_pd_sampling_shortcut_requires_an_entire_materialization_batch(second):
+    from unittest.mock import AsyncMock, Mock
+
+    from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+    from lmdeploy.pytorch.paging.scheduler import Scheduler
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+
+    cache = CacheConfig(max_batches=2, block_size=4, num_gpu_blocks=8, num_cpu_blocks=0)
+    scheduler = Scheduler(SchedulerConfig(max_batches=2, max_session_len=32), cache,
+                          SequenceMeta(4, strategy=ARSequenceStrategy()))
+    seqs = [scheduler.add_session(i).add_sequence(np.arange(8)) for i in range(2)]
+    for seq in seqs:
+        seq.pd_prompt_tokens = np.arange(9)
+        seq.pd_prefix_length = 8
+    if second == 'ordinary':
+        seqs[1].pd_prompt_tokens = None
+    elif second == 'logits':
+        seqs[1].sampling_param.out_logits = True
+    elif second == 'logprobs':
+        seqs[1].sampling_param.num_logprobs = 1
+    inputs = SimpleNamespace(is_dummy=False, is_decoding=False, is_chunk=False)
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(enable_decode_checkpoints=False)
+    maker.scheduler = scheduler
+    maker.executor = SimpleNamespace(forward_async=AsyncMock())
+    maker.do_prefill = lambda: True
+    maker._make_forward_inputs = Mock(return_value=dict(
+        running=seqs, inputs=inputs, delta=None, cache_inputs=None))
+    asyncio.run(maker.send_next_inputs())
+    assert inputs.skip_sampling == (second == 'pd')
+    assert maker.forward_inputs['cache_inputs'].pd_export
+
+
 def test_inputs_maker_attaches_decode_snapshot_to_normal_forward():
     seq = object()
     plan = torch.tensor([[0], [64], [1], [2]])

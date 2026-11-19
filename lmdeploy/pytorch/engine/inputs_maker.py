@@ -1633,6 +1633,10 @@ class InputsMakerAsync:
             return None, None
         next_running = forward_inputs.pop('running')
         inputs = forward_inputs['inputs']
+        if inputs is not None and not inputs.is_dummy and not inputs.is_decoding:
+            inputs.skip_sampling = all(
+                seq.pd_prompt_tokens is not None and not seq.return_logits and not seq.return_ce_loss
+                and seq.logprob_start_pos < 0 and seq.sampling_param.num_logprobs <= 0 for seq in next_running)
         if (inputs is not None and not inputs.is_dummy and (not inputs.is_chunk or inputs.is_last_chunk)
                 and any(seq.pd_prompt_tokens is not None for seq in next_running)):
             carrier = forward_inputs['cache_inputs'] or CacheCheckpointInputs()

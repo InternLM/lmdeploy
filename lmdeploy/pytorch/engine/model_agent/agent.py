@@ -649,7 +649,7 @@ class BaseModelAgent:
 
         hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, inputs)
 
-        logits = self.get_logits(hidden_states)
+        logits = None if inputs.skip_sampling else self.get_logits(hidden_states)
         ret['logits'] = logits
         return ret
 
@@ -713,6 +713,10 @@ class BaseModelAgent:
     async def async_sampling_logits(self, logits: torch.Tensor, inputs: ModelInputs,
                                     extra_inputs: ExtraInputs, sampling_inputs: SamplingInputs):
         """Sampling logits."""
+        if inputs.skip_sampling:
+            next_token_ids, extra_inputs = self.agent_strategy.make_dummy_next_token(inputs, logits, extra_inputs)
+            output_token_ids = extra_inputs.output_token_ids if self.spec_agent.is_enabled() else next_token_ids
+            return next_token_ids, None, output_token_ids, extra_inputs
         if self.spec_agent.is_enabled():
             extra_inputs = await self.spec_agent.async_sampling_logits(inputs, extra_inputs, sampling_inputs)
             return extra_inputs.next_token_ids, extra_inputs.logprobs, extra_inputs.output_token_ids, extra_inputs
@@ -1184,9 +1188,11 @@ class BaseModelAgent:
 
             return
 
-        logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
+        logits = output['logits']
+        if logits is not None:
+            logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
         seq_length = output.get('seq_length', inputs.seq_length)
-        last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
+        last_logits = self._slice_outs(logits, seq_length) if logits is not None else None
         extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, inputs, output)
         model_metas = output.get('model_metas')
 

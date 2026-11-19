@@ -316,7 +316,9 @@ D 对尚未失败的传输每 30 秒用幂等 claim 续租；P 的 grant 从最�
 4. D 首轮 target 执行真实 prompt 尾部，从 `S_H` 推进到 `S_N`，得到 hidden state/logits 并采样 `y1`；MTP 使用这些 hidden states 和 `y1` 生成本地 drafts。首轮对外仅输出 `y1`。
 5. D 第二轮才验证自己的 drafts。停止词、max_tokens 和输出计数全部复用普通生成路径，不再伪造一次 migration prefill 输出。
 
-现有 LMDeploy 单模块 MTP 使用 R=1；两端继续要求相同 MTP 配置。多模块 MTP 不以未经验证的 replay 长度开放。P 后续 drafting 可后续优化，但任何额外 forward 都不得改变要导出的 target state 或有效历史 MTP rows。
+现有 LMDeploy 单模块 MTP 使用 R=1；两端继续要求相同 MTP 配置。多模块 MTP 不以未经验证的 replay 长度开放。
+
+P 已跳过 draft lm-head/采样和后续 proposal forward，只保留构建历史 MTP KV 的一次前向。纯 PD 交接批次进一步跳过 target lm-head/采样，MTP shifted 输入使用已知的真实 prompt token；DP dummy rank 保持相同的必要 MTP 前向次数。混有普通请求，或显式要求 logits、CE loss、logprobs 的批次保留原路径。D 的采样和 drafting 不变。
 
 验证覆盖 H mod 64、H mod 4、N=1、K>1、chunked prefill、Store 命中、lookahead、首轮输出计数及取消后 bank/block 不提前复用。
 

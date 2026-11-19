@@ -236,6 +236,8 @@ class ModelInputs:
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     is_dummy: bool = False
+    # A PD prefix only materializes caches; its sampled token is never consumed.
+    skip_sampling: bool = False
     # Runtime SSM state slot ids for each sequence in the batch.
     state_offsets: torch.Tensor | None = None
     target_hidden_states: torch.Tensor | None = None
