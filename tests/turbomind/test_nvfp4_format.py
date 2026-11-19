@@ -26,8 +26,12 @@ def test_nvfp4_format_contract():
     assert fmt.block_in == 16
     assert fmt.block_out is None
     assert fmt.weight_dtype == _tm.DataType.TYPE_FP4_E2M1
-    assert fmt.scales_dtype == _tm.DataType.TYPE_FP16
+    # Declared qparam format: the checkpoint's raw e4m3 scales.
+    assert fmt.scales_dtype == _tm.DataType.TYPE_FP8_E4M3
     assert fmt.zeros_dtype == _tm.DataType.TYPE_INVALID
+    data_format = fmt.make_data_format()
+    assert data_format.dtype == _tm.DataType.TYPE_FP4_E2M1
+    assert data_format.scales.dtype == _tm.DataType.TYPE_FP8_E4M3
 
     with pytest.raises(ValueError, match='group_size 16'):
         NVFP4Format(block_in=32)
@@ -70,18 +74,36 @@ def test_nvfp4_normalize_layout():
     assert fmt.normalize(one_d, 'global_scale').shape == (1, )
 
 
-def test_nvfp4_finalize_folds_global_scale():
+def test_nvfp4_finalize_keeps_raw_scales_and_stores_reciprocal():
     fmt = NVFP4Format()
+    scales = torch.tensor([[2.0, 4.0]], dtype=torch.float8_e4m3fn)
     tensors = {
         'weight': torch.zeros((4, 1), dtype=torch.uint8),
-        'scales': torch.tensor([[2.0, 4.0]], dtype=torch.float32),
+        'scales': scales,
         'global_scale': torch.tensor([2.0], dtype=torch.float32),
     }
 
-    folded = fmt.finalize(tensors)
-    assert 'global_scale' not in folded
-    assert folded['scales'].dtype == torch.float16
-    assert torch.equal(folded['scales'], torch.tensor([[1.0, 2.0]], dtype=torch.float16))
+    finalized = fmt.finalize(tensors)
+    # Raw e4m3 scales pass through untouched; the bundle keeps global_scale
+    # holding the epilogue multiplier 1/gs.
+    assert 'global_scale' in finalized
+    assert finalized['scales'].dtype == torch.float8_e4m3fn
+    assert torch.equal(finalized['scales'].view(torch.uint8), scales.view(torch.uint8))
+    assert finalized['global_scale'].dtype == torch.float32
+    assert torch.allclose(finalized['global_scale'], torch.tensor([0.5], dtype=torch.float32))
+    # The caller's dict is not mutated.
+    assert torch.equal(tensors['global_scale'], torch.tensor([2.0], dtype=torch.float32))
+
+
+def test_nvfp4_finalize_requires_per_tensor_global_scale():
+    fmt = NVFP4Format()
+    tensors = {
+        'weight': torch.zeros((4, 1), dtype=torch.uint8),
+        'scales': torch.zeros((1, 2), dtype=torch.float8_e4m3fn),
+        'global_scale': torch.ones((2, ), dtype=torch.float32),
+    }
+    with pytest.raises(ValueError, match='per-tensor'):
+        fmt.finalize(tensors)
 
 
 def test_nvfp4_dequant_e2m1_table():
@@ -141,15 +163,55 @@ def test_nvfp4_converter_mapping():
         _build_quantized_formats('not-a-format', None)
 
 
-def test_nvfp4_finalize_underflow_raises_instead_of_flushing():
+def test_nvfp4_dequant_raw_representation_divides_by_global_scale():
+    """Raw bundle dequant: codes * scales * (1/gs) == codes * scales / gs."""
     fmt = NVFP4Format()
-    tensors = {
-        'weight': torch.zeros((4, 1), dtype=torch.uint8),
-        'scales': torch.tensor([[1.0, 2.0]], dtype=torch.float32),
-        'global_scale': torch.tensor([1e12], dtype=torch.float32),
-    }
+    codes = torch.zeros((16, 1), dtype=torch.uint8)
+    codes[0, 0] = 6  # 4.0
+    codes[1, 0] = 7  # 6.0
+    scales = torch.tensor([[2.0]], dtype=torch.float8_e4m3fn)
+    global_scale = torch.tensor([0.25], dtype=torch.float32)  # 1/gs with gs=4
 
-    # 1e-12 and 2e-12 are below the fp16 subnormal minimum (5.96e-8): the
-    # fold would silently flush them to zero, which is weight corruption.
-    with pytest.raises(ValueError, match='flushed to zero'):
-        fmt.finalize(tensors)
+    weight = fmt.dequant(
+        {
+            'weight': codes,
+            'scales': scales,
+            'global_scale': global_scale,
+        }, torch.float32)['weight']
+    # codes 4.0 * scale 2.0 * 0.25 = 2.0; 6.0 * 2.0 * 0.25 = 3.0
+    assert weight.flatten().tolist() == [2.0, 3.0] + [0.0] * 14
+
+
+class _FoldedNvFp4Shim(NVFP4Format):
+    """The retired SM75 folded representation: fp16 scales, no global."""
+
+    scales_dtype = _tm.DataType.TYPE_FP16
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+def test_nvfp4_plan_selects_native_global_scale_lane():
+    """On SM80+ devices the raw-format plan query hits the native lane and the
+    bridge widens scales to fp16; the legacy folded fp16 format has no family
+    anymore."""
+    import lmdeploy.turbomind as tm
+
+    if not tm.is_available():
+        pytest.skip('TurboMind is not built')
+
+    from lmdeploy.turbomind.linear import get_linear
+
+    device = torch.device('cuda')
+    props = torch.cuda.get_device_properties(device)
+    if props.major < 8:
+        pytest.skip(f'NVFP4 native lane requires SM80+, got SM{props.major}{props.minor}')
+
+    linear = get_linear()
+    with torch.cuda.device(device):
+        plan = linear.get_weight_plan(weight_format=NVFP4Format(), dtype=torch.float16)
+        # Only the native bridge matches the raw e4m3 layout: no replication,
+        # scales widened to fp16, no zeros.
+        assert plan._impl.bridge == (1, 1, _tm.DataType.TYPE_FP16, _tm.DataType.TYPE_INVALID)
+
+        # The retired folded representation no longer matches any family.
+        with pytest.raises(NotImplementedError, match='no GEMM family'):
+            linear.get_weight_plan(weight_format=_FoldedNvFp4Shim(), dtype=torch.float16)

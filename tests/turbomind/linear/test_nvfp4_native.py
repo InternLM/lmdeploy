@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+import math
+
+import pytest
+import torch
+
+from lmdeploy import turbomind
+
+if not turbomind.is_available():
+    pytest.skip('TurboMind is not built', allow_module_level=True)
+
+from lmdeploy.turbomind.weight_format import NVFP4Format
+
+_E2M1_VALUES = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0)
+
+
+def _quantize_nvfp4(w_dense: torch.Tensor):
+    """Quantize a [N, K] dense weight to NVFP4 (raw checkpoint layout).
+
+    Follows the compressed-tensors nvfp4-pack-quantized convention: the
+    per-tensor ``weight_global_scale`` is the divisor ``2688 / amax_w`` and
+    the e4m3 block scales are ``448 * amax_g / amax_w`` (<= 448), so the
+    reconstruction is ``codes * scales / global_scale == codes * amax_g/6``.
+    """
+    n, k = w_dense.shape
+    groups = w_dense.view(n, k // 16, 16)
+    amax_w = w_dense.abs().amax().clamp_min(1e-8)
+    scale = (groups.abs().amax(dim=-1, keepdim=True) * (448.0 / amax_w)).clamp_max(448.0)
+    scale = scale.to(torch.float8_e4m3fn).float()  # quantize the scale itself
+    scaled = groups / scale
+
+    grid = torch.tensor(_E2M1_VALUES, device=w_dense.device)
+    mag = torch.argmin((scaled.unsqueeze(-1) - grid).abs(), dim=-1)  # [N, K/16, 16]
+    sign = (scaled < 0).to(torch.uint8)
+    codes = (mag.to(torch.uint8) & 0x7) | (sign << 3)  # [N, K/16, 16]
+
+    codes = codes.view(n, k)
+    # Two codes per byte: even k in the low nibble, odd k in the high nibble.
+    bits = codes[..., 0::2] | (codes[..., 1::2] << 4)  # [N, K/2] uint8
+
+    global_scale = (2688.0 / amax_w).float()
+    return bits, scale.view(n, k // 16), global_scale
+
+
+def _dequant_nvfp4(bits: torch.Tensor, scale: torch.Tensor, global_scale: torch.Tensor) -> torch.Tensor:
+    """First-principles fp32 reconstruction: codes * scales / global_scale."""
+    n, k2 = bits.shape
+    lo = (bits & 0xF).long()
+    hi = (bits >> 4).long()
+    codes = torch.stack((lo, hi), dim=-1).view(n, k2 * 2)  # [N, K]
+    mag = codes & 0x7
+    sign = torch.where((codes & 0x8) != 0, -1.0, 1.0)
+    grid = torch.tensor(_E2M1_VALUES)
+    values = grid[mag] * sign  # [N, K]
+    scales = scale.repeat_interleave(16, dim=-1)  # [N, K]
+    return (values * scales / global_scale).t().contiguous()  # [K, N]
+
+
+def test_split_qkv_passes_global_scale_through():
+    """Per-tensor global_scale bypasses output-dim transforms (split/fuse)
+    and lands in every output Linear: the fold path used to pop the tensor,
+    the native bundle keeps it, so the fused GDN pipeline must carry it."""
+    from lmdeploy.turbomind.builders.deltanet import split_qkv
+    from lmdeploy.turbomind.builders.linear import Linear
+
+    fmt = NVFP4Format()
+    tensors = fmt.finalize({
+        'weight': torch.zeros((64, 8), dtype=torch.uint8),
+        'scales': torch.full((64 // 16, 8), 1.0, dtype=torch.float8_e4m3fn),
+        'global_scale': torch.tensor([2.0], dtype=torch.float32),
+    })
+    linear = Linear(tensors=tensors, weight_format=fmt)
+
+    q, k, v = split_qkv(linear, num_k_heads=2, num_v_heads=4)
+    assert q.tensors['weight'].shape == (64, 2)
+    for part in (q, k, v):
+        assert 'global_scale' in part.tensors
+        assert torch.equal(part.tensors['global_scale'], tensors['global_scale'])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+def test_nvfp4_native_forward_matches_reference():
+    """End-to-end: raw NVFP4 checkpoint -> native GEMM vs first-principles
+    reference.
+
+    This is the load-bearing proof that the kernel consumes the per-tensor
+    global scale on the SM80/SM86 lane: the raw scales stay e4m3, the global
+    scale rides through LinearWeight and the epilogue multiplies the output
+    by it. A kernel that ignored the scale would be off by `global_scale`
+    (a large divisor) and fail hard.
+    """
+    from lmdeploy.turbomind.linear import get_linear
+
+    torch.manual_seed(0)
+    fmt = NVFP4Format()
+    for K, N, M in ((512, 128, 64), (2048, 256, 8)):
+        w_dense = torch.randn(N, K) * (0.1 / math.sqrt(K))
+        bits, scale, global_scale = _quantize_nvfp4(w_dense)
+
+        finalized = fmt.finalize({
+            'weight': bits,
+            'scales': scale.to(torch.float8_e4m3fn),
+            'global_scale': global_scale.reshape(1),
+        })
+        assert torch.equal(finalized['scales'].view(torch.uint8), scale.to(torch.float8_e4m3fn).view(torch.uint8))
+        epilogue_scale = finalized['global_scale']
+
+        linear = get_linear()
+        with linear._activate():
+            plan = linear.get_weight_plan(weight_format=fmt, dtype=torch.float16)
+            weight = linear.prepare_weight(
+                bits.cuda(),
+                plan=plan,
+                scales=scale.to(torch.float8_e4m3fn).cuda(),
+                global_scale=epilogue_scale.cuda(),
+            )
+            x = torch.randn(M, K, device='cuda', dtype=torch.float16)
+            exec_plan, out, _ = linear.tune(x, weight)
+
+        assert out.dtype == torch.float16
+
+        # Reference 1: exact fp32 reconstruction of the raw bundle.
+        w_ref = _dequant_nvfp4(bits, scale, global_scale)  # [K, N]
+        ref = x.float() @ w_ref.cuda().float()
+        err = (out.float() - ref).abs().max().item()
+        assert err < 1e-2, f'K={K} N={N} M={M}: max abs err {err}'
+
+        # Reference 2: the retired fold emulation (fp16 scales/gs, no
+        # epilogue multiply) must agree with the native path up to the fp16
+        # subnormal noise the fold suffered -- the superseded fd4d1cb0 math.
+        folded_scales = (scale / global_scale).to(torch.float16).float()
+        codes = torch.stack(((bits & 0xF).long(), (bits >> 4).long()), dim=-1).view(N, K)
+        grid = torch.tensor(_E2M1_VALUES)
+        values_fold = grid[codes & 0x7] * torch.where((codes & 0x8) != 0, -1.0, 1.0)
+        w_fold = (values_fold * folded_scales.repeat_interleave(16, dim=-1)).t().contiguous()
+        ref_fold = x.float() @ w_fold.cuda().float()
+        err_fold = (out.float() - ref_fold).abs().max().item()
+        assert err_fold < 1e-2, f'K={K} N={N} M={M}: fold-emulation abs err {err_fold}'
