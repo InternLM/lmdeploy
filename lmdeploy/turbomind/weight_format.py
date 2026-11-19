@@ -556,7 +556,14 @@ class NVFP4Format(WeightFormat):
         return x
 
     def finalize(self, tensors: dict[str, Tensor]) -> dict[str, Tensor]:
-        """Fold ``weight_global_scale`` into the block scales as fp16."""
+        """Fold ``weight_global_scale`` into the block scales as fp16.
+
+        The kernel bridge (``supports_nvfp4``) only accepts folded fp16
+        scales, so the global scale cannot be carried separately. A division
+        by a large global scale can push small block scales below the fp16
+        subnormal minimum, where they silently flush to zero — that is
+        weight corruption, so it raises instead of shipping.
+        """
         global_scale = tensors.pop('global_scale', None)
         if global_scale is not None and 'scales' in tensors:
             scales = tensors['scales'].to(torch.float32)
@@ -565,7 +572,14 @@ class NVFP4Format(WeightFormat):
                 scales = scales / gs.reshape(())
             else:
                 scales = scales / gs.reshape(gs.shape + (1, ) * (scales.dim() - gs.dim()))
-            tensors['scales'] = scales.to(torch.float16)
+            folded = scales.to(torch.float16)
+            flushed = (folded == 0) & (scales != 0)
+            if flushed.any():
+                raise ValueError(
+                    f'NVFP4 fold underflow: {int(flushed.sum())} block scale(s) divided by the '
+                    'global scale flushed to zero in fp16; this checkpoint needs a raw '
+                    'global-scale kernel lane that this bridge does not provide.')
+            tensors['scales'] = folded
         return tensors
 
     def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
