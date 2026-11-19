@@ -141,13 +141,6 @@ class WeightFormat(ABC):
     def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
         return PackedTensor(tensor, None, None)
 
-    def post_process(self, tensors: dict[str, Tensor]) -> dict[str, Tensor]:
-        """Post-normalization hook (identity by default).
-
-        Subclasses reshape or expand tensors into the layout the backend kernels expect.
-        """
-        return tensors
-
     def synthesize_zeros(self, scales: Tensor) -> Tensor:
         raise NotImplementedError(f"{type(self).__name__}.synthesize_zeros not implemented")
 
@@ -407,7 +400,7 @@ class FP8Format(WeightFormat):
         if self.block_out == 1:
             # per-channel (Ornith-style `.weight_scale`): one scale per output
             # channel, checkpoint shape [N, 1]. Expanded to the K-grouped
-            # kernel layout [K//128, N] by post_process.
+            # kernel layout [K//128, N] by finalize.
             return scales.shape[-2:] == (w.shape[-2], 1)
         expected = (
             (w.shape[-2] + self.block_out - 1) // self.block_out,
@@ -435,7 +428,7 @@ class FP8Format(WeightFormat):
             result['bias'] = tensors['bias']
         return result
 
-    def post_process(self, tensors: dict[str, Tensor]) -> dict[str, Tensor]:
+    def finalize(self, tensors: dict[str, Tensor]) -> dict[str, Tensor]:
         """Expand per-channel FP8 scales into the K-grouped kernel layout.
 
         In TM layout the weight is ``[K, N]`` (axis 0 = input K, axis -1 =
