@@ -14,7 +14,6 @@ validated BF16/K128/safe-gate shape; other calls delegate to native FLA.
 from __future__ import annotations
 
 import inspect
-import os
 from collections.abc import Callable
 from functools import lru_cache, update_wrapper
 from types import FunctionType
@@ -22,7 +21,9 @@ from typing import Any
 
 import torch
 
-FIXED_PREFIX = os.getenv('LMDEPLOY_GLM53_KDA_FIXED_PREFIX', '0').lower() in {'1', 'true', 'yes', 'on'}
+from lmdeploy.pytorch import envs
+
+FIXED_PREFIX = envs.glm53_kda_fixed_prefix
 
 
 def fixed_kda_gate_chunk_cumsum(g: torch.Tensor,

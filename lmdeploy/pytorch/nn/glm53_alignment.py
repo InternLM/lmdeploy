@@ -1,14 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Shared GLM forward boundaries for training and serving."""
-import os
 
 import torch
 import torch.nn.functional as F
 
-ALIGN_FORWARD = os.getenv('GLM53_ALIGN_FORWARD', '0').lower() in {'1', 'true', 'yes', 'on'}
-ALIGN_ROUTER_PROJECTION = ALIGN_FORWARD and os.getenv('GLM53_ALIGN_ROUTER_PROJECTION', '0').lower() in {
-    '1', 'true', 'yes', 'on'
-}
+from lmdeploy.pytorch import envs
+
+ALIGN_FORWARD = envs.glm53_align_forward
+ALIGN_ROUTER_PROJECTION = ALIGN_FORWARD and envs.glm53_align_router_projection
 
 
 @torch.library.custom_op('lmdeploy::glm53_aligned_router_linear', mutates_args=())
@@ -163,12 +162,24 @@ def kda_gate_projections(x, beta_proj, low_proj, forget_proj, output_proj, batch
     from lmdeploy.pytorch.config import TPMode
 
     projections = (beta_proj, low_proj, forget_proj, output_proj)
-    eligible = (x.is_cuda and x.dtype == torch.bfloat16 and all(
-        hasattr(p, 'weight') and p.weight.ndim == 2 and p.weight.dtype == x.dtype
-        and p.weight.device == x.device and p.bias is None
-        and not p.lora_adapters and not p.dp_gather and not p.all_reduce
-        and not (p.tp > 1 and p.tp_mode == TPMode.DP_TP)
-        for p in projections))
+
+    def supports_fixed_projection(projection):
+        weight = getattr(projection, 'weight', None)
+        return (
+            isinstance(weight, torch.Tensor)
+            and weight.ndim == 2
+            and weight.dtype == x.dtype
+            and weight.device == x.device
+            and getattr(projection, 'bias', None) is None
+            and not getattr(projection, 'lora_adapters', {})
+            and not getattr(projection, 'dp_gather', False)
+            and not getattr(projection, 'all_reduce', False)
+            and not (getattr(projection, 'tp', 1) > 1
+                     and getattr(projection, 'tp_mode', None) == TPMode.DP_TP)
+        )
+
+    eligible = x.is_cuda and x.dtype == torch.bfloat16 and all(
+        supports_fixed_projection(projection) for projection in projections)
     if not eligible:
         beta = beta_proj(x)
         forget, output = batched_proj(low_proj(x))
@@ -181,10 +192,9 @@ def kda_gate_projections(x, beta_proj, low_proj, forget_proj, output_proj, batch
     return beta, forget, output
 
 
-@torch.no_grad()
 def hc_pre(x: torch.Tensor, fn: torch.Tensor, scale: torch.Tensor, base: torch.Tensor,
            norm_weight: torch.Tensor, iters: int, eps: float, norm_eps: float):
-    """Use one projection, Sinkhorn and reduction path at every batch size."""
+    """Use the aligned HC path for inference-only GLM forward passes."""
     if x.numel() == 0:
         shape, h = x.shape[:-2], x.size(-2)
         return (x.new_empty((*shape, x.size(-1))), scale.new_empty((*shape, h)),

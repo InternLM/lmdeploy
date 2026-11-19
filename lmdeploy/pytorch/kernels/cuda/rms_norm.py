@@ -1,18 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import os
-
 import torch
 import torch.nn.functional as F
 import triton
 import triton.language as tl
 from torch import Tensor
 
+from lmdeploy.pytorch import envs
+
 from .utils import get_device_props
 
 
-_GLM53_NATIVE_RMS_NORM = os.getenv('LMDEPLOY_GLM53_NATIVE_RMS_NORM', '0').lower() in {
-    '1', 'true', 'yes', 'on'
-}
+_GLM53_NATIVE_RMS_NORM = envs.glm53_native_rms_norm
 
 
 @triton.jit

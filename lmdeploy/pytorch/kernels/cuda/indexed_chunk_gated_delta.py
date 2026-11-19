@@ -5,8 +5,6 @@ Only the common state propagation is LMDeploy-owned. Gate scans, WY transforms a
 installed FLA implementations. Neither entry point gathers initial states nor stages/scatters dense final states. The
 caller owns destination validation and supplies prebuilt packed chunk metadata.
 """
-import os
-
 import torch
 from fla.modules.l2norm import l2norm_fwd
 from fla.ops.common.chunk_o import chunk_fwd_o
@@ -18,10 +16,10 @@ from fla.ops.kda.gate import kda_gate_chunk_cumsum
 from fla.ops.utils import chunk_local_cumsum
 from fla.ops.utils.constant import RCP_LN2
 
+from lmdeploy.pytorch import envs as _envs
+
 from .indexed_chunk_state import indexed_chunk_state_fwd
 from .kda_gate_prefix import FIXED_PREFIX
-
-_ALIGN_INTRA_TF32X3 = os.getenv('GLM53_ALIGN_KDA_INTRA_TF32X3', '0').lower() in {'1', 'true', 'yes', 'on'}
 
 
 @torch.inference_mode()
@@ -75,7 +73,7 @@ def indexed_chunk_kda(q, k, v, g, beta, pool, input_ids, final_ids, *, A_log=Non
     else:
         g = chunk_local_cumsum(g, scale=RCP_LN2, **common)
     intra = chunk_kda_fwd_intra
-    if _ALIGN_INTRA_TF32X3:
+    if _envs.glm53_align_kda_intra_tf32x3:
         from .fla_dot_precision import fp32_dot_function
         intra = fp32_dot_function(intra, 'tf32x3')
     w, u, _, kg, aqk, _ = intra(q=q, k=k, v=v, gk=g, beta=beta, scale=scale,
