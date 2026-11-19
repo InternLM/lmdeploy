@@ -771,6 +771,23 @@ class ModelConfig:
         return model_config
 
 
+def validate_dcp_dllm_compatibility(model_config: ModelConfig, block_length: int) -> None:
+    """Reject block-sparse dLLM attention when DCP is enabled.
+
+    The DCP GQA implementation currently evaluates dense attention.  The
+    effective dLLM block length must therefore be one before the attention
+    backend is constructed.
+    """
+    dist_config = model_config.dist_config
+    if (dist_config is None or dist_config.dcp <= 1 or model_config.model_paradigm != 'dllm'
+            or block_length == 1):
+        return
+
+    raise ValueError(
+        'DCP does not support SDAR/dLLM block-sparse attention with '
+        f'dllm_block_length={block_length}. Use dcp=1 or set dllm_block_length=1.')
+
+
 class UnmaskingStrategy(enum.Enum):
     """Unmasking Strategy."""
 

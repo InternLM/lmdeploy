@@ -129,6 +129,9 @@ def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl
 
     from lmdeploy.pytorch.distributed import get_dcp_world_rank
     if get_dcp_world_rank()[0] > 1:
+        if spec.block_sparse_size != 1:
+            raise ValueError('DCP attention does not support block-sparse attention '
+                             f'(block_sparse_size={spec.block_sparse_size})')
         from .cp import DCPAttentionImpl
         return DCPAttentionImpl(use_fa3=enable_fa3, **common_args)
     elif enable_fa3:
