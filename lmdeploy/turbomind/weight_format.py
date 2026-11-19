@@ -510,6 +510,10 @@ class NVFP4Format(WeightFormat):
     ``.weight_scale`` (``float8_e4m3fn``, one per 16 input values) and a
     per-tensor ``.weight_global_scale`` (float32). Activation scale
     (``input_global_scale``) is intentionally ignored (W4A16).
+
+    The raw checkpoint representation passes through end to end: the kernel
+    bridge widens the e4m3 scales to half (exact) and the per-tensor global
+    scale reaches the GEMM epilogue, which multiplies the output by it.
     """
 
     name = 'nvfp4'
@@ -520,10 +524,11 @@ class NVFP4Format(WeightFormat):
         '.bias': 'bias',
     }
     weight_dtype = _tm.DataType.TYPE_FP4_E2M1
-    # The on-device scale is a plain half: ``finalize`` folds the per-tensor
-    # global scale into the e4m3 block scales and converts to fp16, matching
-    # the SM75 NVFP4 kernel's ``{kFloat4_e2m1, {16,1}, kHalf}`` format.
-    scales_dtype = _tm.DataType.TYPE_FP16
+    # Declared qparam format: the checkpoint's raw e4m3 block scales. The
+    # on-device scale is a plain half (exact widening in the packing bridge),
+    # matching the kernel families' ``{kFloat4_e2m1, {16,1}, kHalf}`` V
+    # operand.
+    scales_dtype = _tm.DataType.TYPE_FP8_E4M3
     zeros_dtype = _tm.DataType.TYPE_INVALID
 
     def __init__(self, *, block_in: int = 16):
@@ -556,30 +561,23 @@ class NVFP4Format(WeightFormat):
         return x
 
     def finalize(self, tensors: dict[str, Tensor]) -> dict[str, Tensor]:
-        """Fold ``weight_global_scale`` into the block scales as fp16.
+        """Convert the per-tensor global scale for the GEMM epilogue.
 
-        The kernel bridge (``supports_nvfp4``) only accepts folded fp16
-        scales, so the global scale cannot be carried separately. A division
-        by a large global scale can push small block scales below the fp16
-        subnormal minimum, where they silently flush to zero — that is
-        weight corruption, so it raises instead of shipping.
+        Returns a new dict; the caller's bundle is not mutated. The kernel
+        epilogue multiplies the output by the ``global_scale`` tensor, while
+        the checkpoint's ``weight_global_scale`` is a divisor of the block
+        scales (weights reconstruct as ``codes * scales / global_scale``), so
+        the bundle keeps ``global_scale`` holding the fp32 reciprocal
+        ``1 / global_scale``. Scales stay raw e4m3.
         """
-        global_scale = tensors.pop('global_scale', None)
-        if global_scale is not None and 'scales' in tensors:
-            scales = tensors['scales'].to(torch.float32)
-            gs = global_scale.to(torch.float32).reshape(-1)
-            if gs.numel() == 1:
-                scales = scales / gs.reshape(())
-            else:
-                scales = scales / gs.reshape(gs.shape + (1, ) * (scales.dim() - gs.dim()))
-            folded = scales.to(torch.float16)
-            flushed = (folded == 0) & (scales != 0)
-            if flushed.any():
-                raise ValueError(
-                    f'NVFP4 fold underflow: {int(flushed.sum())} block scale(s) divided by the '
-                    'global scale flushed to zero in fp16; this checkpoint needs a raw '
-                    'global-scale kernel lane that this bridge does not provide.')
-            tensors['scales'] = folded
+        tensors = dict(tensors)
+        global_scale = tensors.get('global_scale')
+        if global_scale is None:
+            return tensors
+        gs = global_scale.to(torch.float32).reshape(-1)
+        if gs.numel() != 1:
+            raise ValueError(f'NVFP4 expects a per-tensor global scale, got shape {tuple(gs.shape)}')
+        tensors['global_scale'] = torch.reciprocal(gs.reshape(1))
         return tensors
 
     def pack(self, tensor: Tensor, kind: str) -> PackedTensor:
@@ -588,8 +586,13 @@ class NVFP4Format(WeightFormat):
         return PackedTensor(tensor, None, None)
 
     def dequant(self, tensors, dtype):
-        """Decode E2M1 codes and half scales to a dense weight (mixed
-        fusion)."""
+        """Decode E2M1 codes and scales to a dense weight (mixed fusion).
+
+        The bundle carries the post-``finalize`` ``global_scale`` (the fp32
+        reciprocal of the checkpoint's divisor scale), so the reconstruction
+        divides by the checkpoint global scale:
+        ``codes * scales * global_scale == codes * scales / global_scale_ckpt``.
+        """
         codes = tensors['weight']
         scales = tensors['scales']
         table = torch.tensor(_E2M1_VALUES, dtype=torch.float32, device=codes.device)
@@ -598,6 +601,8 @@ class NVFP4Format(WeightFormat):
         values = table[mag] * torch.where(sign, -1.0, 1.0)
         scale = scales.to(torch.float32).repeat_interleave(self.block_in, dim=0)
         weight = values.to(torch.float32) * scale
+        if 'global_scale' in tensors:
+            weight = weight * tensors['global_scale'].to(torch.float32).reshape(-1)
         result: dict[str, Tensor] = {'weight': weight.to(dtype)}
         if 'bias' in tensors:
             result['bias'] = tensors['bias']

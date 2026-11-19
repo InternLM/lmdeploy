@@ -243,10 +243,10 @@ class Linear:
         result._shape_constraints = (minimum, alignment)
         return result
 
-    def _normalize_params(self, weight_format, weight, scales, zeros, bridge):
+    def _normalize_params(self, weight_format, weight, scales, zeros, bridge, global_scale=None):
         """Normalize source weight components into TurboMind logical layouts
         and expand their quantization blocking to the kernel's."""
-        raw = {'weight': weight, 'scales': scales, 'zeros': zeros}
+        raw = {'weight': weight, 'scales': scales, 'zeros': zeros, 'global_scale': global_scale}
         raw = {kind: tensor for kind, tensor in raw.items() if tensor is not None}
         normalized = {kind: weight_format.normalize(tensor, kind).contiguous() for kind, tensor in raw.items()}
         if weight_format.zeros_dtype != _tm.DataType.TYPE_INVALID and 'zeros' not in normalized:
@@ -328,6 +328,7 @@ class Linear:
         plan: WeightPlan,
         scales: torch.Tensor | Sequence[torch.Tensor] | None = None,
         zeros: torch.Tensor | Sequence[torch.Tensor] | None = None,
+        global_scale: torch.Tensor | Sequence[torch.Tensor] | None = None,
     ) -> Weight:
         """Normalize and pack a dense weight or sequence of expert weights."""
         weight_format = plan._weight_format
@@ -336,7 +337,8 @@ class Linear:
 
         if not plan._grouped:
             with self._activate() as stream:
-                normalized = self._normalize_params(weight_format, weight, scales, zeros, impl_plan.bridge)
+                normalized = self._normalize_params(weight_format, weight, scales, zeros, impl_plan.bridge,
+                                                    global_scale)
                 return self._prepare_one(
                     normalized,
                     weight_format=weight_format,
@@ -349,11 +351,13 @@ class Linear:
         weights = list(weight)
         expert_scales = [None] * len(weights) if scales is None else list(scales)
         expert_zeros = [None] * len(weights) if zeros is None else list(zeros)
+        expert_global_scales = ([None] * len(weights) if global_scale is None else list(global_scale))
 
         with self._activate() as stream:
             normalized_experts = [
-                self._normalize_params(weight_format, expert_weight, expert_scale, expert_zero, impl_plan.bridge)
-                for expert_weight, expert_scale, expert_zero in zip(weights, expert_scales, expert_zeros, strict=True)
+                self._normalize_params(weight_format, expert_weight, expert_scale, expert_zero, impl_plan.bridge,
+                                       expert_global_scale) for expert_weight, expert_scale, expert_zero,
+                expert_global_scale in zip(weights, expert_scales, expert_zeros, expert_global_scales, strict=True)
             ]
             return self._prepare_grouped(
                 normalized_experts,
