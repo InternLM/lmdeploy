@@ -119,6 +119,11 @@ def build_fused_moe(
             output_scale=output_scale,
             fp32_acc=fp32_acc,
         )
+    elif quant_method in ('nvfp4', 'ct_fp8'):
+        raise NotImplementedError(
+            f'The {quant_method} routed-expert route is not wired on the PyTorch engine; '
+            'the TurboMind grouped channel accepts these formats but no PT grouped module exists yet.'
+        )
     elif quant_method == 'compressed-tensors':
         # W4A16 already requests FP32 expert reduction for every invocation.
         if output_scale != 1.0:

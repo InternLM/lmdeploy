@@ -62,6 +62,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..static_fp8_modules import LinearStaticF8BuildSpec
         from ..tm_gemm_modules import LinearTmGemmBuildSpec
         from ..tm_moe_modules import FusedMoETmW4A16BuildSpec
+        from ..tm_quant_modules import LinearTmQuantBuildSpec
         if isinstance(spec, SiluAndMulBuildSpec):
             from .activation import TritonSiluAndMulImpl
             return cast(ImplT, TritonSiluAndMulImpl(spec.inplace))
@@ -156,6 +157,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         if isinstance(spec, LinearTmGemmBuildSpec):
             from .tm_gemm_modules import _build_linear_tm_gemm
             return cast(ImplT, _build_linear_tm_gemm(spec))
+        if isinstance(spec, LinearTmQuantBuildSpec):
+            from .tm_quant_modules import _build_linear_tm_quant
+            return cast(ImplT, _build_linear_tm_quant(spec))
         if isinstance(spec, FusedMoETmW4A16BuildSpec):
             from .tm_moe_modules import _build_fused_moe_tm
             return cast(ImplT, _build_fused_moe_tm(spec))
