@@ -245,7 +245,15 @@ class Linear:
 
     def _normalize_params(self, weight_format, weight, scales, zeros, bridge, global_scale=None):
         """Normalize source weight components into TurboMind logical layouts
-        and expand their quantization blocking to the kernel's."""
+        and expand their quantization blocking to the kernel's.
+
+        The format's ``finalize`` runs last, so callers pass raw
+        checkpoint-layout tensors end to end (per-channel FP8 scales are
+        expanded to the K-grouped layout and the NVFP4 per-tensor global
+        scale becomes the epilogue reciprocal here). The TM builder path
+        applies the same ``finalize`` on its side; the two entry points
+        share one convention.
+        """
         raw = {'weight': weight, 'scales': scales, 'zeros': zeros, 'global_scale': global_scale}
         raw = {kind: tensor for kind, tensor in raw.items() if tensor is not None}
         normalized = {kind: weight_format.normalize(tensor, kind).contiguous() for kind, tensor in raw.items()}
@@ -253,6 +261,7 @@ class Linear:
             normalized['zeros'] = weight_format.synthesize_zeros(normalized['scales']).contiguous()
         if 'zeros' in normalized:
             normalized['zeros'] = normalized['zeros'].to(normalized['scales'].dtype).contiguous()
+        normalized = weight_format.finalize(normalized)
         output_dim = int(normalized['weight'].shape[-1])
         return {kind: _apply_bridge(tensor, kind, bridge, output_dim) for kind, tensor in normalized.items()}
 
@@ -330,7 +339,13 @@ class Linear:
         zeros: torch.Tensor | Sequence[torch.Tensor] | None = None,
         global_scale: torch.Tensor | Sequence[torch.Tensor] | None = None,
     ) -> Weight:
-        """Normalize and pack a dense weight or sequence of expert weights."""
+        """Normalize and pack a dense weight or sequence of expert weights.
+
+        Inputs are raw checkpoint-layout tensors; the format's ``finalize``
+        runs inside (per-channel FP8 scales expand to the kernel's K-grouped
+        layout, the NVFP4 per-tensor global scale becomes the epilogue
+        reciprocal).
+        """
         weight_format = plan._weight_format
         dtype = plan._dtype
         impl_plan = plan._impl
@@ -384,7 +399,8 @@ class Linear:
         zeros: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None,
     ) -> Weight:
         """Normalize, bridge, interleave, and pack gate/up weights for fused
-        SiLU execution."""
+        SiLU execution (raw checkpoint-layout inputs; see
+        ``prepare_weight``)."""
         weight_format = plan._weight_format
         dtype = plan._dtype
         impl_plan = plan._impl
