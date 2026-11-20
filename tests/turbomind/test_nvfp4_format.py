@@ -106,6 +106,23 @@ def test_nvfp4_finalize_requires_per_tensor_global_scale():
         fmt.finalize(tensors)
 
 
+def test_nvfp4_finalize_rejects_gs_less_bundle_loudly():
+    """A gs-less bundle must not silently skip the epilogue multiply (output
+    off by the checkpoint's divisor gs) — finalize raises."""
+    fmt = NVFP4Format()
+    tensors = {
+        'weight': torch.zeros((4, 1), dtype=torch.uint8),
+        'scales': torch.zeros((1, 2), dtype=torch.float8_e4m3fn),
+    }
+    with pytest.raises(ValueError, match='no global_scale'):
+        fmt.finalize(tensors)
+
+    # Same for a non-finite (uninitialized) scale.
+    garbage = dict(tensors, global_scale=torch.full((1, ), float('nan'), dtype=torch.float32))
+    with pytest.raises(ValueError, match='not finite'):
+        fmt.finalize(garbage)
+
+
 def test_nvfp4_dequant_e2m1_table():
     fmt = NVFP4Format()
     codes = torch.arange(16, dtype=torch.uint8).reshape(16, 1)

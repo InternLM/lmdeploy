@@ -532,10 +532,25 @@ class NVFP4Format(WeightFormat):
         tensors = dict(tensors)
         global_scale = tensors.get('global_scale')
         if global_scale is None:
-            return tensors
+            # Loud gate: the kernel epilogue multiplies the output by
+            # ``global_scale``; without it the multiply is skipped and every
+            # result is off by the checkpoint's divisor gs. Dispatch never
+            # selects this format without ``.weight_global_scale``
+            # (``accepts`` rejects it), so reaching here means a caller
+            # handed the nvfp4 lane an incomplete bundle.
+            raise ValueError(
+                'NVFP4 bundle carries no global_scale: the epilogue '
+                'requires the per-tensor divisor (its reciprocal is stored '
+                'for the kernel); a gs-less bundle would compute silently '
+                'wrong results (output off by the global scale)')
         gs = global_scale.to(torch.float32).reshape(-1)
         if gs.numel() != 1:
             raise ValueError(f'NVFP4 expects a per-tensor global scale, got shape {tuple(gs.shape)}')
+        if not bool(torch.isfinite(gs).all()):
+            raise ValueError(
+                'NVFP4 global_scale is not finite (uninitialized or corrupt '
+                'checkpoint metadata); refusing to pack a bundle whose '
+                'epilogue scale would be garbage')
         tensors['global_scale'] = torch.reciprocal(gs.reshape(1))
         return tensors
 

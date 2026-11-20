@@ -111,6 +111,25 @@ class TestNvfp4Linear:
         err_wrong = (module(x).float() - ref).abs().max().item()
         assert err_wrong > 0.5 * ref.abs().max().item(), (err_ok, err_wrong)
 
+    def test_gs_less_bundle_raises_at_prepare(self):
+        """A checkpoint bundle with no global scale for a shard must fail
+        loudly at update_weights; previously the never-loaded slot kept its
+        initializer garbage and the epilogue silently skipped the multiply
+        (output off by gs)."""
+        K, N = 512, 256
+        module = TmQuantLinear(K, N, lane='nvfp4', bias=False, device=torch.device('cuda')).cuda()
+        bits, scale, gs = _quantize_nvfp4(torch.randn(N, K) * 0.05)
+        module.weight_packed.data.copy_(bits)
+        module.weight_scale.data.copy_(scale)
+        # No gs load: the slot stays at its NaN initializer.
+        assert not bool(torch.isfinite(module.weight_global_scale).all())
+        with pytest.raises(ValueError, match='uninitialized'):
+            module.update_weights()
+
+        # Loading the scale clears the gate.
+        module.weight_global_scale.data[0] = gs
+        module.update_weights()
+
     def test_param_names_match_checkpoint_suffixes(self):
         module = TmQuantLinear(256, 64, lane='nvfp4', bias=False, device=torch.device('cuda'))
         names = dict(module.named_parameters())

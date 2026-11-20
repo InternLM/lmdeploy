@@ -90,8 +90,8 @@ class TmQuantLinearMixin:
                                                   device=pack_device)
             params['weight_scale'] = torch.empty((out_features, in_features // 16), dtype=_FP8_DTYPE,
                                                  device=pack_device)
-            params['weight_global_scale'] = torch.empty((self.num_shards, ), dtype=torch.float32,
-                                                        device=pack_device)
+            params['weight_global_scale'] = torch.full((self.num_shards, ), float('nan'), dtype=torch.float32,
+                                                       device=pack_device)
         else:
             assert in_features % 128 == 0, f'CT FP8 requires in_features % 128 == 0, got {in_features}'
             assert out_features % 2 == 0, f'CT FP8 requires out_features % 2 == 0, got {out_features}'
@@ -173,6 +173,19 @@ class TmQuantLinearMixin:
     def update_weights(self):
         """Pack the checkpoint-layout parameters into the TurboMind channel."""
         weights, scales, global_scales, biases = self._lane_shards()
+        if self.lane == 'nvfp4':
+            # Loud gate: the gs param starts NaN; a slot never reached by a
+            # loader means the checkpoint carries no global scale for that
+            # shard and the kernel epilogue would silently skip the multiply
+            # (output off by gs). Refuse to pack garbage.
+            gs = getattr(self, 'weight_global_scale')
+            if not bool(torch.isfinite(gs).all()):
+                raise ValueError(
+                    f'{type(self).__name__} lane nvfp4 has uninitialized '
+                    'weight_global_scale slots: the checkpoint bundle '
+                    'carries no global scale for every shard; loading it '
+                    'as-is would compute silently wrong results (output '
+                    'off by the global scale)')
         self.impl.update_weights(weights, scales, global_scales, biases)
 
     def sleep_release(self):
