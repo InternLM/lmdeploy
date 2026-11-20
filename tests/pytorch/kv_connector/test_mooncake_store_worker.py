@@ -221,8 +221,13 @@ class FakeCudaEvent:
 
 
 @pytest.fixture(autouse=True)
-def patch_worker_runtime(monkeypatch):
+def fake_worker_cuda_event(monkeypatch):
+    # Module-local: compact wire tests import patch_worker_runtime and exercise real GPU fences.
     monkeypatch.setattr(worker_module.torch.cuda, 'Event', FakeCudaEvent)
+
+
+@pytest.fixture(autouse=True)
+def patch_worker_runtime(monkeypatch):
     original_is_tensor = torch.is_tensor
     recording_logger = RecordingLogger()
     monkeypatch.setattr(worker_module, '_get_local_hostname', lambda: '10.0.0.8')
