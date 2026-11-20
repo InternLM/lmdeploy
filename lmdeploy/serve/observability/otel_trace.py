@@ -228,8 +228,7 @@ def finish_engine(t, status):
             ('model.decode', int(t.first_token*1e9) if t.first_token is not None else None,
              int(t.last_token*1e9) if t.last_token is not None else None)):
         if start is not None and stop is not None and t.start_ns <= start <= stop <= end:
-            child_attrs = {'inference.engine': 'lmdeploy', 'inference.role': 'full',
-                           'envoy.error': status != 'success'}
+            child_attrs = {'inference.engine': 'lmdeploy', 'inference.role': 'full'}
             if t.request_id is not None:
                 child_attrs['request.id'] = t.request_id
             if 'session_id' in outcome:

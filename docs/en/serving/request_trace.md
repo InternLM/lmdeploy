@@ -81,7 +81,7 @@ Input preparation is the scalar `lmdeploy.preprocess_seconds`, with no separate 
 Stage durations are not pure GPU kernel times.
 
 Prompt spans are children of the HTTP request span `llm_request`. Phase spans use the propagated
-upstream parent (for example, the Router's backend CLIENT span). Without a valid incoming
+upstream parent (for example, the Router's `model.router` or Envoy's `envoy.upstream`). Without a valid incoming
 parent, they use the local request span. `lmdeploy.prompt_index` links a batch prompt to its
 phases. Concurrent choices also carry `lmdeploy.choice_index` on inference and phase spans.
 HTTP input/cache usage counts shared input once (choice 0, matching the API). Output usage
@@ -99,15 +99,12 @@ Token completeness is explicit through `lmdeploy.token_counts_complete`; failed/
 are partial. Provider initialization is serialized once per process, and the SDK owns shutdown.
 Handle waiting and mean TPOT use `lmdeploy.handle_wait_seconds` and `lmdeploy.tpot_seconds`.
 
-LMDeploy writes both phase names directly into the exported OTLP spans. Each phase carries
-`inference.engine=lmdeploy`, `inference.role=full` and a boolean `envoy.error` derived from
-its engine outcome. The gateway can combine that flag with its own error signals. The local
-Collector can forward these spans directly. Register the exported names before deployment.
-
-Phases carry a valid inbound `request.id` and optional `session.id` when available. Read each
-phase duration from its timestamps. Retain the native `llm_request` and `inference` spans for
-request and prompt usage, E2E latency and TTFT. Retain referenced upstream parents, including
-the Router CLIENT span, to keep the trace connected.
+LMDeploy exports both phase names directly with `inference.engine=lmdeploy`,
+`inference.role=full`, a valid inbound `request.id` and optional `session.id` when available.
+Read phase durations from their timestamps and failures from their OpenTelemetry status.
+Keep the names `llm_request` and `inference` for request and prompt usage, E2E and TTFT.
+When the Router forwards `model.router` in W3C `traceparent`, both phases and
+`llm_request` are its direct children. Each `inference` is a child of `llm_request`.
 
 Register engine `lmdeploy` and role `full` and retain the platform's error-trace tail-sampling
 policy. The gateway must propagate the valid
@@ -135,7 +132,6 @@ Span attributes:
 ```text
 inference.engine
 inference.role
-envoy.error
 request.id
 session.id
 trace.context.missing
