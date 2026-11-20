@@ -28,7 +28,11 @@ def _quantize_nvfp4(w_dense: torch.Tensor):
     amax_w = w_dense.abs().amax().clamp_min(1e-8)
     scale = (groups.abs().amax(dim=-1, keepdim=True) * (448.0 / amax_w)).clamp_max(448.0)
     scale = scale.to(torch.float8_e4m3fn).float()  # quantize the scale itself
-    scaled = groups / scale
+    # codes = round(w * global_scale / scale): the fp4 grid covers [-6, 6]
+    # regardless of the weight amplitude. Dividing by the raw scale alone
+    # (the historical bug) collapses everything but amax_w ~ 2688 weights
+    # onto the zero code and makes the reconstruction vacuous.
+    scaled = groups * ((2688.0 / amax_w) / scale)
 
     grid = torch.tensor(_E2M1_VALUES, device=w_dense.device)
     mag = torch.argmin((scaled.unsqueeze(-1) - grid).abs(), dim=-1)  # [N, K/16, 16]
@@ -175,3 +179,70 @@ def test_nvfp4_native_forward_matches_reference():
         ref_fold = x.float() @ w_fold.cuda().float()
         err_fold = (out.float() - ref_fold).abs().max().item()
         assert err_fold < 1e-2, f'K={K} N={N} M={M}: fold-emulation abs err {err_fold}'
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+def test_nvfp4_grouped_forward_matches_reference():
+    """Grouped (MoE) proof: per-expert NVFP4 weights with DISTINCT per-tensor
+    global scales routed through an uneven offsets layout must reconstruct each
+    expert exactly.
+
+    Constant/shared-scale kernel bugs are detectable only because the amplitudes (and hence gs) differ pairwise by 10x.
+    """
+    from lmdeploy.turbomind.linear import get_linear
+
+    torch.manual_seed(0)
+    E, K, N, T = 3, 512, 128, 24
+    offsets = torch.tensor([0, 8, 18, 24], dtype=torch.int32, device='cuda')
+    amplitudes = [0.02, 0.2, 2.0]
+
+    fmt = NVFP4Format()
+    bits_l, scales_l, gs_l, refs_l = [], [], [], []
+    for amp in amplitudes:
+        w = torch.randn(N, K) * (amp / math.sqrt(K))
+        bits, scale, gs = _quantize_nvfp4(w)
+        assert torch.isfinite(gs) and gs > 0
+        bits_l.append(bits.cuda())
+        scales_l.append(scale.to(torch.float8_e4m3fn).cuda())
+        gs_l.append(gs.reshape(1).cuda())
+        refs_l.append(_dequant_nvfp4(bits, scale, gs))  # [K, N] fp32
+    for i in range(E):
+        for j in range(i + 1, E):
+            assert not torch.allclose(gs_l[i].cpu(), gs_l[j].cpu()), \
+                f'global scales must be pairwise distinct (experts {i},{j})'
+
+    linear = get_linear()
+    with linear._activate():
+        plan = linear.get_weight_plan(weight_format=fmt, dtype=torch.float16, grouped=True)
+        weight = linear.prepare_weight(bits_l, plan=plan, scales=scales_l, global_scale=gs_l)
+
+        x = torch.randn(T, K, device='cuda', dtype=torch.float16)
+        exec_plan, out, _ = linear.tune(x, weight, offsets=offsets)
+        assert out.dtype == torch.float16
+
+    # Reference: each expert's segment against its own dequantized weight.
+    for e in range(E):
+        lo, hi = int(offsets[e]), int(offsets[e + 1])
+        if lo == hi:
+            continue
+        ref = x[lo:hi].float() @ refs_l[e].cuda().float()
+        err = (out[lo:hi].float() - ref).abs().max().item()
+        assert err < 1e-2, f'expert {e}: max abs err {err}'
+
+    # Sensitivity control: with a shared (expert-0) scale the error must be
+    # large -- otherwise the test cannot detect constant-scale bugs.
+    wrong = [
+        _dequant_nvfp4(
+            bits_l[e].cpu(),
+            scales_l[e].cpu().float(),
+            gs_l[0].cpu().reshape(1),
+        )
+        for e in range(E)
+    ]
+    wrong_err = max(
+        (x[int(offsets[e]):int(offsets[e + 1])].float() @ wrong[e].cuda().float()
+         - out[int(offsets[e]):int(offsets[e + 1])].float()).abs().max().item()
+        for e in range(E)
+        if int(offsets[e]) < int(offsets[e + 1])
+    )
+    assert wrong_err > 1.0, f'wrong-scale control error too small: {wrong_err}'
