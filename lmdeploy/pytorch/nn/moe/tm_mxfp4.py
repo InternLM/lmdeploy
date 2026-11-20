@@ -225,6 +225,13 @@ class FusedMoETmMXFP4(FusedMoEBase):
         if num_experts % self.ep != 0:
             raise RuntimeError(f'TurboMind MXFP4 MoE requires num_experts={num_experts} to be divisible by '
                                f'EP={self.ep}.')
+        if top_k > num_experts:
+            # The only router constraint that survives EP: the global router
+            # may exceed the rank-local expert count (surplus foreign routes
+            # park in the skip block), but more routes than experts would
+            # silently produce all-zero outputs.
+            raise RuntimeError(f'TurboMind MXFP4 MoE requires top_k={top_k} <= num_experts={num_experts}: '
+                               'more routes than experts would silently produce all-zero outputs.')
         if self.ep > 1 and dist_config.dp > 1:
             # Plain EP serves the whole token batch per rank; DP attention
             # partitions tokens, which needs all-to-all dispatch (DeepEP) —
