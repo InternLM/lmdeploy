@@ -550,8 +550,7 @@ class RequestTraceMiddleware:
         outcome['operation'] = ('chat' if scope['path'] in ('/v1/chat/completions', '/v1/messages')
                                 else 'text_completion')
         outcome['request_id'] = otel_trace.request_id(headers)
-        outcome['otel_span'] = otel_trace.begin_http(
-            headers, scope['path'], received_ns, validated_request_id=outcome['request_id'])
+        outcome['otel_span'] = otel_trace.begin_http(headers, scope['path'], received_ns, outcome)
         outcome['log_context'] = _http_log_context(outcome['otel_span'], headers)
         outcome_token = request_outcome_context.set(outcome)
         first_body = None

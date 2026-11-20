@@ -21,6 +21,7 @@ try:
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     from opentelemetry.sdk.trace.sampling import ALWAYS_ON, ParentBased
+    from opentelemetry.trace import SpanKind
     SDK = True
 except ImportError:
     SDK = False
@@ -81,7 +82,8 @@ class OTLPTests(unittest.TestCase):
     def test_parent_prompt_stages_and_readonly_ids(self):
         trace_id, parent_id = 'a'*32, 'b'*16
         records, sent = self.request([(b'traceparent', f'00-{trace_id}-{parent_id}-01'.encode()),
-            (b'x-request-id', b'req_gateway_123456'), (b'x-session-affinity', b'private-affinity')])
+            (b'x-request-id', b'req_gateway_123456'), (b'x-session-id', b'session.prod:42'),
+            (b'x-session-affinity', b'private-affinity')])
         spans = self.exporter.get_finished_spans()
         root = next(s for s in spans if s.name == 'llm_request')
         prompts = [s for s in spans if s.name == 'inference']
@@ -91,11 +93,18 @@ class OTLPTests(unittest.TestCase):
         self.assertEqual(root.attributes['gen_ai.usage.output_tokens'], 4)
         self.assertTrue(all(p.parent.span_id == root.context.span_id for p in prompts))
         self.assertEqual(len({p.context.span_id for p in prompts}), 2)
+        phases = [s for s in spans if s.name in ('prefill', 'decode')]
+        self.assertCountEqual([s.name for s in phases], ['prefill', 'decode'] * 2)
         for s in spans:
             self.assertLessEqual(s.start_time, s.end_time)
-            if s.name in ('prefill', 'decode'):
-                self.assertEqual(s.parent.span_id, root.context.span_id)
-                self.assertIn(s.attributes['lmdeploy.prompt_index'], (0, 1))
+        for phase in phases:
+            self.assertEqual(phase.kind, SpanKind.INTERNAL)
+            self.assertEqual(phase.parent, root.parent)
+            self.assertEqual(phase.context.trace_id, root.context.trace_id)
+            self.assertIn(phase.attributes['lmdeploy.prompt_index'], (0, 1))
+            self.assertEqual(phase.attributes['request.id'], 'req_gateway_123456')
+            self.assertEqual(phase.attributes['session.id'], 'session.prod:42')
+            self.assertFalse(any(k.startswith(('gen_ai.usage.', 'gen_ai.latency.')) for k in phase.attributes))
         self.assertTrue(all(r['request_id'] == 'req_gateway_123456' for r in records))
         self.assertEqual(len({r['span_id'] for r in records}), 2)
         self.assertEqual(sent[-1]['body'], b'private-completion')
@@ -111,6 +120,17 @@ class OTLPTests(unittest.TestCase):
                 root, = self.exporter.get_finished_spans()
                 self.assertEqual(root.attributes.get('request.id'), expected)
                 self.assertEqual(root.attributes['session.id'], 'session.first')
+
+    def test_direct_request_phases_use_local_parent(self):
+        self.request(count=1)
+        spans = self.exporter.get_finished_spans()
+        root = next(s for s in spans if s.name == 'llm_request')
+        self.assertIsNone(root.parent)
+        self.assertCountEqual([s.name for s in spans], ['llm_request', 'inference', 'prefill', 'decode'])
+        for child in (s for s in spans if s.name != 'llm_request'):
+            self.assertEqual(child.parent.span_id, root.context.span_id)
+            self.assertEqual(child.context.trace_id, root.context.trace_id)
+            self.assertNotIn('session.id', child.attributes)
 
     def test_library_phases_have_request_router_parent(self):
         t = obs.RequestTrace()

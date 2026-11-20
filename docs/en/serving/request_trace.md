@@ -26,8 +26,8 @@ These are tracing identifiers; `request_id` remains the read-only gateway busine
    engine output and events to accumulate token counts, queue/token boundaries and optional
    Store timings.
 3. At prompt completion, the observer emits the prompt summary and completed Prefill/Decode spans.
-   HTTP completion supplies transport and visible-output summaries. Phase spans are direct
-   children of the HTTP/router span, associated with their prompt through `lmdeploy.prompt_index`.
+   HTTP completion supplies transport and visible-output summaries. The prompt index links
+   each phase to the prompt that produced it.
 4. OpenTelemetry's bounded background processor exports OTLP. Independently, an optional bounded
    writer queue serializes JSONL summaries to disk. Neither output requires per-token spans,
    synchronous request-path disk/network I/O, extra Store RPCs, or internal streaming for nonstream
@@ -73,18 +73,19 @@ export. It respects an upstream unsampled flag; there is no additional random so
 Invalid startup settings fail startup; runtime instrumentation/export failures do not replace an
 inference result. No SDK work or per-token span creation is added to the engine output loop.
 
-Native spans are `llm_request` (HTTP SERVER), `inference` (one per prompt), and `prefill`, `decode`
-phases when their complete boundaries are known. HTTP and prompt usage overlap: choose
-one level when aggregating tokens. GenAI latency attributes are seconds; OTLP timestamps are epoch
-nanoseconds. Store and visible output timings are scalar attributes on the prompt span.
+LMDeploy emits `llm_request` (HTTP SERVER), `inference` (one per prompt), and the INTERNAL
+`prefill` and `decode` phases when their complete boundaries are known.
+Choose either HTTP or prompt usage when aggregating tokens. GenAI latency attributes use seconds.
+OTLP timestamps are epoch nanoseconds. Store and visible output timings are scalar attributes on the prompt span.
 Input preparation is the scalar `lmdeploy.preprocess_seconds`, with no separate span.
 Stage durations are not pure GPU kernel times.
 
-All prompt and phase spans are children of the HTTP/router `llm_request`, as required by the
-platform parent contract. `lmdeploy.prompt_index` associates a batch prompt with its phases.
-Concurrent choices of the same prompt additionally carry `lmdeploy.choice_index` on inference
-and phase spans. HTTP input/cache usage counts the shared input once (choice 0, matching the API);
-output usage sums all choices. Distinct batch prompts still contribute their individual inputs.
+Prompt spans are children of the HTTP request span `llm_request`. Phase spans use the propagated
+upstream parent (for example, the Router's backend CLIENT span). Without a valid incoming
+parent, they use the local request span. `lmdeploy.prompt_index` links a batch prompt to its
+phases. Concurrent choices also carry `lmdeploy.choice_index` on inference and phase spans.
+HTTP input/cache usage counts shared input once (choice 0, matching the API). Output usage
+sums all choices. Distinct batch prompts still contribute their individual inputs.
 Request/response model fields use the resolved API model,
 including a selected LoRA adapter; `lmdeploy.base_model` identifies its base model when different.
 Library calls without HTTP create one `llm_request` root with phases below it.
@@ -95,12 +96,26 @@ Token completeness is explicit through `lmdeploy.token_counts_complete`; failed/
 are partial. Provider initialization is serialized once per process, and the SDK owns shutdown.
 Handle waiting and mean TPOT use `lmdeploy.handle_wait_seconds` and `lmdeploy.tpot_seconds`.
 
-The platform must register the configured service (default `lmdeploy-full`) with role `full`,
-map `llm_request` to `model.router`,
-`inference` to the new `model.inference`, and map phase names to their corresponding `model.*`
-names. The `lmdeploy.*` metadata and timing attributes require explicit platform allowlisting.
-Existing vLLM/SGLang-only gateway contracts will discard these spans until extended.
-This implementation does not deploy or modify a Collector or Gateway.
+For the default service, apply this Collector transform in the traces pipeline before filtering.
+It maps the two measured phases of the full engine. The separate Router service owns
+`model.router`. Use the configured service name here if it differs from the default.
+
+```yaml
+processors:
+  transform/lmdeploy-full:
+    trace_statements:
+      - context: span
+        conditions:
+          - 'resource.attributes["service.name"] == "lmdeploy-full" and kind == SPAN_KIND_INTERNAL'
+        statements:
+          - 'set(name, "model.prefill") where name == "prefill"'
+          - 'set(name, "model.decode") where name == "decode"'
+```
+
+Phases carry a valid inbound `request.id` and optional `session.id` when available. Read each
+phase duration from its timestamps. Retain the native `llm_request` and `inference` spans for
+request and prompt usage, E2E latency and TTFT. Retain referenced upstream parents, including
+the Router CLIENT span, to keep the trace connected.
 
 Platform normalization must run before filtering. Register engine `lmdeploy` and role `full`,
 copy `inference.engine` and `inference.role` from resources into query attributes where required,
