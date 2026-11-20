@@ -72,12 +72,14 @@ def blocked_route(topk_ids: torch.Tensor, num_experts: int):
     sentinels (``-1``) park in an extra block after the last real expert.
     The grouped GEMM walks ``num_experts`` groups only, so it never writes
     their output rows. The caller zeroes them before the reduce.
+
+    Under expert parallelism ``num_experts`` is the rank-local count, and a
+    global router may legitimately emit more routes than that: routes landing
+    outside ``[0, num_experts)`` (foreign experts) park in the skip block with
+    the invalid sentinels and contribute nothing on this rank.
     """
     if topk_ids.dim() != 2:
         raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
-    if topk_ids.shape[1] > num_experts:
-        raise ValueError(f'topk_ids.size(1) must be <= num_experts, but got top_k={topk_ids.shape[1]} '
-                         f'and num_experts={num_experts}')
     valid = (topk_ids >= 0) & (topk_ids < num_experts)
     # Park invalid routes behind the real experts. The sorter sees one extra
     # expert; the grouped GEMM never launches that block.
@@ -102,8 +104,12 @@ class TurbomindMoeW4A16Impl(FusedMoETmW4A16Impl):
         renormalize: bool = False,
         output_dtype: torch.dtype | None = None,
     ):
-        if top_k < 1 or num_experts < 1 or top_k > num_experts:
-            raise ValueError(f'Expected 1 <= top_k <= num_experts, got {top_k} and {num_experts}')
+        # ``num_experts`` is the rank-local count under EP, where the global
+        # top_k may legitimately exceed it: surplus foreign routes park in
+        # the skip block. The global top_k <= num_experts invariant is the
+        # module builder's job, not a kernel-shape sanity check here.
+        if top_k < 1 or num_experts < 1:
+            raise ValueError(f'Expected top_k >= 1 and num_experts >= 1, got {top_k} and {num_experts}')
         self.top_k = top_k
         self.num_experts = num_experts
         self.hidden_dim = hidden_dim

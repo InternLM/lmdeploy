@@ -596,7 +596,7 @@ def get_ep_manager(context):
 
 
 def _build_ep_layer(ep: int, ep_rank: int, num_experts: int, hidden: int, ffn: int, group: int, device,
-                    dp: int = 1, all_reduce: bool = False):
+                    dp: int = 1, all_reduce: bool = False, top_k: int = 2):
     """Construct the module under the rank's EP view."""
     from lmdeploy.pytorch.distributed import get_dist_manager
     from lmdeploy.pytorch.nn.moe.tm_w4a16 import FusedMoETmW4A16
@@ -607,7 +607,7 @@ def _build_ep_layer(ep: int, ep_rank: int, num_experts: int, hidden: int, ffn: i
             hidden_dim=hidden,
             ffn_dim=ffn,
             num_experts=num_experts,
-            top_k=2,
+            top_k=top_k,
             renormalize=True,
             dtype=torch.float16,
             device=device,
@@ -761,6 +761,81 @@ def test_ep2_rank_modules_match_tp_monolith(num_tokens):
             with get_ep_manager(rank_ctx):
                 layer.impl.sleep_release()
         torch.cuda.empty_cache()
+
+
+@torch.inference_mode()
+def test_ep2_serves_top_k_above_local_experts():
+    """EP=2 over 16 experts with top_k=12 > num_local=8: surplus foreign routes
+    park in the skip block, each rank serves its local subset, and the summed
+    partials still match the 16-expert monolith within 1e-6."""
+    device = torch.device('cuda')
+    num_experts, top_k, hidden, ffn, group = 16, 12, 256, 128, 128
+
+    gate = _ExpertSet(num_experts, ffn, hidden, group, device, 2100)
+    up = _ExpertSet(num_experts, ffn, hidden, group, device, 2200)
+    down = _ExpertSet(num_experts, hidden, ffn, group, device, 2300)
+
+    layer0, ctx0 = _build_ep_layer(2, 0, num_experts, hidden, ffn, group, device, top_k=top_k)
+    layer1, ctx1 = _build_ep_layer(2, 1, num_experts, hidden, ffn, group, device, top_k=top_k)
+    monolith, ctxm = _build_ep_layer(1, 0, num_experts, hidden, ffn, group, device, top_k=top_k)
+    try:
+        assert layer0.expert_list == [e for e in range(8)] and layer1.expert_list == [e for e in range(8, 16)]
+        assert monolith.gate_up.qweight.shape[0] == 16 and layer0.gate_up.qweight.shape[0] == 8
+
+        _feed_experts(layer0, gate, up, down, num_experts, ctx0)
+        _feed_experts(layer1, gate, up, down, num_experts, ctx1)
+        _feed_experts(monolith, gate, up, down, num_experts, ctxm)
+
+        gen = torch.Generator().manual_seed(4400)
+        num_tokens = 8
+        topk_ids = torch.stack([torch.randperm(num_experts, generator=gen)[:top_k] for _ in range(num_tokens)])
+        topk_weights = torch.rand(num_tokens, top_k, generator=gen) + 0.1
+        topk_weights = (topk_weights / topk_weights.sum(-1, keepdim=True)).to(device)
+        topk_ids = topk_ids.to(device)
+        x = (torch.randn(num_tokens, hidden, generator=gen, dtype=torch.float16) * 0.5).to(device)
+        local = topk_ids < 8
+        straddling = local.any(-1) & (~local).any(-1)
+        assert bool(straddling.any()), 'test lost its cross-rank route coverage'
+
+        def _run(layer, rank_ctx):
+            with get_ep_manager(rank_ctx):
+                return layer.forward(x, topk_weights, topk_ids)
+
+        combined = _run(layer0, ctx0) + _run(layer1, ctx1)
+        monolith_out = _run(monolith, ctxm)
+        torch.cuda.synchronize()
+
+        max_diff = (combined.float() - monolith_out.float()).abs().max().item()
+        print(f'EP2 surplus top_k=12 tokens={num_tokens} straddling={int(straddling.sum())} '
+              f'max|diff|={max_diff:.3e}')
+        assert max_diff <= 1e-6, f'EP=2 surplus partials diverge from the monolith by {max_diff:.3e}'
+        torch.testing.assert_close(combined.float(), monolith_out.float(), atol=1e-6, rtol=1e-6)
+    finally:
+        for layer, rank_ctx in ((layer0, ctx0), (layer1, ctx1), (monolith, ctxm)):
+            with get_ep_manager(rank_ctx):
+                layer.impl.sleep_release()
+        torch.cuda.empty_cache()
+
+
+@torch.inference_mode()
+def test_global_top_k_invariant_rejects_build():
+    """The global router invariant (top_k <= num_experts) fires on any EP width
+    before device/impl work, so a plain CPU build suffices."""
+    device = torch.device('cpu')
+    from lmdeploy.pytorch.nn.moe.tm_w4a16 import FusedMoETmW4A16
+
+    with get_ep_manager(_ep_dist_context(2, 0)):
+        with pytest.raises(RuntimeError, match='top_k=8 <= num_experts=4'):
+            FusedMoETmW4A16(
+                hidden_dim=64,
+                ffn_dim=32,
+                num_experts=4,
+                top_k=8,
+                dtype=torch.float16,
+                device=device,
+                group_size=16,
+                layer_idx=0,
+            )
 
 
 def test_ep_combine_sums_partials_over_ep_group(monkeypatch):
