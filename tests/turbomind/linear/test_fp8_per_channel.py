@@ -170,3 +170,40 @@ def _linear_plan(fmt, dtype):
     from lmdeploy.turbomind.linear import get_linear
 
     return get_linear().get_weight_plan(weight_format=fmt, dtype=dtype, grouped=False)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+@pytest.mark.parametrize('block_out', [1, 128])
+def test_cpu_source_packing_parity(block_out):
+    """B6 prerequisite gate: packing from HOST-resident checkpoint tensors
+    must produce byte-identical packed weights and outputs as packing from
+    device copies, for both ct_fp8 scale layouts (per-channel [N, 1]
+    finalize-expansion and blocked [ceil(N/128), ceil(K/128)])."""
+    from lmdeploy.turbomind import is_available
+
+    if not is_available():
+        pytest.skip('TurboMind is not built')
+
+    from lmdeploy.turbomind.linear import get_linear
+
+    torch.manual_seed(0)
+    fmt = FP8Format(block_out=block_out)
+    N, K, M = 128, 256, 16
+    w = (torch.randn(N, K) * (0.1 / math.sqrt(K)))
+    w_fp8 = (w / w.abs().amax(-1, keepdim=True).clamp_min(1e-8) * 400).clamp(-448, 448).to(torch.float8_e4m3fn)
+    bits = w_fp8.view(torch.uint8)
+    if block_out == 1:
+        scales = (torch.rand(N, 1) + 0.5).to(torch.bfloat16)
+    else:
+        scales = (torch.rand((N + 127) // 128, (K + 127) // 128) + 0.5).to(torch.bfloat16)
+
+    plan = _linear_plan(fmt, torch.bfloat16)
+    linear = get_linear()
+    with linear._activate():
+        weight_cpu = linear.prepare_weight(bits, plan=plan, scales=scales)
+        weight_gpu = linear.prepare_weight(bits.cuda(), plan=plan, scales=scales.cuda())
+        x = torch.randn(M, K, device='cuda', dtype=torch.bfloat16)
+        _, out_cpu, _ = linear.tune(x, weight_cpu)
+        _, out_gpu, _ = linear.tune(x, weight_gpu)
+
+    assert torch.equal(out_cpu, out_gpu), f'block_out={block_out}: CPU-source packing diverged'
