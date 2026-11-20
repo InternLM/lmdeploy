@@ -505,12 +505,46 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         """Load weight of experts gate up."""
         num_experts = self.config.num_local_experts
 
-        loaded_weight = loaded_weight.cuda()
+        # Suffix dispatch must come first: the mxfp4 packed tensors end in
+        # the plain-projection substring ('gate_up_proj_blocks' contains
+        # 'gate_up_proj') but need no transpose and map to different
+        # parameters.
+        if 'gate_up_proj_blocks' in name:
+            param_name = name.replace('experts.gate_up_proj_blocks', 'experts.experts.gate_up.blocks')
+            param = params_dict[param_name]
+            # Checkpoints store the mxfp4 codes grouped per byte:
+            # [E, out, in // 32, 16]. The module parameter is the flat
+            # [E, out, in // 2] byte layout the TM channel consumes.
+            loaded_weight = loaded_weight.flatten(2)
+            for expert_id in range(num_experts):
+                # The fused output dim interleaves gate and up rows; split
+                # into the module's gate half (first) and up half (second).
+                load_weight(param, loaded_weight[expert_id, ::2], expert_id=expert_id, shard_id='gate')
+                load_weight(param, loaded_weight[expert_id, 1::2], expert_id=expert_id, shard_id='up')
+            return
+        if 'gate_up_proj_scales' in name:
+            param_name = name.replace('experts.gate_up_proj_scales', 'experts.experts.gate_up.scales')
+            param = params_dict[param_name]
+            for expert_id in range(num_experts):
+                load_weight(param, loaded_weight[expert_id, ::2], expert_id=expert_id, shard_id='gate')
+                load_weight(param, loaded_weight[expert_id, 1::2], expert_id=expert_id, shard_id='up')
+            return
         if 'gate_up_proj_bias' in name:
             param_name = name.replace('experts.gate_up_proj_bias', 'experts.experts.gate_up.bias')
+            if param_name in params_dict:
+                param = params_dict[param_name]
+                for expert_id in range(num_experts):
+                    load_weight(param, loaded_weight[expert_id, ::2], expert_id=expert_id, shard_id='gate')
+                    load_weight(param, loaded_weight[expert_id, 1::2], expert_id=expert_id, shard_id='up')
+                return
         elif 'gate_up_proj' in name:
             param_name = name.replace('experts.gate_up_proj', 'experts.experts.gate_up.weight')
             loaded_weight = loaded_weight.transpose(1, 2)
+        # The plain bf16 passthrough lanes keep the host->device move (their
+        # destinations are CUDA-resident). The mxfp4 lanes above returned
+        # with the checkpoint tensor still on the CPU: the rank-local mxfp4
+        # parameters are CPU-resident and the channel packs from host memory.
+        loaded_weight = loaded_weight.cuda()
         param = params_dict[param_name]
         for expert_id in range(num_experts):
             w1 = loaded_weight[expert_id, ::2]
@@ -522,12 +556,32 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         """Load weight of experts down."""
         num_experts = self.config.num_local_experts
 
-        loaded_weight = loaded_weight.cuda()
+        # Suffix dispatch first: 'down_proj_blocks'/'down_proj_scales'
+        # contain 'down_proj' but are the mxfp4 packed tensors.
+        if 'down_proj_blocks' in name:
+            param_name = name.replace('experts.down_proj_blocks', 'experts.experts.down.blocks')
+            param = params_dict[param_name]
+            # Grouped checkpoint byte layout [E, out, in // 32, 16] -> the
+            # module's flat [E, out, in // 2] (see the gate_up branch).
+            loaded_weight = loaded_weight.flatten(2)
+            for expert_id in range(num_experts):
+                load_weight(param, loaded_weight[expert_id], expert_id=expert_id, shard_id='down')
+            return
+        if 'down_proj_scales' in name:
+            param_name = name.replace('experts.down_proj_scales', 'experts.experts.down.scales')
+            param = params_dict[param_name]
+            for expert_id in range(num_experts):
+                load_weight(param, loaded_weight[expert_id], expert_id=expert_id, shard_id='down')
+            return
         if 'down_proj_bias' in name:
             param_name = name.replace('experts.down_proj_bias', 'experts.experts.down.bias')
         elif 'down_proj' in name:
             param_name = name.replace('experts.down_proj', 'experts.experts.down.weight')
             loaded_weight = loaded_weight.transpose(1, 2)
+        # Plain bf16 lanes keep the device move; the mxfp4 lanes above
+        # returned with the checkpoint tensor still on the CPU (CPU-direct
+        # packing, see _load_weight_experts_gate_up).
+        loaded_weight = loaded_weight.cuda()
         param = params_dict[param_name]
         for expert_id in range(num_experts):
             w2 = loaded_weight[expert_id]

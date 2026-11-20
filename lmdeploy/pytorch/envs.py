@@ -1,6 +1,7 @@
 # Copyright (c) Shanghai AI Laboratory. All rights reserved.
 import contextlib
 import os
+from typing import Any, cast
 
 from lmdeploy.utils import get_logger
 
@@ -43,7 +44,7 @@ def env_to_int(
 
 def env_to_list_int(
     env_var: str,
-    default: list[int] = None,
+    default: list[int] | None = None,
 ):
     """Env to list of int."""
     default_ = default if default is not None else []
@@ -104,7 +105,7 @@ def set_envs():
 
         return _origin_get_env(env_var, default)
 
-    os.getenv = _patched_get_env
+    os.getenv = cast(Any, _patched_get_env)
     try:
         yield
     finally:
@@ -123,12 +124,15 @@ def set_envs():
 # class open, the class legacy env decides (backward compat); a conflict
 # warns once and the big env wins.
 # ---------------------------------------------------------------------------
-_TM_KERNEL_CLASS_LEGACY_ENVS = {
+_TM_KERNEL_CLASS_LEGACY_ENVS: dict[str, str | None] = {
     'w4a16': 'LMDEPLOY_W4A16_GEMM_BACKEND',
     'moe_grouped': 'LMDEPLOY_W4A16_GEMM_BACKEND',
     # NVFP4 W4A16 lane (ct nvfp4-pack-quantized checkpoints; SM80 family).
     # No legacy env: the class defaults to auto (capability-based).
     'nvfp4': None,
+    # MXFP4 fused MoE lane (gpt-oss e2m1-blocks checkpoints) over the
+    # TurboMind channel; same auto semantics.
+    'mxfp4': None,
     # CT float-quantized FP8 lane (per-channel / blocked, e.g. Ornith).
     # No legacy env: the class defaults to auto.
     'ct_fp8': None,
@@ -159,7 +163,7 @@ def _tm_legacy_env_state(legacy_env, raw):
     return state if state in _TM_KERNEL_STATES else 'auto'
 
 
-def parse_tm_kernels(env_value=None):
+def parse_tm_kernels(env_value=None) -> dict[str, str | None]:
     """Parse LMDEPLOY_TM_KERNELS into per-class explicit states.
 
     Returns one entry per known class: the state the big env sets for it
@@ -174,7 +178,7 @@ def parse_tm_kernels(env_value=None):
     if env_value is None:
         env_value = os.getenv('LMDEPLOY_TM_KERNELS', '')
     global_state = None
-    explicit = dict.fromkeys(_TM_KERNEL_CLASSES)
+    explicit: dict[str, str | None] = dict.fromkeys(_TM_KERNEL_CLASSES)
     decided = set()
     for item in env_value.replace(';', ',').split(','):
         item = item.strip()

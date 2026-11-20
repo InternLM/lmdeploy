@@ -457,7 +457,7 @@ class DeepseekV2Attention(nn.Module):
             # get_unquantized_weight (a device-side forward through the
             # packed channel), so this module keeps device-resident torch
             # copies: exempt it from the CPU-direct storages at build time.
-            release_torch_weights=False,
+            cpu_resident=False,
         )
         self.kc = DeepseekV2BMM(self.num_heads,
                                 config.qk_nope_head_dim,

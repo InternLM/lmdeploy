@@ -125,8 +125,9 @@ class TestTinyCtGoldenGate:
         assert any('-> turbomind' in m for m in routing)
         assert not any('-> awq triton' in m for m in routing), routing
 
-    def test_tiny_ct_spills_packed_torch_weights(self, tmp_path):
-        """The TM route keeps no raw torch weights on the GPU after load."""
+    def test_tiny_ct_keeps_torch_weights_cpu_resident(self, tmp_path):
+        """The TM route keeps the raw torch weights on the host (CPU-direct
+        packing); the TM channel holds the packed copy."""
         tiny_dir = _make_tiny_model(tmp_path, seed=9)
         _, model = _greedy_ids(tiny_dir, ['hello'])
         from lmdeploy.pytorch.nn.linear.tm_gemm import MergedTmGemmLinear, QKVTmGemmLinear, TmGemmLinear
@@ -136,11 +137,11 @@ class TestTinyCtGoldenGate:
         ]
         assert len(tm_modules) == 8  # 2 layers x (qkv, o, gate_up, down)
         for mod in tm_modules:
-            # Spilled: the raw torch storage is empty; the TM channel holds
-            # the packed copy.
-            assert mod.qweight.data.numel() == 0
-            assert mod._spill is not None
-            assert mod._spill.resident_bytes > 0
+            # CPU-direct: the storages stay loaded on the host and feed the
+            # pack; bias (forward-read) stays on the device.
+            assert mod.qweight.device.type == 'cpu'
+            assert mod.qweight.data.numel() != 0
+            assert mod.scales.device.type == 'cpu'
         resident = sum(p.data.numel() * p.data.element_size() for p in model.parameters() if p.data.is_cuda)
         assert resident > 0
 

@@ -9,6 +9,7 @@ only activations plus routing on ``forward``.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
@@ -76,5 +77,74 @@ class FusedMoETmW4A16BuildSpec(BuildSpec[FusedMoETmW4A16Impl]):
     renormalize: bool
     group_size: int
     output_dtype: torch.dtype
+    # Module path carried for routing logs only.
+    prefix: str = ''
+
+
+class FusedMoETmMXFP4Impl(ABC):
+    """TurboMind grouped MXFP4 routed-expert implementation API.
+
+    Same native-handle contract as the W4A16 route, over the MXFP4 weight
+    format (e2m1 blocks + e8m0 scales, group 32). Experts may carry bias,
+    which has no kernel epilogue on this route: ``update_weights`` takes the
+    per-projection bias tensors and ``forward`` applies them python-side at
+    the blocked-slot granularity.
+    """
+
+    @abstractmethod
+    def update_weights(
+        self,
+        gate_up_blocks: torch.Tensor,
+        gate_up_scales: torch.Tensor,
+        gate_up_bias: torch.Tensor | None,
+        down_blocks: torch.Tensor,
+        down_scales: torch.Tensor,
+        down_bias: torch.Tensor | None,
+    ):
+        """Pack the checkpoint-native MXFP4 expert tensors into the channel.
+
+        Each argument stacks the whole rank-local expert set in checkpoint
+        orientation: ``blocks`` ``[E, N, K // 2]`` uint8 (two e2m1 codes per
+        byte along K), ``scales`` ``[E, N, K // 32]`` e8m0 uint8, ``bias``
+        ``[E, N]`` float. The gate half of gate_up sits in the first ``N``
+        output channels, the up half in the second (already deinterleaved
+        at load time).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.LongTensor,
+    ):
+        """Run the routed experts and return the combined token outputs."""
+        raise NotImplementedError
+
+    def sleep_release(self):
+        """Free packed native handles and device bias copies before
+        ``ModelAgent.sleep`` moves the model."""
+
+
+@dataclass(frozen=True)
+class FusedMoETmMXFP4BuildSpec(BuildSpec[FusedMoETmMXFP4Impl]):
+    """Immutable requirements for a grouped MXFP4 MoE on the TurboMind channel.
+
+    Shape semantics match ``FusedMoETmW4A16BuildSpec``. ``act_func`` is the
+    checkpoint's gated activation over the concatenated ``(gate, up)``
+    intermediate; ``None`` means the built-in SiLU-mul. A custom activation
+    rules out the fused-SiLU kernel lane, whose epilogue bakes plain SiLU
+    in.
+    """
+
+    top_k: int
+    num_experts: int
+    hidden_dim: int
+    ffn_dim: int
+    renormalize: bool
+    group_size: int
+    output_dtype: torch.dtype
+    act_func: Callable | None
     # Module path carried for routing logs only.
     prefix: str = ''

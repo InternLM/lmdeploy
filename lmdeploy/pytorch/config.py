@@ -224,7 +224,15 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'a
         torch_dtype = str(torch_dtype).split('.')[1]
 
     if torch_dtype is None:
-        _dtype = 'float16' if dtype == 'auto' else dtype
+        # Mirror the TurboMind converter's auto resolution (converter.py):
+        # no publisher dtype at all means capability-based fallback —
+        # bfloat16 when the device supports it, else float16, so both
+        # engines resolve a dtype-less checkpoint identically. A present
+        # non-16-bit publisher dtype still resolves differently (TM
+        # capability-falls, PT honors it) — that path is pre-existing and
+        # out of scope here.
+        _dtype = ('bfloat16' if dtype == 'auto' and is_bf16_supported(device_type) else
+                  'float16' if dtype == 'auto' else dtype)
         logger.warning('Model config does not have `torch_dtype`,'
                        f' use: {_dtype}')
         torch_dtype = _dtype
@@ -1155,6 +1163,18 @@ class QuantizationConfig:
                                  'and the load-time repack assumes identity group order.')
             if quant_dtype is None:
                 quant_dtype = 'bfloat16'
+        elif quant_method == 'mxfp4':
+            # MXFP4 packs e2m1 weight codes with one e8m0 byte scale per
+            # group of 32 along the input dim. The checkpoint contract fixes
+            # the group size; an explicit conflicting value is a checkpoint
+            # error, not a knob.
+            bits = 4
+            group_size = quant_config.get('group_size', 32)
+            if group_size != 32:
+                raise ValueError(f'Unsupported mxfp4 `group_size`: expected 32, got {group_size!r}.')
+            if quant_dtype is None:
+                # mxfp4 computes in bf16; placeholder like awq/gptq.
+                quant_dtype = 'bfloat16'
         else:
             raise TypeError(f'Unsupported quant method: {quant_method}')
 
@@ -1230,6 +1250,12 @@ class QuantizationConfig:
                 # through the TurboMind grouped channel.
                 return 'nvfp4' if self.ct_format == 'nvfp4-pack-quantized' else 'ct_fp8'
             return self.quant_method
+        if self.quant_method == 'mxfp4':
+            # The mxfp4 checkpoint contract quantizes only the routed
+            # experts; attention, router, embeddings and lm_head stay in the
+            # checkpoint dtype, so linear/norm modules are never quantized
+            # and ignore-rule matching is unnecessary.
+            return self.quant_method if module_kind == 'moe' else None
         if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
             quant_method = None
             return quant_method
