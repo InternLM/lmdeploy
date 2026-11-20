@@ -68,9 +68,12 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
         raise ValueError('Compressed-tensors checkpoint must have `compressed` status.')
 
     config_groups = quant_config.get('config_groups')
-    if not isinstance(config_groups, Mapping) or set(config_groups) != {'group_0'}:
-        raise ValueError('Compressed-tensors config must contain exactly `config_groups.group_0`.')
-    group = config_groups['group_0']
+    if not isinstance(config_groups, Mapping) or len(config_groups) != 1:
+        raise ValueError('Compressed-tensors config must contain exactly one `config_groups` entry.')
+    # Group keys differ across tools: 'group_0' (compressed-tensors
+    # reference) vs 'config_group_0' (e.g. Ornith). Take the only entry,
+    # mirroring the TurboMind converter's fallback.
+    group = config_groups.get('group_0') or config_groups[sorted(config_groups)[0]]
     if not isinstance(group, Mapping) or group.get('targets') != ['Linear']:
         raise ValueError('Compressed-tensors `group_0` must target `Linear`.')
 
