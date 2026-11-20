@@ -709,7 +709,6 @@ def weight_quant_matmul(
     scale: Tensor,
     offset: Optional[Tensor] = None,
     bias: Optional[Tensor] = None,
-    all_reduce: Optional[bool] = False,
     group_size: Optional[int] = 0,
 ) -> Tensor:
     offset = None if (offset is None or offset.numel() == 0) else offset

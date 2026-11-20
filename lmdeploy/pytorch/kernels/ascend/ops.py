@@ -480,7 +480,6 @@ def weight_quant_matmul(
     scale: Tensor,
     offset: Optional[Tensor] = None,
     bias: Optional[Tensor] = None,
-    all_reduce: Optional[bool] = bool,
     group_size: Optional[int] = 0,
 ) -> Tensor:
     """Complete a matrix multiplication computation with quantized scenarios as
@@ -492,13 +491,12 @@ def weight_quant_matmul(
         scale (Tensor): The antiquant scale tensor of quantized weight.
         offset (Optional[Tensor]): An optional antiquant offset tensor of quantized weight.
         bias (Optional[Tensor]): An optional bias tensor of matrix multiplication.
-        all_reduce (Optional[bool]): An optional bool describes whether or not all_reduce is required.
         group_size (Optional[int]): An optional group_size of the quantized weight in the per_group algorithm mode.
 
     Returns:
         Tensor: The output tensor of the matrix product in the quantisation scenario.
     """
-    return npu_ops.weight_quant_matmul(x1, x2, scale, offset, bias, all_reduce, group_size)
+    return npu_ops.weight_quant_matmul(x1, x2, scale, offset, bias, group_size)
 
 
 def fused_moe(
