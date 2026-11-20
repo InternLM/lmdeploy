@@ -484,12 +484,154 @@ def try_import_deeplink(device_type: str):
             exit(1)
 
 
+ALLOW_PICKLE_UPDATE_PARAMS_ENV = 'LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS'
+
+
+def is_pickle_serialized_named_tensors(payload: object, load_format: str | None = None) -> bool:
+    """Return whether ``payload`` is a pickle blob historically used by
+    update_params.
+
+    ``load_format='safetensors'`` is never treated as pickle, even when the wire type is a
+    base64 string or a list of per-rank strings. HTTP ``/update_weights`` rejects pickle
+    unless ``LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1`` (trusted same-node XTuner IPC). Engine
+    pickle loads always require that env var.
+    """
+    if load_format == 'safetensors':
+        return False
+    if isinstance(payload, str):
+        return True
+    if isinstance(payload, (list, tuple)) and payload and isinstance(payload[0], str):
+        return True
+    return False
+
+
+def allow_pickle_update_params() -> bool:
+    """Whether pickle payloads may be loaded for trusted local IPC.
+
+    When True, HTTP ``/update_weights`` forwards pickle blobs to the engine so same-node
+    XTuner CUDA IPC (``serialize_state_dict`` / FlattenedTensorBucket) keeps working. The
+    HTTP handler still does not call ``pickle.loads``; the engine does after this check.
+    Default remains off so untrusted public clients cannot reach pickle deserialization.
+    """
+    return os.environ.get(ALLOW_PICKLE_UPDATE_PARAMS_ENV, '0') == '1'
+
+
+def load_pickled_serialized_named_tensors(serialized_data: str):
+    """Deserialize a pickle update_params blob.
+
+    This is disabled by default. Callers must only use it for trusted in-process / same-node
+    IPC after ``allow_pickle_update_params()`` is True. HTTP ``/update_weights`` may forward
+    pickle blobs when that env var is set, but must not call this itself.
+    """
+    if not allow_pickle_update_params():
+        raise ValueError('Pickled serialized_named_tensors is disabled by default. '
+                         'Pass structured tensors or load_format="safetensors", or set '
+                         f'{ALLOW_PICKLE_UPDATE_PARAMS_ENV}=1 only for trusted local IPC.')
+    from multiprocessing.reduction import ForkingPickler
+
+    import pybase64
+    return ForkingPickler.loads(pybase64.b64decode(serialized_data))
+
+
+def _prepare_cpu_tensors_for_safetensors(state_dict: dict) -> dict:
+    """Move named tensors to contiguous CPU storage, cloning overlapping views.
+
+    ``.detach().contiguous().cpu()`` is a no-op for CPU tensors and preserves shared
+    storage. Qwen3-style tied embed / LM-head weights then make ``safetensors.save``
+    raise ``RuntimeError``. Clone any tensor whose storage was already seen so each
+    key owns unique bytes while values stay equal.
+    """
+    cpu_tensors = {}
+    seen_storage_ptrs: set[int] = set()
+    for name, tensor in state_dict.items():
+        cpu = tensor.detach().contiguous().cpu()
+        if cpu.numel() == 0:
+            cpu_tensors[name] = cpu
+            continue
+        storage_ptr = cpu.untyped_storage().data_ptr()
+        if storage_ptr in seen_storage_ptrs:
+            cpu = cpu.clone()
+        else:
+            seen_storage_ptrs.add(storage_ptr)
+        cpu_tensors[name] = cpu
+    return cpu_tensors
+
+
+def serialize_named_tensors_safetensors(state_dict: dict) -> str:
+    """Serialize named tensors to a base64 safetensors string for HTTP
+    ``/update_weights``.
+
+    Args:
+        state_dict (dict[str, torch.Tensor]): named tensors to serialize.
+    Returns:
+        str: base64-encoded safetensors bytes, safe to send as ``serialized_named_tensors``
+        with ``load_format='safetensors'``.
+    """
+    import pybase64
+    from safetensors.torch import save
+    cpu_tensors = _prepare_cpu_tensors_for_safetensors(state_dict)
+    return pybase64.b64encode(save(cpu_tensors)).decode('utf-8')
+
+
+def load_safetensors_serialized_named_tensors(serialized_data: str) -> dict[str, torch.Tensor]:
+    """Deserialize a base64 safetensors blob used by ``/update_weights``."""
+    import pybase64
+    from safetensors.torch import load
+    if not isinstance(serialized_data, str):
+        raise TypeError('load_format="safetensors" requires a base64 string payload.')
+    return load(pybase64.b64decode(serialized_data))
+
+
+def coerce_update_params_tensor(value: object) -> torch.Tensor:
+    """Build a tensor from an in-memory Tensor or a JSON-safe spec.
+
+    A spec is ``{'dtype': 'float16', 'shape': [...], 'data': '<base64 bytes>'}``. Callables and
+    pickle reduce tuples are rejected.
+    """
+    if isinstance(value, torch.Tensor):
+        return value
+    if isinstance(value, dict):
+        dtype_name = value.get('dtype')
+        shape = value.get('shape')
+        data = value.get('data')
+        if not isinstance(dtype_name, str) or shape is None or not isinstance(data, str):
+            raise TypeError('structured tensor spec must use JSON-safe {dtype, shape, data} fields')
+        if dtype_name.startswith('torch.'):
+            dtype_name = dtype_name[len('torch.'):]
+        dtype = getattr(torch, dtype_name, None)
+        if not isinstance(dtype, torch.dtype):
+            raise TypeError(f'unsupported dtype {dtype_name!r}')
+        try:
+            shape_tuple = tuple(int(dim) for dim in shape)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f'invalid tensor shape {shape!r}') from exc
+        import pybase64
+        raw = pybase64.b64decode(data)
+        numel = 1
+        for dim in shape_tuple:
+            numel *= dim
+        expected_nbytes = dtype.itemsize * numel
+        if len(raw) != expected_nbytes:
+            raise ValueError(f'tensor byte length {len(raw)} does not match shape {shape_tuple} '
+                             f'and dtype {dtype}')
+        if numel == 0:
+            return torch.empty(shape_tuple, dtype=dtype)
+        tensor = torch.frombuffer(bytearray(raw), dtype=dtype)
+        return tensor.reshape(shape_tuple).contiguous().clone()
+    raise TypeError('serialized_named_tensors values must be tensors or {dtype, shape, data} specs')
+
+
 def serialize_state_dict(state_dict: dict) -> str:
     """Serialize state dict to str.
 
     The consumer should use it on same node. As the producer and consumer may
     have different GPU visibility, we use reduce_tensor instead of ForkingPickler.dumps
     to fix the device_id when loading the serialized tensor.
+
+    HTTP ``POST /update_weights`` rejects this encoding unless
+    ``LMDEPLOY_ALLOW_PICKLE_UPDATE_PARAMS=1`` is set on the server (trusted same-node XTuner
+    CUDA IPC). Untrusted clients should use :func:`serialize_named_tensors_safetensors`
+    with ``load_format='safetensors'``.
 
     Args:
         state_dict (dict[str, torch.Tensor]): state dict to serialize.
