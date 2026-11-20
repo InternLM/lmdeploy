@@ -427,7 +427,8 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                                 dtype=dtype,
                                                 device=device,
                                                 is_tp=True,
-                                                quant_config=quantization_config)
+                                                quant_config=quantization_config,
+                                                prefix=add_prefix('in_proj_qkv', prefix))
         self._patch_qkv_weight_loader(self.in_proj_qkv)
 
         # projection of z, b, a
@@ -439,7 +440,8 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                               dtype=dtype,
                                               device=device,
                                               is_tp=True,
-                                              quant_config=quantization_config)
+                                              quant_config=quantization_config,
+                                              prefix=add_prefix('in_proj_z', prefix))
 
         self.in_proj_ba = build_merged_colwise_linear(self.hidden_size,
                                               [self.num_v_heads, self.num_v_heads],
@@ -466,7 +468,8 @@ class Qwen3_5GatedDeltaNet(nn.Module):
                                      dtype=dtype,
                                      device=device,
                                      is_tp=True,
-                                     quant_config=quantization_config)
+                                     quant_config=quantization_config,
+                                     prefix=add_prefix('out_proj', prefix))
 
         self.gated_delta = GatedDelta()
 
@@ -500,6 +503,11 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             if not mod.is_tp:
                 return default_weight_loader(param, loaded_weight)
 
+            # Per-tensor metadata (e.g. a float-quantized module's
+            # weight_global_scale) is rank-invariant: no split, no chunk.
+            if loaded_weight.numel() < sum(sections):
+                return default_weight_loader(param, loaded_weight)
+
             world_size, rank = mod.get_tp_world_rank()
             split_sections = sections
             # scale tensor has dim0 shrunk by block_size
@@ -512,7 +520,6 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             parts = [p.chunk(world_size, 0)[rank] for p in parts]
             loaded_weight = torch.cat(parts, dim=0)
             default_weight_loader(param, loaded_weight)
-
         mod.weight_loader = qkv_weight_loader
         # Re-run setup_loaders so param.weight_loader picks up the patched
         # mod.weight_loader (for BaseLinear) or mod.weight_loader_with_quant

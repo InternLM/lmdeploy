@@ -133,10 +133,20 @@ void PackQParams(LinearWeight& linear, const LayoutConverter& convert, QuantDesc
         tmp_q = empty_like(linear.scales);
         TM_CUDA_CHECK(cudaMemcpyAsync(
             tmp_q.raw_data(), linear.scales.raw_data(), linear.scales.byte_size(), cudaMemcpyDefault, stream));
-        scale_type = source_weight_type == kFloat8_e4m3 ? kUint16 : kUint8;
+        if (linear.scales.dtype() == kHalf) {
+            // Half-scale formats (e.g. the W4A16 AWQ lane) keep their 16-bit
+            // scale container as-is. NVFP4 is not one of them: it arrives with
+            // raw e4m3 scales (handled below) plus a global scale consumed in
+            // the epilogue.
+            scale_type = kUint16;
+        }
+        else {
+            scale_type = source_weight_type == kFloat8_e4m3 ? kUint16 : kUint8;
+        }
     }
 
-    if (linear.data_type == kHalf && source_weight_type == kFloat4_e2m1) {
+    // The e8m0 fix-up only applies to MXFP4's uint8 (e8m0) scales.
+    if (linear.data_type == kHalf && source_weight_type == kFloat4_e2m1 && linear.scales.dtype() == kUint8) {
         AdjustUe8m0ScaleForHalf(tmp_q.data<uint8_t>(), tmp_q.size(), stream);
     }
 

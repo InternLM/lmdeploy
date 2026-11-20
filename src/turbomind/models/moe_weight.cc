@@ -7,6 +7,8 @@
 #include "src/turbomind/kernels/gemm/convert.h"
 #include "src/turbomind/utils/cuda_utils.h"
 
+#include <algorithm>
+
 namespace turbomind {
 
 MoeWeight::MoeWeight(const core::MoeConfig& cfg)
@@ -37,6 +39,10 @@ static std::unique_ptr<LinearWeight> AliasLinear(const LinearWeight& src)
     dst->bias   = src.bias;
     dst->scales = src.scales;
     dst->zeros  = src.zeros;
+    // The per-tensor global scale rides through the alias like the other
+    // metadata: a dropped scale makes the epilogue skip its multiply and
+    // quantized outputs come out silently wrong.
+    dst->global_scale = src.global_scale;
     src.copy_metadata_to(*dst);
     return dst;
 }
@@ -88,7 +94,14 @@ void LinkLinearExperts(const std::vector<LinearWeight*>& experts, LinearWeight& 
 
     e0.copy_metadata_to(destination);
 
-    const int n            = experts.size();
+    const int n        = experts.size();
+    const int gs_count = std::count_if(
+        experts.begin(), experts.end(), [](const LinearWeight* e) { return static_cast<bool>(e->global_scale); });
+    // The linked {n} global-scale table is indexed by expert id: a single
+    // expert missing its scale would shorten the table and read out of
+    // bounds. Mixed presence is a load bug -- reject it loudly.
+    TM_CHECK(gs_count == 0 || gs_count == n) << "inconsistent global_scale presence across linked experts: " << gs_count
+                                             << "/" << n << " experts carry a global_scale";
     destination.k_desc.num = destination.q_desc.num = n;
 
     if (e0.bias) {
