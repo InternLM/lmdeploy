@@ -368,13 +368,20 @@ def test_w4a16_dispatch_unchanged(monkeypatch):
 
 
 @cuda_required
-def test_nn_module_spill_and_loader_restore():
-    """TmGemmLinear packs, spills, restores on a loader touch, and re-packs."""
+def test_nn_module_cpu_direct_and_hot_update():
+    """TmGemmLinear packs CPU-direct: the raw weights never occupy device
+    memory, hot updates write through the loaders into the host buffers."""
     from lmdeploy.pytorch.nn.linear.tm_gemm import TmGemmLinear
 
     k, n, group_size = 512, 256, 128
     qw, sc, qz, bias = _random_awq(k, n, group_size, seed=6)
     module = TmGemmLinear(k, n, 4, group_size, bias=True, device='cuda')
+    # The TurboMind route routes the packed storages to the host at build
+    # time; bias stays on the module device for forward.
+    assert module.qweight.device.type == 'cpu'
+    assert module.scales.device.type == 'cpu'
+    assert module.qzeros.device.type == 'cpu'
+    assert module.bias.device.type == 'cuda'
     module.qweight.data.copy_(qw)
     module.scales.data.copy_(sc)
     module.qzeros.data.copy_(qz)
@@ -386,15 +393,17 @@ def test_nn_module_spill_and_loader_restore():
     torch.cuda.synchronize()
 
     expected_bytes = qw.numel() * 4 + sc.numel() * 2 + qz.numel() * 4
-    freed = baseline - torch.cuda.memory_allocated()
-    assert freed >= expected_bytes, f"freed only {freed} of {expected_bytes} bytes"
-    assert module.qweight.data.numel() == 0
-    assert module.bias.data.numel() == n  # bias stays on the GPU for forward
+    grown = torch.cuda.memory_allocated() - baseline
+    assert grown < expected_bytes // 4, (
+        f'torch allocations grew by {grown} bytes while packing; the raw '
+        'weights must stay host-resident (the packed handle is a native '
+        'allocation outside the torch allocator)')
+    assert module.qweight.data.numel() != 0  # CPU storages stay authoritative
 
     out_first = module._forward_default(x, all_reduce=False, tp_sizes=None).cpu()
 
-    # A hot update writes through the loader; the first touch restores the
-    # module from the CPU copies, then the original loader applies.
+    # A hot update writes through the loader straight into the CPU buffers;
+    # no spill restore exists or is needed.
     module.qweight.weight_loader(module.qweight, qw.cpu())
     torch.cuda.synchronize()
     assert module.qweight.data.shape == qw.shape
@@ -445,7 +454,8 @@ def test_impl_sleep_release_frees_packed_handle():
 
 @cuda_required
 def test_nn_module_sleep_wakeup_roundtrip():
-    """A layer survives sleep: spill survives, wakeup restores and re-packs."""
+    """A layer survives sleep: the host storages never move, wakeup re-packs
+    from them and forward is bit-exact."""
     from lmdeploy.pytorch.nn.linear.tm_gemm import TmGemmLinear
 
     k, n, group_size = 512, 256, 128
@@ -460,25 +470,20 @@ def test_nn_module_sleep_wakeup_roundtrip():
     module.update_weights()
     torch.cuda.synchronize()
     out_first = module._forward_default(x, all_reduce=False, tp_sizes=None).cpu()
-    assert module._spill is not None
 
-    # Sleep: the native handle drops and the spill stays authoritative.
+    # Sleep: the native handle drops; the host storages stay put.
     module.sleep_release()
     torch.cuda.synchronize()
     assert module.impl._weight is None
-    assert module.qweight.data.numel() == 0
-    spill_bytes = module._spill.resident_bytes
-    expected_bytes = qw.numel() * 4 + sc.numel() * 2 + qz.numel() * 4
-    assert spill_bytes >= expected_bytes
+    assert module.qweight.device.type == 'cpu' and module.qweight.data.numel() != 0
 
-    # Wakeup: restore, re-pack, and re-spill — the steady state matches the
-    # post-hot-update state (empty GPU storages, CPU copies authoritative),
-    # and forward is bit-exact.
+    # Wakeup (the engine moves the model to CUDA first): the CPU-direct
+    # storages skip the move, and the re-pack reproduces forward bit-exact.
+    module.to('cuda')
+    assert module.qweight.device.type == 'cpu'
     module.sleep_wakeup()
     torch.cuda.synchronize()
     assert module.impl._weight is not None
-    assert module.qweight.data.numel() == 0
-    assert module._spill.resident_bytes >= expected_bytes
     out_wakeup = module._forward_default(x, all_reduce=False, tp_sizes=None).cpu()
     assert torch.equal(out_first, out_wakeup)
 
@@ -511,7 +516,7 @@ def test_nn_module_sleep_release_keeps_resident_weights():
     module.bias.data.copy_(bias)
 
     module.update_weights()
-    assert module._spill is None
+    assert module.qweight.device.type == 'cuda'
     assert module.qweight.data.numel() != 0
 
     # The native handle drops, but the torch copies stay registered: they
@@ -519,7 +524,7 @@ def test_nn_module_sleep_release_keeps_resident_weights():
     module.sleep_release()
     torch.cuda.synchronize()
     assert module.impl._weight is None
-    assert module._spill is None
+    assert module.qweight.device.type == 'cuda'
     assert module.qweight.data.numel() != 0
 
     module.sleep_wakeup()

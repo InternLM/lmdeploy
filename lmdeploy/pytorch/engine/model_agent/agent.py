@@ -1872,7 +1872,14 @@ class BaseModelAgent:
 
     def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):
         """Load one externally supplied bucket into the target and draft
-        models."""
+        models.
+
+        The initial load runs under ``torch.inference_mode()`` and its
+        parameter storages are inference tensors; a hot update runs outside
+        that mode, where mutating them is illegal. Wrap the loader writes in
+        the same mode so the update lands regardless of which engine flow
+        created the storages.
+        """
         model = self.patched_model.get_model() if self.patched_model is not None else None
         spec_model = self.spec_agent.get_model()
         main_weights, draft_weights = self._split_updated_weights(weights)
@@ -1882,7 +1889,8 @@ class BaseModelAgent:
                 continue
             renamed = list(ModelWeightLoader._rename_weights_iterator(target_weights, target))
             logger.info(f'{op_name}: {tag}_num_tensors={len(renamed)}')
-            target.load_weights(iter(renamed))
+            with torch.inference_mode():
+                target.load_weights(iter(renamed))
 
     def _finalize_updated_weights(self):
         """Finalize module-specific weights and invalidate captured graphs."""
