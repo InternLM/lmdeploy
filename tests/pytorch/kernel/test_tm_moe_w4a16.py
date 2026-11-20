@@ -437,11 +437,12 @@ def test_sleep_release_frees_handles_and_repack_restores():
     torch.cuda.empty_cache()
 
 
-def test_layer_sleep_hooks_delegate_and_keep_spill_steady_state():
-    """The MoE layer hooks drive release/restore/re-pack/re-spill in order.
+def test_layer_sleep_hooks_delegate_and_repack_from_cpu():
+    """The MoE layer hooks drive release/re-pack in order.
 
     This is the seam the agent walk reaches (`modules()` getattr); reverting the layer hooks must fail here even though
-    the impl-level test stays green.
+    the impl-level test stays green. Under the CPU-direct flow the hooks have no spill to manage: release drops the
+    packed handles, wakeup re-packs straight from the unchanged host storages.
     """
     from types import SimpleNamespace
 
@@ -454,8 +455,6 @@ def test_layer_sleep_hooks_delegate_and_keep_spill_steady_state():
         sleep_release=lambda: events.append('impl_release'),
         update_weights=lambda *args: events.append('impl_update'),
     )
-    layer.release_torch_weights = True
-    layer._spill = None
 
     gate_up = TmMoeWeights(2, 8, 16, 8, 'gate_up', torch.device('cpu'))
     down = TmMoeWeights(2, 16, 8, 8, 'down', torch.device('cpu'))
@@ -466,34 +465,33 @@ def test_layer_sleep_hooks_delegate_and_keep_spill_steady_state():
 
     layer.sleep_release()
     assert events == ['impl_release']
-    assert gate_up.qweight.numel() == 0 and down.qweight.numel() == 0
-    resident = layer._spill.resident_bytes
-    assert resident > 0
+    # The host storages are untouched: sleep only drops the packed handles.
+    assert gate_up.qweight.numel() != 0 and down.qweight.numel() != 0
+    assert gate_up.qweight.device.type == 'cpu'
 
     layer.sleep_wakeup()
     assert events == ['impl_release', 'impl_update']
-    # Restored for the re-pack, then re-spilled: the steady state matches a
-    # hot update (empty storages, CPU copies authoritative).
-    assert gate_up.qweight.numel() == 0 and down.qweight.numel() == 0
-    assert layer._spill.resident_bytes >= resident
+    # The steady state is unchanged: host storages stay authoritative.
+    assert gate_up.qweight.numel() != 0 and down.qweight.numel() != 0
 
-    # MLA-style exemption keeps the torch copies resident.
-    layer2 = FusedMoETmW4A16.__new__(FusedMoETmW4A16)
-    torch.nn.Module.__init__(layer2)
-    layer2.impl = SimpleNamespace(sleep_release=lambda: events.append('impl_release'),
-                                  update_weights=lambda *args: events.append('impl_update'))
-    layer2.release_torch_weights = False
-    layer2._spill = None
-    gate_up2 = TmMoeWeights(2, 8, 16, 8, 'gate_up', torch.device('cpu'))
-    down2 = TmMoeWeights(2, 16, 8, 8, 'down', torch.device('cpu'))
-    gate_up2._loaded_parts = gate_up2._expected_keys()
-    down2._loaded_parts = down2._expected_keys()
-    layer2.gate_up = gate_up2
-    layer2.down = down2
-    layer2.sleep_release()
-    assert layer2._spill is None and gate_up2.qweight.numel() != 0
-    layer2.sleep_wakeup()
-    assert gate_up2.qweight.numel() != 0  # resident, fed the re-pack
+    # A never-loaded module fails loudly on wakeup: its storages are
+    # full-shaped but its ledger is empty, and the completeness gate fires
+    # before the re-pack.
+    empty = FusedMoETmW4A16.__new__(FusedMoETmW4A16)
+    torch.nn.Module.__init__(empty)
+    empty.impl = SimpleNamespace(
+        sleep_release=lambda: None,
+        update_weights=lambda *args: None,
+    )
+    empty.gate_up = TmMoeWeights(2, 8, 16, 8, 'gate_up', torch.device('cpu'))
+    empty.down = TmMoeWeights(2, 16, 8, 8, 'down', torch.device('cpu'))
+    with pytest.raises(RuntimeError, match='Incomplete AWQ gate_up weights'):
+        empty.sleep_wakeup()
+
+    # Module moves skip the CPU-resident parameters.
+    layer.to('cuda')
+    assert gate_up.qweight.device.type == 'cpu'
+    assert down.qweight.device.type == 'cpu'
 
 
 @torch.inference_mode()

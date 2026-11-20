@@ -26,7 +26,6 @@ from torch import nn
 
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.cuda.tm_moe_modules import FusedMoETmW4A16BuildSpec, turbomind_moe_support_reason
-from lmdeploy.pytorch.backends.cuda.tm_weight_release import TorchWeightSpill
 from lmdeploy.pytorch.backends.tm_moe_modules import FusedMoETmW4A16Impl
 from lmdeploy.pytorch.config import TPMode
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
@@ -38,11 +37,22 @@ _PARTS = ('qweight', 'scales', 'qzeros')
 
 
 class TmMoeWeights(nn.Module):
-    """Rank-local canonical AWQ parameters for one fused MoE projection."""
+    """Rank-local canonical AWQ parameters for one fused MoE projection.
+
+    The parameters are CPU-resident: they are the source of truth the
+    TurboMind channel packs from, so the raw expert bytes never occupy
+    device memory.
+    """
 
     def __init__(self, num_experts: int, in_features: int, out_features: int, group_size: int, weight_type: str,
                  device: torch.device):
         super().__init__()
+        # CPU-direct packing: the rank-local expert bytes are the CPU source
+        # of truth. ``device`` is accepted for interface compatibility; these
+        # parameters always live on the host and the channel's prepare_weight
+        # performs the H2D copy.
+        device = torch.device('cpu')
+        self.cpu_resident = True
         if weight_type not in ('gate_up', 'down'):
             raise ValueError(f'Unknown weight type: {weight_type!r}')
         self.weight_type = weight_type
@@ -80,6 +90,17 @@ class TmMoeWeights(nn.Module):
             parameter = nn.Parameter(torch.empty(shape, dtype=dtype, device=device), requires_grad=False)
             parameter.weight_loader = self.weight_loader
             self.register_parameter(name, parameter)
+
+    def _apply(self, fn, recurse=True):
+        """Exclude the CPU-resident expert bytes from module moves.
+
+        Engine flows move the whole model: the post-load ``Module.to(cuda)``,
+        sleep's ``to(cpu/meta)`` and wakeup's ``to(cuda)``. Re-uploading
+        these parameters would defeat the CPU-direct packing.
+        """
+        if self.cpu_resident:
+            return self
+        return super()._apply(fn, recurse=recurse)
 
     def _expected_shards(self) -> tuple[str, ...]:
         if self.weight_type == 'gate_up':
@@ -274,17 +295,21 @@ class FusedMoETmW4A16(FusedMoEBase):
         self.num_local_experts = num_local_experts
         self.first_local_expert = first_local_expert
         self.expert_list = self.gate_up.expert_list if self.ep > 1 else None
-        self.release_torch_weights = True
         self.dtype = dtype
         self.device = device
-        self._spill: TorchWeightSpill | None = None
 
     def update_weights(self):
-        """Pack the loaded AWQ experts into the TurboMind channel, then spill
-        the torch weights."""
+        """Pack the loaded AWQ experts into the TurboMind channel.
+
+        The rank-local parameters are CPU-resident; the channel's
+        ``prepare_weight`` performs the H2D transform from the host bytes.
+        No GPU copy exists, so there is nothing to spill or restore: the
+        CPU parameters are the steady-state source of truth across loads,
+        hot updates and sleep/wakeup cycles alike.
+        """
         if self.gate_up.qweight.numel() == 0:
-            # The module was not part of this update bucket; its storages
-            # are spilled and packing would read the emptied tensors.
+            # A dummy/skipped module has empty storages; packing would read
+            # them pointlessly.
             return
         self.gate_up.validate_complete()
         self.down.validate_complete()
@@ -296,53 +321,26 @@ class FusedMoETmW4A16(FusedMoEBase):
             self.down.scales.data,
             self.down.qzeros.data,
         )
-        if not self.release_torch_weights:
-            # Keep the torch copies resident (mirrors the dense route's MLA
-            # exemption).
-            return
-        self._spill_torch_weights()
-
-    def _spill_torch_weights(self):
-        """Copy the torch expert weights to CPU and free their GPU storages."""
-        if self._spill is None:
-            self._spill = TorchWeightSpill()
-        # Bias is not supported on routed experts, so nothing stays on the
-        # GPU for forward.
-        self._spill.spill({
-            'gate_up.qweight': self.gate_up.qweight,
-            'gate_up.scales': self.gate_up.scales,
-            'gate_up.qzeros': self.gate_up.qzeros,
-            'down.qweight': self.down.qweight,
-            'down.scales': self.down.scales,
-            'down.qzeros': self.down.qzeros,
-        })
 
     def sleep_release(self):
         """Free the packed expert handles ahead of ``Module.to``.
 
-        The packed weights are not registered tensors, so the model move cannot free them. Modules with spilled torch
-        weights keep their CPU copies authoritative.
+        The packed weights are not registered tensors, so the model move cannot free them. The torch expert bytes are
+        CPU-resident already and simply stay put.
         """
         self.impl.sleep_release()
-        if self.gate_up.qweight.numel() == 0:
-            # Already spilled; the CPU copies stay authoritative.
-            return
-        if not self.release_torch_weights:
-            return
-        self._spill_torch_weights()
 
     def sleep_wakeup(self):
-        """Restore spilled torch weights, re-pack, and re-spill.
+        """Re-pack from the CPU-resident parameters.
 
-        The re-spill keeps the steady state after a sleep/wakeup cycle
-        identical to after a hot update: empty GPU storages, authoritative
-        CPU copies, and only the packed handles resident.
+        No spill happened (the parameters never left the host), so the
+        wakeup walk lands here after ``Module.to(cuda)`` — which the
+        CPU-resident parameters skip via ``_apply`` — and only the pack
+        step runs.
         """
-        if self._spill is not None:
-            self._spill.restore()
         if self.gate_up.qweight.numel() == 0:
-            raise RuntimeError('TurboMind W4A16 MoE weights are still spilled after wakeup; '
-                               'the module was never loaded.')
+            raise RuntimeError('TurboMind W4A16 MoE weights were never loaded; '
+                               'wakeup cannot re-pack an empty module.')
         self.gate_up.validate_complete()
         self.down.validate_complete()
         self.impl.update_weights(
@@ -353,9 +351,6 @@ class FusedMoETmW4A16(FusedMoEBase):
             self.down.scales.data,
             self.down.qzeros.data,
         )
-        if not self.release_torch_weights:
-            return
-        self._spill_torch_weights()
 
     def dispatch(self, state: dict):
         """Gather eager default-TP inputs.
