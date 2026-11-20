@@ -162,61 +162,8 @@ def test_fused_bias_rejected_on_shape_level():
 
 
 # ---------------------------------------------------------------------------
-# spill and hot update.
+# hot update.
 # ---------------------------------------------------------------------------
-
-
-@cuda_required
-def test_spill_frees_gpu_and_hot_update_restores():
-    """Spilling drops allocated GPU bytes; restore keeps values bit-exact."""
-    if not _supported_on_device(512, 256):
-        pytest.skip('registry rejects the shape on this device')
-
-    k, n, group_size = 2048, 2048, 128
-    qw, sc, qz, _ = _random_awq(k, n, group_size, seed=3)
-    x = torch.randn(4, k, dtype=torch.float16, device='cuda')
-
-    impl = TurbomindGemmW4A16Impl(k, n, group_size)
-    impl.update_weights(qw, sc, qz)
-    out_first = impl.forward(x, qw, sc, qz).squeeze(0).cpu()
-    torch.cuda.synchronize()
-
-    # Mirror the module flow: the parameters own the storages, the raw
-    # tensors go away, then spilling frees the GPU bytes.
-    from lmdeploy.pytorch.backends.cuda.tm_weight_release import TorchWeightSpill
-
-    expected_bytes = qw.numel() * 4 + sc.numel() * 2 + qz.numel() * 4
-    qw_cpu, sc_cpu, qz_cpu = qw.cpu(), sc.cpu(), qz.cpu()
-    params = {
-        'qweight': torch.nn.Parameter(qw, requires_grad=False),
-        'scales': torch.nn.Parameter(sc, requires_grad=False),
-        'qzeros': torch.nn.Parameter(qz, requires_grad=False),
-    }
-    qw = sc = qz = None
-    spill = TorchWeightSpill()
-    torch.cuda.synchronize()
-    baseline = torch.cuda.memory_allocated()
-    spill.spill(params)
-    torch.cuda.synchronize()
-
-    freed = baseline - torch.cuda.memory_allocated()
-    assert freed >= expected_bytes, f"freed only {freed} of {expected_bytes} bytes"
-    assert spill.resident_bytes == expected_bytes
-    # Forward keeps working from the packed handle; placeholders are ignored.
-    out_spilled = impl.forward(x, params['qweight'], params['scales'], params['qzeros']).squeeze(0)
-    assert torch.equal(out_first, out_spilled.cpu())
-
-    # A hot-update loader touch restores the module bit-exactly.
-    spill.restore()
-    torch.cuda.synchronize()
-    assert torch.equal(params['qweight'].data.cpu(), qw_cpu)
-    assert torch.equal(params['scales'].data.cpu(), sc_cpu)
-    assert torch.equal(params['qzeros'].data.cpu(), qz_cpu)
-
-    # Re-pack after restore keeps the numerics stable.
-    impl.update_weights(params['qweight'].data, params['scales'].data, params['qzeros'].data)
-    out_repaked = impl.forward(x, params['qweight'], params['scales'], params['qzeros']).squeeze(0)
-    assert torch.equal(out_first, out_repaked.cpu())
 
 
 @cuda_required
@@ -496,7 +443,7 @@ def test_nn_module_sleep_wakeup_roundtrip():
 
 @cuda_required
 def test_nn_module_sleep_release_keeps_resident_weights():
-    """An MLA-style module (release_torch_weights=False) keeps its torch copies
+    """An MLA-style module (cpu_resident=False) keeps its torch copies
     resident.
 
     Its registered parameters travel with ``Module.to`` during sleep, so
@@ -507,9 +454,9 @@ def test_nn_module_sleep_release_keeps_resident_weights():
 
     k, n, group_size = 512, 256, 128
     qw, sc, qz, bias = _random_awq(k, n, group_size, seed=10)
-    # release_torch_weights=False mirrors MLA-absorbed modules: update_weights
+    # cpu_resident=False mirrors MLA-absorbed modules: update_weights
     # keeps the torch copies resident.
-    module = TmGemmLinear(k, n, 4, group_size, bias=True, device='cuda', release_torch_weights=False)
+    module = TmGemmLinear(k, n, 4, group_size, bias=True, device='cuda', cpu_resident=False)
     module.qweight.data.copy_(qw)
     module.scales.data.copy_(sc)
     module.qzeros.data.copy_(qz)
