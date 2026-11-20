@@ -255,3 +255,126 @@ def test_global_top_k_invariant_rejects_build():
                 group_size=32,
                 layer_idx=0,
             )
+
+
+def _build_mx_layer(device, ep=1, ep_rank=0):
+    """Construct the module under the rank's EP view (mirrors the W4A16
+    suite)."""
+    from lmdeploy.pytorch.distributed import get_dist_manager
+    from lmdeploy.pytorch.nn.moe.tm_mxfp4 import FusedMoETmMXFP4
+
+    rank_ctx = _ep_dist_context(ep, ep_rank)
+    with get_dist_manager().context(rank_ctx):
+        layer = FusedMoETmMXFP4(
+            hidden_dim=HIDDEN,
+            ffn_dim=FFN,
+            num_experts=NUM_EXPERTS,
+            top_k=TOP_K,
+            bias=True,
+            renormalize=True,
+            dtype=torch.bfloat16,
+            device=device,
+            all_reduce=False,
+            group_size=GROUP,
+            layer_idx=0,
+            act_func=_silu_mul,
+        )
+    return layer, rank_ctx
+
+
+def _feed_cpu_experts(layer, rank_ctx, seed):
+    """Fill the CPU-resident parameters through the real weight_loader path.
+
+    Mirrors the gpt-oss loader: per-expert, already-deinterleaved
+    projections (gate rows first, up rows second). Scale bytes stay valid
+    e8m0 (exponent <= 127, i.e. byte <= 254).
+    """
+    from lmdeploy.pytorch.distributed import get_dist_manager
+
+    gen = torch.Generator().manual_seed(seed)
+    # Random block bytes keep the round trip input-agnostic; scales stay in
+    # [2^-127, 2^0] so the dequantized experts cannot overflow bf16 into
+    # NaNs (NaN != NaN would break the bitwise equality assertion).
+    gate_up_blocks = torch.randint(0, 255, (NUM_EXPERTS, 2 * FFN, HIDDEN // 2), dtype=torch.uint8)
+    gate_up_scales = torch.randint(0, 128, (NUM_EXPERTS, 2 * FFN, HIDDEN // 32), dtype=torch.uint8)
+    gate_up_bias = torch.randn(NUM_EXPERTS, 2 * FFN, generator=gen) * 0.02
+    down_blocks = torch.randint(0, 255, (NUM_EXPERTS, HIDDEN, FFN // 2), dtype=torch.uint8)
+    down_scales = torch.randint(0, 128, (NUM_EXPERTS, HIDDEN, FFN // 32), dtype=torch.uint8)
+    down_bias = torch.randn(NUM_EXPERTS, HIDDEN, generator=gen) * 0.02
+
+    sources = {
+        (layer.gate_up.blocks, gate_up_blocks, 'gate_up', 'blocks'),
+        (layer.gate_up.scales, gate_up_scales, 'gate_up', 'scales'),
+        (layer.gate_up.bias, gate_up_bias, 'gate_up', 'bias'),
+        (layer.down.blocks, down_blocks, 'down', 'blocks'),
+        (layer.down.scales, down_scales, 'down', 'scales'),
+        (layer.down.bias, down_bias, 'down', 'bias'),
+    }
+    with get_dist_manager().context(rank_ctx):
+        for expert in range(NUM_EXPERTS):
+            for param, stacked, weight_type, _part in sources:
+                if weight_type == 'gate_up':
+                    # The loader deinterleaves the fused output dim into
+                    # gate rows (first) and up rows (second) before feeding.
+                    for shard_id, rows in (('gate', slice(0, FFN)), ('up', slice(FFN, 2 * FFN))):
+                        param.weight_loader(param, stacked[expert][rows].contiguous(), expert_id=expert,
+                                            shard_id=shard_id)
+                else:
+                    param.weight_loader(param, stacked[expert].contiguous(), expert_id=expert, shard_id='down')
+        layer.update_weights()
+
+
+@torch.inference_mode()
+def test_cpu_resident_sleep_wakeup_roundtrip():
+    """CPU-direct sleep/wakeup: the CPU-resident parameters stay put across
+    model moves, sleep frees only the packed handles, and wakeup re-packs from
+    the host bytes reproducing the forward bitwise."""
+    from lmdeploy.pytorch.distributed import get_dist_manager
+
+    device = torch.device('cuda')
+    layer, rank_ctx = _build_mx_layer(device)
+
+    # Deployment order: the engine moves the whole model to CUDA after the
+    # load (and again on wakeup). The cpu_resident parameters must skip it.
+    layer.to(device)
+    assert layer.gate_up.blocks.device.type == 'cpu'
+    assert layer.down.blocks.device.type == 'cpu'
+
+    _feed_cpu_experts(layer, rank_ctx, seed=7)
+    assert layer.gate_up.blocks.numel() != 0
+
+    gen = torch.Generator().manual_seed(77)
+    x = (torch.randn(4, HIDDEN, generator=gen, dtype=torch.float32) * 0.5).to(device, torch.bfloat16)
+    topk_ids = torch.stack([torch.randperm(NUM_EXPERTS, generator=gen)[:TOP_K] for _ in range(4)])
+    topk_weights = torch.rand(4, TOP_K, generator=gen) + 0.1
+    topk_weights = (topk_weights / topk_weights.sum(-1, keepdim=True)).to(device)
+    topk_ids = topk_ids.to(device)
+
+    with get_dist_manager().context(rank_ctx):
+        out_first = layer.forward(x, topk_weights, topk_ids).cpu()
+        torch.cuda.synchronize()
+
+        # Forward-side bias copies are device-resident even though their
+        # source parameters are CPU-resident.
+        assert layer.impl._gate_up_bias.device.type == 'cuda'
+        assert layer.impl._down_bias.device.type == 'cuda'
+
+        # sleep level 1: the packed handles are freed; the CPU bytes stay.
+        layer.sleep_release()
+        impl = layer.impl
+        assert impl._w13 is None and impl._w_gate is None and impl._w_up is None and impl._w_down is None
+        assert impl._linear is None
+        assert layer.gate_up.blocks.device.type == 'cpu' and layer.gate_up.blocks.numel() != 0
+
+        # wakeup: the model move skips the CPU-resident parameters again,
+        # then sleep_wakeup re-packs from the unchanged host bytes.
+        layer.to(device)
+        assert layer.gate_up.blocks.device.type == 'cpu'
+        layer.sleep_wakeup()
+        out_second = layer.forward(x, topk_weights, topk_ids).cpu()
+        torch.cuda.synchronize()
+
+    assert torch.equal(out_first, out_second)
+
+    layer.impl.sleep_release()
+    torch.cuda.empty_cache()
