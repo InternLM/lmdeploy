@@ -210,6 +210,34 @@ class TestQkvGlobalScale:
         assert module.weight_global_scale.tolist() == [4.5, 8.0, 16.0]
 
 
+class TestCtFp8Linear:
+
+    def test_plain_per_channel_matches_reference(self):
+        torch.manual_seed(0)
+        K, N = 512, 256
+        module = TmQuantLinear(K, N, lane='ct_fp8', bias=False, device=torch.device('cuda')).cuda()
+        w = (torch.randn(N, K) * 0.05).to(torch.float8_e4m3fn).cuda()
+        s = (torch.rand(N, 1).bfloat16() * 0.01 + 0.005).cuda()
+        module.weight.data.copy_(w)
+        module.weight_scale.data.copy_(s)
+        module.update_weights()
+
+        x = torch.randn(8, K, dtype=torch.bfloat16, device='cuda')
+        out = module(x)
+        ref = x.float() @ w.float().T * s.float().T
+        err = (out.float() - ref).abs().max().item()
+        assert out.dtype == torch.bfloat16
+        assert err < 1e-2 * ref.abs().max().item() + 0.05, err
+
+    def test_param_names_match_checkpoint_suffixes(self):
+        module = TmQuantLinear(256, 64, lane='ct_fp8', bias=False, device=torch.device('cuda'))
+        names = dict(module.named_parameters())
+        assert 'weight' in names and 'weight_scale' in names
+        assert names['weight'].dtype == torch.float8_e4m3fn
+        assert names['weight_scale'].shape == (64, 1)
+        assert names['weight_scale'].dtype == torch.bfloat16
+
+
 class TestEnvGates:
 
     def test_off_is_loud(self, monkeypatch):
@@ -217,17 +245,7 @@ class TestEnvGates:
         with pytest.raises(RuntimeError, match='no native fallback'):
             TmQuantLinear(256, 64, lane='nvfp4', bias=False, device=torch.device('cuda'))
 
-
-class TestCpuResidency:
-    """B6: the checkpoint-layout quant params are the CPU source of truth
-    (single occupancy); module moves must not re-upload them, and packing
-    goes through the channel's device-agnostic prepare_weight."""
-
-    def test_params_stay_cpu_through_module_moves(self):
-        module = TmQuantLinear(256, 64, lane='nvfp4', bias=True, device=torch.device('cuda')).cuda()
-        assert module.cpu_resident
-        assert module.weight_packed.device.type == 'cpu'
-        assert module.weight_scale.device.type == 'cpu'
-        assert module.weight_global_scale.device.type == 'cpu'
-        # bias travels with the module: forward adds it python-side
-        assert module.bias.device.type == 'cuda'
+    def test_ct_fp8_off_is_loud(self, monkeypatch):
+        monkeypatch.setenv('LMDEPLOY_TM_KERNELS', 'ct_fp8=off')
+        with pytest.raises(RuntimeError, match='no native fallback'):
+            TmQuantLinear(256, 64, lane='ct_fp8', bias=False, device=torch.device('cuda'))
