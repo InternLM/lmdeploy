@@ -243,11 +243,6 @@ class FusedMoETmW4A16(FusedMoEBase):
             # outside this route.
             raise RuntimeError('TurboMind W4A16 MoE EP requires dp=1: every rank must see the full token '
                                'batch, but DP attention partitions tokens per rank.')
-        if self.ep > 1 and self.tp > 1:
-            # Expert blocks (EP) and moe-TP width shards cannot co-exist:
-            # each expert would materialize at partial width on one rank.
-            raise RuntimeError(f'TurboMind W4A16 MoE EP requires moe_tp=1, got EP={self.ep}, '
-                               f'moe_tp={self.tp}.')
         if self.ep > 1:
             # init_dist_args disables the outer reduce at moe_tp==1; expert
             # parallelism re-enables exactly one group-wide sum of the
