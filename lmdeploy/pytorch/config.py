@@ -4,7 +4,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from math import gcd
-from typing import Any
+from typing import Any, Literal
 
 import torch
 
@@ -268,6 +268,9 @@ class DistConfig:
     mlp_tp_mode: TPMode = TPMode.DEFAULT
     moe_tp_mode: TPMode = TPMode.DEFAULT
 
+    # communication
+    communication_backend: Literal['nccl', 'auto'] = 'nccl'
+
     def __post_init__(self):
         """Post init."""
         assert self.dp_rank < self.dp
@@ -341,6 +344,7 @@ class DistConfig:
             dp_rank=engine_config.dp_rank,
             enable_microbatch=engine_config.enable_microbatch,
             enable_eplb=engine_config.enable_eplb,
+            communication_backend=engine_config.communication_backend,
             tp=engine_config.tp,
             dcp=engine_config.dcp,
             attn_tp=engine_config.attn_tp_size,
@@ -744,7 +748,11 @@ class ModelConfig:
         model_config.dist_config = dist_config
 
         if dist_config.dcp > 1:
-            assert model_config.use_flash_mla, 'DCP requires FlashMLA attention'
+            if not model_config.use_flash_mla:
+                replicas = model_config.num_replicate_key_value_heads
+                assert replicas % dist_config.dcp == 0, (
+                    'GQA DCP groups must share replicated KV heads: '
+                    f'KV replication factor {replicas} must be divisible by dcp {dist_config.dcp}')
             assert model_config.sliding_window < 0, 'DCP does not support sliding-window attention'
             if model_config.mla_index_topk is not None:
                 from lmdeploy.pytorch import envs
@@ -761,6 +769,22 @@ class ModelConfig:
             model_config.eos_token_id = [model_config.eos_token_id]
 
         return model_config
+
+
+def validate_dcp_dllm_compatibility(model_config: ModelConfig, block_length: int) -> None:
+    """Reject block-sparse dLLM attention when DCP is enabled.
+
+    The DCP GQA implementation currently evaluates dense attention.  The effective dLLM block length must therefore be
+    one before the attention backend is constructed.
+    """
+    dist_config = model_config.dist_config
+    if (dist_config is None or dist_config.dcp <= 1 or model_config.model_paradigm != 'dllm'
+            or block_length == 1):
+        return
+
+    raise ValueError(
+        'DCP does not support SDAR/dLLM block-sparse attention with '
+        f'dllm_block_length={block_length}. Use dcp=1 or set dllm_block_length=1.')
 
 
 class UnmaskingStrategy(enum.Enum):
