@@ -436,6 +436,9 @@ def is_bf16_supported(device_type: str = 'cuda'):
 
     if device_type in ['cuda', 'auto']:
         import torch
+        if torch.version.hip is not None:
+            # ROCm builds set torch.version.cuda to None. Use the PyTorch check.
+            return torch.cuda.is_bf16_supported()
         device = torch.cuda.current_device()
 
         # Check for CUDA version and device compute capability.
