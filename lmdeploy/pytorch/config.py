@@ -21,13 +21,13 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
 
     Returns ``(bits, group_size, ignored_layers, ct_format)``. The
     ``pack-quantized`` branch keeps its historical W4A16 validation; the
-    ``nvfp4-pack-quantized`` branch validates the weight-only float layout
-    served through the TurboMind channel.
+    ``nvfp4-pack-quantized`` and ``float-quantized`` branches validate the
+    weight-only float layouts served through the TurboMind channel.
     """
     ct_format = quant_config.get('format')
-    if ct_format not in ('pack-quantized', 'nvfp4-pack-quantized'):
+    if ct_format not in ('pack-quantized', 'nvfp4-pack-quantized', 'float-quantized'):
         raise ValueError(f'Unsupported compressed-tensors `format`: {ct_format!r}. '
-                         'Supported formats: pack-quantized, nvfp4-pack-quantized.')
+                         'Supported formats: pack-quantized, nvfp4-pack-quantized, float-quantized.')
     if quant_config.get('quantization_status') != 'compressed':
         raise ValueError('Compressed-tensors checkpoint must have `compressed` status.')
 
@@ -50,7 +50,7 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
         _validate_pack_quantized_group(group, weights)
         return weights['num_bits'], weights['group_size'], ignored_layers, ct_format
 
-    # The nvfp4 lane is weight-only: activation quantization metadata may
+    # Both float lanes are weight-only: activation quantization metadata may
     # describe dynamic input quantization (applied inside the kernel), but a
     # static input scheme or any output scheme has no serving path.
     input_activations = group.get('input_activations')
@@ -83,8 +83,18 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
                                  f'got {weights.get(key)!r}.')
         return 4, 16, ignored_layers, ct_format
 
-    raise ValueError(f'Unsupported compressed-tensors float format: {ct_format!r}. '
-                     'Supported: nvfp4-pack-quantized.')
+    # float-quantized FP8 weights: per-channel (strategy `channel`, no
+    # group) or K-blocked (`tensor_group`/`group` with group_size 128).
+    if weights.get('num_bits') != 8:
+        raise ValueError(f'Unsupported float-quantized `num_bits`: expected 8, got {weights.get("num_bits")!r}.')
+    strategy = weights.get('strategy')
+    group_size = weights.get('group_size')
+    if strategy == 'channel' and group_size is None:
+        return 8, None, ignored_layers, ct_format
+    if strategy in ('tensor_group', 'group') and group_size == 128:
+        return 8, 128, ignored_layers, ct_format
+    raise ValueError(f'Unsupported float-quantized weights layout: strategy={strategy!r}, '
+                     f'group_size={group_size!r}. Supported: channel (no group) or 128-blocked.')
 
 
 def _validate_pack_quantized_group(group: Mapping[str, Any], weights: Mapping[str, Any]):
@@ -1168,13 +1178,15 @@ class QuantizationConfig:
                 # skipped. Checkpoints with ignore rules must pass prefixes.
                 if self.ct_format == 'nvfp4-pack-quantized':
                     return 'nvfp4'
+                if self.ct_format == 'float-quantized':
+                    return 'ct_fp8'
                 if self.group_size == 128:
                     return 'awq'
                 return self.quant_method
-            if module_kind == 'moe' and self.ct_format == 'nvfp4-pack-quantized':
-                # Grouped expert routes consume the nvfp4 format through
-                # the TurboMind grouped channel.
-                return 'nvfp4'
+            if module_kind == 'moe' and self.ct_format in ('nvfp4-pack-quantized', 'float-quantized'):
+                # Grouped expert routes consume the same float formats
+                # through the TurboMind grouped channel.
+                return 'nvfp4' if self.ct_format == 'nvfp4-pack-quantized' else 'ct_fp8'
             return self.quant_method
         if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
             quant_method = None
