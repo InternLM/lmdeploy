@@ -294,6 +294,17 @@ than a universal profitability threshold.
 - Plans are never evicted during serving.
 - `CUDAGraphRunner.reset()` invalidates complete plans before weights, cache
   arenas, or other captured addresses can change.
+- TurboMind packed expert weights (the grouped W4A16 route) are non-tensor
+  native buffers: `TurbomindMoeW4A16Impl.update_weights` swaps whole packed
+  handles (`Weight` handles over `LinkLinearExperts`) that no registered
+  parameter references, so tensor-based reset/change detection never sees
+  them. A captured graph — full or piecewise — bakes the old device
+  pointers, and replay after a silent hot update would keep serving the
+  previous experts. Every hot update, `sleep`/`sleep_wakeup`, or other
+  handle publish must therefore run `CUDAGraphRunner.reset()` (or rebuild
+  the plans) around the swap; the impl releases old handles only after a
+  device-wide synchronize, so the reset barrier is the only ordering
+  contract it relies on.
 - Steady replay uses stream ordering, not device-wide synchronization.
 
 ## Adding Piecewise Support

@@ -786,9 +786,17 @@ class PiecewiseGraphManager:
         return descriptor in self._plans
 
     def prepare(self, descriptor: Hashable, kwargs: Mapping[str, Any]) -> Any:
-        """Warm up and publish one plan; any failure aborts engine warmup."""
-        self._runtime.warmup(descriptor, kwargs)
+        """Warm up and publish one plan; any failure aborts engine warmup.
+
+        The eager warmup runs on the stream the capture will use: operators
+        keep stream-bound state (per-stream GEMM workspaces, cached device
+        contexts) whose first construction synchronizes. Created during
+        capture it would invalidate the graph, so every stream the capture may
+        select must have seen one warmup call before capture begins.
+        """
         stream = self._stream if self._stream is not None else torch.cuda.current_stream()
+        with torch.cuda.stream(stream):
+            self._runtime.warmup(descriptor, kwargs)
         build = self._runtime.build(descriptor, kwargs, self._bridge_pool, stream)
         self._plans[descriptor] = build.plan
         return build.output
