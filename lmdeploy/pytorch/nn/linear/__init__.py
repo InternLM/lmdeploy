@@ -54,11 +54,11 @@ def _is_static_per_tensor_fp8(quant_config):
 def _build_tm_quant_linear(quant_config, lane, *, merged=False, qkv_args=None, **common):
     """Construct the TurboMind float-lane module family member.
 
-    ``lane`` is the dispatch result (``'nvfp4'``; the ct FP8 lane arrives
-    with the follow-up branch); the ct FP8 scale layout follows the parsed
-    group size (128 = blocked).
+    ``lane`` is the dispatch result (``'nvfp4'`` or ``'ct_fp8'``); the
+    ct FP8 scale layout follows the parse outcome (group size 128 or a
+    resolved weight_block_size = blocked).
     """
-    fp8_blocked = quant_config.group_size == 128
+    fp8_blocked = quant_config.group_size == 128 or quant_config.weight_block_size is not None
     if qkv_args is not None:
         return QKVTmQuantLinear(lane=lane, fp8_blocked=fp8_blocked, **qkv_args)
     if merged:
@@ -137,7 +137,7 @@ def build_linear(
             all_reduce=all_reduce,
             layer_type=layer_type,
         )
-    if quant_method == 'nvfp4':
+    if quant_method in ('nvfp4', 'ct_fp8'):
         return _build_tm_quant_linear(
             quant_config,
             quant_method,
@@ -349,7 +349,7 @@ def build_merged_colwise_linear(
             is_tp=is_tp,
             layer_type=layer_type,
         )
-    if quant_method == 'nvfp4':
+    if quant_method in ('nvfp4', 'ct_fp8'):
         return _build_tm_quant_linear(
             quant_config,
             quant_method,
@@ -465,7 +465,7 @@ def build_qkv_proj(in_features: int,
                             device=device,
                             is_tp=is_tp,
                             num_replicate_kv_heads=num_replicate_kv_heads)
-    if quant_method == 'nvfp4':
+    if quant_method in ('nvfp4', 'ct_fp8'):
         return _build_tm_quant_linear(
             quant_config,
             quant_method,
