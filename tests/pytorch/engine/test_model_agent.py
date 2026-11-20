@@ -1596,6 +1596,9 @@ class TestResetGraphRunner:
         model = object()
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+        agent.model_config = SimpleNamespace(
+            quant_config=SimpleNamespace(quant_method=None, group_size=None))
+        agent._ct_normalize_state = None
         agent._model_update_group = {'update': object()}
         agent.patched_model = SimpleNamespace(
             get_model=lambda: model,
@@ -1989,6 +1992,9 @@ class TestCheckpointEngineWeightUpdate:
 
         agent = BaseModelAgent.__new__(BaseModelAgent)
         agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+        agent.model_config = SimpleNamespace(
+            quant_config=SimpleNamespace(quant_method=None, group_size=None))
+        agent._ct_normalize_state = None
         agent.patched_model = _PatchedModel()
         agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
         agent.spec_agent._enabled = False
@@ -2291,6 +2297,11 @@ class TestMemDecodeModelAgentLifecycle:
 def weight_update_agent(request):
     agent = BaseModelAgent.__new__(BaseModelAgent)
     agent.cache_config = SimpleNamespace(compact_state_capacity=None)
+    # The main model carries no ct quantization: _ct_normalize declines and
+    # update streams normalize with the default single-call contract.
+    agent.model_config = SimpleNamespace(
+        quant_config=SimpleNamespace(quant_method=None, group_size=None))
+    agent._ct_normalize_state = None
     config = SimpleNamespace(num_hidden_layers=5, num_nextn_predict_layers=2)
     # Follower ranks have the draft config but no local proposer.
     agent.spec_agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)

@@ -52,24 +52,13 @@ class PackedTensor(NamedTuple):
 
 
 # ---------------------------------------------------------------------------
-# Low-level u4 packing / unpacking helpers (reused across normalize / pack)
+# Low-level u4 packing / unpacking helpers (reused across normalize / pack).
+# The unpack helpers live in ct_repack: they are pure torch, and CPU-only
+# callers (tests on installations without the native extension) import them
+# from there — importing weight_format itself requires the extension.
 # ---------------------------------------------------------------------------
 
-
-def _get_u4_slices(x: Tensor, dtype: torch.dtype) -> list[Tensor]:
-    MAP = {torch.int32: 8, torch.uint8: 2}
-    xs = []
-    for _ in range(MAP[x.dtype]):
-        xs.append((x & 15).to(dtype))
-        x = x >> 4
-    return xs
-
-
-def _unpack_awq_gemm(x: Tensor) -> Tensor:
-    xs = _get_u4_slices(x, torch.uint8)
-    order = [0, 4, 1, 5, 2, 6, 3, 7]
-    ys = [xs[i] for i in order]
-    return torch.stack(ys, dim=-1).view(*x.shape[:-1], -1)
+from .ct_repack import _get_u4_slices, _unpack_awq_gemm  # noqa: E402
 
 
 def pack_u4_row(x: torch.Tensor) -> torch.Tensor:
