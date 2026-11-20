@@ -486,9 +486,7 @@ class TurbomindMoeMXFP4Impl(FusedMoETmMXFP4Impl):
         renormalize: bool = False,
         output_dtype: torch.dtype | None = None,
         act_func: Callable | None = None,
-    ):
-        if top_k < 1 or num_experts < 1 or top_k > num_experts:
-            raise ValueError(f'Expected 1 <= top_k <= num_experts, got {top_k} and {num_experts}')
+        ):
         self.top_k = top_k
         self.num_experts = num_experts
         self.hidden_dim = hidden_dim
