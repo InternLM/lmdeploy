@@ -505,11 +505,8 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             if not mod.is_tp:
                 return default_weight_loader(param, loaded_weight)
 
-            # Per-tensor metadata (e.g. a float-quantized module's
-            # weight_global_scale) is rank-invariant: no split, no chunk.
-            if loaded_weight.numel() < sum(sections):
-                return default_weight_loader(param, loaded_weight)
-
+            # gs params never route here (float-lane modules bind them to
+            # global_scale_loader); everything below is section-indexed.
             world_size, rank = mod.get_tp_world_rank()
             split_sections = sections
             # scale tensor has dim0 shrunk by block_size

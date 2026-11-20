@@ -340,8 +340,16 @@ class MergedTmQuantLinear(TmQuantLinear):
         )
         self.shard_sections = list(self.all_out_features)
 
-    def global_scale_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any = 0):
-        """Load one shard's per-tensor global scale."""
+    def global_scale_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any | None = None):
+        """Load one shard's per-tensor global scale.
+
+        Per-shard checkpoints pass ``shard_id`` and fill their own slot; a
+        fused checkpoint module carries ONE scale for all sections, so no
+        shard id broadcasts it into every slot.
+        """
+        if shard_id is None:
+            default_weight_loader(param, loaded_weight.reshape(1).expand(param.shape))
+            return
         idx = self.out_names_map[shard_id]
         default_weight_loader(param[idx:idx + 1], loaded_weight.reshape(1))
 
@@ -403,11 +411,6 @@ class QKVTmQuantLinear(MergedTmQuantLinear, QKVMixin):
         """Head-derived sections distribute exactly; alignment is inherited
         from the head geometry."""
         return all_out_features
-
-    def global_scale_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any = 'q'):
-        """Load one shard's per-tensor global scale."""
-        idx = self.out_names_map[shard_id]
-        default_weight_loader(param[idx:idx + 1], loaded_weight.reshape(1))
 
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any = 'q'):
         """Weight loader with non-replicated k/v head chunking."""
