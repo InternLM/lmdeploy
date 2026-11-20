@@ -45,6 +45,25 @@ def test_prometheus_stat_logger_records_specdecode_metrics():
     assert _get_sample_value('lmdeploy:spec_decode_per_position_accept_rate', position_labels) == 0
 
 
+def test_scheduler_timestamp_advances_only_on_updates(monkeypatch):
+    import importlib
+    from types import SimpleNamespace
+
+    module = importlib.import_module('lmdeploy.metrics.loggers')
+    now = 100.0
+    monkeypatch.setattr(module, 'time', SimpleNamespace(time=lambda: now))
+    logger = PrometheusStatLogger('test-model', max_model_len=16, dp_rank=2)
+    name = 'lmdeploy:scheduler_last_update_timestamp_seconds'
+    labels = {'model_name': 'test-model', 'engine': '2'}
+    assert _get_sample_value(name, labels) == 0
+    logger.record_schedule(SchedulerStats())
+    assert _get_sample_value(name, labels) == 100
+    now = 120
+    assert _get_sample_value(name, labels) == 100
+    logger.record_schedule(SchedulerStats())
+    assert _get_sample_value(name, labels) == 120
+
+
 @pytest.mark.parametrize('external_hit_rate', [None, 0.0, 12 / 17])
 def test_logging_stat_logger_separates_local_and_enabled_external_cache(capsys, external_hit_rate):
     logger = LoggingStatLogger(dp_rank=2)
