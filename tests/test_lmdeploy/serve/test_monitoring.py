@@ -199,8 +199,10 @@ def test_stuck_monitoring_thread_does_not_block_engine_cleanup(monkeypatch):
     monitoring = importlib.import_module('lmdeploy.serve.monitoring')
     release = threading.Event()
     error = Mock()
+    thread_sockets = []
 
     def stuck(server, sockets):
+        thread_sockets.extend(sockets)
         server.started = True
         release.wait(3)
 
@@ -218,10 +220,13 @@ def test_stuck_monitoring_thread_does_not_block_engine_cleanup(monkeypatch):
         try:
             engine.close.assert_called_once()
             assert thread.is_alive()
+            assert all(sock.fileno() >= 0 for sock in thread_sockets)
             assert 'continuing engine cleanup' in error.call_args.args[0]
         finally:
             release.set()
             thread.join(timeout=1)
+        assert not thread.is_alive()
+        assert all(sock.fileno() == -1 for sock in thread_sockets)
 
     asyncio.run(run())
 

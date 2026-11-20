@@ -72,34 +72,34 @@ async def monitoring_server(health_monitor: EngineHealthMonitor,
     # Validate TLS and bind in the caller so startup errors fail the API startup.
     config.load()
     loop = asyncio.get_running_loop()
-    # Use Uvicorn's address resolution and binding semantics, then hand socket
-    # duplicates to the monitoring loop without accepting on the API loop.
+    # Use Uvicorn's address resolution and binding semantics without accepting
+    # on the API loop. The monitoring thread owns its socket copies until exit.
     async with await loop.create_server(asyncio.Protocol, host, port, start_serving=False) as listener:
-        with ExitStack() as stack:
-            sockets = [stack.enter_context(sock.dup()) for sock in listener.sockets]
-            server = uvicorn.Server(config)
+        server = uvicorn.Server(config)
 
-            def run():
-                try:
-                    server.run(sockets=sockets)
-                finally:
-                    if not server.should_exit:
-                        logger.error('Monitoring server exited unexpectedly.')
-
-            thread = Thread(target=run, name='lmdeploy-monitoring', daemon=True)
-            thread.start()
+        def run():
             try:
-                while not server.started:
-                    if not thread.is_alive():
-                        raise RuntimeError('Monitoring server failed to start.')
-                    await asyncio.sleep(0.01)
-                port = sockets[0].getsockname()[1]
-                logger.info('Monitoring server listening on %s:%s', host, port)
-                yield port
+                with ExitStack() as stack:
+                    sockets = [stack.enter_context(sock.dup()) for sock in listener.sockets]
+                    server.run(sockets=sockets)
             finally:
-                server.should_exit = True
-                # Bound the wait even if a handler blocks the monitoring loop.
-                thread.join(timeout=_THREAD_JOIN_TIMEOUT)
-                if thread.is_alive():
-                    logger.error('Monitoring thread did not stop within %s seconds; continuing engine cleanup.',
-                                 _THREAD_JOIN_TIMEOUT)
+                if not server.should_exit:
+                    logger.error('Monitoring server exited unexpectedly.')
+
+        thread = Thread(target=run, name='lmdeploy-monitoring', daemon=True)
+        thread.start()
+        try:
+            while not server.started:
+                if not thread.is_alive():
+                    raise RuntimeError('Monitoring server failed to start.')
+                await asyncio.sleep(0.01)
+            port = listener.sockets[0].getsockname()[1]
+            logger.info('Monitoring server listening on %s:%s', host, port)
+            yield port
+        finally:
+            server.should_exit = True
+            # Bound the wait even if a handler blocks the monitoring loop.
+            thread.join(timeout=_THREAD_JOIN_TIMEOUT)
+            if thread.is_alive():
+                logger.error('Monitoring thread did not stop within %s seconds; continuing engine cleanup.',
+                             _THREAD_JOIN_TIMEOUT)
