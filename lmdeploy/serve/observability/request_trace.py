@@ -579,14 +579,16 @@ class RequestTraceMiddleware:
         async def traced_send(message):
             nonlocal first_body, status_code, complete
             if message['type'] == 'http.response.start':
-                status_code = message['status']
                 message = dict(message)
                 message['headers'] = list(message.get('headers', []))
                 if (outcome['request_id'] is not None
                         and not any(k.lower() == HEADER.encode() for k, _ in message['headers'])):
                     message['headers'].append((HEADER.encode(), outcome['request_id'].encode()))
+                await send(message)
+                status_code = message['status']
                 observation.sse = any(k.lower() == b'content-type' and b'text/event-stream' in v
                                       for k, v in message['headers'])
+                return
             await send(message)
             if message['type'] == 'http.response.body':
                 if message.get('body') and first_body is None:
@@ -644,36 +646,7 @@ class RequestTraceMiddleware:
                              http_first_body_seconds=interval(start, first_body), http_total_seconds=http_total,
                              **(observed.summary() if observed is not None else _EMPTY_OUTPUT_SUMMARY))
             finally:
-                total_seconds = time.monotonic() - start
-                http_end_ns = received_ns + int(total_seconds * 1e9)
-                try:
-                    completed = outcome['traces']
-                    if completed and outcome['otel_span'] is not None:
-                        attrs = {'lmdeploy.token_counts_complete': status == 'success' and all(
-                            t.token_counts_complete for t in completed)}
-                        for key, field in (('input_tokens', 'prompt_tokens'), ('output_tokens', 'output_tokens'),
-                                           ('cached_tokens', 'cached_tokens')):
-                            selected = completed if key == 'output_tokens' else [
-                                t for t in completed if t.choice_index in (None, 0)]
-                            values = [getattr(t, field) for t in selected]
-                            if values and all(v is not None for v in values):
-                                attrs['gen_ai.usage.' + key] = sum(values)
-                        models = {t.model for t in completed if t.model}
-                        if len(models) == 1:
-                            attrs['gen_ai.request.model'] = attrs['gen_ai.response.model'] = models.pop()
-                        first_tokens = [t.first_token for t in completed
-                                        if t.first_token is not None
-                                        and received_unix <= t.first_token <= http_end_ns / 1e9]
-                        if first_tokens:
-                            attrs['gen_ai.latency.time_to_first_token'] = min(first_tokens) - received_unix
-                        attrs['gen_ai.latency.e2e'] = total_seconds
-                        otel_trace.attributes(outcome['otel_span'], attrs)
-                    if observation.sse and observation.terminal:
-                        otel_trace.stream_end(outcome['otel_span'], http_end_ns)
-                    otel_trace.finish(outcome['otel_span'], status, end_ns=http_end_ns, http_status=status_code,
-                                      output={'http_total_seconds': total_seconds, **observation.summary()})
-                except Exception:
-                    otel_trace.finish(outcome['otel_span'], status, end_ns=http_end_ns, http_status=status_code)
+                otel_trace.finish_http(outcome, status, status_code, time.monotonic() - start, observation)
                 outcome['closed'] = True
                 outcome['output_traces'].clear()
                 outcome['traces'].clear()

@@ -91,7 +91,10 @@ including a selected LoRA adapter; `lmdeploy.base_model` identifies its base mod
 Library calls without HTTP create one `llm_request` root with phases below it.
 Each prompt span ends at its own inference completion, not at the end of the enclosing HTTP batch.
 Output observations remain separate attributes; `llm.stream.end` belongs to the HTTP span.
-HTTP TTFT starts at HTTP receipt; prompt TTFT starts at engine queue admission.
+HTTP TTFT starts at HTTP receipt. Prompt TTFT starts at engine queue admission.
+The HTTP span also records E2E latency for requests rejected before inference. It records the
+HTTP status code once the ASGI server accepts the response headers. A 5xx marks spans carrying
+that HTTP code as ERROR. Phase spans and the prompt's `lmdeploy.outcome` describe engine work.
 Token completeness is explicit through `lmdeploy.token_counts_complete`; failed/cancelled counts
 are partial. Provider initialization is serialized once per process, and the SDK owns shutdown.
 Handle waiting and mean TPOT use `lmdeploy.handle_wait_seconds` and `lmdeploy.tpot_seconds`.
