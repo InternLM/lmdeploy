@@ -110,12 +110,19 @@ def test_w1w3_merge_rejects_mismatched_global_scales():
     assert 'global_scale' in fused.tensors
     assert torch.equal(fused.tensors['global_scale'], gate.tensors['global_scale'])
 
-    # One-sided gs: merge proceeds with the present scale.
+    # Mixed presence (exactly one side carries gs) rejects loudly: the merged
+    # layout has one gs slot, so the bare half would silently lose or gain the
+    # scalar — the same all-or-none convention LinkLinearExperts enforces.
     one_sided = mk(3.0)
     bare = Linear(tensors={k: v for k, v in one_sided.tensors.items() if k != 'global_scale'},
                   weight_format=one_sided.weight_format)
-    _check_w1w3_global_scales(one_sided, bare)
-    _check_w1w3_global_scales(bare, one_sided)
+    with pytest.raises(ValueError, match='exactly one of gate/up'):
+        _check_w1w3_global_scales(one_sided, bare)
+    with pytest.raises(ValueError, match='exactly one of gate/up'):
+        _check_w1w3_global_scales(bare, one_sided)
+
+    # Both absent: nothing to conflict, plain merge.
+    _check_w1w3_global_scales(bare, Linear(tensors={}, weight_format=one_sided.weight_format))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')

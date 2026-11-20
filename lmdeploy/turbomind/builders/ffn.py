@@ -39,7 +39,13 @@ def _check_w1w3_global_scales(w1: Linear, w3: Linear) -> None:
     """
     gs1 = w1.tensors.get('global_scale')
     gs3 = w3.tensors.get('global_scale')
-    if gs1 is None or gs3 is None:
+    if (gs1 is None) != (gs3 is None):
+        raise ValueError(
+            'w1/w3 fusion unsupported: exactly one of gate/up carries a per-tensor '
+            'global_scale. The merged w1w3 layout has a single global-scale slot '
+            '(adopted from gate), so the bare half would silently lose or gain the '
+            'scalar. Reject mixed presence like LinkLinearExperts does.')
+    if gs1 is None:
         return
     if not torch.allclose(gs1.float(), gs3.float(), rtol=1e-5, atol=0):
         raise ValueError(
