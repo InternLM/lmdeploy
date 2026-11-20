@@ -27,7 +27,7 @@ class TmGemmLinearMixin:
     The raw weights never occupy device memory, so the former spill (copy to
     CPU, free the GPU storage) has nothing left to free.
 
-    ``release_torch_weights`` (default true) selects this CPU-direct route.
+    ``cpu_resident`` (default true) selects this CPU-direct route.
     Modules that feed ``get_unquantized_weight`` (MLA absorption such as
     kv_b_proj) set it to False: they keep device-resident registered copies
     because the absorption path reads them through the module.
@@ -81,7 +81,7 @@ class TmGemmLinearMixin:
     def cpu_resident(self) -> bool:
         """Whether the packed quant storages live on the host (CPU-direct
         TurboMind route)."""
-        return (self.release_torch_weights
+        return (self.cpu_resident_requested
                 and isinstance(getattr(self, 'impl', None), TurbomindGemmW4A16Impl))
 
     def register_all_parameters(self, qweight: torch.Tensor, scales: torch.Tensor, qzeros: torch.Tensor,
@@ -179,11 +179,11 @@ class TmGemmLinear(TmGemmLinearMixin, AwqLinear):
         is_tp: bool = False,
         all_reduce: bool = True,
         layer_type: str = 'attn',
-        release_torch_weights: bool = True,
+        cpu_resident: bool = True,
         prefix: str = '',
     ):
         # The mixin reads these while the AWQ base class builds the operator.
-        self.release_torch_weights = release_torch_weights
+        self.cpu_resident_requested = cpu_resident
         self.tm_prefix = prefix
         super().__init__(
             in_features,
@@ -215,9 +215,9 @@ class MergedTmGemmLinear(TmGemmLinearMixin, MergedAwqLinear):
                  is_tp: bool = True,
                  out_names: list[int] | None = None,
                  layer_type: str = 'attn',
-                 release_torch_weights: bool = True,
+                 cpu_resident: bool = True,
                  prefix: str = ''):
-        self.release_torch_weights = release_torch_weights
+        self.cpu_resident_requested = cpu_resident
         self.tm_prefix = prefix
         super().__init__(
             in_features,
@@ -247,9 +247,9 @@ class QKVTmGemmLinear(TmGemmLinearMixin, QKVAwqLinear):
                  device: torch.device | None = None,
                  is_tp: bool = True,
                  num_replicate_kv_heads: int = 1,
-                 release_torch_weights: bool = True,
+                 cpu_resident: bool = True,
                  prefix: str = ''):
-        self.release_torch_weights = release_torch_weights
+        self.cpu_resident_requested = cpu_resident
         self.tm_prefix = prefix
         super().__init__(
             in_features,

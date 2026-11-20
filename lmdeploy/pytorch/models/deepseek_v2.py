@@ -454,7 +454,7 @@ class DeepseekV2Attention(nn.Module):
             is_tp=True,
             quant_config=quantization_config,
             # MLA absorption reads the weight device-side; keep torch copies.
-            release_torch_weights=False,
+            cpu_resident=False,
         )
         self.kc = DeepseekV2BMM(self.num_heads,
                                 config.qk_nope_head_dim,

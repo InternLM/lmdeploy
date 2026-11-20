@@ -8,8 +8,8 @@ Differences from the AWQ Triton W4A16 implementation:
 - The initial load publishes packed weights without a per-module sync. Hot
   updates keep the sync because a concurrent forward may still run on engine
   streams.
-- Optional spill of the packed torch weights frees the GPU copies (see
-  ``tm_weight_release``).
+- The raw torch weights stay host-resident (CPU-direct packing); only the
+  packed handle occupies device memory.
 - Communication stays on the python side: ``all_reduce`` plus
   ``reduce_scatter_by_tp_sizes`` when a scatter split is requested.
 """
