@@ -42,11 +42,21 @@ class TmMoeMXFP4Weights(nn.Module):
     ``[E_local, out_features, in_features // 32]`` uint8, ``bias``
     ``[E_local, out_features]``. ``MXFP4Format.normalize`` transposes into
     the TurboMind layout at pack time.
+
+    The parameters are CPU-resident: they are the source of truth the
+    TurboMind channel packs from, so the raw expert bytes never occupy
+    device memory.
     """
 
     def __init__(self, num_experts: int, in_features: int, out_features: int, bias: bool, weight_type: str,
                  dtype: torch.dtype, device: torch.device):
         super().__init__()
+        # CPU-direct packing: the rank-local expert bytes are the CPU source
+        # of truth. ``device`` is accepted for interface compatibility with
+        # the other MoE weight holders; these parameters always live on the
+        # host and the channel's prepare_weight performs the H2D copy.
+        device = torch.device('cpu')
+        self.cpu_resident = True
         if weight_type not in ('gate_up', 'down'):
             raise ValueError(f'Unknown weight type: {weight_type!r}')
         self.weight_type = weight_type
@@ -84,6 +94,18 @@ class TmMoeMXFP4Weights(nn.Module):
             parameter = nn.Parameter(torch.empty(shape, dtype=dtype_, device=device), requires_grad=False)
             parameter.weight_loader = self.weight_loader
             self.register_parameter(name, parameter)
+
+    def _apply(self, fn, recurse=True):
+        """Exclude the CPU-resident expert bytes from module moves.
+
+        Engine flows move the whole model: the post-load ``Module.to(cuda)``,
+        sleep's ``to(cpu/meta)`` and wakeup's ``to(cuda)``. Re-uploading
+        these parameters would defeat the CPU-direct packing and re-create
+        the double occupancy the spill used to clean up.
+        """
+        if self.cpu_resident:
+            return self
+        return super()._apply(fn, recurse=recurse)
 
     def _expected_shards(self) -> tuple[str, ...]:
         if self.weight_type == 'gate_up':
@@ -292,7 +314,10 @@ class FusedMoETmMXFP4(FusedMoEBase):
         self.num_local_experts = num_local_experts
         self.first_local_expert = first_local_expert
         self.expert_list = self.gate_up.expert_list if self.ep > 1 else None
-        self.release_torch_weights = True
+        # CPU-direct packing keeps the rank-local expert bytes CPU-resident,
+        # so there is no GPU copy to spill; the spill machinery stays
+        # callable but disabled for this module.
+        self.release_torch_weights = False
         self.dtype = dtype
         self.device = device
         self._spill: TorchWeightSpill | None = None
@@ -310,8 +335,12 @@ class FusedMoETmMXFP4(FusedMoEBase):
         )
 
     def update_weights(self):
-        """Pack the loaded MXFP4 experts into the TurboMind channel, then spill
-        the torch weights."""
+        """Pack the loaded MXFP4 experts into the TurboMind channel.
+
+        The rank-local parameters are CPU-resident; the channel's
+        ``prepare_weight`` performs the H2D transform from the host bytes.
+        No GPU copy exists, so the torch-weight spill stays disabled.
+        """
         if self.gate_up.blocks.numel() == 0:
             # The module was not part of this update bucket; its storages
             # are spilled and packing would read the emptied tensors.

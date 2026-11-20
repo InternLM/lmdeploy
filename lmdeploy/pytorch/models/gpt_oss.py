@@ -505,7 +505,6 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         """Load weight of experts gate up."""
         num_experts = self.config.num_local_experts
 
-        loaded_weight = loaded_weight.cuda()
         # Suffix dispatch must come first: the mxfp4 packed tensors end in
         # the plain-projection substring ('gate_up_proj_blocks' contains
         # 'gate_up_proj') but need no transpose and map to different
@@ -541,6 +540,11 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         elif 'gate_up_proj' in name:
             param_name = name.replace('experts.gate_up_proj', 'experts.experts.gate_up.weight')
             loaded_weight = loaded_weight.transpose(1, 2)
+        # The plain bf16 passthrough lanes keep the host->device move (their
+        # destinations are CUDA-resident). The mxfp4 lanes above returned
+        # with the checkpoint tensor still on the CPU: the rank-local mxfp4
+        # parameters are CPU-resident and the channel packs from host memory.
+        loaded_weight = loaded_weight.cuda()
         param = params_dict[param_name]
         for expert_id in range(num_experts):
             w1 = loaded_weight[expert_id, ::2]
@@ -552,7 +556,6 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         """Load weight of experts down."""
         num_experts = self.config.num_local_experts
 
-        loaded_weight = loaded_weight.cuda()
         # Suffix dispatch first: 'down_proj_blocks'/'down_proj_scales'
         # contain 'down_proj' but are the mxfp4 packed tensors.
         if 'down_proj_blocks' in name:
@@ -575,6 +578,10 @@ class GptOssForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         elif 'down_proj' in name:
             param_name = name.replace('experts.down_proj', 'experts.experts.down.weight')
             loaded_weight = loaded_weight.transpose(1, 2)
+        # Plain bf16 lanes keep the device move; the mxfp4 lanes above
+        # returned with the checkpoint tensor still on the CPU (CPU-direct
+        # packing, see _load_weight_experts_gate_up).
+        loaded_weight = loaded_weight.cuda()
         param = params_dict[param_name]
         for expert_id in range(num_experts):
             w2 = loaded_weight[expert_id]

@@ -686,10 +686,13 @@ class TurbomindMoeMXFP4Impl(FusedMoETmMXFP4Impl):
         )
 
         # Bias has no kernel epilogue on this route. Keep rank-local device
-        # copies for forward; they are freed in ``_release`` (hot update,
-        # sleep) so they never outlive the packed weights.
-        new_gate_up_bias = None if gate_up_bias is None else gate_up_bias.detach().to(dtype).contiguous()
-        new_down_bias = None if down_bias is None else down_bias.detach().to(dtype).contiguous()
+        # copies for forward: the source parameters are CPU-resident under
+        # the CPU-direct flow (and the caller may pass device tensors in
+        # tests), so the forward-side copies are explicitly moved. They are
+        # freed in ``_release`` (hot update, sleep) so they never outlive
+        # the packed weights.
+        new_gate_up_bias = None if gate_up_bias is None else gate_up_bias.detach().to(dtype).cuda().contiguous()
+        new_down_bias = None if down_bias is None else down_bias.detach().to(dtype).cuda().contiguous()
 
         if self._published:
             # Hot update: a concurrent forward may execute on any engine
