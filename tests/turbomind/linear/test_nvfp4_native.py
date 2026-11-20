@@ -261,3 +261,41 @@ def test_fuse_weight_rejects_global_scale():
         w = torch.zeros(16, 64, dtype=torch.uint8)
         with pytest.raises(ValueError, match='global scale'):
             linear.fuse_weight((w, w), plan=plan, global_scale=torch.tensor([2.0]))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+def test_cpu_source_packing_parity():
+    """B6 prerequisite gate: the nvfp4 dense lane packed from HOST-resident
+    raw-e4m3 codes plus the reciprocal global-scale bridge must match the
+    device-source pack byte for byte (the prior round's documented gap)."""
+    from lmdeploy.turbomind.linear import get_linear
+
+    torch.manual_seed(0)
+    fmt = NVFP4Format()
+    K, N, M = 512, 128, 32
+    w_dense = torch.randn(N, K) * (0.1 / math.sqrt(K))
+    bits, scale, global_scale = _quantize_nvfp4(w_dense)
+
+    linear = get_linear()
+    with linear._activate():
+        plan = linear.get_weight_plan(weight_format=fmt, dtype=torch.float16)
+        weight_cpu = linear.prepare_weight(
+            bits,
+            plan=plan,
+            scales=scale.to(torch.float8_e4m3fn),
+            global_scale=global_scale.reshape(1),
+        )
+        weight_gpu = linear.prepare_weight(
+            bits.cuda(),
+            plan=plan,
+            scales=scale.to(torch.float8_e4m3fn).cuda(),
+            global_scale=global_scale.reshape(1).cuda(),
+        )
+        x = torch.randn(M, K, device='cuda', dtype=torch.float16)
+        _, out_cpu, _ = linear.tune(x, weight_cpu)
+        _, out_gpu, _ = linear.tune(x, weight_gpu)
+
+    assert torch.equal(out_cpu, out_gpu), 'nvfp4 CPU-source packing diverged'
+    # and the CPU-source pack is still numerically correct
+    ref = x.float() @ _dequant_nvfp4(bits, scale, global_scale).cuda().float()
+    assert (out_cpu.float() - ref).abs().max().item() < 1e-2
