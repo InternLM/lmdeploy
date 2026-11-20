@@ -255,16 +255,49 @@ def finish(span, status, end_ns=None, http_status=None, output=None):
     attributes(span, {'http.response.status_code': http_status, 'lmdeploy.outcome': status})
     if output:
         attributes(span, {f'lmdeploy.{key}': value for key, value in output.items()})
-    span.set_status(Status(StatusCode.OK if status == 'success' else StatusCode.ERROR))
+    failed = status != 'success' or (http_status is not None and http_status >= 500)
+    span.set_status(Status(StatusCode.ERROR if failed else StatusCode.OK))
     if status != 'success':
         span.add_event('error', timestamp=end_ns)  # No exception messages or payloads.
     span.end(end_time=end_ns)
 
 
 @fail_open
-def stream_end(span, timestamp):
-    if span is not None:
-        span.add_event('llm.stream.end', timestamp=timestamp)
+def finish_http(outcome, status, http_status, elapsed, observation):
+    span = outcome['otel_span']
+    if span is None or not span.is_recording():
+        return
+    start_ns = outcome['start_ns']
+    end_ns = start_ns + int(elapsed * 1e9)
+    attrs = {'gen_ai.latency.e2e': elapsed, 'lmdeploy.http_total_seconds': elapsed}
+    try:
+        traces = outcome['traces']
+        if traces:
+            attrs['lmdeploy.token_counts_complete'] = status == 'success' and all(
+                t.token_counts_complete for t in traces)
+            # API choices share an input but each contributes its own output.
+            inputs = [t for t in traces if t.choice_index in (None, 0)]
+            for key, field, selected in (('input_tokens', 'prompt_tokens', inputs),
+                                         ('cached_tokens', 'cached_tokens', inputs),
+                                         ('output_tokens', 'output_tokens', traces)):
+                values = [getattr(t, field) for t in selected]
+                if values and all(v is not None for v in values):
+                    attrs['gen_ai.usage.' + key] = sum(values)
+            models = {t.model for t in traces if t.model}
+            if len(models) == 1:
+                attrs['gen_ai.request.model'] = attrs['gen_ai.response.model'] = models.pop()
+            start = start_ns / 1e9
+            end = end_ns / 1e9
+            first = min((t.first_token for t in traces if t.first_token is not None and start <= t.first_token <= end),
+                        default=None)
+            if first is not None:
+                attrs['gen_ai.latency.time_to_first_token'] = first - start
+        if observation.sse and observation.terminal:
+            span.add_event('llm.stream.end', timestamp=end_ns)
+        attrs.update({f'lmdeploy.{k}': v for k, v in observation.summary().items()})
+    finally:
+        attributes(span, attrs)
+        finish(span, status, end_ns=end_ns, http_status=http_status)
 
 
 def _after_fork():

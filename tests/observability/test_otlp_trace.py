@@ -330,6 +330,36 @@ class OTLPTests(unittest.TestCase):
         self.assertNotIn('request.id', root.attributes)
         self.assertEqual(root.status.status_code.name, 'ERROR')
         self.assertEqual(root.attributes['http.response.status_code'], 400)
+        self.assertAlmostEqual(root.attributes['gen_ai.latency.e2e'], (root.end_time - root.start_time) / 1e9)
+        self.assertNotIn('gen_ai.latency.time_to_first_token', root.attributes)
+        self.assertFalse(any(key.startswith('gen_ai.usage.') for key in root.attributes))
+
+    def test_http_5xx_after_successful_generation(self):
+        self.request(count=1, status=503)
+        spans = {s.name: s for s in self.exporter.get_finished_spans()}
+        for name in ('llm_request', 'inference'):
+            self.assertEqual(spans[name].attributes['http.response.status_code'], 503)
+            self.assertEqual(spans[name].status.status_code.name, 'ERROR')
+        self.assertEqual(spans['inference'].attributes['lmdeploy.outcome'], 'success')
+        for name in ('model.prefill', 'model.decode'):
+            self.assertEqual(spans[name].status.status_code.name, 'OK')
+            self.assertIs(spans[name].attributes['envoy.error'], False)
+
+    def test_failed_response_start_omits_http_code(self):
+        async def app(scope, receive, send):
+            await send({'type': 'http.response.start', 'status': 200, 'headers': []})
+
+        async def send(message):
+            raise BrokenPipeError()
+
+        with patch.object(obs, 'enabled', return_value=True), patch.object(obs, 'get_writer'), \
+                patch.object(obs, 'emit') as emit, self.assertRaises(BrokenPipeError):
+            asyncio.run(obs.RequestTraceMiddleware(app)(
+                {'type': 'http', 'method': 'POST', 'path': '/v1/completions'}, None, send))
+        root, = self.exporter.get_finished_spans()
+        self.assertEqual(root.status.status_code.name, 'ERROR')
+        self.assertNotIn('http.response.status_code', root.attributes)
+        self.assertIsNone(emit.call_args.kwargs['http_status'])
 
     def test_unsampled_parent_and_exception_privacy(self):
         self.request([(b'traceparent', ('00-'+'a'*32+'-'+'b'*16+'-00').encode())])
