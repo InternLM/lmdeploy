@@ -43,6 +43,13 @@ def _build_quantized_formats(model_format: str | None, group_size: int | None) -
     elif model_format == 'mxfp4':
         formats.append(MXFP4Format())
     elif model_format == 'nvfp4':
+        from lmdeploy.pytorch import envs as _pt_envs
+
+        if _pt_envs.tm_kernel_state('nvfp4') == 'off':
+            raise ValueError(
+                'NVFP4 checkpoints require the TurboMind W4A16 channel and '
+                'LMDEPLOY_TM_KERNELS sets the nvfp4 class to off; '
+                'dequantize the checkpoint offline or re-enable the class.')
         formats.append(NVFP4Format(block_in=group_size or 16))
     else:
         raise ValueError(f'unknown model_format: {model_format!r}')
