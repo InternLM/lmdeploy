@@ -1,4 +1,4 @@
-# Copyright (c) OpenMMLab. All rights reserved.
+# Copyright (c) Shanghai AI Laboratory. All rights reserved.
 
 import math
 from collections.abc import Iterable
@@ -453,6 +453,11 @@ class DeepseekV2Attention(nn.Module):
             device=device,
             is_tp=True,
             quant_config=quantization_config,
+            # MLA absorption reads the effective kv_b weight through
+            # get_unquantized_weight (a device-side forward through the
+            # packed channel), so this module keeps device-resident torch
+            # copies: exempt it from the CPU-direct storages at build time.
+            release_torch_weights=False,
         )
         self.kc = DeepseekV2BMM(self.num_heads,
                                 config.qk_nope_head_dim,
