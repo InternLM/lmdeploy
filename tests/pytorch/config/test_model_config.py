@@ -6,8 +6,8 @@ from lmdeploy.hf_configs import config_from_pretrained
 from lmdeploy.hf_configs.configuration_kimi_k2 import KimiK2Config
 from lmdeploy.pytorch.config import (
     CacheConfig,
-    DLLMConfig,
     DistConfig,
+    DLLMConfig,
     ModelConfig,
     QuantizationConfig,
     validate_dcp_dllm_compatibility,
