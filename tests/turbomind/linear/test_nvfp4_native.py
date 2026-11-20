@@ -79,6 +79,41 @@ def test_split_qkv_passes_global_scale_through():
         assert torch.equal(part.tensors['global_scale'], tensors['global_scale'])
 
 
+def test_w1w3_merge_rejects_mismatched_global_scales():
+    """The merged w1w3 layout has one global-scale slot and the merge keeps
+    only the first input's per-tensor tensors: separately-quantized gate/up
+    with differing global scales must raise loudly instead of silently applying
+    the gate's scale to the whole fused output."""
+    from lmdeploy.turbomind.builders.ffn import _block_pack_w1w3, _check_w1w3_global_scales
+    from lmdeploy.turbomind.builders.linear import Linear
+
+    def mk(gs):
+        fmt = NVFP4Format()
+        tensors = fmt.finalize({
+            'weight': torch.zeros((64, 8), dtype=torch.uint8),
+            'scales': torch.full((64 // 16, 8), 1.0, dtype=torch.float8_e4m3fn),
+            'global_scale': torch.tensor([gs], dtype=torch.float32),
+        })
+        return Linear(tensors=tensors, weight_format=fmt)
+
+    with pytest.raises(ValueError, match='global scale'):
+        _check_w1w3_global_scales(mk(2.0), mk(100.0))
+
+    # Equal scales (fused checkpoints like QUASAR share one gs) still merge.
+    gate, up = mk(2.0), mk(2.0)
+    _check_w1w3_global_scales(gate, up)
+    fused = _block_pack_w1w3(gate, up, groups=1)
+    assert 'global_scale' in fused.tensors
+    assert torch.equal(fused.tensors['global_scale'], gate.tensors['global_scale'])
+
+    # One-sided gs: merge proceeds with the present scale.
+    one_sided = mk(3.0)
+    bare = Linear(tensors={k: v for k, v in one_sided.tensors.items() if k != 'global_scale'},
+                  weight_format=one_sided.weight_format)
+    _check_w1w3_global_scales(one_sided, bare)
+    _check_w1w3_global_scales(bare, one_sided)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 def test_nvfp4_native_forward_matches_reference():
     """End-to-end: raw NVFP4 checkpoint -> native GEMM vs first-principles
