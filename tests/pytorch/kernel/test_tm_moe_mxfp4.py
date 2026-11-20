@@ -223,3 +223,35 @@ def test_pack_rejects_bias_without_act_override():
     with pytest.raises(ValueError, match='bias'):
         impl.update_weights(gate_up_blocks, gate_up_scales, torch.zeros(NUM_EXPERTS, 2 * FFN, device=device),
                             down.blocks.to(device), down.scales.to(device), None)
+
+
+def _ep_dist_context(ep: int, ep_rank: int, dp: int = 1):
+    """Single-process fake EP context (mirrors the W4A16 suite's helper)."""
+    from lmdeploy.pytorch.config import DistConfig
+    from lmdeploy.pytorch.distributed import DistContext, DistGroup
+
+    return DistContext(rank=ep_rank,
+                       dp_rank=0,
+                       ep_rank=ep_rank,
+                       dist_config=DistConfig(ep=ep, dp=dp),
+                       moe_tp_group=DistGroup(rank=0))
+
+
+def test_global_top_k_invariant_rejects_build():
+    """The global router invariant (top_k <= num_experts) fires on any EP width
+    before device/impl work, so a plain CPU build suffices."""
+    from lmdeploy.pytorch.distributed import get_dist_manager
+    from lmdeploy.pytorch.nn.moe.tm_mxfp4 import FusedMoETmMXFP4
+
+    with get_dist_manager().context(_ep_dist_context(2, 0)):
+        with pytest.raises(RuntimeError, match='top_k=8 <= num_experts=4'):
+            FusedMoETmMXFP4(
+                hidden_dim=64,
+                ffn_dim=32,
+                num_experts=4,
+                top_k=8,
+                dtype=torch.float16,
+                device=torch.device('cpu'),
+                group_size=32,
+                layer_idx=0,
+            )
