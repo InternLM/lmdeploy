@@ -12,7 +12,6 @@ import torch
 
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.cuda.tm_gemm_modules import TurbomindGemmW4A16Impl
-from lmdeploy.pytorch.backends.cuda.tm_weight_release import TorchWeightSpill
 from lmdeploy.pytorch.backends.tm_gemm_modules import LinearTmGemmBuildSpec
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
@@ -22,19 +21,25 @@ from .awq import AwqLinear, MergedAwqLinear, QKVAwqLinear
 class TmGemmLinearMixin:
     """TurboMind GEMM adaptation shared by the plain, merged, and QKV linears.
 
-    ``release_torch_weights`` (default true) lets ``update_weights`` spill the
-    packed torch weights to an exact CPU copy and free the GPU storage.
+    The TurboMind route packs CPU-direct: at module build time the packed
+    quant storages (qweight/scales/qzeros) are routed to the host, so the
+    loader fills CPU buffers and ``update_weights`` packs from host memory.
+    The raw weights never occupy device memory, so the former spill (copy to
+    CPU, free the GPU storage) has nothing left to free.
+
+    ``release_torch_weights`` (default true) selects this CPU-direct route.
     Modules that feed ``get_unquantized_weight`` (MLA absorption such as
-    kv_b_proj) set it to False; they keep their torch copies.
+    kv_b_proj) set it to False: they keep device-resident registered copies
+    because the absorption path reads them through the module.
 
     Two seams of the AWQ shapes are overridden:
 
     - ``_build_impl`` requests ``LinearTmGemmBuildSpec``. The backend probe
       then picks the TurboMind kernel per module and falls back to the AWQ
-      Triton kernel otherwise, mirroring the ``LMDEPLOY_W4A16_GEMM_BACKEND``
-      semantics.
-    - ``update_weights`` packs into the TurboMind channel and then spills the
-      raw torch weights to exact CPU copies, freeing GPU storage.
+      Triton kernel otherwise (which keeps CUDA-resident weights), mirroring
+      the ``LMDEPLOY_W4A16_GEMM_BACKEND`` semantics.
+    - ``update_weights`` packs into the TurboMind channel from the
+      registered storages (host-resident under the CPU-direct route).
     """
 
     def _build_impl(self, in_features: int, out_features: int, w_bit: int, group_size: int, bias: bool,
@@ -56,76 +61,86 @@ class TmGemmLinearMixin:
                 enable_deterministic=get_build_model_context().enable_deterministic,
             )
 
+    @property
+    def cpu_resident(self) -> bool:
+        """Whether the packed quant storages live on the host (CPU-direct
+        TurboMind route)."""
+        return (self.release_torch_weights
+                and isinstance(getattr(self, 'impl', None), TurbomindGemmW4A16Impl))
+
+    def register_all_parameters(self, qweight: torch.Tensor, scales: torch.Tensor, qzeros: torch.Tensor,
+                                bias: torch.Tensor | None = None):
+        """Register the packed storages as parameters.
+
+        At module build time the storages are still the untouched CUDA
+        empties ``create_weights`` produced. When the probe picked the
+        TurboMind channel (and the module is not MLA-exempt), they are
+        replaced with host empties so the loader fills CPU-direct buffers.
+        Later calls re-register the loaded storages verbatim: the channel
+        has already packed them, and a fresh allocation would only discard
+        data. Bias always stays on the module device — forward reads it
+        python-side on every call.
+        """
+        if self.cpu_resident and qweight.is_cuda:
+            qweight = torch.empty(tuple(qweight.shape), dtype=qweight.dtype, device='cpu')
+            scales = torch.empty(tuple(scales.shape), dtype=scales.dtype, device='cpu')
+            qzeros = torch.empty(tuple(qzeros.shape), dtype=qzeros.dtype, device='cpu')
+        super().register_all_parameters(qweight, scales, qzeros, bias)
+
+    def _apply(self, fn, recurse=True):
+        """Keep the host-resident quant storages out of module moves.
+
+        They are the CPU-direct pack source: the engine's moves (the
+        post-load ``Module.to(cuda)`` and wakeup's ``to(cuda)``) must not
+        re-upload them. Bias and any other registered tensors still travel.
+        """
+        if not self.cpu_resident:
+            return super()._apply(fn, recurse=recurse)
+        pinned = [(name, self._parameters.pop(name)) for name in ('qweight', 'scales', 'qzeros')
+                  if name in self._parameters]
+        try:
+            return super()._apply(fn, recurse=recurse)
+        finally:
+            for name, param in pinned:
+                self._parameters[name] = param
+
     def update_weights(self):
-        """Pack into the TurboMind channel, then spill the torch weights."""
+        """Pack into the TurboMind channel.
+
+        Under the CPU-direct route the registered storages are host-resident
+        and the channel's ``prepare_weight`` performs the H2D transform; no
+        device-side raw copy exists to spill. The Triton fallback keeps its
+        torch weights, and the MLA-exempt modules keep theirs by design.
+        """
         if self.qweight.numel() == 0:
-            # The module was not part of this update bucket and its weights
-            # are spilled; packing would read the emptied storages.
+            # A dummy/skipped module has empty storages; packing would read
+            # them pointlessly.
             return
         qweight, scales, qzeros, bias = self.impl.update_weights(self.qweight, self.scales, self.qzeros, self.bias)
         self.register_all_parameters(qweight, scales, qzeros, bias)
-        if not isinstance(self.impl, TurbomindGemmW4A16Impl):
-            # Triton fallback keeps its torch weights; nothing to spill.
-            return
-        if not self.release_torch_weights:
-            # MLA absorption reads the torch copies through
-            # get_unquantized_weight; keep them resident.
-            return
-        if self._spill is None:
-            self._spill = TorchWeightSpill()
-        # Bias is read in python on every forward, so it stays on the GPU.
-        self._spill.spill(
-            dict(
-                qweight=self.qweight,
-                scales=self.scales,
-                qzeros=self.qzeros,
-            )
-        )
 
     def sleep_release(self):
         """Release the native packed handle ahead of ``Module.to``.
 
-        The packed weight is not a registered tensor, so the model move cannot free it. Modules with spilled torch
-        weights keep their CPU copies authoritative; resident modules (never packed, or kept for MLA absorption) leave
-        the registered copies to travel with the model move.
+        The packed weight is not a registered tensor, so the model move cannot free it. CPU-direct modules keep their
+        host-resident storages; MLA-exempt modules keep the registered CUDA copies, which travel with the model move.
         """
         if not isinstance(self.impl, TurbomindGemmW4A16Impl):
             return
         self.impl.sleep_release()
-        if self.qweight is None or self.qweight.numel() == 0:
-            # Already spilled; the CPU copies stay authoritative.
-            return
-        if not self.release_torch_weights:
-            # MLA absorption reads the registered torch copies; they move
-            # with the model, so no spill is needed.
-            return
-        if self._spill is None:
-            self._spill = TorchWeightSpill()
-        self._spill.spill(dict(qweight=self.qweight, scales=self.scales, qzeros=self.qzeros))
 
     def sleep_wakeup(self):
-        """Restore spilled torch weights, re-pack, and re-spill.
+        """Re-pack after the model move.
 
-        The re-spill keeps the steady state after a sleep/wakeup cycle
-        identical to after a hot update: empty GPU storages, authoritative
-        CPU copies, and only the packed handle resident.
+        CPU-direct modules re-pack from the unchanged host storages; MLA-exempt modules re-pack from their registered
+        CUDA copies. No spill/restore exists in either path.
         """
         if not isinstance(self.impl, TurbomindGemmW4A16Impl):
             return
-        if self._spill is not None:
-            self._spill.restore()
         if self.qweight.numel() == 0:
-            raise RuntimeError(
-                'TurboMind W4A16 weights are still spilled after wakeup; '
-                'the module was never loaded.'
-            )
+            raise RuntimeError('TurboMind W4A16 weights were never loaded; '
+                               'wakeup cannot re-pack an empty module.')
         self.impl.sleep_wakeup(self.qweight, self.scales, self.qzeros, self.bias)
-        if not self.release_torch_weights:
-            # MLA absorption reads the registered torch copies; keep them.
-            return
-        if self._spill is None:
-            self._spill = TorchWeightSpill()
-        self._spill.spill(dict(qweight=self.qweight, scales=self.scales, qzeros=self.qzeros))
 
 
 class TmGemmLinear(TmGemmLinearMixin, AwqLinear):
@@ -153,7 +168,6 @@ class TmGemmLinear(TmGemmLinearMixin, AwqLinear):
     ):
         # The mixin reads these while the AWQ base class builds the operator.
         self.release_torch_weights = release_torch_weights
-        self._spill: TorchWeightSpill | None = None
         self.tm_prefix = prefix
         super().__init__(
             in_features,
@@ -188,7 +202,6 @@ class MergedTmGemmLinear(TmGemmLinearMixin, MergedAwqLinear):
                  release_torch_weights: bool = True,
                  prefix: str = ''):
         self.release_torch_weights = release_torch_weights
-        self._spill: TorchWeightSpill | None = None
         self.tm_prefix = prefix
         super().__init__(
             in_features,
@@ -221,7 +234,6 @@ class QKVTmGemmLinear(TmGemmLinearMixin, QKVAwqLinear):
                  release_torch_weights: bool = True,
                  prefix: str = ''):
         self.release_torch_weights = release_torch_weights
-        self._spill: TorchWeightSpill | None = None
         self.tm_prefix = prefix
         super().__init__(
             in_features,
