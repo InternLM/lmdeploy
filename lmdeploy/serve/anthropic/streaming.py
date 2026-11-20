@@ -10,6 +10,7 @@ from typing import Any
 
 from lmdeploy.serve.core.exceptions import RequestError
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+from lmdeploy.serve.openai.utils import filter_parallel_tool_call_deltas
 
 from .adapter import map_finish_reason
 from .errors import anthropic_error_from_request
@@ -253,8 +254,9 @@ async def stream_messages_response(parsed_stream,
         delta_output_ids = delta_token_ids if return_token_ids and chunk.is_last_delta else None
         delta_output_logprobs = delta_logprobs if chunk.is_last_delta else None
         metadata_emitted = delta_output_ids is None and delta_output_logprobs is None
+        tool_deltas = filter_parallel_tool_call_deltas(delta_message.tool_calls, request.parallel_tool_calls)
         has_content = bool(delta_message.content)
-        has_tools = bool(delta_message.tool_calls)
+        has_tools = bool(tool_deltas)
 
         if delta_message.reasoning_content:
             for event in _start_text_or_thinking(block_state, 'thinking'):
@@ -286,8 +288,8 @@ async def stream_messages_response(parsed_stream,
             metadata_emitted = metadata_emitted or (
                 content_output_ids is not None or content_output_logprobs is not None)
 
-        if delta_message.tool_calls:
-            for tool_index, tool_delta in enumerate(delta_message.tool_calls):
+        if tool_deltas:
+            for tool_index, tool_delta in enumerate(tool_deltas):
                 for event in _start_tool_block(block_state, tool_delta):
                     yield event
                 function_delta = tool_delta.function
@@ -297,7 +299,7 @@ async def stream_messages_response(parsed_stream,
                 if partial_json:
                     output_ids = None
                     output_token_logprobs = None
-                    if tool_index == len(delta_message.tool_calls) - 1:
+                    if tool_index == len(tool_deltas) - 1:
                         output_ids = delta_output_ids
                         output_token_logprobs = delta_output_logprobs
                     yield _format_sse(

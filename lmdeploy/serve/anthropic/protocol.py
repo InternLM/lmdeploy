@@ -76,12 +76,14 @@ class ToolChoiceAutoParam(BaseModel):
     """Let model decide whether to call tools."""
 
     type: Literal['auto'] = 'auto'
+    disable_parallel_tool_use: bool | None = None
 
 
 class ToolChoiceAnyParam(BaseModel):
     """Require model to call at least one tool."""
 
     type: Literal['any'] = 'any'
+    disable_parallel_tool_use: bool | None = None
 
 
 class ToolChoiceToolParam(BaseModel):
@@ -89,6 +91,7 @@ class ToolChoiceToolParam(BaseModel):
 
     type: Literal['tool'] = 'tool'
     name: str
+    disable_parallel_tool_use: bool | None = None
 
 
 ToolChoiceParam = ToolChoiceAutoParam | ToolChoiceAnyParam | ToolChoiceToolParam
