@@ -774,9 +774,8 @@ class ModelConfig:
 def validate_dcp_dllm_compatibility(model_config: ModelConfig, block_length: int) -> None:
     """Reject block-sparse dLLM attention when DCP is enabled.
 
-    The DCP GQA implementation currently evaluates dense attention.  The
-    effective dLLM block length must therefore be one before the attention
-    backend is constructed.
+    The DCP GQA implementation currently evaluates dense attention.  The effective dLLM block length must therefore be
+    one before the attention backend is constructed.
     """
     dist_config = model_config.dist_config
     if (dist_config is None or dist_config.dcp <= 1 or model_config.model_paradigm != 'dllm'
