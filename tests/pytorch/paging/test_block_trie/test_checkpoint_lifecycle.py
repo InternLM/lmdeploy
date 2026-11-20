@@ -773,9 +773,74 @@ class TestStateCheckpointLifecycle(BlockTrieTestMixin):
         assert block_trie.state_checkpoints.unpin_save(seq)
         assert block_trie.evict(1) == 1
         assert node.state_checkpoint is None
-        # The frozen-block release is counted by the checkpoint lifecycle, so
+        # The frozen-block release is counted by the shared eviction loop, so
         # the KV-pressure path must not add it a second time.
         assert block_trie.num_evicted_blocks == 1
+
+    def test_evicted_blocks_ignores_discarded_save(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * (block_size * 2 + 1)
+
+        seq = ssm_scheduler.add_session(0).add_sequence(token_ids)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        assert block_trie.state_checkpoints.reserve_save(seq) >= 0
+        node = seq.prefix_cache.pending_save.node
+        assert node.state_checkpoint.frozen_block_id >= 0
+        free_blocks = block_mgr.get_num_free_gpu_blocks()
+
+        assert block_trie.state_checkpoints.discard_save(seq)
+
+        # Discarding an unpublished reservation returns the frozen block but
+        # reclaims no cached prefix, so it is not an eviction.
+        assert block_mgr.get_num_free_gpu_blocks() == free_blocks + 1
+        assert block_trie.num_evicted_blocks == 0
+
+    def test_evicted_blocks_ignores_cleared_trie(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * (block_size * 2 + 1)
+
+        seq = ssm_scheduler.add_session(0).add_sequence(token_ids)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        assert block_trie.state_checkpoints.reserve_save(seq) >= 0
+        node = seq.prefix_cache.pending_save.node
+        assert block_trie.state_checkpoints.publish_save(seq)
+        assert node.state_checkpoint.frozen_block_id >= 0
+        free_blocks = block_mgr.get_num_free_gpu_blocks()
+
+        ssm_scheduler.end_session(0)
+        block_trie.clear()
+
+        # The frozen tail comes back with the trie, but nothing was evicted.
+        assert block_mgr.get_num_free_gpu_blocks() > free_blocks
+        assert block_trie.num_evicted_blocks == 0
+
+    def test_evicted_blocks_ignores_replaced_checkpoint(self, ssm_scheduler):
+        block_mgr = ssm_scheduler.block_manager
+        block_trie = ssm_scheduler.block_trie
+        block_size = ssm_scheduler.seq_meta.block_size
+        token_ids = [1] * (block_size * 2 + 1)
+
+        seq = ssm_scheduler.add_session(0).add_sequence(token_ids)
+        block_mgr.allocate(seq)
+        block_trie.allocate(seq)
+        assert block_trie.state_checkpoints.reserve_save(seq, step=block_size * 2 + 1) >= 0
+        node = seq.prefix_cache.pending_save.node
+        checkpoint = node.state_checkpoint
+        assert block_trie.state_checkpoints.publish_save(seq)
+        assert checkpoint.frozen_block_id >= 0
+
+        # Replacing the partial checkpoint with an aligned one frees its frozen
+        # tail, but nothing was evicted.
+        assert block_trie.state_checkpoints.reserve_save(seq, step=block_size * 2) >= 0
+        assert node.state_checkpoint is checkpoint
+        assert checkpoint.frozen_block_id < 0
+        assert block_trie.num_evicted_blocks == 0
 
     @pytest.mark.parametrize('pressure_path', ['runtime', 'checkpoint'])
     def test_evicted_blocks_count_state_pressure_frozen_block(self, ssm_cache_config, scheduler_config, seq_meta,

@@ -656,3 +656,25 @@ def test_failed_unpublished_decode_replacement_unpins_old_only_at_actual_complet
     owner.free(seq)
     lifecycle.evict(100)
     assert not owner._units
+
+
+def test_evicted_blocks_count_compact_frozen_tail():
+    """A compact checkpoint owns its frozen tail through its own release path,
+    so the shared eviction loop must still count the block it frees."""
+    scheduler, owner, trie = _environment()
+    lifecycle = trie.state_checkpoints
+    # An 80-token checkpoint anchors at 64 tokens and owns one frozen tail.
+    seq = _sequence(scheduler, owner, trie, list(range(80)))
+    assert lifecycle.reserve_save(seq, step=80) >= 0
+    node = seq.prefix_cache.pending_save.node
+    _, access = _submit(owner, seq)
+    assert lifecycle.publish_save(seq)
+    owner.acknowledge(access.access_id)
+    assert node.state_checkpoint.frozen_block_id >= 0
+    assert trie.num_evicted_blocks == 0
+
+    free_blocks = scheduler.block_manager.get_num_free_gpu_blocks()
+    assert trie.evict(1) == 1
+    assert node.state_checkpoint is None
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == free_blocks + 1
+    assert trie.num_evicted_blocks == 1

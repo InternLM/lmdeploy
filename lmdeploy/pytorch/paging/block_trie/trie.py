@@ -208,8 +208,8 @@ class BlockTrie:
 
     @property
     def num_evicted_blocks(self) -> int:
-        """Cumulative blocks evicted, including checkpoint-frozen partial blocks."""
-        return self._kv_evicted_blocks + self._state_checkpoints.num_frozen_blocks_released
+        """Cumulative blocks evicted, including checkpoint-frozen tails."""
+        return self._kv_evicted_blocks + self._state_checkpoints.num_frozen_blocks_evicted
 
     def _record_match_stats(self, seq: SchedulerSequence, query_tokens: int, hit_tokens: int = 0):
         """Record a user-visible prefix-cache match attempt."""
@@ -759,8 +759,8 @@ class BlockTrie:
         kv_evicted = 0
         if evicted < max_num_blocks:
             kv_evicted = self._kv_lifecycle.evict(max_num_blocks - evicted)
-        # Frozen-block releases are already counted by the checkpoint lifecycle
-        # (they also happen outside this method under state pressure), so only
-        # trie-owned leaf frees are accumulated here to avoid double counting.
+        # Every eviction path (KV pressure here, state pressure inside the
+        # checkpoint lifecycle) funnels through the shared eviction loops, so
+        # the counter never sees a release that is not an eviction.
         self._kv_evicted_blocks += kv_evicted
         return evicted + kv_evicted
