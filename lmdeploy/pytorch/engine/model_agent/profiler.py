@@ -40,7 +40,7 @@ class AgentProfiler:
             logger.warning('Do not support duration<=0 for dp > 1.')
             self.profiler = None
 
-    def begin_step(self, inputs):
+    def begin_step(self, inputs, *, access_id, worker_started_at, prepare_ms, dp_wait_ms):
         """Record stream time without adding a synchronization to inference."""
         start = torch.cuda.Event(enable_timing=True)
         start.record(self.stream)
@@ -48,6 +48,7 @@ class AgentProfiler:
         self._phase_marks = []
         self._phase_step = (start, time.perf_counter(), dict(
             rank=self.rank, dp_rank=self.dp_rank, step=self._phase_index, started_at=time.time(),
+            access_id=access_id, worker_started_at=worker_started_at, prepare_ms=prepare_ms, dp_wait_ms=dp_wait_ms,
             prefill=not inputs.is_decoding, dummy=inputs.is_dummy,
             skip_sampling=inputs.skip_sampling,
             batch=inputs.seq_length.numel(), tokens=inputs.input_ids.numel()))

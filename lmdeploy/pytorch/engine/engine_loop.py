@@ -617,6 +617,7 @@ class EngineLoop:
         out = await self.executor.get_output_async()
         if PROFILE_PHASES:
             trace_phase('engine_step', role=self.config.role.name, sessions=step_sessions,
+                        dp_rank=self.executor.dist_config.dp_rank, access_id=ssm_state_access_id,
                         prefill=model_inputs is not None and not model_inputs.is_decoding,
                         prefetch_ms=(prefetch_end - step_begin) * 1000,
                         output_wait_ms=(time.perf_counter() - prefetch_end) * 1000)

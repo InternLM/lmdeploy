@@ -383,6 +383,10 @@ class KVCacheStoreSendingThread(threading.Thread):
             total_bytes,
             (time.perf_counter() - start) * 1000,
         )
+        if PROFILE_PHASES:
+            trace_phase('store_put', rank=self.global_rank, seq_id=request.request_id, save_id=request.save_id,
+                        bytes=total_bytes, keys=len(missing_keys), native_ms=(time.perf_counter() - start) * 1000,
+                        success=not failed)
         return not failed
 
     def _save(self, task: _SaveTask) -> bool:
