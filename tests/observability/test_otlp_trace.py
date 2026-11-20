@@ -21,7 +21,7 @@ try:
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
     from opentelemetry.sdk.trace.sampling import ALWAYS_ON, ParentBased
-    from opentelemetry.trace import SpanKind
+    from opentelemetry.trace import SpanKind, StatusCode
     SDK = True
 except ImportError:
     SDK = False
@@ -101,7 +101,7 @@ class OTLPTests(unittest.TestCase):
             self.assertEqual(phase.kind, SpanKind.INTERNAL)
             self.assertEqual(phase.attributes['inference.engine'], 'lmdeploy')
             self.assertEqual(phase.attributes['inference.role'], 'full')
-            self.assertIs(phase.attributes['envoy.error'], False)
+            self.assertNotIn('envoy.error', phase.attributes)
             self.assertEqual(phase.parent, root.parent)
             self.assertEqual(phase.context.trace_id, root.context.trace_id)
             self.assertIn(phase.attributes['lmdeploy.prompt_index'], (0, 1))
@@ -343,7 +343,7 @@ class OTLPTests(unittest.TestCase):
         self.assertEqual(spans['inference'].attributes['lmdeploy.outcome'], 'success')
         for name in ('model.prefill', 'model.decode'):
             self.assertEqual(spans[name].status.status_code.name, 'OK')
-            self.assertIs(spans[name].attributes['envoy.error'], False)
+            self.assertNotIn('envoy.error', spans[name].attributes)
 
     def test_failed_response_start_omits_http_code(self):
         async def app(scope, receive, send):
@@ -500,7 +500,8 @@ class OTLPTests(unittest.TestCase):
         self.request(crash=True)
         phases = [s for s in self.exporter.get_finished_spans() if s.name in ('model.prefill', 'model.decode')]
         self.assertEqual(len(phases), 4)
-        self.assertTrue(all(s.attributes['envoy.error'] is True for s in phases))
+        self.assertTrue(all('envoy.error' not in s.attributes for s in phases))
+        self.assertTrue(all(s.status.status_code is StatusCode.ERROR for s in phases))
         for span in self.exporter.get_finished_spans():
             if span.name in ('inference', 'llm_request'):
                 self.assertFalse(span.attributes['lmdeploy.token_counts_complete'])
@@ -591,8 +592,7 @@ class OTLPTests(unittest.TestCase):
                             attrs = {a.key: a.value for a in phase.attributes}
                             self.assertEqual(attrs['inference.role'].string_value, 'full')
                             self.assertEqual(attrs['inference.engine'].string_value, 'lmdeploy')
-                            self.assertEqual(attrs['envoy.error'].WhichOneof('value'), 'bool_value')
-                            self.assertFalse(attrs['envoy.error'].bool_value)
+                            self.assertNotIn('envoy.error', attrs)
                         self.assertTrue(all(len(s.trace_id) == 16 and len(s.span_id) == 8 for s in spans))
                         root = next(s for s in spans if s.name == 'llm_request')
                         attrs = {a.key: a.value.string_value for a in root.attributes}

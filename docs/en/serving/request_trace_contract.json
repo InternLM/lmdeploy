@@ -16,7 +16,6 @@
   "allowed_attributes": [
     "inference.engine",
     "inference.role",
-    "envoy.error",
     "request.id",
     "session.id",
     "trace.context.missing",
