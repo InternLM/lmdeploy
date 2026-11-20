@@ -3,9 +3,14 @@
 
 from __future__ import annotations
 
+import functools
+import importlib
+import inspect
+import os
 import re
+import types
 from collections.abc import Iterable, Sequence
-from functools import partial
+from functools import lru_cache, partial
 from typing import Any
 
 import torch
@@ -86,8 +91,6 @@ from .qwen3_vl import Qwen3VLInputProcessor
 from .utils.cudagraph import PiecewiseCudaGraphMixin
 from .utils.model import build_embedding, vlm_model
 
-Glm5NextVisionRMSNorm = RMSNorm
-
 
 def _build_glm53_latent_norm(hidden_size: int, eps: float,
                              dtype: torch.dtype | None,
@@ -124,10 +127,306 @@ _GLM53_COMPACT_FP8_MOE_ACT.masked_post_quant = partial(
     silu_and_mul_masked_post_quant_fwd, swiglu_limit=10.0, precise_mul=True)
 
 
+# Optional vision operator adapters remain local to this model so their
+# input contracts and fallback behavior are visible beside their call sites.
+_TRUE_VALUES = frozenset(('1', 'true', 'yes', 'on'))
+
+
+def _env_enabled(name: str) -> bool:
+    return os.getenv(name, '0').strip().lower() in _TRUE_VALUES
+
+
+VISION_FA3_ENABLED = _env_enabled('LMDEPLOY_GLM53_VISION_FA3')
+VISION_PROJECTOR_LN_ENABLED = _env_enabled('LMDEPLOY_GLM53_VISION_XT_PROJECTOR_LN')
+VISION_ROPE_FMA_OFF_ENABLED = _env_enabled('LMDEPLOY_GLM53_VISION_ROPE_FMA_OFF')
+VISION_XT_RMS_NORM_ENABLED = _env_enabled('LMDEPLOY_GLM53_VISION_XT_RMS_NORM')
+VISION_XT_PATCH_EMBED_ENABLED = _env_enabled('LMDEPLOY_GLM53_VISION_XT_PATCH_EMBED')
+
+
+@lru_cache(maxsize=1)
+def _get_fa3_function():
+    function = importlib.import_module('flash_attn_interface').flash_attn_varlen_func
+    required = {
+        'seqused_q', 'seqused_k', 'qv', 'q_descale', 'k_descale', 'v_descale',
+        'attention_chunk', 'num_splits', 'pack_gqa', 'sm_margin',
+        'return_attn_probs'
+    }
+    if not required.issubset(inspect.signature(function).parameters):
+        raise RuntimeError('The installed FA3 varlen API is not supported')
+    return function
+
+
+def _run_fa3(query, key, value, q_start_loc, q_seqlens, max_q_seqlen, scale):
+    last_q_end = q_start_loc[-1] + q_seqlens[-1]
+    cu_seqlens = torch.cat((q_start_loc, last_q_end.reshape(1)))
+    return _get_fa3_function()(
+        query,
+        key,
+        value,
+        cu_seqlens,
+        cu_seqlens,
+        max_q_seqlen,
+        max_q_seqlen,
+        seqused_q=None,
+        seqused_k=None,
+        softmax_scale=scale,
+        causal=False,
+        qv=None,
+        q_descale=None,
+        k_descale=None,
+        v_descale=None,
+        window_size=(-1, -1),
+        attention_chunk=0,
+        softcap=0.0,
+        num_splits=1,
+        pack_gqa=None,
+        deterministic=os.getenv('XTUNER_DETERMINISTIC') == 'true',
+        sm_margin=int(os.getenv('XTUNER_SM_MARGIN', '0')),
+        return_attn_probs=False,
+    )
+
+
+class VisionFA3Attention(nn.Module):
+    """Use FA3 for the supported eager vision-prefill shape."""
+
+    def __init__(self, original: nn.Module):
+        super().__init__()
+        self.original = original
+        self.scale = original.impl.scale
+
+    @staticmethod
+    def _supports(query, key, value, q_start_loc, q_seqlens, kv_start_loc,
+                  kv_seqlens, max_q_seqlen):
+        return (
+            query.device.type == 'cuda'
+            and query.dtype == key.dtype == value.dtype == torch.bfloat16
+            and query.device == key.device == value.device == q_start_loc.device
+            and query.device == q_seqlens.device
+            and query.ndim == key.ndim == value.ndim == 3
+            and query.shape == key.shape == value.shape
+            and query.shape[0] > 0
+            and query.shape[1:] == (16, 64)
+            and not any(tensor.requires_grad for tensor in (query, key, value))
+            and q_start_loc.dtype == q_seqlens.dtype == torch.int32
+            and q_start_loc.ndim == q_seqlens.ndim == 1
+            and q_start_loc.numel() == q_seqlens.numel() > 0
+            and kv_start_loc is None
+            and kv_seqlens is None
+            and isinstance(max_q_seqlen, int)
+            and max_q_seqlen > 0
+        )
+
+    def forward(self,
+                query,
+                key,
+                value,
+                q_start_loc,
+                q_seqlens,
+                kv_start_loc=None,
+                kv_seqlens=None,
+                max_q_seqlen=None):
+        kwargs = dict(
+            q_start_loc=q_start_loc,
+            q_seqlens=q_seqlens,
+            kv_start_loc=kv_start_loc,
+            kv_seqlens=kv_seqlens,
+            max_q_seqlen=max_q_seqlen,
+        )
+        if (self.training or torch.cuda.is_current_stream_capturing()
+                or not self._supports(query, key, value, q_start_loc, q_seqlens,
+                                      kv_start_loc, kv_seqlens, max_q_seqlen)):
+            return self.original(query, key, value, **kwargs)
+        return _run_fa3(query, key, value, q_start_loc, q_seqlens,
+                        max_q_seqlen, self.scale)
+
+
+def build_vision_flash_attention(original: nn.Module,
+                                 enabled: bool | None = None) -> nn.Module:
+    enabled = VISION_FA3_ENABLED if enabled is None else enabled
+    if not enabled:
+        return original
+    impl = original.impl
+    if not (
+            impl.num_heads == impl.num_kv_heads == 16
+            and impl.head_dim == impl.v_head_dim == 64
+            and impl.causal is False
+            and impl.scale == 0.125
+            and impl.sliding_window is None
+            and impl.logit_softcapping in (None, 0, 0.0)):
+        return original
+    return VisionFA3Attention(original)
+
+
+class _NoFusionKernelLaunch:
+    def __init__(self, original):
+        self.original = original
+
+    def __getitem__(self, grid):
+        original_launch = self.original[grid]
+
+        def launch(*args, **kwargs):
+            kwargs['enable_fp_fusion'] = False
+            return original_launch(*args, **kwargs)
+
+        return launch
+
+
+def _bind_no_fusion_function(native=None):
+    if native is None:
+        native = importlib.import_module(
+            'lmdeploy.pytorch.kernels.cuda.apply_rotary_pos_emb').apply_rotary_pos_emb
+    kernel_name = 'apply_rotary_pos_emb_qk_kernel'
+    if not isinstance(native, types.FunctionType) or kernel_name not in native.__globals__:
+        raise RuntimeError('The installed rotary kernel does not expose the expected Triton kernel')
+    local_globals = dict(native.__globals__)
+    local_globals[kernel_name] = _NoFusionKernelLaunch(local_globals[kernel_name])
+    bound = types.FunctionType(native.__code__, local_globals, native.__name__,
+                               native.__defaults__, native.__closure__)
+    bound.__kwdefaults__ = native.__kwdefaults__
+    functools.update_wrapper(bound, native)
+    return bound
+
+
+class VisionRoPEFmaOff(nn.Module):
+    """Disable Triton FP fusion for the supported vision RoPE shape."""
+
+    def __init__(self, original: nn.Module):
+        super().__init__()
+        self.original = original
+        self.native_function = _bind_no_fusion_function()
+
+    @staticmethod
+    def _supports(query, key, cos, sin, inplace, complex_mode):
+        return (
+            not inplace
+            and not complex_mode
+            and query.device.type == 'cuda'
+            and query.device == key.device == cos.device == sin.device
+            and query.dtype == key.dtype == torch.bfloat16
+            and query.ndim == key.ndim == 3
+            and query.shape == key.shape
+            and query.shape[0] > 0
+            and query.shape[1:] == (16, 64)
+            and cos.ndim == sin.ndim == 2
+            and cos.shape == sin.shape == (query.shape[0], 64)
+            and cos.dtype in (torch.float32, torch.bfloat16)
+            and sin.dtype == cos.dtype
+            and cos.is_contiguous()
+            and sin.is_contiguous()
+            and not any(tensor.requires_grad for tensor in (query, key, cos, sin))
+        )
+
+    def forward(self, query, key, cos, sin, inplace=True, complex_mode=False):
+        if (self.training or torch.cuda.is_current_stream_capturing()
+                or not self._supports(query, key, cos, sin, inplace, complex_mode)):
+            return self.original(query,
+                                key,
+                                cos,
+                                sin,
+                                inplace=inplace,
+                                complex_mode=complex_mode)
+        return self.native_function(query,
+                                    key,
+                                    cos,
+                                    sin,
+                                    complex_mode=False,
+                                    enable_fp32_compute=True)
+
+
+def build_vision_rope_fma_off(original: nn.Module,
+                              enabled: bool | None = None) -> nn.Module:
+    enabled = VISION_ROPE_FMA_OFF_ENABLED if enabled is None else enabled
+    if not enabled or not getattr(original.impl, 'enable_fp32_compute', False):
+        return original
+    return VisionRoPEFmaOff(original)
+
+
+class Glm53VisionRMSNorm(nn.Module):
+    """FP32-statistics RMSNorm used by the optional XT vision path."""
+
+    def __init__(self,
+                 hidden_size,
+                 eps=1e-6,
+                 dtype=None,
+                 device=None,
+                 quant_config=None,
+                 tp=False,
+                 align=1,
+                 prefix='',
+                 all_reduce_group=None):
+        super().__init__()
+        if (hidden_size not in (64, 1024) or quant_config is not None or tp
+                or all_reduce_group is not None or align != 1):
+            raise ValueError(
+                'Vision XT RMS supports only unquantized TP1 D64/D1024 norms')
+        dtype = torch.float16 if dtype is None else dtype
+        device = 'cuda' if device is None else device
+        self.weight = nn.Parameter(
+            torch.ones(hidden_size, dtype=dtype, device=device),
+            requires_grad=False)
+        self.eps = eps
+        self.variance_epsilon = eps
+
+    def forward(self, x, residual=None):
+        if x.shape[-1] != self.weight.numel():
+            raise ValueError('Vision XT RMS input width does not match its weight')
+        if residual is not None:
+            x = x + residual
+        input_dtype = x.dtype
+        hidden_states = x.float()
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        output = self.weight * hidden_states.to(input_dtype)
+        return output if residual is None else (output, x)
+
+
+def get_vision_rms_norm_class(original_class):
+    return (Glm53VisionRMSNorm if VISION_XT_RMS_NORM_ENABLED else original_class)
+
+
+def vision_qk_norm_eps(config_eps, original_eps=1e-6):
+    return config_eps if VISION_XT_RMS_NORM_ENABLED else original_eps
+
+
+def build_vision_projector_norm(original_class,
+                                hidden_size,
+                                *,
+                                dtype,
+                                device):
+    if not VISION_PROJECTOR_LN_ENABLED:
+        return original_class(hidden_size,
+                              eps=1e-6,
+                              dtype=torch.float32,
+                              device=device)
+    if hidden_size != 4096 or dtype != torch.bfloat16:
+        raise ValueError('Vision projector LayerNorm requires BF16 D4096')
+    result = nn.LayerNorm(hidden_size,
+                          eps=1e-5,
+                          elementwise_affine=True,
+                          bias=True,
+                          dtype=dtype,
+                          device=device)
+    result.requires_grad_(False)
+    return result
+
+
+def vision_projector_norm_input(value):
+    if not VISION_PROJECTOR_LN_ENABLED:
+        return value.float()
+    if value.dtype != torch.bfloat16 or value.ndim != 2 or value.shape[-1] != 4096:
+        raise ValueError('Vision projector LayerNorm requires [N,4096] BF16 input')
+    return value
+
+
+Glm5NextVisionRMSNorm = get_vision_rms_norm_class(RMSNorm)
+
+
 class Glm5NextVisionPatchEmbed(Glm4vVisionPatchEmbed):
     """Patch embedding with SGLang's unfold-plus-linear reduction order."""
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if VISION_XT_PATCH_EMBED_ENABLED:
+            return super().forward(hidden_states)
         target_dtype = self.proj.weight.dtype
         hidden_states = hidden_states.view(
             -1,
@@ -156,14 +455,16 @@ class Glm5NextVisionAttention(Glm4vVisionAttention):
         # Reuse LMDeploy's QKV/row-parallel projections and rotary operator.
         # Vision weights stay in BF16 even when the language tower is block-FP8.
         super().__init__(config, dtype=dtype, device=device)
+        self.attention = build_vision_flash_attention(self.attention)
         self.apply_rotary_pos_emb = ApplyRotaryEmb(enable_fp32_compute=True)
+        self.apply_rotary_pos_emb = build_vision_rope_fma_off(self.apply_rotary_pos_emb)
         self.q_norm = Glm5NextVisionRMSNorm(self.head_dim,
-                                           eps=self.qk_norm_eps,
+                                           eps=vision_qk_norm_eps(config.rms_norm_eps, self.qk_norm_eps),
                                            quant_config=None,
                                            dtype=dtype,
                                            device=device)
         self.k_norm = Glm5NextVisionRMSNorm(self.head_dim,
-                                           eps=self.qk_norm_eps,
+                                           eps=vision_qk_norm_eps(config.rms_norm_eps, self.qk_norm_eps),
                                            quant_config=None,
                                            dtype=dtype,
                                            device=device)
@@ -248,7 +549,7 @@ class Glm5NextVisionPatchMerger(nn.Module):
                               bias=False,
                               dtype=dtype,
                               device=device)
-        self.post_projection_norm = LayerNorm(dim, eps=1e-6, dtype=torch.float32, device=device)
+        self.post_projection_norm = build_vision_projector_norm(LayerNorm, dim, dtype=dtype, device=device)
         nn.init.zeros_(self.post_projection_norm.bias)
         self.gate_up_proj = build_merged_colwise_linear(
             in_features=dim,
@@ -272,7 +573,7 @@ class Glm5NextVisionPatchMerger(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.proj(hidden_states)
-        hidden_states = self.post_projection_norm(hidden_states.float()).to(hidden_states.dtype)
+        hidden_states = self.post_projection_norm(vision_projector_norm_input(hidden_states)).to(hidden_states.dtype)
         hidden_states = self.act1(hidden_states)
         hidden_states = self.gate_up_proj(hidden_states)
         hidden_states = _glm_swiglu_impl(hidden_states,
