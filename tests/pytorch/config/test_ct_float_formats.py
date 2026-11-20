@@ -208,6 +208,23 @@ class TestParse:
         assert quant.weight_block_size == (128, 128)
         assert quant.get_quant_method('model.layers.0.mlp.gate_proj') == 'ct_fp8'
 
+    def test_config_group_0_fallback(self):
+        """Ornith-style checkpoints name the group `config_group_0`; the parser
+        falls back to the only entry."""
+        config = dict(_FP8_PER_CHANNEL_CONFIG)
+        groups = config['config_groups']
+        config['config_groups'] = {'config_group_0': groups['group_0']}
+        bits, group_size, _, ct_format = _parse_compressed_tensors_config(config)
+        assert (bits, group_size, ct_format) == (8, None, 'float-quantized')
+
+    def test_rejects_multiple_groups(self):
+        config = dict(_FP8_PER_CHANNEL_CONFIG)
+        groups = config['config_groups']
+        config['config_groups'] = dict(groups)
+        config['config_groups']['group_1'] = groups['group_0']
+        with pytest.raises(ValueError, match='exactly one'):
+            _parse_compressed_tensors_config(config)
+
     def test_fp8_per_channel(self):
         bits, group_size, ignored, ct_format = _parse_compressed_tensors_config(_FP8_PER_CHANNEL_CONFIG)
         assert (bits, group_size, ct_format) == (8, None, 'float-quantized')
