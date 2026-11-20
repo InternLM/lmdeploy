@@ -59,6 +59,7 @@ def _gated_delta_preprocess_kernel(
     EPS: tl.constexpr,
     USE_INIT_TOKEN_MASK: tl.constexpr,
     APPLY_QK_L2NORM: tl.constexpr,
+    REPEAT_KV: tl.constexpr,
 ):
     batch_id = tl.program_id(0)
     src_head_id = tl.program_id(1)
@@ -131,14 +132,17 @@ def _gated_delta_preprocess_kernel(
     )
 
     for rep in tl.static_range(0, KV_RATIO):
-        dst_head_id = src_head_id * KV_RATIO + rep
+        dst_head_id = src_head_id * KV_RATIO + rep if REPEAT_KV else src_head_id
 
         q_out_ptrs = q_out + q_out_batch_offset + offs_t[:, None] * q_out_stride_t \
             + dst_head_id * q_out_stride_h + offs_d[None, :] * q_out_stride_d
         k_out_ptrs = k_out + k_out_batch_offset + offs_t[:, None] * k_out_stride_t \
             + dst_head_id * k_out_stride_h + offs_d[None, :] * k_out_stride_d
-        tl.store(q_out_ptrs, q_vals, mask=mask_t[:, None] & mask_d[None, :])
-        tl.store(k_out_ptrs, k_vals, mask=mask_t[:, None] & mask_d[None, :])
+        store_mask = mask_t[:, None] & mask_d[None, :]
+        if not REPEAT_KV:
+            store_mask = store_mask & (rep == 0)
+        tl.store(q_out_ptrs, q_vals, mask=store_mask)
+        tl.store(k_out_ptrs, k_vals, mask=store_mask)
 
 
 def gated_delta_preprocess(
@@ -151,6 +155,7 @@ def gated_delta_preprocess(
     kv_ratio: int,
     init_token_mask: torch.Tensor | None = None,
     apply_qk_l2norm: bool = True,
+    repeat_kv: bool = True,
 ):
     """Prepare q/k/beta/g for gated-delta rule."""
     assert q.dim() == k.dim() == 4
@@ -190,7 +195,7 @@ def gated_delta_preprocess(
         g_out = a_log_exp * F.softplus(a + dt_bias)
         if init_token_mask is not None:
             g_out = g_out.masked_fill(init_token_mask[None, :, None], -1.0e6)
-        if kv_ratio > 1:
+        if repeat_kv and kv_ratio > 1:
             q = q.repeat_interleave(kv_ratio, dim=-2)
             k = k.repeat_interleave(kv_ratio, dim=-2)
         if apply_qk_l2norm:
@@ -203,7 +208,8 @@ def gated_delta_preprocess(
             k = k.view(k_shape)
         return q, k, beta_out, g_out
 
-    q_out = torch.empty((batch_size, num_tokens, num_v_heads, head_dim), dtype=q.dtype, device=q.device)
+    num_qk_heads = num_v_heads if repeat_kv else num_k_heads
+    q_out = torch.empty((batch_size, num_tokens, num_qk_heads, head_dim), dtype=q.dtype, device=q.device)
     k_out = torch.empty_like(q_out)
     beta_out = torch.empty((batch_size, num_tokens, num_v_heads), dtype=b.dtype, device=b.device)
     g_out = torch.empty((batch_size, num_tokens, num_v_heads), dtype=torch.float32, device=a.device)
@@ -248,5 +254,6 @@ def gated_delta_preprocess(
         EPS=1e-6,
         USE_INIT_TOKEN_MASK=init_token_mask is not None,
         APPLY_QK_L2NORM=apply_qk_l2norm,
+        REPEAT_KV=repeat_kv,
     )
     return q_out, k_out, beta_out, g_out

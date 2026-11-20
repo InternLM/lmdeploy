@@ -263,6 +263,10 @@ class GlmMoeDsaMTPModel(DeepseekMTPModel):
         inputs['skip_topk'] = (
             self.uses_dsa_topk_buffer and model_metas is not None and len(model_metas) > 0
             and all(meta is not None and meta.get('skip_topk', False) for meta in model_metas))
+        if self.uses_dsa_topk_buffer and not inputs['skip_topk']:
+            # Grow seed storage before key selection. A reuse step cannot
+            # populate a new allocation; let read() reject missing seed rows.
+            self.topk_indices_buffer.ensure(inputs['input_ids'].numel(), inputs['input_ids'].device)
         return inputs
 
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor,

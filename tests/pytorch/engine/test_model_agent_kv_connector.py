@@ -89,9 +89,10 @@ def _bare_model_agent():
     agent.all_context = nullcontext
     agent.compact_state_plan = None
     agent.cache_config = _enabled_config()
-    agent.model_config = SimpleNamespace(num_replicate_key_value_heads=4)
+    agent.model_config = SimpleNamespace(num_replicate_key_value_heads=4, enable_replayssm=True)
     agent.rank = 7
     agent.cache_stream = object()
+    agent._get_connector_cache_schema = lambda: 'test-schema'
     agent.block_cache_plan = object()
     agent.dist_config = SimpleNamespace(attn_tp=8)
     agent.memdecode_agent = None
@@ -117,7 +118,8 @@ def test_build_cache_engine_replaces_connector_and_registers_row_mapping(monkeyp
 
     class _NewConnector:
 
-        def register_kv_caches(self, caches, *, state_cache_pools=()):
+        def register_kv_caches(self, caches, *, state_cache_pools=(), cache_schema=''):
+            assert cache_schema == 'test-schema'
             events.append(('register', caches, state_cache_pools))
 
         def shutdown(self):
@@ -198,7 +200,8 @@ def test_build_cache_engine_registers_state_pools_with_connector(monkeypatch):
 
     class _Connector:
 
-        def register_kv_caches(self, caches, *, state_cache_pools=()):
+        def register_kv_caches(self, caches, *, state_cache_pools=(), cache_schema=''):
+            assert cache_schema == 'test-schema'
             events.append((caches, state_cache_pools))
 
         def shutdown(self):
@@ -236,7 +239,8 @@ def test_build_cache_engine_propagates_registration_error(monkeypatch):
 
     class _Connector:
 
-        def register_kv_caches(self, caches, *, state_cache_pools=()):
+        def register_kv_caches(self, caches, *, state_cache_pools=(), cache_schema=''):
+            assert cache_schema == 'test-schema'
             events.append('register')
             raise RuntimeError('registration failed')
 
@@ -789,3 +793,24 @@ def test_wakeup_rebuilds_connector_with_kv_cache():
 
     assert events == ['build-cache', 'warmup']
     assert agent.state.is_sleeping is False
+
+
+def test_connector_schema_distinguishes_packed_dtypes_and_draft():
+    from lmdeploy.pytorch.engine.cache_engine.schema import CacheDesc, CacheTensorSpec
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+    agent = _bare_model_agent()
+    agent.model_config.state_cache_specs = []
+    spec = CacheTensorSpec('key', CacheDesc([4, 8], torch.bfloat16))
+    plan = SimpleNamespace(tensor_specs=(spec,))
+    agent.cache_engine = SimpleNamespace(block_cache_plan=plan)
+    agent.spec_agent = SimpleNamespace(cache_engine=None)
+    def schema():
+        return BaseModelAgent._get_connector_cache_schema(agent)
+
+    native = schema()
+    agent.spec_agent.cache_engine = SimpleNamespace(block_cache_plan=plan)
+    mtp = schema()
+    assert mtp != native
+    agent.spec_agent.cache_engine.block_cache_plan = SimpleNamespace(tensor_specs=(
+        CacheTensorSpec('key', CacheDesc([4, 8], torch.float16)),))
+    assert schema() != mtp
