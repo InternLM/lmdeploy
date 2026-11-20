@@ -15,9 +15,15 @@ Two lanes served by one implementation family:
 Merged projections (gate/up, QKV) keep one packed handle per shard:
 NVFP4 carries a per-tensor global scale per checkpoint module, so shard
 outputs are computed separately and concatenated before the module-level
-activation. The torch parameter copies stay resident (no spill): one
-extra packed-weight copy is bounded and keeps hot updates and
-sleep/wakeup trivial.
+activation.
+
+CPU-direct packing: the checkpoint-layout quant parameters
+(``weight_packed``/``weight_scale``/``weight_global_scale``/``weight``)
+are CPU-resident and are the single source of truth -- the TurboMind
+channel packs from the host (its pack API is device-agnostic, proven by
+the CPU-source parity gates in the lane suites). Bias stays on the module
+device because forward adds it python-side. Sleep/wakeup re-pack from the
+unchanged host params; there is no device copy to spill.
 """
 
 from typing import Any
@@ -42,28 +48,54 @@ class TmQuantLinearMixin:
     """Shared construction/pack plumbing for the TurboMind float lanes."""
 
     lane: str
+    cpu_resident = True
 
     @property
     def _fp8_block_out(self):
         """ct_fp8 scale layout: 1 = per-channel, 128 = blocked."""
         return 128 if getattr(self, 'fp8_blocked', False) else 1
 
+    def _apply(self, fn, recurse=True):
+        """Keep the host-resident quant params out of module moves.
+
+        They are the CPU-direct pack source: the engine's moves (the
+        post-load ``Module.to(cuda)`` and wakeup's ``to(cuda)``) must not
+        re-upload them. Bias and any other registered tensors still travel.
+        """
+        if not self.cpu_resident:
+            return super()._apply(fn, recurse=recurse)
+        pinned = [(name, self._parameters.pop(name)) for name in list(self._parameters) if name != 'bias']
+        try:
+            return super()._apply(fn, recurse=recurse)
+        finally:
+            for name, param in pinned:
+                self._parameters[name] = param
+
     def _create_lane_weights(self, in_features: int, out_features: int, bias: bool, device: torch.device):
-        """Allocate the checkpoint-layout parameters of one lane."""
+        """Allocate the checkpoint-layout parameters of one lane.
+
+        CPU-direct packing: the quantized checkpoint-layout tensors are the
+        host source of truth (single occupancy -- there is no device-side
+        raw copy), and the channel's ``prepare_weight`` performs the H2D
+        transform. Bias stays on the module device: forward adds it
+        python-side against device-resident activations.
+        """
+        pack_device = torch.device('cpu')
         compute_dtype = _LANE_COMPUTE_DTYPE[self.lane]
         params: dict[str, torch.Tensor | None] = {}
         if self.lane == 'nvfp4':
             assert in_features % 16 == 0, f'NVFP4 requires in_features % 16 == 0, got {in_features}'
             assert out_features % 2 == 0, f'NVFP4 requires out_features % 2 == 0, got {out_features}'
             params['weight_packed'] = torch.empty((out_features, in_features // 2), dtype=torch.uint8,
-                                                  device=device)
+                                                  device=pack_device)
             params['weight_scale'] = torch.empty((out_features, in_features // 16), dtype=_FP8_DTYPE,
-                                                 device=device)
-            params['weight_global_scale'] = torch.empty((self.num_shards, ), dtype=torch.float32, device=device)
+                                                 device=pack_device)
+            params['weight_global_scale'] = torch.empty((self.num_shards, ), dtype=torch.float32,
+                                                        device=pack_device)
         else:
             assert in_features % 128 == 0, f'CT FP8 requires in_features % 128 == 0, got {in_features}'
             assert out_features % 2 == 0, f'CT FP8 requires out_features % 2 == 0, got {out_features}'
-            params['weight'] = torch.empty((out_features, in_features), dtype=_FP8_DTYPE, device=device)
+            params['weight'] = torch.empty((out_features, in_features), dtype=_FP8_DTYPE, device=pack_device)
             if self._fp8_block_out == 1:
                 # Per-channel checkpoint scales: [N, 1] (FP8Format(block_out=1)
                 # expands them to the kernel's [K//128, N] layout in
@@ -74,7 +106,7 @@ class TmQuantLinearMixin:
                 # convention: [ceil(N/128), ceil(K/128)] (one scale per
                 # output block per input group).
                 scale_shape = ((out_features + 127) // 128, (in_features + 127) // 128)
-            params['weight_scale'] = torch.empty(scale_shape, dtype=compute_dtype, device=device)
+            params['weight_scale'] = torch.empty(scale_shape, dtype=compute_dtype, device=pack_device)
         params['bias'] = torch.empty((out_features, ), dtype=compute_dtype, device=device) if bias else None
         return params
 
@@ -164,7 +196,7 @@ class TmQuantLinearMixin:
         self.impl._release()
 
     def sleep_wakeup(self):
-        """Re-pack the torch weights after wakeup."""
+        """Re-pack from the unchanged host params after wakeup."""
         self.update_weights()
 
     def _forward_default(self, x, all_reduce, tp_sizes):

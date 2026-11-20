@@ -176,3 +176,23 @@ class TestEnvGates:
         monkeypatch.setenv('LMDEPLOY_TM_KERNELS', 'ct_fp8=off')
         with pytest.raises(RuntimeError, match='no native fallback'):
             TmQuantLinear(256, 64, lane='ct_fp8', bias=False, device=torch.device('cuda'))
+
+
+class TestCpuResidency:
+    """B6: the checkpoint-layout quant params are the CPU source of truth
+    (single occupancy); module moves must not re-upload them, and packing
+    goes through the channel's device-agnostic prepare_weight."""
+
+    def test_params_stay_cpu_through_module_moves(self):
+        module = TmQuantLinear(256, 64, lane='nvfp4', bias=True, device=torch.device('cuda')).cuda()
+        assert module.cpu_resident
+        assert module.weight_packed.device.type == 'cpu'
+        assert module.weight_scale.device.type == 'cpu'
+        assert module.weight_global_scale.device.type == 'cpu'
+        # bias travels with the module: forward adds it python-side
+        assert module.bias.device.type == 'cuda'
+
+    def test_fp8_lane_params_stay_cpu(self):
+        module = TmQuantLinear(256, 64, lane='ct_fp8', bias=False, device=torch.device('cuda')).cuda()
+        assert module.weight.device.type == 'cpu'
+        assert module.weight_scale.device.type == 'cpu'
