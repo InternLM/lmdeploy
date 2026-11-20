@@ -223,12 +223,15 @@ def finish_engine(t, status):
     if ctx is None:
         ctx = trace.set_span_in_context(outcome.get('otel_span') or span)
     for name, start, stop in (
-            ('prefill', int(t.scheduled*1e9) if t.scheduled is not None else None,
+            ('model.prefill', int(t.scheduled*1e9) if t.scheduled is not None else None,
              int(t.first_token*1e9) if t.first_token is not None else None),
-            ('decode', int(t.first_token*1e9) if t.first_token is not None else None,
+            ('model.decode', int(t.first_token*1e9) if t.first_token is not None else None,
              int(t.last_token*1e9) if t.last_token is not None else None)):
         if start is not None and stop is not None and t.start_ns <= start <= stop <= end:
-            child_attrs = {'request.id': t.request_id} if t.request_id is not None else {}
+            child_attrs = {'inference.engine': 'lmdeploy', 'inference.role': 'full',
+                           'envoy.error': status != 'success'}
+            if t.request_id is not None:
+                child_attrs['request.id'] = t.request_id
             if 'session_id' in outcome:
                 child_attrs['session.id'] = outcome['session_id']
             if t.prompt_index is not None:

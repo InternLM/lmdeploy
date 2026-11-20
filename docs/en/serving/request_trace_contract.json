@@ -6,14 +6,17 @@
   "span_mapping": {
     "llm_request": "llm_request",
     "inference": "inference",
-    "prefill": "model.prefill",
-    "decode": "model.decode"
+    "model.prefill": "model.prefill",
+    "model.decode": "model.decode"
   },
   "add_span_names": [
     "llm_request",
     "inference"
   ],
   "allowed_attributes": [
+    "inference.engine",
+    "inference.role",
+    "envoy.error",
     "request.id",
     "session.id",
     "trace.context.missing",
@@ -76,8 +79,8 @@
   ],
   "span_parent_mapping": {
     "inference": "llm_request",
-    "prefill": "propagated parent, otherwise local llm_request",
-    "decode": "propagated parent, otherwise local llm_request"
+    "model.prefill": "propagated parent, otherwise local llm_request",
+    "model.decode": "propagated parent, otherwise local llm_request"
   },
   "batch_phase_correlation": "lmdeploy.prompt_index and optional lmdeploy.choice_index",
   "service_configuration": "lmdeploy-full by default; register any configured service.name in the platform exact allowlist before deployment"

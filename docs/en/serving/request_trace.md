@@ -74,7 +74,7 @@ Invalid startup settings fail startup; runtime instrumentation/export failures d
 inference result. No SDK work or per-token span creation is added to the engine output loop.
 
 LMDeploy emits `llm_request` (HTTP SERVER), `inference` (one per prompt), and the INTERNAL
-`prefill` and `decode` phases when their complete boundaries are known.
+`model.prefill` and `model.decode` phases when their complete boundaries are known.
 Choose either HTTP or prompt usage when aggregating tokens. GenAI latency attributes use seconds.
 OTLP timestamps are epoch nanoseconds. Store and visible output timings are scalar attributes on the prompt span.
 Input preparation is the scalar `lmdeploy.preprocess_seconds`, with no separate span.
@@ -96,30 +96,18 @@ Token completeness is explicit through `lmdeploy.token_counts_complete`; failed/
 are partial. Provider initialization is serialized once per process, and the SDK owns shutdown.
 Handle waiting and mean TPOT use `lmdeploy.handle_wait_seconds` and `lmdeploy.tpot_seconds`.
 
-For the default service, apply this Collector transform in the traces pipeline before filtering.
-It maps the two measured phases of the full engine. The separate Router service owns
-`model.router`. Use the configured service name here if it differs from the default.
-
-```yaml
-processors:
-  transform/lmdeploy-full:
-    trace_statements:
-      - context: span
-        conditions:
-          - 'resource.attributes["service.name"] == "lmdeploy-full" and kind == SPAN_KIND_INTERNAL'
-        statements:
-          - 'set(name, "model.prefill") where name == "prefill"'
-          - 'set(name, "model.decode") where name == "decode"'
-```
+LMDeploy writes both phase names directly into the exported OTLP spans. Each phase carries
+`inference.engine=lmdeploy`, `inference.role=full` and a boolean `envoy.error` derived from
+its engine outcome. The gateway can combine that flag with its own error signals. The local
+Collector can forward these spans directly. Register the exported names before deployment.
 
 Phases carry a valid inbound `request.id` and optional `session.id` when available. Read each
 phase duration from its timestamps. Retain the native `llm_request` and `inference` spans for
 request and prompt usage, E2E latency and TTFT. Retain referenced upstream parents, including
 the Router CLIENT span, to keep the trace connected.
 
-Platform normalization must run before filtering. Register engine `lmdeploy` and role `full`,
-copy `inference.engine` and `inference.role` from resources into query attributes where required,
-and retain the platform's error-trace tail-sampling policy. The gateway must propagate the valid
+Register engine `lmdeploy` and role `full` and retain the platform's error-trace tail-sampling
+policy. The gateway must propagate the valid
 `x-request-id`, `traceparent` and explicit `x-session-id` and export the referenced upstream span.
 
 The complete allowlists below make the integration contract explicit. The companion
@@ -142,6 +130,9 @@ inference.role
 Span attributes:
 
 ```text
+inference.engine
+inference.role
+envoy.error
 request.id
 session.id
 trace.context.missing

@@ -93,12 +93,15 @@ class OTLPTests(unittest.TestCase):
         self.assertEqual(root.attributes['gen_ai.usage.output_tokens'], 4)
         self.assertTrue(all(p.parent.span_id == root.context.span_id for p in prompts))
         self.assertEqual(len({p.context.span_id for p in prompts}), 2)
-        phases = [s for s in spans if s.name in ('prefill', 'decode')]
-        self.assertCountEqual([s.name for s in phases], ['prefill', 'decode'] * 2)
+        phases = [s for s in spans if s.name in ('model.prefill', 'model.decode')]
+        self.assertCountEqual([s.name for s in phases], ['model.prefill', 'model.decode'] * 2)
         for s in spans:
             self.assertLessEqual(s.start_time, s.end_time)
         for phase in phases:
             self.assertEqual(phase.kind, SpanKind.INTERNAL)
+            self.assertEqual(phase.attributes['inference.engine'], 'lmdeploy')
+            self.assertEqual(phase.attributes['inference.role'], 'full')
+            self.assertIs(phase.attributes['envoy.error'], False)
             self.assertEqual(phase.parent, root.parent)
             self.assertEqual(phase.context.trace_id, root.context.trace_id)
             self.assertIn(phase.attributes['lmdeploy.prompt_index'], (0, 1))
@@ -126,7 +129,7 @@ class OTLPTests(unittest.TestCase):
         spans = self.exporter.get_finished_spans()
         root = next(s for s in spans if s.name == 'llm_request')
         self.assertIsNone(root.parent)
-        self.assertCountEqual([s.name for s in spans], ['llm_request', 'inference', 'prefill', 'decode'])
+        self.assertCountEqual([s.name for s in spans], ['llm_request', 'inference', 'model.prefill', 'model.decode'])
         for child in (s for s in spans if s.name != 'llm_request'):
             self.assertEqual(child.parent.span_id, root.context.span_id)
             self.assertEqual(child.context.trace_id, root.context.trace_id)
@@ -436,7 +439,7 @@ class OTLPTests(unittest.TestCase):
         contract = json.loads((SOURCE / 'docs/en/serving/request_trace_contract.json').read_text())
         self.request([(b'x-request-id', b'req_contract_123456')])
         for span in self.exporter.get_finished_spans():
-            self.assertIn(span.name, contract['span_mapping'])
+            self.assertEqual(contract['span_mapping'][span.name], span.name)
             self.assertTrue(set(span.attributes) <= set(contract['allowed_attributes']))
             self.assertTrue(all(isinstance(v, (str, int, bool, float)) for v in span.attributes.values()))
             self.assertTrue(all(e.name in contract['events'] for e in span.events))
@@ -465,6 +468,9 @@ class OTLPTests(unittest.TestCase):
                 self.assertTrue(span.attributes['lmdeploy.token_counts_complete'])
         self.exporter.clear()
         self.request(crash=True)
+        phases = [s for s in self.exporter.get_finished_spans() if s.name in ('model.prefill', 'model.decode')]
+        self.assertEqual(len(phases), 4)
+        self.assertTrue(all(s.attributes['envoy.error'] is True for s in phases))
         for span in self.exporter.get_finished_spans():
             if span.name in ('inference', 'llm_request'):
                 self.assertFalse(span.attributes['lmdeploy.token_counts_complete'])
@@ -549,7 +555,14 @@ class OTLPTests(unittest.TestCase):
                         self.assertTrue(provider.force_flush(5000))
                         spans = [s for req in received for rs in req.resource_spans
                                  for ss in rs.scope_spans for s in ss.spans]
-                        self.assertEqual(len(spans), 4)
+                        self.assertCountEqual([s.name for s in spans],
+                                              ['llm_request', 'inference', 'model.prefill', 'model.decode'])
+                        for phase in (s for s in spans if s.name.startswith('model.')):
+                            attrs = {a.key: a.value for a in phase.attributes}
+                            self.assertEqual(attrs['inference.role'].string_value, 'full')
+                            self.assertEqual(attrs['inference.engine'].string_value, 'lmdeploy')
+                            self.assertEqual(attrs['envoy.error'].WhichOneof('value'), 'bool_value')
+                            self.assertFalse(attrs['envoy.error'].bool_value)
                         self.assertTrue(all(len(s.trace_id) == 16 and len(s.span_id) == 8 for s in spans))
                         root = next(s for s in spans if s.name == 'llm_request')
                         attrs = {a.key: a.value.string_value for a in root.attributes}
