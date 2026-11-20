@@ -16,6 +16,42 @@ from lmdeploy.utils import get_logger, is_bf16_supported
 logger = get_logger('lmdeploy')
 
 
+def _resolve_ct_fp8_layout(weights: Mapping[str, Any]) -> tuple[int, int | None, bool, str]:
+    """Resolve a compressed-tensors float-quantized FP8 weight layout.
+
+    Returns ``(bits, group_size_or_None, blocked, ct_format)``. Two layouts
+    are served: per-channel (``strategy == 'channel'`` with no group) and
+    the canonical llm-compressor blocked output (``strategy == 'block'``
+    with ``block_structure == [128, 128]`` and a null ``group_size``; the
+    ground truth is e.g. RedHatAI/Qwen3-0.6B-FP8-BLOCK, whose
+    ``.weight_scale`` is bf16 ``[ceil(N/128), ceil(K/128)]`` N-first and
+    ``.weight`` is e4m3 ``[N, K]``). The legacy ``group``/``tensor_group``
+    128 spellings keep working. Shared by the PT engine parser and the
+    TurboMind converter so the two cannot drift.
+    """
+    ct_format = 'float-quantized'
+    if weights.get('num_bits') != 8:
+        raise ValueError(f'Unsupported float-quantized `num_bits`: expected 8, got {weights.get("num_bits")!r}.')
+    strategy = weights.get('strategy')
+    group_size = weights.get('group_size')
+    if strategy == 'channel':
+        if group_size is not None:
+            raise ValueError(f'Unsupported float-quantized layout: strategy `channel` requires no '
+                             f'group_size, got {group_size!r}.')
+        return 8, None, False, ct_format
+    if strategy == 'block':
+        block_structure = weights.get('block_structure')
+        if block_structure != [128, 128]:
+            raise ValueError(f'Unsupported compressed-tensors FP8 block structure: {block_structure!r}. '
+                             'Only [128, 128] is supported.')
+        return 8, None, True, ct_format
+    if strategy in ('tensor_group', 'group') and group_size == 128:
+        return 8, 128, True, ct_format
+    raise ValueError(f'Unsupported float-quantized weights layout: strategy={strategy!r}, '
+                     f'group_size={group_size!r}. Supported: channel (no group), block [128, 128], '
+                     'or group/tensor_group 128.')
+
+
 def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
     """Parse the compressed-tensors metadata needed by the inference backend.
 
@@ -84,18 +120,10 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
                                  f'got {weights.get(key)!r}.')
         return 4, 16, ignored_layers, ct_format
 
-    # float-quantized FP8 weights: per-channel (strategy `channel`, no
-    # group) or K-blocked (`tensor_group`/`group` with group_size 128).
-    if weights.get('num_bits') != 8:
-        raise ValueError(f'Unsupported float-quantized `num_bits`: expected 8, got {weights.get("num_bits")!r}.')
-    strategy = weights.get('strategy')
-    group_size = weights.get('group_size')
-    if strategy == 'channel' and group_size is None:
-        return 8, None, ignored_layers, ct_format
-    if strategy in ('tensor_group', 'group') and group_size == 128:
-        return 8, 128, ignored_layers, ct_format
-    raise ValueError(f'Unsupported float-quantized weights layout: strategy={strategy!r}, '
-                     f'group_size={group_size!r}. Supported: channel (no group) or 128-blocked.')
+    # float-quantized FP8 weights: per-channel, 128x128 blocked, or the
+    # legacy group-128 spellings -- resolved by the shared layout helper.
+    bits, group_size, _blocked, _ct = _resolve_ct_fp8_layout(weights)
+    return bits, group_size, ignored_layers, ct_format
 
 
 def _validate_pack_quantized_group(group: Mapping[str, Any], weights: Mapping[str, Any]):
@@ -1102,6 +1130,15 @@ class QuantizationConfig:
                 raise TypeError(f'Unsupported fp8 fmt: {fmt}')
         elif quant_method == 'compressed-tensors':
             bits, group_size, ignored_layers, ct_format = _parse_compressed_tensors_config(quant_config)
+            if ct_format == 'float-quantized':
+                _ct_weights = quant_config['config_groups']
+                _ct_weights = _ct_weights.get('group_0') or _ct_weights[sorted(_ct_weights)[0]]
+                _, _, ct_fp8_blocked, _ = _resolve_ct_fp8_layout(_ct_weights['weights'])
+                # The canonical blocked checkpoints carry a null group_size;
+                # surface blocked-ness through weight_block_size so the PT
+                # dispatch does not misroute them to the per-channel lane.
+                if ct_fp8_blocked and weight_block_size is None:
+                    weight_block_size = (128, 128)
         elif quant_method == 'gptq':
             # GPTQ dense linears load through the AWQ family: the load-time
             # repack absorbs pack axis, nibble order, and zero point offset

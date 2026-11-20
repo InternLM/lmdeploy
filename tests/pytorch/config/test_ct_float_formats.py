@@ -7,7 +7,7 @@ suffixes).
 """
 import pytest
 
-from lmdeploy.pytorch.config import QuantizationConfig, _parse_compressed_tensors_config
+from lmdeploy.pytorch.config import QuantizationConfig, _parse_compressed_tensors_config, _resolve_ct_fp8_layout
 
 _NVFP4_CONFIG = {
     'quant_method': 'compressed-tensors',
@@ -72,6 +72,48 @@ _FP8_PER_CHANNEL_CONFIG = {
     'ignore': ['lm_head'],
 }
 
+# Transcribed verbatim from RedHatAI/Qwen3-0.6B-FP8-BLOCK config.json
+# (quantization_config): the canonical llm-compressor blocked FP8 output --
+# strategy `block`, block_structure [128, 128], null group_size.
+_FP8_BLOCK_CONFIG = {
+    'quant_method': 'compressed-tensors',
+    'format': 'float-quantized',
+    'config_groups': {
+        'group_0': {
+            'input_activations': {
+                'actorder': None,
+                'block_structure': None,
+                'dynamic': True,
+                'group_size': 128,
+                'num_bits': 8,
+                'observer': None,
+                'observer_kwargs': {},
+                'strategy': 'group',
+                'symmetric': True,
+                'type': 'float',
+            },
+            'output_activations': None,
+            'targets': ['Linear'],
+            'weights': {
+                'actorder': None,
+                'block_structure': [128, 128],
+                'dynamic': False,
+                'group_size': None,
+                'num_bits': 8,
+                'observer': 'minmax',
+                'observer_kwargs': {},
+                'strategy': 'block',
+                'symmetric': True,
+                'type': 'float',
+            },
+        }
+    },
+    'ignore': ['lm_head'],
+    'kv_cache_scheme': None,
+    'global_compression_ratio': None,
+    'quantization_status': 'compressed',
+}
+
 _PACK_QUANTIZED_CONFIG = {
     'quant_method': 'compressed-tensors',
     'format': 'pack-quantized',
@@ -107,12 +149,64 @@ def _from(quant_config):
     return QuantizationConfig.from_config(_Hf())
 
 
+class TestResolveCtFp8Layout:
+
+    def test_per_channel(self):
+        assert _resolve_ct_fp8_layout(_FP8_PER_CHANNEL_CONFIG['config_groups']['group_0']['weights']) == \
+            (8, None, False, 'float-quantized')
+
+    def test_blocked_canonical(self):
+        assert _resolve_ct_fp8_layout(_FP8_BLOCK_CONFIG['config_groups']['group_0']['weights']) == \
+            (8, None, True, 'float-quantized')
+
+    def test_legacy_group_128(self):
+        weights = dict(_FP8_BLOCK_CONFIG['config_groups']['group_0']['weights'])
+        weights.update(strategy='tensor_group', group_size=128, block_structure=None)
+        assert _resolve_ct_fp8_layout(weights) == (8, 128, True, 'float-quantized')
+
+    def test_rejects_unsupported_block_structure(self):
+        weights = dict(_FP8_BLOCK_CONFIG['config_groups']['group_0']['weights'])
+        weights['block_structure'] = [64, 128]
+        with pytest.raises(ValueError, match='block structure'):
+            _resolve_ct_fp8_layout(weights)
+
+    def test_rejects_channel_with_group(self):
+        weights = dict(_FP8_PER_CHANNEL_CONFIG['config_groups']['group_0']['weights'])
+        weights['group_size'] = 128
+        with pytest.raises(ValueError, match='channel'):
+            _resolve_ct_fp8_layout(weights)
+
+    def test_rejects_non_8bit(self):
+        weights = dict(_FP8_PER_CHANNEL_CONFIG['config_groups']['group_0']['weights'])
+        weights['num_bits'] = 4
+        with pytest.raises(ValueError, match='num_bits'):
+            _resolve_ct_fp8_layout(weights)
+
+    def test_rejects_unknown_strategy(self):
+        weights = dict(_FP8_PER_CHANNEL_CONFIG['config_groups']['group_0']['weights'])
+        weights['strategy'] = 'tensor_group'
+        weights['group_size'] = None
+        with pytest.raises(ValueError, match='layout'):
+            _resolve_ct_fp8_layout(weights)
+
+
 class TestParse:
 
     def test_nvfp4(self):
         bits, group_size, ignored, ct_format = _parse_compressed_tensors_config(_NVFP4_CONFIG)
         assert (bits, group_size, ct_format) == (4, 16, 'nvfp4-pack-quantized')
         assert ignored == ['lm_head', 're:.*visual.*']
+
+    def test_fp8_blocked_canonical(self):
+        """The canonical llm-compressor blocked output (null group_size,
+        strategy `block`) parses as float-quantized and surfaces blocked-ness
+        through weight_block_size."""
+        bits, group_size, ignored, ct_format = _parse_compressed_tensors_config(_FP8_BLOCK_CONFIG)
+        assert (bits, group_size, ct_format) == (8, None, 'float-quantized')
+        assert ignored == ['lm_head']
+        quant = _from(_FP8_BLOCK_CONFIG)
+        assert quant.weight_block_size == (128, 128)
+        assert quant.get_quant_method('model.layers.0.mlp.gate_proj') == 'ct_fp8'
 
     def test_fp8_per_channel(self):
         bits, group_size, ignored, ct_format = _parse_compressed_tensors_config(_FP8_PER_CHANNEL_CONFIG)

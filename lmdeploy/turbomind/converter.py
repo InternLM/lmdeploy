@@ -4,7 +4,7 @@ import torch
 
 from lmdeploy.archs import get_model_arch, search_nested_config
 from lmdeploy.messages import TurbomindEngineConfig
-from lmdeploy.pytorch.config import override_hf_config
+from lmdeploy.pytorch.config import _resolve_ct_fp8_layout, override_hf_config
 from lmdeploy.utils import get_logger
 
 from ..utils import _get_and_verify_max_len
@@ -241,18 +241,18 @@ def get_tm_config(model_path,
                         'TurboMind FP8 channel and LMDEPLOY_TM_KERNELS sets '
                         'the ct_fp8 class to off; dequantize the checkpoint '
                         'offline or re-enable the class.')
-                # FP8 float-quantized (W8A8): per-channel (Ornith) or 128x128
-                # blocked. Map onto the native FP8 path. block_out is the
-                # N-direction scale granularity: per-channel -> 1, blocked -> 128.
+                # FP8 float-quantized (W8A8): map onto the native FP8 path.
+                # Blocked-ness comes from the shared layout resolver, never
+                # from `group_size null => per-channel` (the canonical
+                # llm-compressor blocked output has a null group_size).
+                # block_out is the N-direction scale granularity:
+                # per-channel -> 1, blocked -> 128.
                 assert _weights['num_bits'] == 8 and _weights['type'] == 'float', (
                     f'float-quantized expects 8-bit float weights, got '
                     f'{_weights["num_bits"]}-bit {_weights["type"]}')
-                _w_gs = _weights.get('group_size')
-                _per_channel = (
-                    _w_gs is None or _w_gs == 0 or _weights.get('strategy') == 'channel'
-                )
-                _group_size = _w_gs if _w_gs else 128  # K-direction group (128)
-                fp8_block_out = 1 if _per_channel else 128
+                _, _layout_gs, _blocked, _ = _resolve_ct_fp8_layout(_weights)
+                _group_size = _layout_gs if _layout_gs else 128  # K-direction group (128)
+                fp8_block_out = 128 if _blocked else 1
             elif _format == 'pack-quantized':
                 _group_size = _weights['group_size']
                 _num_bits = _weights['num_bits']

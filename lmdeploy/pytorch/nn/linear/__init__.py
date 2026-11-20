@@ -55,9 +55,10 @@ def _build_tm_quant_linear(quant_config, lane, *, merged=False, qkv_args=None, *
     """Construct the TurboMind float-lane module family member.
 
     ``lane`` is the dispatch result (``'nvfp4'`` or ``'ct_fp8'``); the
-    ct FP8 scale layout follows the parsed group size (128 = blocked).
+    ct FP8 scale layout follows the parse outcome (group size 128 or a
+    resolved weight_block_size = blocked).
     """
-    fp8_blocked = quant_config.group_size == 128
+    fp8_blocked = quant_config.group_size == 128 or quant_config.weight_block_size is not None
     if qkv_args is not None:
         return QKVTmQuantLinear(lane=lane, fp8_blocked=fp8_blocked, **qkv_args)
     if merged:
