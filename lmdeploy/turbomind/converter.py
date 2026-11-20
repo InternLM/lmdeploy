@@ -43,6 +43,7 @@ def _build_quantized_formats(
     elif model_format == 'compressed-tensors':
         if fp8_block_out is not None:
             # float-quantized FP8 (per-channel / blocked), e.g. Ornith W8A8.
+            # Gated on the ct_fp8 class in get_tm_config's float-quantized arm.
             formats.append(FP8Format(block_out=fp8_block_out))
         else:
             formats.append(CompressedTensorFormat(block_in=group_size))
@@ -232,6 +233,14 @@ def get_tm_config(model_path,
             _format = _first['format']
             _weights = _first['weights']
             if _format == 'float-quantized':
+                from lmdeploy.pytorch import envs as _pt_envs
+
+                if _pt_envs.tm_kernel_state('ct_fp8') == 'off':
+                    raise ValueError(
+                        'float-quantized FP8 checkpoints require the '
+                        'TurboMind FP8 channel and LMDEPLOY_TM_KERNELS sets '
+                        'the ct_fp8 class to off; dequantize the checkpoint '
+                        'offline or re-enable the class.')
                 # FP8 float-quantized (W8A8): per-channel (Ornith) or 128x128
                 # blocked. Map onto the native FP8 path. block_out is the
                 # N-direction scale granularity: per-channel -> 1, blocked -> 128.
