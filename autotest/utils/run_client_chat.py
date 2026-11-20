@@ -73,10 +73,6 @@ def hf_command_line_test(config, case, case_info, run_config, cuda_prefix: str =
         for k, v in chat_config.get('extra_params', {}).items() if k not in CHAT_EXCLUDED_PARAMS
     }
     chat_config['extra_params']['session_len'] = 4096
-    # The assertions in this suite check stable semantic markers. Sampling can
-    # legitimately omit a marker or terminate immediately, making the CLI test
-    # flaky without exercising a different engine path.
-    chat_config['extra_params']['greedy'] = True
     if case == 'base_testcase':
         chat_config['extra_params']['chat_template'] = TEMPLATE
         chat_config['extra_params']['session_len'] = 512

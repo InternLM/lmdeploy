@@ -128,8 +128,7 @@ def build_pipe(model_path, backend, trust_remote_code=False, **kwargs):
 
 
 def build_gen_config(**kwargs):
-    greedy = kwargs.pop('greedy', False)
-    gen_config = GenerationConfig(do_sample=not greedy, max_new_tokens=4096)
+    gen_config = GenerationConfig(do_sample=True, max_new_tokens=4096)
     for key, value in kwargs.items():
         if hasattr(GenerationConfig, key):
             setattr(gen_config, key, value)

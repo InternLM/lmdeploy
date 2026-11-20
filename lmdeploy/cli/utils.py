@@ -938,15 +938,6 @@ class ArgumentHelper:
             'auto opts into eligible optimizations. Default: nccl.')
 
     @staticmethod
-    def greedy(parser):
-        """Use deterministic greedy decoding in the interactive chat CLI."""
-        return parser.add_argument(
-            '--greedy',
-            action='store_true',
-            default=False,
-            help='Use greedy decoding instead of sampling.')
-
-    @staticmethod
     def kv_transfer_config(parser):
         """Add external KV-cache connector configuration."""
         return parser.add_argument(
