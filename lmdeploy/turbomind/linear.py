@@ -397,10 +397,21 @@ class Linear:
         plan: WeightPlan,
         scales: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None,
         zeros: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None,
+        global_scale: torch.Tensor | Sequence[torch.Tensor] | None = None,
     ) -> Weight:
         """Normalize, bridge, interleave, and pack gate/up weights for fused
-        SiLU execution (raw checkpoint-layout inputs; see
-        ``prepare_weight``)."""
+        SiLU execution (raw checkpoint-layout inputs; see ``prepare_weight``).
+
+        ``global_scale`` is rejected: the fused-SiLU lane has a single
+        per-tensor scale slot, and one scalar cannot serve two
+        differently-scaled projections -- load gate/up through the split
+        path (``prepare_weight`` per projection) instead.
+        """
+        if global_scale is not None:
+            raise ValueError(
+                'fuse_weight cannot carry a per-tensor global scale: the fused-SiLU lane has one '
+                'scale slot for two projections. Use the split path (prepare_weight per '
+                'projection) for globally scaled formats.')
         weight_format = plan._weight_format
         dtype = plan._dtype
         impl_plan = plan._impl
