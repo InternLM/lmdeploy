@@ -1580,6 +1580,7 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
                  dtype: torch.dtype | None = None,
                  device: torch.device | None = None):
         nn.Module.__init__(self)
+        self.routed_experts_shape = (config.text_config.num_hidden_layers, config.text_config.num_experts_per_tok)
         self.enable_return_routed_experts = get_build_model_context().enable_return_routed_experts
         self.mm_config = config
         self.config = config.text_config

@@ -243,3 +243,22 @@ def test_cancelled_shutdown_does_not_cancel_shielded_producer():
         await agent.drain_for_shutdown()
         agent.shutdown_kv_connector.assert_called_once()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('drain_error', [False, True])
+def test_plain_store_shutdown_requires_drain_before_releasing_paging(monkeypatch, drain_error):
+    scheduler = Mock(cache_config=SimpleNamespace(use_mooncake_store=True, compact_state_capacity=None))
+    scheduler.get_sessions.return_value = []
+    engine = _engine(monkeypatch, scheduler, drain_error=drain_error)
+    if drain_error:
+        with pytest.raises(RuntimeError, match='drain failed'):
+            asyncio.run(engine.async_loop())
+        scheduler.finish_kv_transfers_after_worker_drain.assert_not_called()
+        scheduler.shutdown.assert_not_called()
+    else:
+        engine.executor.drain_for_shutdown.side_effect = lambda: scheduler.shutdown.assert_not_called()
+        asyncio.run(engine.async_loop())
+        scheduler.finish_kv_transfers_after_worker_drain.assert_called_once()
+        scheduler.shutdown.assert_called_once()
+    engine.executor.drain_for_shutdown.assert_awaited_once()
+    engine.executor.release.assert_called_once()

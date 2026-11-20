@@ -177,7 +177,8 @@ def _environment(monkeypatch, width):
     model = _RecurrentModel(conv, recurrent, width)
     model_config = SimpleNamespace(vocab_size=16, use_mla_fp8_cache=False, use_flash_mla=False, mla_index_topk=None,
                                    model_paradigm='ar', states_shapes=[(1,)], use_mrope=False, block_size=64)
-    cache = SimpleNamespace(cache_config=SimpleNamespace(window_size=0, quant_policy=0), gpu_cache=[], block_caches={})
+    cache = SimpleNamespace(cache_config=SimpleNamespace(window_size=0, quant_policy=0), gpu_cache=[],
+                            block_caches={}, routed_experts_cache=None)
     state_cache = SimpleNamespace(compact_plan=SimpleNamespace(unit_specs=(object(),)),
                                   state_caches=[conv, recurrent], named_state_caches={})
     return model, model_config, cache, state_cache
@@ -401,7 +402,8 @@ def test_zero_resource_plan_keeps_stateless_model_forward_without_ids(monkeypatc
 
     monkeypatch.setattr(module, 'step_ctx_manager', lambda mgr: nullcontext())
     monkeypatch.setattr(torch.cuda, 'stream', lambda stream: nullcontext())
-    cache = SimpleNamespace(cache_config=SimpleNamespace(quant_policy=0), gpu_cache=[], block_caches={})
+    cache = SimpleNamespace(cache_config=SimpleNamespace(quant_policy=0), gpu_cache=[], block_caches={},
+                            routed_experts_cache=None)
     state_cache = SimpleNamespace(compact_plan=SimpleNamespace(unit_specs=()), state_caches=[], named_state_caches={})
     output = model_forward(Stateless(), inputs, None, cache, state_cache, stream=object())
     assert output['hidden_states'].shape == (1, 1, 2)

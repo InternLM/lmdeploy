@@ -22,12 +22,15 @@ from .data import (
     MooncakeStoreKeyMetadata,
     MooncakeStoreRegistration,
     MooncakeStoreStateRegistration,
+    build_rl_store_cache_prefix,
     build_store_key,
 )
 from .lookup import LookupKeyServer
 from .worker_threads import KVCacheStoreRecvingThread, KVCacheStoreSendingThread
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from lmdeploy.messages import KVTransferConfig
     from lmdeploy.pytorch.config import CacheConfig
 
@@ -102,17 +105,27 @@ class MooncakeStoreWorker:
         self._completion_lock = threading.Lock()
         self._inflight_loads: set[RequestId] = set()
         self._completed_loads: dict[RequestId, bool] = {}
+        self._completed_routes: dict[RequestId, np.ndarray] = {}
+        self._routed_experts_cache: torch.Tensor | None = None
         self._inflight_save_ids: set[int] = set()
         self._completed_saves: dict[int, bool] = {}
 
         extra_config = kv_transfer_config.kv_connector_extra_config
+        self._store_routes = extra_config.get('store_routed_experts', False)
+        cache_prefix = extra_config.get('cache_prefix', '')
+        if extra_config.get('rl_weight_versioning', False):
+            cache_prefix = build_rl_store_cache_prefix(cache_prefix, extra_config.get('weight_version'))
         self.key_metadata = MooncakeStoreKeyMetadata(
             model_name=extra_config.get('model_name', 'unnamed-model'),
-            cache_prefix=extra_config.get('cache_prefix', ''),
+            cache_prefix=cache_prefix,
             tp_size=tp_size,
             block_size=cache_config.block_size,
             kv_head_replica_num=kv_head_replica_num,
         )
+
+        if extra_config.get('rl_weight_versioning', False):
+            logger.info('Mooncake Store namespace: model=%s cache_prefix=%s',
+                        self.key_metadata.model_name, self.key_metadata.cache_prefix)
 
         config_path = extra_config.get('mooncake_config_path')
         self.store_config = MooncakeStoreConfig.load_from_config(config_path)
@@ -154,10 +167,13 @@ class MooncakeStoreWorker:
         self,
         request_id: RequestId,
         success: bool,
+        routed_experts: np.ndarray | None = None,
     ) -> None:
         with self._completion_lock:
             self._inflight_loads.discard(request_id)
             self._completed_loads[request_id] = success
+            if routed_experts is not None:
+                self._completed_routes[request_id] = routed_experts
 
     def _mark_save_finished(self, save_id: int, success: bool) -> None:
         with self._completion_lock:
@@ -186,6 +202,7 @@ class MooncakeStoreWorker:
             tp_size=self.tp_size,
             completion_callback=self._mark_load_finished,
             state_registrations=self._registered_state_regions,
+            routed_experts_cache=self._routed_experts_cache,
         )
         receiver.start()
         self.kv_recv_thread = receiver
@@ -213,6 +230,7 @@ class MooncakeStoreWorker:
             completion_callback=self._mark_save_finished,
             replicate_config=self._replicate_config,
             state_registrations=self._registered_state_regions,
+            routed_experts_cache=self._routed_experts_cache,
         )
         sender.start()
         self.kv_send_thread = sender
@@ -392,6 +410,7 @@ class MooncakeStoreWorker:
         *,
         state_cache_pools: Sequence[KVCachePool] = (),
         state_cache_schema: str | None = None,
+        routed_experts_cache: torch.Tensor | None = None,
     ) -> None:
         """Register standard KV rows and owning linear-attention pools."""
         if not kv_caches and not state_cache_pools:
@@ -420,14 +439,30 @@ class MooncakeStoreWorker:
                 if offset < end or size <= 0 or offset + size > tensor.stride(0):
                     raise ValueError('Compact Store field ranges must be ordered, disjoint and within each unit.')
                 end = offset + size
-        self.key_metadata = replace(self.key_metadata, state_schema=state_cache_schema)
+        route_shape = None
+        route_registrations = ()
+        if self._store_routes and self.tp_rank == 0:
+            if routed_experts_cache is None:
+                raise ValueError('R3 Store requires a GPU block pool on the output rank.')
+            if (routed_experts_cache.dtype != torch.uint16 or routed_experts_cache.ndim != 4
+                    or tuple(routed_experts_cache.shape[:2]) !=
+                    (self._cache_config.num_gpu_blocks, self._cache_config.block_size)):
+                raise ValueError('R3 pool must have shape [blocks, block_size, layers, topk] and dtype uint16.')
+            route_registrations, _ = self._build_registrations({'routed_experts': routed_experts_cache})
+            route_shape = tuple(routed_experts_cache.shape[-2:])
+        elif routed_experts_cache is not None:
+            raise ValueError('Only the output rank may register an enabled R3 pool.')
+        self._routed_experts_cache = routed_experts_cache
+        self.key_metadata = replace(self.key_metadata, state_schema=state_cache_schema,
+                                    routed_experts_shape=route_shape)
         registrations, backing_storages = (
             self._build_registrations(kv_caches) if kv_caches else ((), 0))
         state_registrations, state_backing_storages = self._build_state_registrations(state_cache_pools)
         row_block_sizes = self._prepare_transfer_layout(registrations) if registrations else ()
-        total = len(registrations) + len(state_registrations)
+        total = len(registrations) + len(state_registrations) + len(route_registrations)
         total_bytes = sum(registration.size for registration in registrations)
         total_bytes += sum(registration.size for registration in state_registrations)
+        total_bytes += sum(registration.size for registration in route_registrations)
         for index, registration in enumerate(registrations, start=1):
             self._register_buffer(registration, index, total)
         for index, registration in enumerate(state_registrations, start=len(registrations) + 1):
@@ -437,6 +472,8 @@ class MooncakeStoreWorker:
                 total,
             )
         self._registered_regions = registrations
+        for index, registration in enumerate(route_registrations, start=total - len(route_registrations) + 1):
+            self._register_buffer(registration, index, total)
         self._row_block_sizes = row_block_sizes
         self._registered_state_regions = state_registrations
         if registrations:
@@ -463,7 +500,7 @@ class MooncakeStoreWorker:
         if connector_metadata.load_requests and receiver is None:
             raise RuntimeError('Mooncake KV-cache receiver is not initialized')
         ready_event = None
-        if any(request.state_destination is not None for request in connector_metadata.load_requests):
+        if connector_metadata.load_requests:
             ready_event = torch.cuda.Event()
             ready_event.record()
         for request in connector_metadata.load_requests:
@@ -473,7 +510,12 @@ class MooncakeStoreWorker:
                     continue
                 self._inflight_loads.add(request_id)
             assert receiver is not None
-            receiver.add_request(request, ready_event)
+            try:
+                receiver.add_request(request, ready_event)
+            except Exception:
+                ready_event.synchronize()
+                self._mark_load_finished(request_id, False)
+                raise
 
     def start_save_kv(self, connector_metadata: MooncakeStoreConnectorMetadata) -> None:
         """Fence the compute stream and submit immutable full-block saves."""
@@ -500,15 +542,21 @@ class MooncakeStoreWorker:
             try:
                 sender.add_request(request, ready_event)
             except Exception:
+                ready_event.synchronize()
                 self._mark_save_finished(save_id, False)
                 raise
 
     def get_finished(self) -> KVConnectorOutput:
         """Return rank-local terminal transfer progress since the last poll."""
+        for thread in (self.kv_send_thread, self.kv_recv_thread):
+            if thread is not None and thread.fatal_error is not None:
+                raise thread.fatal_error
         with self._completion_lock:
             completed_loads = set(self._completed_loads)
             failed_receiving = {request_id for request_id, success in self._completed_loads.items() if not success}
             self._completed_loads.clear()
+            routed_experts = self._completed_routes
+            self._completed_routes = {}
             completed_save_ids = set(self._completed_saves)
             failed_save_ids = {save_id for save_id, success in self._completed_saves.items() if not success}
             self._completed_saves.clear()
@@ -517,6 +565,7 @@ class MooncakeStoreWorker:
             finished_receiving=completed_loads or None,
             failed_receiving=failed_receiving,
             failed_save_ids=failed_save_ids,
+            routed_experts=routed_experts,
         )
 
     def lookup(self, token_len: int, block_hashes: Sequence[bytes], *, recompute_blocks: int = 0) -> int:
@@ -556,6 +605,10 @@ class MooncakeStoreWorker:
                     state_interval_blocks - 1, full_blocks - recompute_blocks, state_interval_blocks)
                 for rank in range(self.tp_size)
             )
+        route_offset = len(keys)
+        if self._store_routes:
+            keys.extend(build_store_key(key_metadata, 0, digest, group_id=2)
+                        for digest in block_hashes[:full_blocks - recompute_blocks])
         logger.info(
             'Mooncake Store interaction before: operation=lookup_batch_is_exist '
             'global_rank=%d tp_rank=%d tp_size=%d token_len=%d blocks=%d candidate_keys=%d',
@@ -597,6 +650,11 @@ class MooncakeStoreWorker:
         # The final MTP row depends on the following token. Apply the sequence's
         # rewind policy once, before choosing an exact recurrent-state boundary.
         matched_blocks = max(0, matched_blocks - recompute_blocks)
+        if self._store_routes:
+            for block_index in range(matched_blocks):
+                if exists_states[route_offset + block_index] != 1:
+                    matched_blocks = block_index
+                    break
         matched_tokens = matched_blocks * block_size
         if is_hybrid:
             matched_tokens = 0
@@ -630,19 +688,20 @@ class MooncakeStoreWorker:
             lookup_server.close()
 
         receiver = self.kv_recv_thread
-        self.kv_recv_thread = None
         if receiver is not None:
             receiver.close()
+            self.kv_recv_thread = None
 
         sender = self.kv_send_thread
-        self.kv_send_thread = None
         if sender is not None:
             sender.close()
+            self.kv_send_thread = None
 
         store = self.store
         self.store = None
         if store is not None:
             self._close_store(store)
+        self._routed_experts_cache = None
 
     def _close_store(self, store: Any) -> None:
         logger.info(

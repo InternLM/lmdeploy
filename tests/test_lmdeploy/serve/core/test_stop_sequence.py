@@ -218,7 +218,7 @@ def test_min_new_tokens_keeps_prefix_without_replaying_an_earlier_match():
 
 @pytest.mark.parametrize('terminal', [ResponseType.CANCEL, ResponseType.FINISH, 'same_batch', 'error', 'missing'])
 @pytest.mark.parametrize('use_ref', [False, True])
-@pytest.mark.parametrize('start', [0, 2])
+@pytest.mark.parametrize('start', [0, 2, 3, 4, 7, 8])
 def test_content_stop_collects_only_accepted_routed_experts(terminal, use_ref, start, monkeypatch):
     from lmdeploy.serve.core.async_engine import metrics_processor
 
@@ -232,6 +232,7 @@ def test_content_stop_collects_only_accepted_routed_experts(terminal, use_ref, s
         cancelled.append(session_id)
 
     async def trim(key, num_rows):
+        assert num_rows >= 0
         trimmed.append((key, num_rows))
         return 'prefix-key'
 
@@ -284,7 +285,7 @@ def test_content_stop_collects_only_accepted_routed_experts(terminal, use_ref, s
     assert [(o.status, o.token_ids) for o in updates] == [(ResponseType.FINISH, [1, 6])]
     assert result.logprobs == [{1: -0.1}, {6: -0.1}]
     assert result.routed_experts == ('prefix-key' if use_ref else list(range(start, 3)))
-    assert trimmed == ([('batch-key', 3 - start)] if use_ref else [])
+    assert trimmed == ([('batch-key', max(0, 3 - start))] if use_ref else [])
     assert cancelled == ([] if terminal == 'same_batch' else [7])
     assert runner._closed
 
@@ -297,3 +298,58 @@ def test_stop_in_tool_arguments_preserves_literal_and_breaks_content_prefix():
     assert [msg.content for msg, _ in output] == ['answer ', 'ST', None, 'OP_HERE']
     assert output[2] == (tool, True)
     assert stop.matched is None
+
+
+@pytest.mark.parametrize('terminal', [8, 9, 1])
+@pytest.mark.parametrize('include_stop', [False, True])
+@pytest.mark.parametrize('use_ref', [False, True])
+@pytest.mark.parametrize('start', [0, 2, 3, 4])
+def test_native_stop_trims_routed_experts_to_visible_tokens(terminal, include_stop, use_ref, start):
+    # Backend routes include the row preceding the hidden terminal token.
+    # Offset cropping happens there before an array or SharedStore key is returned.
+    backend_routes = list(range(start, 3))
+    stored = {'batch-key': backend_routes}
+    trimmed = []
+
+    async def trim(key, num_rows):
+        assert num_rows >= 0
+        trimmed.append((key, num_rows))
+        stored['prefix-key'] = stored[key][:num_rows]
+        return 'prefix-key'
+
+    @asynccontextmanager
+    async def request_handle():
+        yield SimpleNamespace(trim_routed_experts=trim)
+
+    @asynccontextmanager
+    async def safe_run(*args, **kwargs):
+        async def generate():
+            yield EngineOutput(ResponseType.FINISH, [1, terminal],
+                               routed_experts='batch-key' if use_ref else backend_routes)
+        yield generate()
+
+    session = SimpleNamespace(session_id=9, epoch=None, request_handle=request_handle)
+    engine = AsyncEngine.__new__(AsyncEngine)
+    engine.session_mgr = SimpleNamespace(remove=lambda _: None)
+    engine.tokenizer = Tokenizer()
+    engine.num_spec_token = 3
+    engine.safe_run = safe_run
+    engine.request_logger = SimpleNamespace(log_response=lambda *args: None)
+    config = GenerationConfig(return_routed_experts=True, routed_experts_start_len=start,
+                              stop_token_ids=[8, 9], include_stop_str_in_output=include_stop)
+    prep = PreprocessedRequest(session=session, inputs={'input_ids': [0, 0]}, input_token_len=2,
+                               gen_config=config, adapter_name=None)
+
+    async def run():
+        return [out async for out in engine.generate(prep)]
+
+    outputs = asyncio.run(run())
+    last = outputs[-1]
+    stop = terminal in (8, 9)
+    visible_ids = [i for out in outputs for i in out.token_ids]
+    assert visible_ids == ([1] if stop and not include_stop else [1, terminal])
+    assert last.finish_reason == ('stop' if stop else 'length')
+    expected_rows = max(0, 2 + len(visible_ids) - 1 - start)
+    actual = stored[last.routed_experts] if use_ref else last.routed_experts
+    assert actual == backend_routes[:expected_rows]
+    assert trimmed == ([('batch-key', expected_rows)] if use_ref and stop and not include_stop else [])

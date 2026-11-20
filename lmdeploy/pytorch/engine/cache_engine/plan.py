@@ -87,6 +87,7 @@ def build_block_cache_plan(
     cache_config: CacheConfig,
     world_size: int,
     request_collector: Callable[[BlockCacheRequestContext], Sequence[BlockCacheRequest]] | None = None,
+    routed_experts_shape: tuple[int, int] | None = None,
 ) -> BlockCachePlan:
     """Finalize one worker-local block-cache plan."""
     geometry = BlockCacheGeometry(logical_block_size=cache_config.block_size,
@@ -96,6 +97,10 @@ def build_block_cache_plan(
     if request_collector is not None:
         request_context = BlockCacheRequestContext(geometry=geometry)
         block_requests = tuple(request_collector(request_context))
+    if routed_experts_shape is not None:
+        block_requests += (BlockCacheRequest(
+            name='routed_experts', shape=(geometry.kernel_block_size, *routed_experts_shape),
+            dtype=torch.uint16, per_row_contiguous=True, store_cacheable=False),)
 
     tensor_specs = build_model_block_cache_tensor_specs(model_config,
                                                         cache_config,

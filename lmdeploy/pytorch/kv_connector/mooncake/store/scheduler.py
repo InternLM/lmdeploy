@@ -121,7 +121,11 @@ class MooncakeStoreScheduler:
         # chunk. Failure rewinds it; decode also covers unfinished earlier saves.
         self._next_save_block: dict[RequestId, int] = {}
         self._inflight_saves: dict[int, _SaveOperation] = {}
+        # Bound pinned blocks while Store is slower than inference. A skipped
+        # wave leaves the frontier retryable by the next accepted checkpoint.
+        self._max_pending_saves = 2 * cache_config.max_batches
         self._ready_decode_saves: list[MooncakeStoreSaveRequest] = []
+        self._store_routes = kv_transfer_config.kv_connector_extra_config.get('store_routed_experts', False)
 
     def bind_compact_state_manager(self, owner: SSMStateManager) -> None:
         """Inject paging's single unit owner before any compact Store
@@ -161,6 +165,8 @@ class MooncakeStoreScheduler:
 
     def _lookup_range(self, request: SchedulerSequence, num_computed_tokens: int) -> tuple[int, int]:
         """Return the safe query boundary and recompute margin, or zeros."""
+        if request.return_routed_experts and not self._store_routes:
+            return 0, 0
         if not self._kv_transfer_config.is_kv_consumer:
             return 0, 0
         if self._compact_capacity is not None and self._compact_owner is None:
@@ -356,6 +362,7 @@ class MooncakeStoreScheduler:
             remote_block_count=remote_block,
             state_slot=state_slot,
             state_unit_id=state_unit_id,
+            return_routed_experts=request.return_routed_experts,
         )
         if state_unit_id is not None:
             load_access = self._compact_owner.submit_load(bank, remote_token_len)
@@ -397,6 +404,8 @@ class MooncakeStoreScheduler:
         save_requests = []
         for index, (request, token_len, request_blocks, request_logical_blocks) in enumerate(zip(
                 running, token_lens, block_ids, logical_block_ids, strict=True)):
+            if len(self._inflight_saves) >= self._max_pending_saves:
+                break
             if len(request.history_embeddings) > 0:
                 continue
 
@@ -508,7 +517,7 @@ class MooncakeStoreScheduler:
             raise RuntimeError('Compact Store saves require the paging state owner.')
         if not (len(running) == len(token_lens) == len(checkpoint_steps)):
             raise ValueError('Compact Store save plans must match model rows.')
-        credits = owner.get_num_free_store_saves()
+        credits = min(owner.get_num_free_store_saves(), self._max_pending_saves - len(self._inflight_saves))
         steps = []
         block_size = self._cache_config.block_size
         for seq, end, boundary in zip(running, token_lens, checkpoint_steps):
@@ -551,6 +560,8 @@ class MooncakeStoreScheduler:
         block_size = self._cache_config.block_size
         requests, sources, producers = [], [], []
         for seq, end, reference, ids, logical_ids in zip(running, ends, references, blocks, logical):
+            if len(self._inflight_saves) + len(requests) >= self._max_pending_saves:
+                break
             if reference is None:
                 continue
             boundary = reference.boundary
@@ -665,6 +676,13 @@ class MooncakeStoreScheduler:
         if self.client is not None:
             self.client.discard(int(request_id))
 
+    def reject_load_result(self, request_id: int) -> None:
+        """Disable further remote loads for this request; recompute and
+        resave."""
+        req_id = int(request_id)
+        self._failed_load_requests.add(req_id)
+        self._next_save_block.pop(req_id, None)
+
     def update_connector_output(
         self,
         connector_output: KVConnectorOutput,
@@ -707,7 +725,9 @@ class MooncakeStoreScheduler:
                 self._failed_load_requests.discard(req_id)
                 if self._kv_transfer_config.is_kv_producer:
                     self._next_save_block[req_id] = request.remote_block_count
-            results.append(KVLoadResult(request_id=req_id, success=not failed))
+            routes = connector_output.routed_experts.get(req_id)
+            results.append(KVLoadResult(request_id=req_id, success=not failed,
+                                        routed_experts=routes if not failed else None))
         return KVConnectorResult(
             load_results=tuple(results),
             completed_save_ids=completed_save_ids,
@@ -742,6 +762,9 @@ class MooncakeStoreScheduler:
         for access in self._compact_loads.values():
             self._compact_owner.complete(access, success=False)
         self._compact_loads.clear()
+        self._lookup_plans.clear()
+        if self.client is not None:
+            self.client.discard_all()
         self._pending_loads.clear()
         self._inflight_loads.clear()
         self._ready_decode_saves.clear()

@@ -852,16 +852,13 @@ class AsyncEngine:
                     # router replay
                     routed_experts = outputs.routed_experts
                     if routed_experts is not None:
-                        if text_stop:
+                        if text_stop or (not gen_config.include_stop_str_in_output and finish_reason == 'stop'):
                             # The backend already removed the rows before routed_experts_start_len.
-                            num_rows = input_len + gen_len - 1 - gen_config.routed_experts_start_len
+                            num_rows = max(0, input_len + gen_len - 1 - gen_config.routed_experts_start_len)
                             if isinstance(routed_experts, str):
                                 routed_experts = await handle.trim_routed_experts(routed_experts, num_rows)
                             else:
                                 routed_experts = routed_experts[:num_rows]
-                        elif (not isinstance(routed_experts, str) and not gen_config.include_stop_str_in_output
-                              and finish_reason == 'stop'):
-                            routed_experts = routed_experts[:-1]
 
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '

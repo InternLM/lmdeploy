@@ -368,6 +368,7 @@ class GlmMoeDsaForCausalLM(DeepseekV32ForCausalLM, PiecewiseCudaGraphMixin):
                  dtype: torch.dtype = None,
                  device: torch.device = None):
         super().__init__(config, ctx_mgr, dtype=dtype, device=device)
+        self.routed_experts_shape = (config.num_hidden_layers, config.num_experts_per_tok)
         self.enable_return_routed_experts = get_build_model_context().enable_return_routed_experts
 
     def forward(

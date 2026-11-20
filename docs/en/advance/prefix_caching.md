@@ -1,101 +1,59 @@
 # Prefix caching (PyTorch)
 
-This guide covers local prefix caching in the PyTorch backend and the hybrid
-state-checkpoint policies shared with Mooncake Store. Local caching is enabled
-with `PytorchEngineConfig.enable_prefix_caching=True`; Mooncake Store must be
-configured separately through `kv_transfer_config`.
+When requests start with the same tokens, LMDeploy can reuse the cached prefix
+and prefill only the remaining input. Enable local reuse with
+`PytorchEngineConfig(enable_prefix_caching=True)` or `--enable-prefix-caching`.
+Mooncake Store is optional and configured separately through `kv_transfer_config`.
+
+Check `Response.cached_tokens` on a repeated prompt to see how many tokens were
+reused. For aggregate local and Store hit rates, see [cache metrics](./metrics.md).
 For TurboMind, see its [prefix caching settings](../inference/turbomind_config.md#prefix-caching-switch).
 
-## Prefill checkpoints for hybrid attention models
+## Checkpoints for hybrid attention models
 
-Hybrid attention models need both full-attention KV blocks and the
-linear-attention state at a reusable prefix boundary.
+A hybrid model can reuse a prefix only if it has both the full-attention KV
+blocks and the linear-attention state at the same boundary. The following
+settings control where LMDeploy saves that state:
 
-- `prefill_save_alignment` (`--prefill-save-alignment`, default 1024) controls
-  prefill state-checkpoint boundaries for both local prefix caching and Mooncake
-  Store. It must be a positive multiple of the cache block size.
-  With alignment 512 and a token budget of 8192,
-  an uncached 800-token text prompt uses two chunks: 512 and 288 tokens,
-  including when both caches are enabled. Full-attention-only models ignore this
-  option. Alignment does not require a checkpoint at every multiple.
-- `prefix_cache_state_budget` reserves extra checkpoint slots and uses additional
-  memory. Zero adds no reserved slots; idle runtime slots may still be reused.
+| Setting                                    | When to use it                                                                                                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prefill_save_alignment` (default `1024`)  | Sets eligible prefill boundaries for local caching and Store. Use a positive multiple of the cache block size; not every boundary is saved.                               |
+| `prefill_save_last_only` (default `False`) | For append-only conversations, save only the last safe aligned boundary per input turn. This reduces saves but leaves fewer reusable prefixes if a conversation branches. |
+| `prefix_cache_state_budget` (default `0`)  | Reserve extra GPU state slots for local checkpoints. With no extra slots, checkpoints can still use idle runtime slots.                                                   |
 
-### Save only the last checkpoint
+For example, with alignment 8192 and last-only saving, a 20,000-token prompt
+saves at 16,384. If that boundary splits an image, it moves back to 8192.
+The boundary must leave at least one input token. These prefill settings do not
+apply to full-attention-only models.
 
-`prefill_save_last_only=True` (`--prefill-save-last-only`, disabled by default)
-saves only the last reusable boundary aligned to `prefill_save_alignment` in
-each input turn. The boundary leaves at least one input token and moves back
-if needed to avoid splitting multimodal inputs, including the shifted MTP
-input. Earlier chunks use their normal token budget; the chunk reaching this
-boundary saves the local state checkpoint and sends all unsaved full-attention
-KV blocks through that boundary, together with its state snapshot, to Mooncake
-Store. Each cache must be enabled separately.
+To checkpoint generated tokens too, set `prefix_cache_decode_save_first=True`
+for the first safe aligned boundary at or after the prompt. Set
+`prefix_cache_decode_state_interval` to a positive multiple of the cache block
+size for periodic checkpoints; the default of zero disables periodic saves.
 
-For example, with alignment explicitly set to 8192 and 20,000 input tokens,
-the save is at 16,384; if an image spans \[16,000, 18,000), it moves back to 8192.
-A 32,768-token input saves at 24,576, leaving a suffix for prefix reuse.
-No save is made if no positive safe boundary exists or a cache hit already
-reaches it. Earlier turns' checkpoints remain subject to normal eviction,
-and unavailable snapshot slots retain the existing skip behavior.
+**GLM-5.3-Flash** uses 64-token cache blocks and supports prefix reuse with or
+without [DeepSeek MTP](./spec_decoding.md#deepseek-mtp). Hybrid Store and decode
+checkpoints with MTP require a single stateless draft layer. Prefill/decode
+disaggregation is not supported for this model.
 
-This policy reduces checkpoint copies and Store submissions for append-only
-agent conversations, at the cost of fewer intermediate prefixes for edited
-or branching conversations. Full-attention-only models ignore it.
+## RL weight updates with Mooncake Store
 
-Supported MTP methods use token lookahead instead of block rewind for both
-local and Store matches, so they do not require extra KV blocks beyond the
-saved state boundary for remote reuse.
+Cached prefixes from one set of weights must not be reused with another. For
+colocated RL updates, configure `KVTransferConfig` with
+`kv_connector='MooncakeStoreConnector'` and `kv_role='kv_both'`. Alongside your
+Store connection settings, set these options in `kv_connector_extra_config`:
 
-## GLM-5.3-Flash
+- Set `rl_weight_versioning=True` and provide a nonempty initial `weight_version`
+  that identifies the loaded weights. Never reuse a version for different weights.
+- To share across replicas, set `rl_share_across_engines=True` (default `False`).
+  The trainer must coordinate versions across replicas. After sleep, each engine
+  must commit an update before waking its KV cache.
+- If the workload needs routed-expert IDs, set `store_routed_experts=True` on a
+  model that supports collecting them. This reserves extra GPU memory on the
+  output rank; missing or incomplete route blocks are recomputed.
 
-GLM-5.3-Flash can reuse prefix caches with ordinary autoregressive decoding or
-[`deepseek_mtp`](./spec_decoding.md#deepseek-mtp).
-Enable `PytorchEngineConfig.enable_prefix_caching` in either mode.
-The following text-only example uses TP4; choose a TP size and cache budget that
-fit your hardware. Set `speculative_config=None` to disable MTP without disabling
-prefix caching.
-
-```python
-from lmdeploy import GenerationConfig, PytorchEngineConfig, pipeline
-from lmdeploy.messages import SpeculativeConfig
-
-if __name__ == '__main__':
-    engine = PytorchEngineConfig(
-        tp=4,
-        max_batch_size=4,
-        enable_prefix_caching=True,
-        prefix_cache_state_budget=8,
-        max_prefill_token_num=512,
-        language_model_only=True,
-    )
-    spec = SpeculativeConfig(method='deepseek_mtp', num_speculative_tokens=3)
-    with pipeline('/path/to/GLM-5.3-Flash', backend_config=engine,
-                  speculative_config=spec) as pipe:
-        notes = 'A rectangle has four sides and four right angles. ' * 80
-        prompt = notes + '\nHow many sides does a rectangle have?'
-        generation = GenerationConfig(max_new_tokens=128, do_sample=False)
-        cold = pipe(prompt, gen_config=generation)
-        warm = pipe(prompt, gen_config=generation)
-        print(cold.cached_tokens, warm.cached_tokens)
-```
-
-### Configuration limits
-
-- Cache blocks contain 64 tokens. If setting `num_gpu_blocks` manually, count
-  these blocks rather than KPool entries.
-- With MTP, keep `prefix_cache_decode_state_interval=0`. Without MTP, positive
-  values must be multiples of 64.
-- PD migration is not supported.
-
-The native FP8 CUDA path also supports DP/EP serving, for example `--tp 2 --dp 2 --ep 4`. Enable text-prefill PCG with `--piecewise-cudagraph-max-tokens 512`
-and `--max-prefill-token-num 512`. Startup warmup prepares these plans; skipping
-warmup leaves unprepared prefills eager. Vision-bearing chunks also fall back to
-eager execution. MTP draft prefill remains eager, while supported decode steps
-use the ordinary CUDA graph path. These choices are independent of prefix caching.
-
-Inspect `Response.cached_tokens` to verify actual reuse. For aggregate local
-and Store hit rates, see [cache hit metrics](./metrics.md).
-Changing prefill, PCG padding, batch shapes or parallel topology can change
-FP8 generation trajectories; compare task accuracy and MTP acceptance as well
-as cache hits rather than assuming bitwise-identical outputs or a guaranteed speedup.
+Follow the [Ray weight-update procedure](./update_weights.md): drain requests,
+sleep, wake the weights, update them, then wake the KV cache. On the final
+`/update_weights` request (`finished=True`), every rank must supply the same
+nonempty `weight_version`, or all must omit it (or use `None`) for a fresh
+engine-private cache. A rejected version does not roll back weights already loaded.

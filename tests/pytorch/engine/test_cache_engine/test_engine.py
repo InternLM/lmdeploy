@@ -509,3 +509,21 @@ def test_deepseek_v4_caches_resolve_state_and_carry_block_view():
     assert caches.block_caches is block_cache_view
     with pytest.raises(RuntimeError, match='does not own cache'):
         caches.state_cache('state', 2)
+
+
+def test_r3_pool_uses_logical_block_geometry_and_is_excluded_from_kv_wire():
+    config = CacheConfig(max_batches=1, block_size=128, kernel_block_size=64,
+                         num_cpu_blocks=0, num_gpu_blocks=3)
+    model = _make_model_config()
+    plain = build_block_cache_plan(model, config, 1)
+    plan = build_block_cache_plan(model, config, 1, routed_experts_shape=(4, 3))
+    engine = CacheEngine.__new__(CacheEngine)
+    engine.cache_config, engine.block_cache_plan = config, plan
+    engine.gpu_allocation = plan.allocate(3, 'cpu')
+    engine._block_caches = engine._build_block_cache_view(engine.gpu_allocation.tensor_views)
+    assert plan.logical_block_nbytes == plain.logical_block_nbytes + 128 * 4 * 3 * 2
+    assert engine.routed_experts_cache.shape == (3, 128, 4, 3)
+    assert engine.routed_experts_cache.is_contiguous()
+    assert engine.routed_experts_cache.data_ptr() == engine.gpu_allocation.pools[-1].tensor.data_ptr()
+    assert plan.model_cache_indices == plain.model_cache_indices
+    assert len(engine.connector_kv_caches) == model.num_layers

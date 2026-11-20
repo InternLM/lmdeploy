@@ -27,6 +27,21 @@ _BLOCK_HASH_SCHEMA = b'lmdeploy-mooncake-prefix-block-v1\x00'
 MooncakeMode = Literal['embedded']
 
 
+def build_rl_store_cache_prefix(cache_prefix: str, weight_version: str) -> str:
+    """Fingerprint the ordered prefix/version pair without delimiter ambiguity.
+
+    The canonical JSON array order and encoding define the v2 namespace. Bump the tag if that contract changes; never
+    fall back to ambiguous legacy keys.
+    """
+    if not isinstance(cache_prefix, str):
+        raise TypeError('cache_prefix must be a string')
+    if not isinstance(weight_version, str) or not weight_version:
+        raise ValueError('RL Mooncake Store requires a non-empty weight_version')
+    encoded = json.dumps([cache_prefix, weight_version], ensure_ascii=True,
+                         separators=(',', ':')).encode('ascii')
+    return 'rl-store-v2:' + hashlib.sha256(encoded).hexdigest()
+
+
 def validate_kv_head_replica_num(
     kv_head_replica_num: int,
     tp_size: int,
@@ -216,9 +231,15 @@ def build_compact_store_schema(state_specs, *, block_plans, spec_identity: str,
     layouts = []
     for plan in block_plans:
         allocation = plan.allocate(1, device='meta')
-        pools = allocation.pools
+        # R3 has its own wire schema and exists only on the output rank.
+        route_storage = {view.untyped_storage() for spec, view in
+                         zip(plan.tensor_specs, allocation.tensor_views, strict=True)
+                         if spec.name == 'routed_experts'}
+        pools = tuple(pool for pool in allocation.pools if pool.tensor.untyped_storage() not in route_storage)
         fields = []
         for spec, view in zip(plan.tensor_specs, allocation.tensor_views, strict=True):
+            if spec.name == 'routed_experts':
+                continue
             owners = [i for i, pool in enumerate(pools) if view.untyped_storage() is pool.tensor.untyped_storage()]
             if len(owners) != 1:
                 raise ValueError('Compact Store KV field must belong to exactly one retained pool.')
@@ -249,6 +270,7 @@ class MooncakeStoreKeyMetadata:
     block_size: int
     kv_head_replica_num: int = 1
     state_schema: str | None = None
+    routed_experts_shape: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
         validate_kv_head_replica_num(self.kv_head_replica_num, self.tp_size)
@@ -268,7 +290,7 @@ def build_store_key(
     *,
     group_id: int = 0,
 ) -> str:
-    """Build a group-0 FA shard key or a group-1 attention-rank state key."""
+    """Build a KV, state, or output-rank R3 block key."""
     block_hash = bytes(block_hash)
     if len(block_hash) != MOONCAKE_BLOCK_HASH_BYTES:
         raise ValueError(f'block_hash must contain {MOONCAKE_BLOCK_HASH_BYTES} bytes')
@@ -276,10 +298,14 @@ def build_store_key(
     prefix = f'{metadata.cache_prefix}@' if metadata.cache_prefix else ''
     # Compact recovery is one KV+state contract. Legacy keys remain unchanged.
     state_schema = f'@state:{metadata.state_schema}' if metadata.state_schema else ''
+    route_schema = ''
+    if group_id == 2:
+        layers, topk = metadata.routed_experts_shape
+        route_schema = f'@r3:u16-token-layer-topk-v2:{metadata.block_size}:{layers}:{topk}:tp{metadata.tp_size}'
     return (
         f'{prefix}{metadata.model_name}'
         f'@tp_rank:{kv_head_rank}'
-        f'@group:{group_id}{state_schema}'
+        f'@group:{group_id}{state_schema}{route_schema}'
         f'@{block_hash.hex()}'
     )
 
@@ -450,6 +476,7 @@ class MooncakeStoreLoadRequest:
     remote_block_count: int = 0
     state_slot: int | None = None
     state_unit_id: int | None = None
+    return_routed_experts: bool = False
 
     def __post_init__(self):
         if self.state_unit_id is not None:

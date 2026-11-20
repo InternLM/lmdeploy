@@ -311,7 +311,7 @@ class LookupKeyClient:
             recompute_blocks.to_bytes(4, byteorder='big'),
         )
 
-    def _lookup(self, token_len: int, block_hashes: Sequence[bytes], recompute_blocks: int) -> int:
+    def _lookup(self, token_len: int, block_hashes: Sequence[bytes], recompute_blocks: int):
         frames = self._encode_lookup(token_len, block_hashes, recompute_blocks)
         rpc_socket = self._ensure_socket()
         try:
@@ -366,6 +366,10 @@ class LookupKeyClient:
             return 0
         finally:
             self.queries.pop(req_id, None)
+
+    def discard_all(self):
+        for req_id in tuple(self.queries):
+            self.discard(req_id)
 
     def discard(self, req_id: RequestId) -> None:
         """Drop an in-flight or completed lookup for an aborted request."""

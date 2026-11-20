@@ -308,7 +308,8 @@ def test_stateless_worker_build_allocates_no_state_ids_or_compact_schema(monkeyp
     monkeypatch.setattr(agent_module, 'get_dist_manager', lambda: SimpleNamespace(
         current_context=lambda: SimpleNamespace(attn_tp_group=SimpleNamespace(rank=0))))
     kv = {'layer.k': object(), 'layer.v': object()}
-    monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: SimpleNamespace(connector_kv_caches=kv))
+    cache_engine = SimpleNamespace(connector_kv_caches=kv, routed_experts_cache=None)
+    monkeypatch.setattr(agent_module, 'CacheEngine', lambda *args, **kwargs: cache_engine)
     monkeypatch.setattr(agent_module, 'build_kv_connector', lambda *args, **kwargs: connector)
     # Legacy empty-layout selection is allowed; tensor allocation is not.
     monkeypatch.setattr(torch, 'empty', forbidden)
