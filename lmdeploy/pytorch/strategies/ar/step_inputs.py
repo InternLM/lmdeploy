@@ -34,7 +34,26 @@ def step_sampling_delta(sampling_delta: SamplingInputsDelta,
     all_ids = sampling_delta.all_ids
     if all_ids is not None:
         sampling_delta.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)
+    # The scheduler builds the next step's sampling inputs before this step's
+    # tokens are appended to the sequences, so keep generated ids on device.
+    generated_ids = sampling_delta.generated_ids
+    if generated_ids is not None:
+        sampling_delta.generated_ids = torch.cat([generated_ids, next_token_ids[:, None]], 1)
     return sampling_delta
+
+
+def _merge_right_aligned(ids0: torch.Tensor | None, ids1: torch.Tensor | None, bs0: int, bs1: int,
+                         pad_token_id: int, device: torch.device) -> torch.Tensor | None:
+    """Concatenate two right-aligned id tensors along the batch dim."""
+    if ids0 is None and ids1 is None:
+        return None
+    max_len = max(0 if ids0 is None else ids0.size(1), 0 if ids1 is None else ids1.size(1))
+    out = torch.full((bs0 + bs1, max_len), pad_token_id, dtype=torch.int64, device=device)
+    if ids0 is not None and ids0.size(1) > 0:
+        out[:bs0, max_len - ids0.size(1):] = ids0
+    if ids1 is not None and ids1.size(1) > 0:
+        out[bs0:, max_len - ids1.size(1):] = ids1
+    return out
 
 
 def merge_sampling_delta(
@@ -66,10 +85,20 @@ def merge_sampling_delta(
             bs1 = all_ids1.size(0)
             all_ids[-bs1:, :max_len1] = all_ids1
 
+    # Rows of a batch without generated ids have no repetition penalty or
+    # n-gram filter, so padding them is harmless.
+    generated_ids = _merge_right_aligned(sampling_delta.generated_ids,
+                                         other.generated_ids,
+                                         sampling_delta.num_ignore_eos.size(0),
+                                         other.num_ignore_eos.size(0),
+                                         pad_token_id,
+                                         device=num_ignore_eos.device)
+
     return SamplingInputsDelta(
         num_ignore_eos=num_ignore_eos,
         random_offsets=random_offsets,
         all_ids=all_ids,
+        generated_ids=generated_ids,
     )
 
 
@@ -87,10 +116,14 @@ def reindex_sampling_delta(
     all_ids = sampling_delta.all_ids
     if all_ids is not None:
         all_ids = all_ids[indices]
+    generated_ids = sampling_delta.generated_ids
+    if generated_ids is not None:
+        generated_ids = generated_ids[indices]
     return SamplingInputsDelta(
         num_ignore_eos=num_ignore_eos,
         random_offsets=random_offsets,
         all_ids=all_ids,
+        generated_ids=generated_ids,
     )
 
 
