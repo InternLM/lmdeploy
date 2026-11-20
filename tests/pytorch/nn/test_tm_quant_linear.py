@@ -8,7 +8,7 @@ checkpoint-suffix parameter names and the per-shard global-scale routing.
 import pytest
 import torch
 
-from lmdeploy.pytorch.nn.linear.tm_quant import MergedTmQuantLinear, TmQuantLinear
+from lmdeploy.pytorch.nn.linear.tm_quant import MergedTmQuantLinear, QKVTmQuantLinear, TmQuantLinear
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA not available')
 
@@ -32,16 +32,19 @@ def _quantize_nvfp4(w_dense: torch.Tensor):
     """Quantize a [N, K] dense weight to the raw checkpoint bundle.
 
     Follows the compressed-tensors nvfp4-pack-quantized convention (same
-    construction as the TM-side native test): per-tensor global scale is
-    the divisor ``2688 / amax_w``, e4m3 block scales ``448 * amax_g /
-    amax_w``, two codes per byte with the even index in the low nibble.
+    construction as the TM-side native test; keep the copies in lockstep):
+    per-tensor global scale is the divisor ``2688 / amax_w``, e4m3 block
+    scales ``448 * amax_g / amax_w``, two codes per byte with the even
+    index in the low nibble.
     """
     n, k = w_dense.shape
     groups = w_dense.view(n, k // 16, 16)
     amax_w = w_dense.abs().amax().clamp_min(1e-8)
     scale = (groups.abs().amax(dim=-1, keepdim=True) * (448.0 / amax_w)).clamp_max(448.0)
     scale = scale.to(torch.float8_e4m3fn).float()
-    scaled = groups / scale
+    # codes = round(w * gs / scale); the raw ``groups / scale`` (the
+    # historical bug) collapses every magnitude code onto zero.
+    scaled = groups * ((2688.0 / amax_w) / scale)
 
     grid = torch.tensor(_E2M1_VALUES, device=w_dense.device)
     mag = torch.argmin((scaled.unsqueeze(-1) - grid).abs(), dim=-1)
@@ -72,6 +75,42 @@ class TestNvfp4Linear:
         assert out.dtype == torch.bfloat16
         assert err < 1e-2 * ref.abs().max().item() + 0.05, err
 
+    def test_quantizer_produces_nonzero_codes(self):
+        """Dropping the gs factor (the historical bug) collapsed every
+        magnitude code onto zero, making the kernel proof above vacuous."""
+        torch.manual_seed(0)
+        w = torch.randn(64, 512) * 0.05
+        bits, scale, gs = _quantize_nvfp4(w)
+        codes = torch.stack(((bits & 0xF).long(), (bits >> 4).long()), dim=-1).view(64, 512)
+        nz_mag = ((codes & 0x7) != 0).float().mean().item()
+        assert nz_mag > 0.3, nz_mag
+        w_ref = _dequant_nvfp4(bits, scale, gs)
+        assert w_ref.abs().max() > 0
+
+    def test_plain_wrong_global_scale_is_loud(self):
+        """Reloading the same bundle with a wrong scale must move the output
+        far from the reference; with all-zero codes this passes vacuously."""
+        torch.manual_seed(0)
+        K, N = 512, 256
+        module = TmQuantLinear(K, N, lane='nvfp4', bias=False, device=torch.device('cuda')).cuda()
+        bits, scale, gs = _quantize_nvfp4(torch.randn(N, K) * 0.05)
+        module.weight_packed.data.copy_(bits)
+        module.weight_scale.data.copy_(scale)
+        module.weight_global_scale.data[0] = gs
+        module.update_weights()
+
+        x = torch.randn(8, K, dtype=torch.bfloat16, device='cuda')
+        ref = x.float() @ _dequant_nvfp4(bits.cuda(), scale.cuda(), gs.cuda()).T
+        out = module(x)
+        err_ok = (out.float() - ref).abs().max().item()
+        assert err_ok < 1e-2 * ref.abs().max().item() + 0.05, err_ok
+
+        # Same codes, epilogue factor off by 8x.
+        module.weight_global_scale.data[0] = gs * 8
+        module.update_weights()
+        err_wrong = (module(x).float() - ref).abs().max().item()
+        assert err_wrong > 0.5 * ref.abs().max().item(), (err_ok, err_wrong)
+
     def test_param_names_match_checkpoint_suffixes(self):
         module = TmQuantLinear(256, 64, lane='nvfp4', bias=False, device=torch.device('cuda'))
         names = dict(module.named_parameters())
@@ -90,25 +129,66 @@ class TestNvfp4Linear:
         assert module.num_shards == 2
         bundles = []
         for shard in range(2):
-            bits, scale, gs = _quantize_nvfp4(torch.randn(N, K) * 0.05)
+            bits, scale, _ = _quantize_nvfp4(torch.randn(N, K) * 0.05)
             module.weight_packed.data.split(module.all_out_features, 0)[shard].copy_(bits.cuda())
             module.weight_scale.data.split(module.all_out_features, 0)[shard].copy_(scale.cuda())
-            module.weight_global_scale.data[shard] = gs
-            bundles.append((bits.cuda(), scale.cuda(), gs.cuda(), gs.item()))
-        # loader routing: shard ids map into the fused parameter rows
+            bundles.append((bits.cuda(), scale.cuda()))
+        # loader routing: shard ids map into the fused parameter rows and
+        # each shard's GEMM applies its own slot's scale; with collapsed
+        # codes this proof used to pass vacuously
         module.global_scale_loader(module.weight_global_scale, torch.tensor(4.5), shard_id=0)
         module.global_scale_loader(module.weight_global_scale, torch.tensor(8.0), shard_id=1)
         assert module.weight_global_scale.tolist() == [4.5, 8.0]
-        bundles[0] = (bundles[0][0], bundles[0][1], bundles[0][2], 4.5)
-        bundles[1] = (bundles[1][0], bundles[1][1], bundles[1][2], 8.0)
+        module.update_weights()
+
+        x = torch.randn(4, K, dtype=torch.bfloat16, device='cuda')
+        refs = [
+            x.float() @ _dequant_nvfp4(b, s, torch.tensor(g).cuda()).T
+            for (b, s), g in zip(bundles, module.weight_global_scale.tolist())
+        ]
+        ref = torch.cat(refs, dim=-1)
+        out = module(x)
+        err = (out.float() - ref).abs().max().item()
+        assert err < 1e-2 * ref.abs().max().item() + 0.05, err
+
+
+class TestQkvGlobalScale:
+    """A fused QKV checkpoint module carries ONE per-tensor global scale; every
+    shard that packs it must receive it."""
+
+    def _make_module(self):
+        K = 256
+        module = QKVTmQuantLinear(K, 4, 2, 32, 32, lane='nvfp4', bias=False, device=torch.device('cuda')).cuda()
+        assert list(module.get_qkv_out_feautures()) == [128, 64, 64]
+        return module, K
+
+    def test_fused_single_global_scale_reaches_all_shards(self):
+        torch.manual_seed(0)
+        module, K = self._make_module()
+        sections = module.get_qkv_out_feautures()
+        bits, scale, gs = _quantize_nvfp4(torch.randn(sum(sections), K) * 0.05)
+        module.weight_packed.data.copy_(bits)
+        module.weight_scale.data.copy_(scale)
+        # fused checkpoint style: one key, no shard id
+        module.global_scale_loader(module.weight_global_scale, gs)
+        assert module.weight_global_scale.tolist() == pytest.approx([gs.item()] * 3)
         module.update_weights()
 
         x = torch.randn(4, K, dtype=torch.bfloat16, device='cuda')
         out = module(x)
-        refs = [x.float() @ _dequant_nvfp4(b, s, g.cuda()).T for b, s, g, _ in bundles]
-        ref = torch.cat(refs, dim=-1)
+        ref = x.float() @ _dequant_nvfp4(bits.cuda(), scale.cuda(), gs.cuda()).T
+        assert torch.isfinite(out).all()
         err = (out.float() - ref).abs().max().item()
         assert err < 1e-2 * ref.abs().max().item() + 0.05, err
+
+    def test_shard_id_routing_stays_per_slot(self):
+        """Unfused checkpoints (separate q/k/v keys) keep their distinct per-
+        tensor scales in their own slots."""
+        module, _ = self._make_module()
+        module.global_scale_loader(module.weight_global_scale, torch.tensor(4.5), shard_id='q')
+        module.global_scale_loader(module.weight_global_scale, torch.tensor(8.0), shard_id='k')
+        module.global_scale_loader(module.weight_global_scale, torch.tensor(16.0), shard_id='v')
+        assert module.weight_global_scale.tolist() == [4.5, 8.0, 16.0]
 
 
 class TestEnvGates:

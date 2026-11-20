@@ -22,6 +22,7 @@ def _quantize_nvfp4(w_dense: torch.Tensor):
     per-tensor ``weight_global_scale`` is the divisor ``2688 / amax_w`` and
     the e4m3 block scales are ``448 * amax_g / amax_w`` (<= 448), so the
     reconstruction is ``codes * scales / global_scale == codes * amax_g/6``.
+    Keep in lockstep with tests/pytorch/nn/test_tm_quant_linear.py.
     """
     n, k = w_dense.shape
     groups = w_dense.view(n, k // 16, 16)
