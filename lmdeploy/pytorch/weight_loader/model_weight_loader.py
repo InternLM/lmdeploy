@@ -50,7 +50,7 @@ def new_ct_normalize_state() -> dict:
 
     Pass the returned dict to consecutive ``normalize_ct_weights`` calls so a
     module whose ``weight_packed``/``weight_scale`` land in different
-    safetensors shards (or update buckets) still stages together. Finish the
+    safetensors shards (or update buckets) still stage together. Finish the
     sequence with ``finalize_ct_weights``; a state passed this way does NOT
     validate leftovers at the end of a single stream.
     """
@@ -156,6 +156,140 @@ def normalize_ct_weights(iterator, state: dict | None = None):
     if owns_state and staged:
         raise ValueError('Incomplete compressed-tensors shards for: '
                          f'{sorted(staged)}; check the checkpoint integrity.')
+
+
+_GPTQ_SUFFIXES = ('qweight', 'scales', 'qzeros')
+
+
+def new_gptq_normalize_state() -> dict:
+    """Create staging state that lets one linear's tensors split across
+    streams.
+
+    Pass the returned dict to consecutive ``normalize_gptq_weights`` calls so
+    a module whose quant tensors land in different safetensors shards still
+    stages together. Finish the sequence with ``finalize_gptq_weights``; a
+    state passed this way does NOT flush or validate at the end of a single
+    stream.
+    """
+    return {'staged': {}, 'converted': set()}
+
+
+def _gptq_convert_one(prefix, shard):
+    """Decide the layout of one module and emit canonical AWQ tensors."""
+    from lmdeploy.turbomind import gptq_repack
+
+    qw, sc = shard['qweight'], shard['scales']
+    is_gptq = qw.shape[-1] == sc.shape[-1]
+    is_awq = qw.shape[-1] * 8 == sc.shape[-1]
+    if not is_gptq and not is_awq:
+        raise ValueError(
+            f'Cannot classify quant tensors at prefix {prefix!r}: qweight {tuple(qw.shape)} vs scales '
+            f'{tuple(sc.shape)}; neither the GPTQ nor the AWQ pack geometry matches.')
+    if is_awq:
+        for s in _GPTQ_SUFFIXES:
+            if s in shard:
+                yield f'{prefix}{s}', shard[s]
+        return
+    out_shard, _ = gptq_repack.convert_shard(shard)
+    for s, t in out_shard.items():
+        yield f'{prefix}{s}', t
+
+
+def _gptq_flush_staged(staged, converted, keep):
+    """Flush every staged module except ``keep``; raise on strays."""
+    for prefix, shard in list(staged.items()):
+        if prefix == keep:
+            continue
+        if 'scales' not in shard:
+            raise ValueError(f'Quant shard for {prefix!r} has no scales; '
+                             'check the checkpoint integrity.')
+        staged.pop(prefix)
+        converted.add(prefix)
+        yield from _gptq_convert_one(prefix, shard)
+
+
+def finalize_gptq_weights(state: dict):
+    """Flush staged modules once every stream of the state was consumed.
+
+    Mirrors the end-of-stream behavior of a locally owned normalizer:
+    modules missing ``qzeros`` flush with the synthesized symmetric pad,
+    strays without ``scales`` raise. The flushed tensors must still be
+    loaded, so this is a generator; consume it fully — consuming is also
+    what triggers the stray validation.
+    """
+    yield from _gptq_flush_staged(state['staged'], state['converted'], keep=None)
+
+
+def normalize_gptq_weights(iterator, state: dict | None = None):
+    """Normalize GPTQ W4A16 tensors to the canonical AWQ layout.
+
+    GPTQ and AWQ checkpoints share the ``qweight``/``scales``/``qzeros``
+    suffixes but pack differently: GPTQ packs along K with sequential
+    nibbles and a ``zero_point - 1`` offset, AWQ packs along N with the
+    ``[0, 4, 1, 5, 2, 6, 3, 7]`` nibble order. The discriminator is the
+    qwidth/scales relation, which is decisive for any non-empty layer:
+    GPTQ ``qweight.shape[-1] == scales.shape[-1]``, AWQ
+    ``qweight.shape[-1] * 8 == scales.shape[-1]``.
+
+    Tensors of one linear are staged until the full triple arrives, then
+    GPTQ modules convert in one ``gptq_to_awq`` call; AWQ modules pass
+    through in arrival order. A module that never ships ``qzeros`` flushes
+    with a synthesized symmetric zero word at the end of the complete
+    stream — exporters only drop qzeros for symmetric groups, where the
+    AWQ symmetric pad is the exact value. Staging never synthesizes early:
+    a module whose tensors straddle shard or bucket boundaries stays staged
+    until its components arrive. Peak staging memory stays at the
+    interleaving bound of the stream.
+
+    With a locally owned state the stream end flushes and validates.
+    Pass a shared ``state`` (see ``new_gptq_normalize_state``) to keep
+    staging alive across calls; the caller then flushes the leftovers
+    through ``finalize_gptq_weights``.
+    """
+    if state is None:
+        state = new_gptq_normalize_state()
+        owns_state = True
+    else:
+        owns_state = False
+    staged = state['staged']
+    converted = state['converted']
+    from lmdeploy.turbomind import gptq_repack
+    from lmdeploy.turbomind.gptq_repack import _is_sequential_g_idx
+
+    for name, tensor in iterator:
+        if name.endswith('g_idx'):
+            # AutoGPTQ ships an identity group-index buffer even without
+            # act-order; consume it. A reordered mapping is real act-order
+            # and cannot be served by the AWQ layout.
+            if _is_sequential_g_idx(tensor):
+                continue
+            raise ValueError(f'{name}: desc_act (act-order) GPTQ checkpoints are not supported; '
+                             're-quantize the checkpoint without desc_act.')
+        suffix = next((s for s in _GPTQ_SUFFIXES if name.endswith(s)), None)
+        if suffix is None:
+            yield name, tensor
+            continue
+        prefix = name[:-len(suffix)]
+        if prefix in converted:
+            # The module already converted. A symmetric GPTQ checkpoint
+            # stores the constant 7 (= zero point 8 minus one), which the
+            # synthesized pad already represents.
+            if suffix == 'qzeros' and bool((gptq_repack.unpack_u4_lsb(tensor) == 7).all()):
+                continue
+            raise ValueError(f'Duplicate quant key {name!r} after {prefix} converted.')
+        shard = staged.setdefault(prefix, {})
+        if not owns_state:
+            # Update buckets deliver views into reused IPC buffers; a module
+            # whose scales land in a later bucket would convert from a stale
+            # view. The ct normalizer makes the same defensive copy.
+            tensor = tensor.clone()
+        shard[suffix] = tensor
+        if len(shard) == len(_GPTQ_SUFFIXES):
+            staged.pop(prefix)
+            converted.add(prefix)
+            yield from _gptq_convert_one(prefix, shard)
+    if owns_state:
+        yield from _gptq_flush_staged(staged, converted, keep=None)
 
 
 def _get_weight_type(model_path: str, use_safetensors: bool = None):
@@ -286,7 +420,7 @@ class ModelWeightLoader:
         self,
         model: torch.nn.Module,
         device: torch.device = None,
-        normalize_ct: bool = False,
+        normalize_quant: bool = False,
     ):
         """Load model weights implementation."""
         assert hasattr(model, 'load_weights')
@@ -303,18 +437,28 @@ class ModelWeightLoader:
         paths = sorted(paths)
         if _envs.random_load_weight:
             np.random.shuffle(paths)
-        # One staging state spans all shard files: a linear's weight_packed /
-        # weight_scale pair may split across shard boundaries.
+        # One staging state per normalizer spans all shard files: a linear's
+        # quant tensors may split across shard boundaries.
         ct_state = new_ct_normalize_state()
+        gptq_state = new_gptq_normalize_state()
         for path in tqdm(paths, desc='Loading weights from safetensors', disable=disable_tqdm):
             weights_iterator = self._get_weights_iterator(path)
-            if normalize_ct:
-                weights_iterator = normalize_ct_weights(weights_iterator, ct_state)
+            if normalize_quant:
+                weights_iterator = normalize_gptq_weights(
+                    normalize_ct_weights(weights_iterator, ct_state), gptq_state)
             weights_iterator = self._rename_weights_iterator(weights_iterator, model)
             if len(dummy_prefix) > 0:
                 weights_iterator = self._skip_dummy_iterator(weights_iterator, dummy_prefix)
             model.load_weights(weights_iterator)
-        if normalize_ct:
+        if normalize_quant:
+            # Strays raise here; flushed leftovers still feed the model
+            # through the same rename/dummy pipeline as the shard streams.
+            leftover = list(finalize_gptq_weights(gptq_state))
+            if leftover:
+                leftover = self._rename_weights_iterator(iter(leftover), model)
+                if len(dummy_prefix) > 0:
+                    leftover = self._skip_dummy_iterator(leftover, dummy_prefix)
+                model.load_weights(leftover)
             finalize_ct_weights(ct_state)
         if device is not None:
             model.to(device)
@@ -342,9 +486,9 @@ def load_model_weights(model: torch.nn.Module,
                        checkpoint_path: str,
                        prefix: str = None,
                        device: torch.device = None,
-                       normalize_ct: bool = False):
+                       normalize_quant: bool = False):
     """Loading model weights."""
     loader = ModelWeightLoader(checkpoint_path, prefix=prefix)
-    loader.load_model_weights(model, device=device, normalize_ct=normalize_ct)
+    loader.load_model_weights(model, device=device, normalize_quant=normalize_quant)
     model.eval()
     process_weights_after_loading(model)
