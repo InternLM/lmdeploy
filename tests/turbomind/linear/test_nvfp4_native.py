@@ -246,3 +246,18 @@ def test_nvfp4_grouped_forward_matches_reference():
         if int(offsets[e]) < int(offsets[e + 1])
     )
     assert wrong_err > 1.0, f'wrong-scale control error too small: {wrong_err}'
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
+def test_fuse_weight_rejects_global_scale():
+    """Insurance: the fused-SiLU lane has a single per-tensor scale slot;
+    a global-scale bundle must be rejected loudly instead of silently
+    serving two differently-scaled projections with one scalar."""
+    from lmdeploy.turbomind.linear import get_linear
+
+    linear = get_linear()
+    with linear._activate():
+        plan = linear.get_weight_plan(weight_format=NVFP4Format(), dtype=torch.float16)
+        w = torch.zeros(16, 64, dtype=torch.uint8)
+        with pytest.raises(ValueError, match='global scale'):
+            linear.fuse_weight((w, w), plan=plan, global_scale=torch.tensor([2.0]))
