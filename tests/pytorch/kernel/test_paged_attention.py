@@ -1210,7 +1210,7 @@ class TestPagedAttentionQuantMultiToken:
 
             vc_codes = torch.stack([_pack4(codes), _pack4(codes_request1)])
             k_cache = torch.full((B, BS, HK, kv_dim), 0x11, device='cuda', dtype=torch.uint8)
-        v_cache = vc_codes[:, None].expand(B, BS, HK, kv_dim).contiguous()
+        v_cache = vc_codes[:, None, None].expand(B, BS, HK, kv_dim).contiguous()
 
         scales_zeros = torch.zeros(B, BS, HK, 2, device='cuda', dtype=torch.float16)
         scales_zeros[..., 0] = quant_scale
