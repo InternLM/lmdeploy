@@ -1,4 +1,4 @@
-# Copyright (c) OpenMMLab. All rights reserved.
+# Copyright (c) Shanghai AI Laboratory. All rights reserved.
 
 import contextlib
 from typing import cast
@@ -60,6 +60,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
         from ..rejection_sampling import RejectionSamplingBuildSpec
         from ..static_fp8_modules import LinearStaticF8BuildSpec
+        from ..tm_gemm_modules import LinearTmGemmBuildSpec
         if isinstance(spec, SiluAndMulBuildSpec):
             from .activation import TritonSiluAndMulImpl
             return cast(ImplT, TritonSiluAndMulImpl(spec.inplace))
@@ -151,6 +152,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         if isinstance(spec, GatedDeltaRuleBuildSpec):
             from .gated_delta_rule import CudaGatedDeltaRuleImpl
             return cast(ImplT, CudaGatedDeltaRuleImpl(indexed_state=spec.indexed_state))
+        if isinstance(spec, LinearTmGemmBuildSpec):
+            from .tm_gemm_modules import _build_linear_tm_gemm
+            return cast(ImplT, _build_linear_tm_gemm(spec))
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import _build_linear_w4a16
             return cast(ImplT, _build_linear_w4a16(spec))

@@ -1,10 +1,11 @@
-# Copyright (c) OpenMMLab. All rights reserved.
+# Copyright (c) Shanghai AI Laboratory. All rights reserved.
 from typing import Any
 
 import torch
 from torch import nn
 
 from lmdeploy.pytorch.config import TPMode
+from lmdeploy.pytorch.devices import get_device_manager
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
@@ -17,6 +18,7 @@ from .static_fp8 import (
     QKVStaticF8Linear,
     StaticF8Linear,
 )
+from .tm_gemm import MergedTmGemmLinear, QKVTmGemmLinear, TmGemmLinear
 from .w8a8 import MergedW8A8Linear, QKVW8A8Linear, StaticW8A8Linear, W8A8Linear
 
 
@@ -25,6 +27,20 @@ def build_batched_linear(*projections: nn.Module) -> nn.Module:
     if not projections:
         raise ValueError('At least one projection is required.')
     return BatchedLinear(projections)
+
+
+def _prefer_tm_gemm() -> bool:
+    """Whether AWQ W4A16 linears should take the TurboMind GEMM route.
+
+    The env selects the backend family: ``auto`` and ``turbomind`` want the
+    TurboMind channel, any other value keeps the historical AWQ Triton
+    modules. Only the CUDA backend knows the TurboMind spec.
+    """
+    from lmdeploy.pytorch import envs as _envs
+
+    if _envs.w4a16_gemm_backend not in ('auto', 'turbomind'):
+        return False
+    return get_device_manager().current_context().device_type == 'cuda'
 
 
 def _is_static_per_tensor_fp8(quant_config):
@@ -47,6 +63,7 @@ def build_linear(
     dp_gather: bool = False,
     layer_type: str = 'attn',
     prefix: str = '',
+    release_torch_weights: bool = True,
 ) -> nn.Module:
     """Build linear."""
     if layer_type is None:
@@ -76,6 +93,21 @@ def build_linear(
         )
 
     if quant_method == 'awq':
+        if _prefer_tm_gemm():
+            return TmGemmLinear(
+                in_features,
+                out_features,
+                w_bit=quant_config.bits,
+                group_size=quant_config.group_size,
+                bias=bias,
+                device=device,
+                colwise=colwise,
+                is_tp=is_tp,
+                all_reduce=all_reduce,
+                layer_type=layer_type,
+                prefix=prefix,
+                release_torch_weights=release_torch_weights,
+            )
         return AwqLinear(
             in_features,
             out_features,
@@ -157,6 +189,7 @@ def build_colwise_linear(
     check_dist: bool = True,
     layer_type: str = 'attn',
     prefix: str = '',
+    release_torch_weights: bool = True,
 ) -> nn.Module:
     """Build columnwise parallel linear layer."""
     if check_dist:
@@ -184,6 +217,7 @@ def build_colwise_linear(
         dp_gather=dp_gather,
         layer_type=layer_type,
         prefix=prefix,
+        release_torch_weights=release_torch_weights,
     )
 
 
@@ -237,6 +271,7 @@ def build_merged_colwise_linear(
     check_dist: bool = True,
     layer_type: str = 'attn',
     prefix: str = '',
+    release_torch_weights: bool = True,
 ):
     """Merge linear."""
     if check_dist and is_tp:
@@ -260,6 +295,19 @@ def build_merged_colwise_linear(
                                 layer_type=layer_type)
 
     if quant_method == 'awq':
+        if _prefer_tm_gemm():
+            return MergedTmGemmLinear(
+                in_features,
+                all_out_features=all_out_features,
+                w_bit=quant_config.bits,
+                group_size=quant_config.group_size,
+                bias=bias,
+                device=device,
+                is_tp=is_tp,
+                layer_type=layer_type,
+                prefix=prefix,
+                release_torch_weights=release_torch_weights,
+            )
         return MergedAwqLinear(
             in_features,
             all_out_features=all_out_features,
@@ -322,7 +370,8 @@ def build_qkv_proj(in_features: int,
                    device: torch.device | None = None,
                    is_tp: bool = True,
                    num_replicate_kv_heads: int = 1,
-                   prefix: str = ''):
+                   prefix: str = '',
+                   release_torch_weights: bool = True):
     """Build qkv proj."""
     dist_config = get_dist_manager().current_config()
     is_tp = is_tp if dist_config.attn_tp > 1 else False
@@ -346,6 +395,20 @@ def build_qkv_proj(in_features: int,
                              num_replicate_kv_heads=num_replicate_kv_heads)
 
     if quant_method == 'awq':
+        if _prefer_tm_gemm():
+            return QKVTmGemmLinear(in_features=in_features,
+                                   num_q_heads=num_q_heads,
+                                   num_kv_heads=num_kv_heads,
+                                   head_size=head_size,
+                                   head_size_v=head_size_v,
+                                   w_bit=quant_config.bits,
+                                   group_size=quant_config.group_size,
+                                   bias=bias,
+                                   device=device,
+                                   is_tp=is_tp,
+                                   num_replicate_kv_heads=num_replicate_kv_heads,
+                                   prefix=prefix,
+                                   release_torch_weights=release_torch_weights)
         return QKVAwqLinear(in_features=in_features,
                             num_q_heads=num_q_heads,
                             num_kv_heads=num_kv_heads,
