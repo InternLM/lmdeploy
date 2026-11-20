@@ -620,10 +620,8 @@ def _get_sorted_idx_triton(topk_ids: torch.Tensor, num_experts: int):
     """Build sorted route indices with four CUDA graph nodes."""
     if topk_ids.dim() != 2:
         raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
-    if topk_ids.size(1) > num_experts:
-        raise ValueError(
-            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
-            f'and num_experts={num_experts}')
+    # top_k may exceed num_experts: bins just carry multiple routes (and
+    # under EP the extra skip bin parks foreign/invalid routes).
 
     expert_ids = topk_ids.flatten()
     num_routes = expert_ids.numel()
@@ -752,10 +750,8 @@ def _get_sorted_idx_single_cta(topk_ids: torch.Tensor,
     """Build bounded-route sorted-index metadata in one CTA."""
     if topk_ids.dim() != 2:
         raise ValueError(f'topk_ids must be a 2D tensor, but got dim={topk_ids.dim()}')
-    if topk_ids.size(1) > num_experts:
-        raise ValueError(
-            f'topk_ids.size(1) must be <= num_experts, but got topk={topk_ids.size(1)} '
-            f'and num_experts={num_experts}')
+    # top_k may exceed num_experts: bins just carry multiple routes (and
+    # under EP the extra skip bin parks foreign/invalid routes).
     if num_experts > 2048:
         raise ValueError(f'single-CTA metadata supports at most 2048 experts, got {num_experts}')
 
