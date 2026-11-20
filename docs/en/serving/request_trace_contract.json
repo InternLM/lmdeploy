@@ -4,13 +4,14 @@
   "engine": "lmdeploy",
   "role": "full",
   "span_mapping": {
-    "llm_request": "model.router",
-    "inference": "model.inference",
+    "llm_request": "llm_request",
+    "inference": "inference",
     "prefill": "model.prefill",
     "decode": "model.decode"
   },
   "add_span_names": [
-    "model.inference"
+    "llm_request",
+    "inference"
   ],
   "allowed_attributes": [
     "request.id",
@@ -75,9 +76,9 @@
   ],
   "span_parent_mapping": {
     "inference": "llm_request",
-    "prefill": "llm_request",
-    "decode": "llm_request"
+    "prefill": "propagated parent, otherwise local llm_request",
+    "decode": "propagated parent, otherwise local llm_request"
   },
-  "batch_phase_correlation": "lmdeploy.prompt_index and optional lmdeploy.choice_index; phase parents are the HTTP/router span",
+  "batch_phase_correlation": "lmdeploy.prompt_index and optional lmdeploy.choice_index",
   "service_configuration": "lmdeploy-full by default; register any configured service.name in the platform exact allowlist before deployment"
 }

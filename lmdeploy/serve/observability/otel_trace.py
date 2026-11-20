@@ -117,7 +117,7 @@ def metadata_string(value):
 
 
 @fail_open
-def begin_http(headers, path, start_ns, *, validated_request_id=None):
+def begin_http(headers, path, start_ns, outcome):
     if _tracer is None:
         return None
     from opentelemetry import trace
@@ -129,7 +129,9 @@ def begin_http(headers, path, start_ns, *, validated_request_id=None):
     parent = trace.get_current_span(context).get_span_context()
     attrs = {'http.request.method': 'POST', 'url.path': path, 'http.route': path,
              'trace.context.missing': not parent.is_valid}
-    rid = validated_request_id
+    if parent.is_valid:
+        outcome['upstream_context'] = context
+    rid = outcome['request_id']
     if rid is not None:
         attrs['request.id'] = rid
     # The platform owns affinity normalization (§5.5): never export or hash it.
@@ -141,6 +143,7 @@ def begin_http(headers, path, start_ns, *, validated_request_id=None):
     # Preserve explicit IDs, including punctuation; apply only metadata safety bounds.
     session = metadata_string(session)
     if session is not None:
+        outcome['session_id'] = session
         attrs['session.id'] = session
     span = _tracer.start_span('llm_request', context=context, kind=trace.SpanKind.SERVER,
                               start_time=start_ns, attributes=attrs)
@@ -213,10 +216,12 @@ def finish_engine(t, status):
              'lmdeploy.kv_load_status': t.kv_status, 'lmdeploy.outcome': status}
     attributes(span, attrs)
     from opentelemetry import trace
-    # The platform requires phase parents to be the request/router span.
-    # Batch prompts remain distinguishable without adding spans or parent links.
-    router = t.outcome.get('otel_span') if t.outcome is not None else span
-    ctx = trace.set_span_in_context(router)
+    # Phases share the propagated router/Envoy parent when available. Direct
+    # requests and library calls have a local request span to parent them.
+    outcome = t.outcome or {}
+    ctx = outcome.get('upstream_context')
+    if ctx is None:
+        ctx = trace.set_span_in_context(outcome.get('otel_span') or span)
     for name, start, stop in (
             ('prefill', int(t.scheduled*1e9) if t.scheduled is not None else None,
              int(t.first_token*1e9) if t.first_token is not None else None),
@@ -224,6 +229,8 @@ def finish_engine(t, status):
              int(t.last_token*1e9) if t.last_token is not None else None)):
         if start is not None and stop is not None and t.start_ns <= start <= stop <= end:
             child_attrs = {'request.id': t.request_id} if t.request_id is not None else {}
+            if 'session_id' in outcome:
+                child_attrs['session.id'] = outcome['session_id']
             if t.prompt_index is not None:
                 child_attrs['lmdeploy.prompt_index'] = t.prompt_index
             if t.choice_index is not None:
