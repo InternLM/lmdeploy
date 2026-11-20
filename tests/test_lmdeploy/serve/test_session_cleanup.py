@@ -188,6 +188,50 @@ def test_prompt_cancel_updates_metrics():
     asyncio.run(_run_prompt_cancel_updates_metrics())
 
 
+@pytest.mark.parametrize('waiting', [True, False], ids=['before_handle', 'after_handle'])
+def test_generate_cancel_counts_request_once(monkeypatch, waiting):
+    from lmdeploy.metrics.metrics_processor import metrics_processor
+    from lmdeploy.metrics.stats import SchedulerStats
+    from lmdeploy.serve.core.async_engine import AsyncEngine, PreprocessedRequest
+
+    stats = SchedulerStats()
+    monkeypatch.setattr(metrics_processor, 'scheduler_stats', stats)
+
+    async def run():
+        class Handle(_FakeHandle):
+
+            async def async_stream_infer(self, *args, **kwargs):
+                await asyncio.Event().wait()
+                yield
+
+        engine = AsyncEngine.__new__(AsyncEngine)
+        engine.session_mgr = SessionManager()
+        engine.session_mgr.build_request_handle_pool(SimpleNamespace(create_instance=Handle), 1)
+        pool = engine.session_mgr.request_handle_pool
+        blocker = await pool.get() if waiting else None
+        session = engine.session_mgr.get(engine.session_mgr.map_user_session_id(42))
+        request = PreprocessedRequest(session, {'input_ids': [1]}, 1, GenerationConfig(), None)
+        async with aclosing(engine.generate(request)) as gen:
+            task = asyncio.create_task(anext(gen))
+            await asyncio.sleep(0)  # Run generate up to its first blocking await.
+            assert not task.done()
+            assert stats.num_total_reqs == 1
+            assert stats.num_api_waiting_reqs == int(waiting)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError if waiting else StopAsyncIteration):
+                await task
+
+        assert stats.num_cancelled_reqs == stats.num_completed_reqs == 1
+        assert stats.num_api_waiting_reqs == stats.num_api_routed_reqs == 0
+        assert engine.session_mgr.sessions == {}
+        assert engine.session_mgr.user_session_id_map == engine.session_mgr.session_id_map == {}
+        assert pool.num_dispatched == int(waiting)
+        pool.put(blocker)
+        assert pool.num_dispatched == 0
+
+    asyncio.run(run())
+
+
 async def _run_max_new_tokens_zero_cleans_up_session():
     from lmdeploy.metrics.metrics_processor import metrics_processor
     from lmdeploy.metrics.stats import SchedulerStats
