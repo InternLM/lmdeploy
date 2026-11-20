@@ -54,6 +54,13 @@ LMDeploy's RESTful API is compatible with the following three OpenAI interfaces:
 - /v1/models
 - /v1/completions
 
+Each `/v1/models` card reports `max_model_len`, the serving engine's resolved
+context length in tokens. This includes the base model and any served adapters;
+clients can use it to size prompts and configure context compaction. The value
+reflects `--session-len` when configured, or the engine's model-derived default.
+Cards without a known serving limit, such as proxy-generated cards, omit this
+optional field.
+
 For `/v1/chat/completions`, content arrays must contain objects with a supported `type`.
 Unknown or missing block types and non-object blocks return HTTP 400 before generation, including when `stream=true`.
 The error message identifies the location, for example `messages[0].content[1].type`; unsupported blocks are not silently removed.
