@@ -285,8 +285,9 @@ class TestTinyMoeGoldenGate:
         assert gate['top1_agreement'] >= MOE_TINY_TOP1_THRESHOLD, gate
         assert gate['worst_truncated_kl'] <= MOE_TINY_KL_THRESHOLD, gate
 
-    def test_tiny_moe_spills_packed_expert_weights(self, tmp_path):
-        """The TM route keeps no raw expert tensors on the GPU after load."""
+    def test_tiny_moe_keeps_expert_weights_cpu_resident(self, tmp_path):
+        """The TM route keeps the raw expert tensors on the host (CPU-direct
+        packing); only the packed handles occupy device memory."""
         candidate_dir, _ = _make_tiny_moe_pair(tmp_path, seed=5)
         import sys
 
@@ -315,11 +316,11 @@ class TestTinyMoeGoldenGate:
             assert len(moe_modules) == NUM_LAYERS, 'expected one TM MoE block per layer'
             for mod in moe_modules:
                 for submodule in (mod.gate_up, mod.down):
-                    # Spilled: the raw storage is empty, the CPU copy armed
-                    # the loader for hot updates.
-                    assert submodule.qweight.data.numel() == 0
-                    assert submodule.scales.data.numel() == 0
-                assert mod._spill is not None
-                assert mod._spill.resident_bytes > 0
+                    # CPU-direct: the storages stay loaded on the host and
+                    # feed the pack; the packed handle is native memory.
+                    assert submodule.qweight.device.type == 'cpu'
+                    assert submodule.scales.device.type == 'cpu'
+                    assert submodule.qweight.data.numel() != 0
+                    assert submodule.scales.data.numel() != 0
         finally:
             pipe.close()
