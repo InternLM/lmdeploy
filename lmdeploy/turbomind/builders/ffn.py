@@ -25,6 +25,30 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
+def _check_w1w3_global_scales(w1: Linear, w3: Linear) -> None:
+    """Reject merging gate/up projections whose per-tensor global scales
+    differ.
+
+    The merged w1w3 layout has exactly one ``global_scale`` slot, and
+    ``transform_output_dim`` keeps only the FIRST input's per-tensor
+    tensors: merging differently-scaled gate/up would silently apply the
+    gate's scale to the whole fused output (the GEMM epilogue multiplies
+    by it). Fused checkpoints (e.g. QUASAR) share one scale and keep
+    merging; separately-quantized gate/up with differing scales are
+    unsupported until the kernel grows per-segment scales.
+    """
+    gs1 = w1.tensors.get('global_scale')
+    gs3 = w3.tensors.get('global_scale')
+    if gs1 is None or gs3 is None:
+        return
+    if not torch.allclose(gs1.float(), gs3.float(), rtol=1e-5, atol=0):
+        raise ValueError(
+            'w1/w3 fusion unsupported: gate and up carry different per-tensor '
+            f'global scales ({gs1.item():.6g} vs {gs3.item():.6g}). The merged '
+            'w1w3 layout has a single global-scale slot; quantize gate/up with '
+            'a shared scale or load them unfused.')
+
+
 @transform_output_dim
 def _block_pack_w1w3(w1: torch.Tensor, w3: torch.Tensor, *,
                      groups: int) -> torch.Tensor:
@@ -107,6 +131,8 @@ class FfnBuilder(Builder):
             # the interleave uses the kernel's scale blocking, so bridge first
             bridge = plan.bridge
             w1, w3 = _bridge_linear(w1, bridge), _bridge_linear(w3, bridge)
+        _check_w1w3_global_scales(w1, w3)
+        if gate_up_block:
             w1w3 = _block_pack_w1w3(w1, w3, groups=groups)
             self._commit_linear('w1w3', w1w3, SplitSide.OUTPUT, plan)
         else:
