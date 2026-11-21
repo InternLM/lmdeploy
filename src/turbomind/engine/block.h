@@ -95,6 +95,8 @@ struct CacheBlock {
     object_alloc_t allocation{};   // {const Allocation*}; .a == nullptr => no live allocation
     uint64_t       alloc_key{};    // snapshot of allocation->key at replay (ABA stale check)
 
+    uint32_t transfer_refs{};  // LMCache STORE/RETRIEVE retaining this allocation
+
     // Slot -> owning logical block (weak identity). Set at Create; persists
     // across evict/realloc. nullptr = sequence-owned (frontier).
     LogicalBlock* owner{};
@@ -114,6 +116,22 @@ struct CacheBlock {
     bool valid() const noexcept
     {
         return allocation.a != nullptr;
+    }
+    bool transfer_pinned() const noexcept
+    {
+        return transfer_refs != 0;
+    }
+
+    void AcquireTransfer()
+    {
+        TM_CHECK(valid());
+        ++transfer_refs;
+    }
+
+    void ReleaseTransfer()
+    {
+        TM_CHECK_GT(transfer_refs, 0);
+        --transfer_refs;
     }
 
     // Deallocates the backing object and clears the slot back to "no
@@ -150,6 +168,7 @@ public:
     // Eviction candidates: exactly the currently allocated blocks. The cached
     // allocation handle is the validity flag; the timestamp only orders the candidates.
     std::vector<CacheBlock*> SortedBlocks();
+    std::vector<CacheBlock*> SortedEvictableBlocks();
 
     uint64_t Stamp(const std::vector<CacheBlock*>& blocks);
     uint64_t Stamp(CacheBlock* b);

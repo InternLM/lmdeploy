@@ -26,6 +26,7 @@ CacheBlockPtr CacheBlockPool::Create(int object_id, LogicalBlock* owner)
 void CacheBlockPool::Invalidate(CacheBlock* b)
 {
     TM_CHECK_GE(b->object_id, 0);  // double-invalidate check
+    TM_CHECK_EQ(b->transfer_refs, 0);
     *b = CacheBlock{};
     free_.push_back(b);
 }
@@ -33,6 +34,7 @@ void CacheBlockPool::Invalidate(CacheBlock* b)
 void CacheBlock::Deallocate(ObjectAllocator& alloc)
 {
     TM_CHECK(valid());
+    TM_CHECK_EQ(transfer_refs, 0);
     alloc.Deallocate(object_id, allocation);
     allocation = {};
     alloc_key  = 0;
@@ -46,6 +48,21 @@ std::vector<CacheBlock*> CacheBlockPool::SortedBlocks()
     v.reserve(blocks_.size());
     for (auto& b : blocks_) {
         if (b.valid()) {
+            v.push_back(&b);
+        }
+    }
+    std::sort(v.begin(), v.end(), [](const CacheBlock* a, const CacheBlock* b) {  //
+        return a->timestamp < b->timestamp;
+    });
+    return v;
+}
+
+std::vector<CacheBlock*> CacheBlockPool::SortedEvictableBlocks()
+{
+    std::vector<CacheBlock*> v;
+    v.reserve(blocks_.size());
+    for (auto& b : blocks_) {
+        if (b.valid() && !b.transfer_pinned()) {
             v.push_back(&b);
         }
     }

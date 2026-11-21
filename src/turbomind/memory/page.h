@@ -95,6 +95,7 @@ public:
     PageStats stats() const
     {
         PageStats s;
+        s.base      = base_;
         s.pages     = pages_;
         s.page_size = page_size_;
         s.max_order = max_order_;

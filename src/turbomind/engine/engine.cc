@@ -15,6 +15,7 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/context.h"
 #include "src/turbomind/engine/engine.h"
+#include "src/turbomind/engine/lmcache.h"
 #include "src/turbomind/engine/model_executor.h"
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/engine/scheduler.h"
@@ -64,6 +65,7 @@ struct Engine::Impl {
     Impl(EngineParam                  param,
          ObjectAllocator              alloc,
          CacheRegistry                cache_registry,
+         LmCache                      lmcache,
          LanguageModel                model,
          std::unique_ptr<VisionModel> vision_model,
          Context&                     ctx,
@@ -118,6 +120,7 @@ struct Engine::Impl {
     {
         if (internal_thread_.joinable()) {
             internal_thread_.join();
+            lmcache_.Drain();
         }
     }
 
@@ -147,6 +150,7 @@ struct Engine::Impl {
 
     ObjectAllocator object_allocator_;
     Scheduler       scheduler_;
+    LmCache         lmcache_;
 
     Queue<unique_ptr<BatchData>> inbound_;
     Queue<unique_ptr<BatchData>> outbound_;
@@ -208,6 +212,7 @@ Engine::Impl::~Impl()
     for (auto& state : states_) {
         for (auto& cache : state.rc) {
             if (cache) {
+                lmcache_.OnRetire(*cache);
                 scheduler_.Release(*cache);
                 cache.reset();
             }
@@ -218,6 +223,7 @@ Engine::Impl::~Impl()
 Engine::Impl::Impl(EngineParam                  param,
                    ObjectAllocator              alloc,
                    CacheRegistry                cache_registry,
+                   LmCache                      lmcache,
                    LanguageModel                model,
                    std::unique_ptr<VisionModel> vision_model,
                    Context&                     ctx,
@@ -244,10 +250,13 @@ Engine::Impl::Impl(EngineParam                  param,
                param_.cache_prompt,
                param_.cache_prompt_boundary_skip,
                param_.cache_generation,
-               is_warm_up_},
+               is_warm_up_,
+               lmcache.chunk_size()},
+    lmcache_{std::move(lmcache)},
     model_{std::move(model)},
     vision_model_{std::move(vision_model)}
 {
+    lmcache_.Bind(scheduler_);
     states_.emplace_back();
 
     for (int i = 0; i < phases; ++i) {
@@ -335,10 +344,11 @@ void Engine::Impl::Interrupt(Sequence& c)
 void Engine::Impl::Retire(State& s)
 {
     for (auto& p : s.rc) {
-        if (!p || !p->retiring || p->inflight != 0) {
+        if (!p || !p->retiring || p->inflight != 0 || !lmcache_.CanRetire(*p)) {
             continue;
         }
 
+        lmcache_.OnRetire(*p);
         Interrupt(*p);
         p.reset();
         ++s.finish;
@@ -420,6 +430,7 @@ void Engine::Impl::Accept(const Requests& rs, vector<Signal>& signals)
     for (auto& x : incoming) {
         if (x->status == 0) {
             scheduler_.AdmitPrompt(*x);
+            lmcache_.OnAccepted(*x);
             s.rc.push_back(std::move(x));
         }
         else {
@@ -436,6 +447,8 @@ void Engine::Impl::Schedule()
     TM_FUNCTION_SCOPE();
     auto& s = states_.at(0);
 
+    lmcache_.PrepareSchedule();
+
     vector<Sequence*> eligible;
 
     vector<int> was_active;
@@ -449,7 +462,7 @@ void Engine::Impl::Schedule()
             continue;
         }
         auto& c = *p;
-        if (!c.retiring) {
+        if (!c.retiring && lmcache_.Schedulable(c)) {
             eligible.push_back(&c);
             was_active.push_back(c.is_active);
             context_length.push_back(c.seq_len + c.inflight_new_tokens /* plus draft tokens */);
@@ -464,6 +477,7 @@ void Engine::Impl::Schedule()
     resources.Add<ContextTokenResource>(param_.max_context_token_num);
 
     scheduler_.Schedule(eligible, resources);
+    lmcache_.OnScheduled();
 
     vector<int> idxs(eligible.size());
     std::iota(idxs.begin(), idxs.end(), 0);
@@ -576,7 +590,7 @@ void Engine::Impl::FailStalledHeadOfLine(std::vector<Signal>& signals)
 {
     auto& s = states_.at(0);
 
-    if (s.active != 0 || is_warm_up_) {
+    if (s.active != 0 || is_warm_up_ || lmcache_.HasPendingReleases()) {
         return;  // work was admitted, or warm-up legitimately forces empty active
     }
 
@@ -593,12 +607,12 @@ void Engine::Impl::FailStalledHeadOfLine(std::vector<Signal>& signals)
         if (p->inflight > 0) {
             return;  // in-flight batch will release memory when it completes (transient drain)
         }
-        if (!p->retiring && (!victim || p->req->unique_id < victim->req->unique_id)) {
+        if (!p->retiring && lmcache_.Schedulable(*p) && (!victim || p->req->unique_id < victim->req->unique_id)) {
             victim = p.get();  // smallest unique_id == highest priority == root of the OOM
         }
     }
 
-    if (!victim) {
+    if (!victim || lmcache_.Fallback(*victim)) {
         return;
     }
 
@@ -630,6 +644,8 @@ void Engine::Impl::Setup(BatchData& d)
         ++c->inflight;
         rs[i] = c;
     }
+
+    lmcache_.StageStores(d.phase, rs.data(), s.active);
 
     d.restore_copies.clear();
     d.publish_copies.clear();
@@ -765,6 +781,8 @@ void Engine::Impl::Update(BatchData& b, std::vector<Signal>& signals)
         TM_CHECK_GT(c.inflight, 0);
         --c.inflight;
     }
+
+    lmcache_.OnBatchComplete(b.phase);
 }
 
 void Engine::Impl::InternalThreadEntry()
@@ -820,6 +838,8 @@ void Engine::Impl::InternalThreadEntry()
         Accept(rs->infer, signals);
 
         Cancel(rs->cancel, signals);
+
+        lmcache_.Poll();
 
         gateway_.notify(std::move(signals), tp_rank_ == 0);
 
@@ -887,6 +907,7 @@ Engine& Engine::operator=(Engine&&) noexcept = default;
 Engine::Engine(EngineParam                  param,
                ObjectAllocator              alloc,
                CacheRegistry                cache_registry,
+               LmCache                      lmcache,
                LanguageModel                model,
                std::unique_ptr<VisionModel> vision_model,
                Context&                     ctx,
@@ -897,6 +918,7 @@ Engine::Engine(EngineParam                  param,
     impl_{std::make_unique<Impl>(param,
                                  std::move(alloc),
                                  std::move(cache_registry),
+                                 std::move(lmcache),
                                  std::move(model),
                                  std::move(vision_model),
                                  ctx,
