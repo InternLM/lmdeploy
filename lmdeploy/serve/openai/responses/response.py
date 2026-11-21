@@ -32,7 +32,7 @@ def response_metadata_kwargs(request: ResponsesRequest) -> dict[str, Any]:
         metadata=request.metadata,
         max_output_tokens=request.max_output_tokens,
         max_tool_calls=request.max_tool_calls,
-        parallel_tool_calls=request.parallel_tool_calls,
+        parallel_tool_calls=request.parallel_tool_calls is not False,
         previous_response_id=request.previous_response_id,
         prompt=request.prompt,
         prompt_cache_key=request.prompt_cache_key,
@@ -113,7 +113,7 @@ def make_response(*,
                 type='message',
                 role='assistant',
                 status=message_status,
-                content=[ResponseOutputText(type='output_text', text=text, annotations=[])],
+                content=[ResponseOutputText(type='output_text', text=text, annotations=[], logprobs=[])],
             ))
     if tool_calls:
         for tool_call in tool_calls:

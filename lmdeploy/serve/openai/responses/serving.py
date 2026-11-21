@@ -84,7 +84,7 @@ class OpenAIServingResponses:
             reasoning_tokens=res.reasoning_tokens or 0,
             finish_reason=res.finish_reason,
         )
-        return response.model_dump(exclude_none=True)
+        return response.to_api_dict()
 
 
 def create_responses_router(server_context) -> APIRouter:
