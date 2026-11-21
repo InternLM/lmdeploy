@@ -30,6 +30,14 @@ class CudaRouterGemmImpl(RouterGemmImpl):
 
     def forward(self, hidden_states: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         """Compute router logits."""
+        from lmdeploy.pytorch.nn.glm53_alignment import ALIGN_ROUTER_PROJECTION, aligned_router_linear
+
+        if (ALIGN_ROUTER_PROJECTION and self.out_dtype == torch.float32
+                and hidden_states.dtype == torch.bfloat16
+                and weight.dtype in (torch.bfloat16, torch.float32)
+                and weight.shape == (288, 4096)):
+            return aligned_router_linear(hidden_states, weight)
+
         # Use the cuBLAS output epilogue when BF16 gates require FP32 logits.
         if self.allow_cublas_router_gemm and hidden_states.dtype == weight.dtype == torch.bfloat16:
             return torch.mm(hidden_states, weight.T, out_dtype=torch.float32)
