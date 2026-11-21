@@ -9,13 +9,14 @@ from fastapi import Request
 
 from ..adapter import get_model_list
 from ..errors import create_error_response
+from ..headers import validate_anthropic_headers
 from ..protocol import MessagesRequest
 
 
 def check_request(request: MessagesRequest, raw_request: Request, server_context):
     """Validate Anthropic Messages request parameters."""
 
-    header_error = _validate_headers(raw_request)
+    header_error = validate_anthropic_headers(raw_request)
     if header_error is not None:
         return header_error
 
@@ -44,13 +45,6 @@ def check_request(request: MessagesRequest, raw_request: Request, server_context
 def messages_empty(request: MessagesRequest) -> bool:
     """Whether request uses the raw input_ids fallback path."""
     return request.messages is None or len(request.messages) == 0
-
-
-def _validate_headers(raw_request: Request):
-    anthropic_version = raw_request.headers.get('anthropic-version')
-    if not anthropic_version:
-        return create_error_response(HTTPStatus.BAD_REQUEST, 'Missing required header: anthropic-version')
-    return None
 
 
 def _validate_model(request: MessagesRequest, server_context):

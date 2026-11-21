@@ -18,14 +18,8 @@ from ..adapter import (
     to_openai_tools,
 )
 from ..errors import create_error_response
+from ..headers import validate_anthropic_headers
 from ..protocol import CountTokensRequest, CountTokensResponse
-
-
-def _validate_headers(raw_request: Request):
-    anthropic_version = raw_request.headers.get('anthropic-version')
-    if not anthropic_version:
-        return create_error_response(HTTPStatus.BAD_REQUEST, 'Missing required header: anthropic-version')
-    return None
 
 
 def register(router: APIRouter, server_context, *, merge_inline_system: bool = False) -> None:
@@ -33,7 +27,7 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
 
     @router.post('/v1/messages/count_tokens', dependencies=[Depends(validate_json_request)])
     async def count_tokens(request: CountTokensRequest, raw_request: Request):
-        header_error = _validate_headers(raw_request)
+        header_error = validate_anthropic_headers(raw_request)
         if header_error is not None:
             return header_error
 
