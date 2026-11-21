@@ -11,7 +11,9 @@ import json
 from collections import deque
 from types import SimpleNamespace
 
-from fastapi import APIRouter
+import pytest
+from fastapi import APIRouter, FastAPI
+from fastapi.testclient import TestClient
 
 from lmdeploy.serve.openai.endpoints.completions import register
 from lmdeploy.serve.openai.protocol import CompletionRequest
@@ -199,4 +201,35 @@ async def _collect_raw_stream_lines(text):
 
 def test_stream_text_is_utf8_literal_not_escaped():
     # non-ASCII generation must reach clients as UTF-8 literals, not \u escapes
-    assert any('你好' in line for line in asyncio.run(_collect_raw_stream_lines('你好')))
+    assert any('浣犲ソ' in line for line in asyncio.run(_collect_raw_stream_lines('浣犲ソ')))
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('n', [None, 1, 0, -1])
+def test_completion_n_validation_over_http(n, stream):
+    engine = _AsyncEngine([[1, 2, 3]], [0])
+    router = APIRouter()
+    register(router, _ServerContext(engine))
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post('/v1/completions', json={
+            'model': 'fake-model', 'prompt': 'hello', 'n': n,
+            'max_tokens': 8, 'stream': stream,
+        })
+    if n is not None and n <= 0:
+        assert response.status_code == 400
+        assert 'must be a positive int' in response.json()['message']
+        return
+    assert response.status_code == 200
+    if stream:
+        lines = response.text.splitlines()
+        assert 'data: [DONE]' in lines
+        payloads = [json.loads(line.removeprefix('data: ')) for line in lines
+                    if line.startswith('data: ') and line != 'data: [DONE]']
+        text = ''.join(choice['text'] for payload in payloads for choice in payload['choices'])
+    else:
+        choices = response.json()['choices']
+        assert len(choices) == 1
+        text = choices[0]['text']
+    assert text == 'xx'
