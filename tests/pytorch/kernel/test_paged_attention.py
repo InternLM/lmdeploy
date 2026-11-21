@@ -1230,7 +1230,7 @@ class TestPagedAttentionQuantMultiToken:
 
         if nbits == 4:
             # unpack the two nibbles of each byte back into the raw value dim
-            raw_codes = torch.stack([vc_codes & 0xF, (vc_codes >> 4) & 0xF], dim=-1).flatten(-1)
+            raw_codes = torch.cat([vc_codes & 0xF, (vc_codes >> 4) & 0xF], dim=-1)
         else:
             raw_codes = vc_codes
         expected = (raw_codes.float() * quant_scale)
