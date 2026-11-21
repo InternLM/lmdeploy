@@ -23,6 +23,8 @@ def per_channel_quant(x: torch.Tensor, dtype: torch.dtype):
     q_max = qtype_info.max
     q_min = qtype_info.min
     scale = x_absmax / q_max
+    # A zero channel otherwise produces 0 / 0 (NaN for FP8 weights).
+    scale = scale.clamp_min(torch.finfo(scale.dtype).tiny)
     x_q = x / scale
     if not dtype.is_floating_point:
         x_q = torch.round(x_q)
