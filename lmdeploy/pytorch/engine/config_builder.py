@@ -95,7 +95,8 @@ class ConfigBuilder:
             role=engine_config.role,
             # reserve 1 blocks for dummy input and padding
             num_reserved_gpu_blocks=1,
-            kv_transfer_config=copy.deepcopy(engine_config.kv_transfer_config))
+            kv_transfer_config=copy.deepcopy(engine_config.kv_transfer_config),
+            session_len=engine_config.session_len)
         return cache_config
 
     @staticmethod

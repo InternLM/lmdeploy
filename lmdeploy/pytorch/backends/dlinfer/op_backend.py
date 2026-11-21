@@ -38,8 +38,8 @@ class DlinferOpsBackend(DefaultOpsBackend):
             from .activation import DlinferSiluAndMulImpl
             return cast(ImplT, DlinferSiluAndMulImpl())
         if isinstance(spec, ApplyRotaryEmbBuildSpec):
-            if spec.enable_fp32_compute:
-                raise NotImplementedError('Dlinfer ApplyRotaryEmb does not support enable_fp32_compute=True.')
+            # dlinfer's rotary kernel performs the required internal float
+            # accumulation; it has no separate fp32 dispatch variant.
             from .apply_rotary_emb import DlinferApplyRotaryEmbImpl
             return cast(ImplT, DlinferApplyRotaryEmbImpl())
         if isinstance(spec, RMSNormBuildSpec):

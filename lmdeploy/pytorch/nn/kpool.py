@@ -129,6 +129,10 @@ class KPoolIndexer(nn.Module):
         self.softmax_scale = index_head_dim**-0.5
         self.scale_fmt = scale_fmt
         self.cache_dtype = torch.bfloat16 if envs.glm53_kpool_bf16 else torch.float8_e4m3fn
+        # Backends that store plain BF16 pooled keys in a token-block-aligned
+        # page (vLLM-Ascend's GLM KPool layout) set this instead of consuming
+        # the CUDA packed FP8 cache below.
+        self.paged_bf16_cache = False
         self._block_cache_binding: BlockCacheBinding | None = None
 
         def add_prefix(name: str) -> str:
@@ -187,6 +191,24 @@ class KPoolIndexer(nn.Module):
 
     def get_block_cache_requests(self, context: BlockCacheRequestContext):
         """Declare the pooled index cache through the shared cache planner."""
+        if getattr(self, "paged_bf16_cache", False):
+            # Mirror vLLM-Ascend's GLM KPool layout: one BF16 pooled vector
+            # per ``index_kpool`` tokens, stored in pages that share the token
+            # block table.  Pool g lives in token page ``g // pools_per_block``
+            # at entry ``g % pools_per_block``, so the physical page id comes
+            # straight from the (kernel-granular) token block table.
+            geometry = context.geometry
+            if geometry.kernel_block_size <= 0 or geometry.kernel_block_size % self.index_kpool:
+                raise ValueError('GLM-5.3 KPool bf16 cache requires kernel_block_size '
+                                 f'divisible by pool_size={self.index_kpool}, '
+                                 f'got {geometry.kernel_block_size}.')
+            pools_per_block = geometry.kernel_block_size // self.index_kpool
+            return (BlockCacheRequest(
+                name=DSA_INDEXER_K_CACHE_NAME,
+                shape=(pools_per_block, 1, self.head_dim),
+                dtype=torch.bfloat16,
+                per_row_contiguous=True,
+            ), )
         geometry = context.geometry
         if (geometry.logical_block_size != KPOOL_PAGE_SIZE
                 or geometry.kernel_block_size != KPOOL_PAGE_SIZE):
@@ -481,6 +503,18 @@ def kpool_compress_two_pass(closed_keys: Tensor, closed_scores: Tensor,
     return _finish_compressed_pool(accumulator / denominator, rotate=rotate)
 
 
+def kpool_compress_bf16(closed_keys: Tensor, closed_scores: Tensor,
+                        ape: Tensor) -> Tensor:
+    """Store closed pools as BF16 vectors like vLLM-Ascend's KPool kernel.
+
+    Same FP32 ``softmax(gate + ape)`` weighted sum and BF16 rounding as the
+    CUDA decode path, but without the Hadamard rotation: scores run against
+    the same BF16 vectors in FP32.
+    """
+    return kpool_compress_two_pass(closed_keys, closed_scores, ape,
+                                   rotate=False)
+
+
 def kpool_compress(
     closed_keys: Tensor,
     closed_scores: Tensor,
@@ -737,6 +771,126 @@ def kpool_read_packed_cache(
     pages = torch.div(locations, values.size(1), rounding_mode='floor')
     slots = torch.remainder(locations, values.size(1))
     return values[pages, slots], scales[pages, slots]
+
+
+def kpool_write_bf16_paged_cache(
+    cache: Tensor,
+    token_block_offsets: Tensor,
+    group_ids: Tensor,
+    pooled_keys: Tensor,
+    pool_size: int,
+) -> None:
+    """Write one request's closed pools into the BF16 paged index cache.
+
+    ``cache`` is the pooled row ``[blocks, pools_per_block, 1, head_dim]``
+    declared by :meth:`KPoolIndexer.get_block_cache_requests` in paged BF16
+    mode; ``token_block_offsets`` is the request's kernel-block page table.
+    """
+    _validate_pool_geometry(pool_size)
+    if cache.dtype != torch.bfloat16:
+        raise TypeError(f'BF16 KPool cache must be bfloat16, got {cache.dtype}.')
+    if cache.ndim != 4 or cache.size(2) != 1:
+        raise ValueError('BF16 KPool cache must have shape [blocks, entries, 1, head_dim].')
+    if pooled_keys.ndim != 2 or pooled_keys.size(1) != cache.size(-1):
+        raise ValueError('pooled_keys must have shape [groups, head_dim].')
+    if group_ids.shape != (pooled_keys.size(0), ):
+        raise ValueError('group_ids must contain one id per pooled key.')
+    if token_block_offsets.ndim != 1:
+        raise ValueError('token_block_offsets must be a one-dimensional page table row.')
+    entries_per_block = cache.size(1)
+    group_ids = group_ids.to(torch.int64)
+    page_columns = torch.div(group_ids, entries_per_block, rounding_mode='floor')
+    if page_columns.numel() and int(page_columns.max()) >= token_block_offsets.numel():
+        raise ValueError('The token block table is too short for the requested pool ids.')
+    pages = token_block_offsets.to(torch.int64).index_select(0, page_columns)
+    slots = torch.remainder(group_ids, entries_per_block)
+    cache[pages, slots, 0] = pooled_keys
+
+
+def kpool_write_bf16_paged_cache_batched(
+    cache: Tensor,
+    block_offsets: Tensor,
+    group_ids: Tensor,
+    pooled_keys: Tensor,
+    pool_size: int,
+    valid: Tensor,
+) -> None:
+    """Write at most one closed pool per fixed-shape decode batch row.
+
+    Invalid rows keep the previous contents of reserved cache block zero, so
+    the write stays graph-safe without dynamic boolean indexing.
+    """
+    _validate_pool_geometry(pool_size)
+    if cache.dtype != torch.bfloat16 or cache.ndim != 4 or cache.size(2) != 1:
+        raise TypeError('BF16 KPool cache must be a [blocks, entries, 1, head_dim] bfloat16 tensor.')
+    if pooled_keys.ndim != 2 or pooled_keys.size(1) != cache.size(-1):
+        raise ValueError('pooled_keys must have shape [batch, head_dim].')
+    batch_size = pooled_keys.size(0)
+    if block_offsets.ndim != 2 or block_offsets.size(0) != batch_size:
+        raise ValueError('block_offsets must have one page-table row per batch row.')
+    if group_ids.shape != (batch_size, ) or valid.shape != (batch_size, ):
+        raise ValueError('group_ids and valid must contain one value per batch row.')
+    entries_per_block = cache.size(1)
+    group_ids = group_ids.to(torch.int64)
+    page_columns = torch.div(group_ids, entries_per_block, rounding_mode='floor')
+    page_columns = page_columns.clamp(min=0, max=block_offsets.size(1) - 1)
+    pages = block_offsets.to(torch.int64).gather(1, page_columns[:, None]).squeeze(1)
+    pages = torch.where(valid, pages, torch.zeros_like(pages))
+    slots = torch.remainder(group_ids, entries_per_block)
+    current_keys = cache[pages, slots, 0]
+    cache[pages, slots, 0] = torch.where(valid[:, None], pooled_keys, current_keys)
+
+
+def kpool_read_bf16_paged_cache(
+    cache: Tensor,
+    token_block_offsets: Tensor,
+    num_groups: int,
+) -> Tensor:
+    """Gather one request's closed pools in logical order from paged BF16 storage."""
+    if num_groups < 0:
+        raise ValueError(f'num_groups must be non-negative, got {num_groups}.')
+    if token_block_offsets.ndim != 1:
+        raise ValueError('token_block_offsets must be a one-dimensional page table row.')
+    head_dim = cache.size(-1)
+    if num_groups == 0:
+        return cache.new_empty((0, head_dim))
+    entries_per_block = cache.size(1)
+    group_ids = torch.arange(num_groups, dtype=torch.int64, device=cache.device)
+    page_columns = torch.div(group_ids, entries_per_block, rounding_mode='floor')
+    page_columns = page_columns.clamp(max=token_block_offsets.numel() - 1)
+    pages = token_block_offsets.to(torch.int64).index_select(0, page_columns)
+    slots = torch.remainder(group_ids, entries_per_block)
+    return cache[pages, slots, 0]
+
+
+def kpool_score_bf16(
+    query: Tensor,
+    head_gate: Tensor,
+    pooled_keys: Tensor,
+    softmax_scale: float | None = None,
+) -> Tensor:
+    """FP32 head-reduced scores of BF16 pooled history.
+
+    Mirrors vLLM-Ascend's lightning indexer: ``qbar = sum_h w_h * q_h`` is
+    accumulated in FP32 once per row, then dotted against the BF16 pooled
+    keys.  There is deliberately no per-head ReLU (unlike the FP8 CUDA
+    reference) and no quantization scaling - vLLM-Ascend keeps this exact
+    formula and notes that a per-head ReLU would change selection.
+    ``head_gate`` is :meth:`KPoolIndexer.project_head_gate` output and already
+    carries the ``num_heads**-0.5`` factor.
+    """
+    if query.ndim != 3:
+        raise ValueError('query must have shape [rows, heads, head_dim].')
+    rows, heads, head_dim = query.shape
+    if head_gate.shape != (rows, heads):
+        raise ValueError(f'head_gate must have shape {(rows, heads)}, got {tuple(head_gate.shape)}.')
+    if pooled_keys.ndim != 2 or pooled_keys.size(1) != head_dim:
+        raise ValueError('pooled_keys must have shape [groups, head_dim].')
+    if softmax_scale is None:
+        softmax_scale = head_dim**-0.5
+    query_weight = head_gate.float() * softmax_scale
+    qbar = torch.einsum('rh,rhd->rd', query_weight, query.float())
+    return torch.matmul(qbar, pooled_keys.float().transpose(0, 1))
 
 
 def kpool_selected_token_counts(seq_lens: Tensor, topk: int, pool_size: int) -> Tensor:

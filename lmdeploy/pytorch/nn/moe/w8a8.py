@@ -83,7 +83,9 @@ class FusedMoEW8A8(FusedMoEBase):
                  dtype: torch.dtype | None = None,
                  quant_dtype: torch.dtype | None = torch.int8,
                  device: torch.device | None = None,
-                 all_reduce: bool = True):
+                 all_reduce: bool = True,
+                 output_scale: float = 1.0,
+                 swiglu_limit: float = 0.0):
 
         device = device or torch.device('cpu')
         dtype = dtype or torch.float16
@@ -108,6 +110,7 @@ class FusedMoEW8A8(FusedMoEBase):
                 quant_dtype=quant_dtype,
                 ep_size=self.ep_size,
                 ep_group=dist_ctx.ep_gpu_group,
+                swiglu_limit=swiglu_limit,
             ),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
@@ -141,6 +144,8 @@ class FusedMoEW8A8(FusedMoEBase):
         self.dtype = dtype
         self.device = device
         self.all_reduce = all_reduce
+        self.output_scale = output_scale
+        self.swiglu_limit = swiglu_limit
 
     def update_weights(self):
         """Update weights."""
@@ -173,9 +178,18 @@ class FusedMoEW8A8(FusedMoEBase):
         hidden_states = state['hidden_states']
         topk_weights = state['topk_weights']
         topk_ids = state['topk_idx']
+        # vLLM-Ascend casts routing weights to the model/output dtype before
+        # the Ascend grouped matmul/unpermute path.  Keeping the router's
+        # FP32 tensor here changes the NPU kernel contract and can amplify
+        # W8A8 MoE errors.
+        topk_weights = topk_weights.to(self.dtype)
 
         ret = self.impl.forward(hidden_states, topk_weights, topk_ids, self.gate_up.weight, self.gate_up.scale,
                                 self.down.weight, self.down.scale, self.expert_list)
+        # dlinfer's W8A8 MoE kernel returns the routed reduction directly.
+        # Preserve GLM-5.3's model-level routed scaling at the boundary.
+        if self.output_scale != 1.0:
+            ret = ret * self.output_scale
         return dict(hidden_states=ret, moe_type=state['moe_type'])
 
     def combine(self, state: dict):
