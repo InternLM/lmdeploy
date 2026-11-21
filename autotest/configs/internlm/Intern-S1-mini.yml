@@ -20,6 +20,27 @@ a100:
   - mllm_evaluate
   - prefix_cache
   - quantization
+  interface:
+    pytorch:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - hard_schema
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: intern-s1
+        reasoning-parser: default
+    turbomind:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - hard_schema
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: intern-s1
+        reasoning-parser: default
   quantization:
     turbomind:
     - kvint4
@@ -45,6 +66,27 @@ h:
   - func
   - mllm_evaluate
   - prefix_cache
+  interface:
+    pytorch:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - hard_schema
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: intern-s1
+        reasoning-parser: default
+    turbomind:
+    - suites:
+      - base
+      - logprob
+      - toolcall
+      - hard_schema
+      extra:
+        logprobs-mode: raw_logprobs
+        tool-call-parser: intern-s1
+        reasoning-parser: default
   quantization:
     turbomind:
     - kvint8

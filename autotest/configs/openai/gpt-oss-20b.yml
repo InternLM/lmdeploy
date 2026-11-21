@@ -53,12 +53,10 @@ h:
   - prefix_cache
   interface:
     pytorch:
-      suites:
+    - suites:
       - reasoning
-      extra:
-        reasoning-parser: default
+      - toolcall
     turbomind:
-      suites:
+    - suites:
       - reasoning
-      extra:
-        reasoning-parser: default
+      - toolcall
