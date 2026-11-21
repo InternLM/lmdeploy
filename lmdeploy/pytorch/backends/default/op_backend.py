@@ -19,6 +19,7 @@ class DefaultOpsBackend(OpsBackend):
         from ..activation import GeluAndMulBuildSpec, SiluAndMulBuildSpec
         from ..apply_rotary_emb import ApplyRotaryEmbBuildSpec
         from ..awq_modules import LinearW4A16BuildSpec
+        from ..conceptlm import ConceptLMRuntimeOpsBuildSpec
         from ..embedding import EmbeddingBuildSpec
         from ..linear import LinearBuildSpec
         from ..moe import SoftmaxTopKBuildSpec
@@ -89,6 +90,9 @@ class DefaultOpsBackend(OpsBackend):
         if isinstance(spec, LinearBuildSpec):
             from .linear import DefaultLinearImpl
             return cast(ImplT, DefaultLinearImpl())
+        if isinstance(spec, ConceptLMRuntimeOpsBuildSpec):
+            from .conceptlm import DefaultConceptLMRuntimeOpsImpl
+            return cast(ImplT, DefaultConceptLMRuntimeOpsImpl(spec.config))
         spec_name = type(spec).__name__
         raise RuntimeError(f'Build spec {spec_name} is not supported by {cls.get_name()} backend.')
 
