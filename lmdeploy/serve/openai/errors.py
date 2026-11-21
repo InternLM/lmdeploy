@@ -40,7 +40,11 @@ def create_error_response(
                             type=error_type,
                             code=status_value,
                             param=param)
-    return JSONResponse(payload.model_dump(), status_code=status_value)
+    legacy = payload.model_dump()
+    # Keep legacy top-level fields for existing clients while exposing the
+    # standard OpenAI error object consumed by SDKs and API schema validators.
+    envelope = dict(message=message, type=error_type, param=param, code=error_code.value)
+    return JSONResponse({**legacy, 'error': envelope}, status_code=status_value)
 
 
 def create_request_error_response(error: RequestError, *, param: str | None = None) -> JSONResponse:
