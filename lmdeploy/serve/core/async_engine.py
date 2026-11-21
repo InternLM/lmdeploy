@@ -32,6 +32,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeInitRequest,
 )
 from lmdeploy.serve.managers import Session, SessionManager
+from lmdeploy.serve.observability.request_trace import RequestTrace, get_writer, trace_generate, trace_preprocess
 from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
@@ -90,6 +91,7 @@ class PreprocessedRequest:
     gen_config: GenerationConfig
     adapter_name: str | None
     consumed: bool = False
+    trace: RequestTrace | None = None
 
 
 # class AsyncEngine(LogitsMixin):
@@ -138,6 +140,8 @@ class AsyncEngine:
             Default to None.
         max_log_len (int): Max number of prompt characters or prompt tokens
             being printed in log. Default: Unlimited
+        enable_request_trace (bool): Explicit instance opt-in for library callers.
+            Requires process-level tracing to be enabled; the API server sets this automatically.
     """
 
     def __init__(self,
@@ -150,7 +154,11 @@ class AsyncEngine:
                  trust_remote_code: bool = False,
                  speculative_config: SpeculativeConfig | None = None,
                  allowed_media_domains: list[str] | None = None,
+                 enable_request_trace: bool = False,
                  **kwargs) -> None:
+        self.request_trace_enabled = enable_request_trace
+        if enable_request_trace:
+            get_writer()
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'speculative_config={speculative_config}')
         backend_config = backend_config or (TurbomindEngineConfig()
@@ -482,6 +490,7 @@ class AsyncEngine:
             await generator.aclose()
             metrics_processor.decrease_api_routed_requests()
 
+    @trace_preprocess
     async def preprocess(
             self,
             messages,
@@ -653,6 +662,7 @@ class AsyncEngine:
             return RequestError(ErrorCode.ENGINE_UNAVAILABLE)
         return RequestError(ErrorCode.INTERNAL_ERROR)
 
+    @trace_generate
     async def generate(self,
                        request: PreprocessedRequest,
                        stream_response: bool = True,
@@ -701,6 +711,8 @@ class AsyncEngine:
         session._remove_on_request_exit = True
         runtime_error = None
         async with session.request_handle() as handle:
+            if request.trace is not None:
+                request.trace.handle_ready = time.monotonic()
             if session.epoch is not None and session.epoch != self.epoch:
                 logger.info(f'[generate] session {session_id} got aborted before starting inference, '
                                f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
@@ -756,6 +768,7 @@ class AsyncEngine:
                 req_stats = RequestStats(prompt_tokens=input_len)  # per-request stats
                 # We use this as default outputs in case the async_stream_infer of the Engine yields empty generator.
                 outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
+                observe_output = request.trace.observe if request.trace is not None else None
 
                 read_ahead = None
                 resolve_separator = content_stop.resolve_separator if content_stop else None
@@ -763,6 +776,8 @@ class AsyncEngine:
                     read_ahead = BufferedEngineStream(gen)
                     gen = read_ahead
                 async for outputs in gen:
+                    if observe_output is not None:
+                        observe_output(outputs)
                     req_metrics = outputs.req_metrics
                     cached_tokens = req_metrics.cached_tokens if req_metrics is not None else 0
                     iteration_stats = IterationStats()  # per-iteration stats

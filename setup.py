@@ -182,6 +182,9 @@ if __name__ == '__main__':
         tests_require=parse_requirements('requirements/test.txt'),
         install_requires=parse_requirements(f'requirements/runtime_{get_target_device()}.txt') + extra_deps,
         extras_require={
+            'trace': ['opentelemetry-sdk>=1.27,<2',
+                      'opentelemetry-exporter-otlp-proto-grpc>=1.27,<2',
+                      'opentelemetry-exporter-otlp-proto-http>=1.27,<2'],
             'all': parse_requirements(f'requirements_{get_target_device()}.txt'),
             'lite': parse_requirements('requirements/lite.txt'),
             'serve': parse_requirements('requirements/serve.txt'),

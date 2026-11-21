@@ -210,6 +210,7 @@ def register(router: APIRouter, server_context) -> None:
                     input_ids=resolved_input_ids,
                     do_preprocess=resolved_input_ids is None,
                     adapter_name=adapter_name,
+                    preprocess_kwargs=dict(trace_choice_index=getattr(raw_request, '_trace_choice_index', None)),
                     gen_config_kwargs=dict(
                         logits_processors=logits_processors,
                         random_seed=request.seed,
