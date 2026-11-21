@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import math
 import re
 from collections.abc import Iterable
 
@@ -17,7 +18,7 @@ def get_ranks_and_scalings(target_name: str, cfgs: Iterable, device: torch.devic
             scalings.append(1)
             continue
         ranks.append(cfg.r)
-        scalings.append(float(cfg.lora_alpha / cfg.r))
+        scalings.append(float(cfg.lora_alpha / (math.sqrt(cfg.r) if cfg.use_rslora else cfg.r)))
     ranks = torch.tensor(ranks, device=device)
     scalings = torch.tensor(scalings, device=device)
     return ranks, scalings
