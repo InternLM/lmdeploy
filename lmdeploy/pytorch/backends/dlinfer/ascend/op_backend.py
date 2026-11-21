@@ -117,7 +117,7 @@ class AscendKVQuantMeta:
 
     @classmethod
     def set_value(cls, device: str, dtype: torch.dtype, record_file: str, total_layers: int):
-        with open(record_file) as file:
+        with open(record_file, encoding='utf-8') as file:
             data = file.read()
         scale_offset_pairs = re.findall(r'scale:\s*([\d\.\-]+)\s*offset:\s*(-?\d+)', data)
         scale_offset_pairs = [(float(scale), float(offset)) for scale, offset in scale_offset_pairs]

@@ -152,7 +152,7 @@ class ConfigBuilder:
         packaged_options = {}
         packaged_keys = set(memdecode_keys) | {'default_router', 'routers'}
         if fusion_config_path.exists():
-            with fusion_config_path.open() as f:
+            with fusion_config_path.open(encoding='utf-8') as f:
                 packaged_options = json.load(f)
             if not isinstance(packaged_options, dict):
                 raise ValueError(f'{fusion_config_path} must contain a JSON object.')

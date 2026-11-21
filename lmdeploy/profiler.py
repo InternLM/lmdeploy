@@ -139,7 +139,7 @@ class Profiler:
     def save_csv(self, csv_file: str, hyperparams):
         """Export legacy metrics to CSV."""
         file_exists = os.path.isfile(csv_file)
-        with open(csv_file, mode='a', newline='') as csvfile:
+        with open(csv_file, mode='a', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile)
             keys, vals = zip(*hyperparams)
             if not file_exists:

@@ -28,7 +28,7 @@ def main():
             dst_path = os.path.join(args.dst_dir, name)
             shutil.copy(src_path, dst_path)
 
-    with open(os.path.join(args.src_dir, 'pytorch_model.bin.index.json')) as f:
+    with open(os.path.join(args.src_dir, 'pytorch_model.bin.index.json'), encoding='utf-8') as f:
         index = json.load(f)
 
     n_shard = len(index['weight_map'])
@@ -48,7 +48,7 @@ def main():
             cnt += 1
         del state_dict
         torch.cuda.empty_cache()
-    with open(os.path.join(args.dst_dir, 'pytorch_model.bin.index.json'), 'w') as f:
+    with open(os.path.join(args.dst_dir, 'pytorch_model.bin.index.json'), 'w', encoding='utf-8') as f:
         json.dump(new_index, f)
     assert new_index['weight_map'].keys() == index['weight_map'].keys(), 'Mismatch on `weight_map`!'
 

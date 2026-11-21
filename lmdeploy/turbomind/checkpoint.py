@@ -128,7 +128,7 @@ def _apply_mappings(key: str, mappings) -> str:
 def _gather_shards(model_path: str, index_name: str | None,
                    file_pattern: str | None) -> tuple[list[str], dict]:
     if index_name:
-        with open(osp.join(model_path, index_name)) as f:
+        with open(osp.join(model_path, index_name), encoding='utf-8') as f:
             index = json.load(f)['weight_map']
         shards = sorted(
             osp.join(model_path, name) for name in set(index.values()))
