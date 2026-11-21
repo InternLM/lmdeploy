@@ -9,6 +9,8 @@ target_link_libraries(host_comm PRIVATE core Threads::Threads)
 set_property(TARGET host_comm PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 add_library(device_comm STATIC device_comm.cc)
+target_sources(device_comm PRIVATE
+        padded_row_allgather.cc)
 target_link_libraries(device_comm PRIVATE core)
 set_property(TARGET device_comm PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET device_comm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

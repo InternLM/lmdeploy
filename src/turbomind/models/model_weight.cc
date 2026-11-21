@@ -8,7 +8,11 @@
 namespace turbomind {
 
 ModelWeight::ModelWeight(const core::ModelWeightConfig& cfg):
-    tp_size(cfg.tp_size), tp_rank(cfg.tp_rank), data_type(cfg.data_type), hidden_units(cfg.hidden_units)
+    data_type(cfg.data_type),
+    hidden_units(cfg.hidden_units),
+    tp_size(cfg.tp_size),
+    tp_rank(cfg.tp_rank),
+    decoder_only(cfg.decoder_only)
 {
 }
 
@@ -39,17 +43,21 @@ void ModelWeight::prepare()
     head_dim    = attn_layer->attention->head_dim;
     kv_head_num = attn_layer->attention->kv_head_num;
 
-    vocab_size        = tok_embeddings.shape(0);
-    embedding_size    = vocab_size;
-    num_layer         = layers->size();
-    vocab_size_padded = TM_CHECK_NOTNULL(output)->output_dim * tp_size;
+    num_layer = layers->size();
+    if (!decoder_only) {
+        vocab_size        = tok_embeddings.shape(0);
+        embedding_size    = vocab_size;
+        vocab_size_padded = TM_CHECK_NOTNULL(output)->output_dim * tp_size;
+    }
 
     layer_types.resize(num_layer);
     for (int i = 0; i < num_layer; ++i) {
         layer_types[i] = layer(i)->linear_attn ? 1 : 0;
     }
 
-    EnsureFloatDtype(tok_embeddings, data_type);
+    if (!decoder_only) {
+        EnsureFloatDtype(tok_embeddings, data_type);
+    }
 }
 
 DecoderLayerWeight* ModelWeight::layer(int i) const
@@ -78,7 +86,7 @@ std::vector<DecoderLayerWeight*> ModelWeight::layers_list() const
 bool ModelWeight::verify(std::vector<std::string>& missing)
 {
     Module::verify(missing);
-    if (!tok_embeddings) {
+    if (!decoder_only && !tok_embeddings) {
         missing.push_back(full_path() + ": missing tok_embeddings");
     }
     if (!norm) {

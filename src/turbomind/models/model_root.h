@@ -45,6 +45,11 @@ public:
         return text_model.get();
     }
 
+    ModelWeight* draft_model_ptr() const
+    {
+        return draft_model.get();
+    }
+
     /// Convenience accessor for the optional VLM sub-tree. Nullptr for
     /// text-only checkpoints (the spec never attached a vision root).
     VisionModelWeight* vision_model_ptr() const
@@ -54,6 +59,7 @@ public:
 
 #define MODEL_ROOT_CHILDREN(X)                                                                                         \
     X(ModelWeight, text_model)                                                                                         \
+    X(ModelWeight, draft_model)                                                                                        \
     X(VisionModelWeight, vision_model)
 
 #define MODEL_ROOT_PARAMS(X)

@@ -498,6 +498,16 @@ __global__ void MoeGateKernel_v8(float*       scales,      // routing: [e,n], di
         }
         return;
     }
+    // Initialize every routing slot to the skip sentinel; a token that selects
+    // fewer than top_k experts (NaN/-inf logits) leaves the rest untouched.
+    for (int i = threadIdx.x; i < max_top_k * tokens_per_cta; i += block_dim) {
+        const int t              = i % tokens_per_cta;
+        const int k              = i / tokens_per_cta;
+        smem.shared_exp_id[k][t] = -1;
+        smem.shared_scales[k][t] = 0.f;
+    }
+    __syncthreads();
+
     PRAGMA_UNROLL
     for (int i = 0; i < items_per_thread; ++i) {
         if (mask.test(i)) {
@@ -554,9 +564,14 @@ __global__ void MoeGateKernel_v8(float*       scales,      // routing: [e,n], di
             const int   expert_id = smem.shared_exp_id[idx][bti2];
             const float scale     = smem.shared_scales[idx][bti2];
 
-            masks[expert_id * token_num_padded + ti2] = idx;
-            scales[idx * token_num + ti2]             = scale * routed_scale;
-            atomicAdd(&smem.shared_accum[(ti2 >> log_tile) - tile0][expert_id], 1);
+            // `expert_id` is -1 for slots a token never filled (a token may
+            // select fewer than top_k experts on NaN/-inf logits); skip them
+            // so `masks` is never indexed out of range.
+            if (expert_id >= 0 && expert_id < expert_num) {
+                masks[expert_id * token_num_padded + ti2] = idx;
+                scales[idx * token_num + ti2]             = scale * routed_scale;
+                atomicAdd(&smem.shared_accum[(ti2 >> log_tile) - tile0][expert_id], 1);
+            }
         }
     }
 
@@ -1009,6 +1024,16 @@ __global__ void MoeGateNoAuxTCKernel_V2(float*       scales,
         return;
     }
 
+    // Initialize every routing slot to the skip sentinel; a token that selects
+    // fewer than top_k experts (NaN/-inf logits) leaves the rest untouched.
+    for (int i = threadIdx.x; i < max_top_k * tokens_per_cta; i += block_dim) {
+        const int t              = i % tokens_per_cta;
+        const int k              = i / tokens_per_cta;
+        smem.shared_exp_id[k][t] = -1;
+        smem.shared_scales[k][t] = 0.f;
+    }
+    __syncthreads();
+
     PRAGMA_UNROLL
     for (int i = 0; i < items_per_thread; ++i) {
         if (mask.test(i)) {
@@ -1059,9 +1084,14 @@ __global__ void MoeGateNoAuxTCKernel_V2(float*       scales,
             const int   expert_id = smem.shared_exp_id[idx][bti2];
             const float scale     = smem.shared_scales[idx][bti2];
 
-            masks[expert_id * token_num_padded + ti2] = idx;
-            scales[idx * token_num + ti2]             = scale * routed_scale;
-            atomicAdd(&smem.shared_accum[(ti2 >> log_tile) - tile0][expert_id], 1);
+            // `expert_id` is -1 for slots a token never filled (a token may
+            // select fewer than top_k experts on NaN/-inf logits); skip them
+            // so `masks` is never indexed out of range.
+            if (expert_id >= 0 && expert_id < expert_num) {
+                masks[expert_id * token_num_padded + ti2] = idx;
+                scales[idx * token_num + ti2]             = scale * routed_scale;
+                atomicAdd(&smem.shared_accum[(ti2 >> log_tile) - tile0][expert_id], 1);
+            }
         }
     }
 

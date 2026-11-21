@@ -1,10 +1,10 @@
 
 #include "src/turbomind/models/output_processor.h"
 
-#include <functional>
-
 #include "src/turbomind/engine/request.h"
 #include "src/turbomind/kernels/cross_entropy_kernels.h"
+#include "src/turbomind/models/language_model.h"
+#include "src/turbomind/models/model_weight.h"
 
 // #include "dbg.h"
 
@@ -18,14 +18,12 @@ struct OutputProcessor::Impl {
 
     static constexpr auto kAll = GenerationConfig::kAll;
 
-    const int vocab_size_;
-    const int max_logits_len_;
-    const int tp_rank_;
+    LanguageModel& model_;
+    const int      vocab_size_;
+    const int      tp_rank_;
 
-    std::function<Tensor(const Tensor&)> lm_head_;
-
-    Impl(int vocab_size, int max_logits_len, int tp_rank, int phases, std::function<Tensor(const Tensor&)> lm_head):
-        vocab_size_{vocab_size}, max_logits_len_{max_logits_len}, tp_rank_{tp_rank}, lm_head_{std::move(lm_head)}
+    Impl(LanguageModel& model, int tp_rank, int phases):
+        model_{model}, vocab_size_{model.weights().vocab_size}, tp_rank_{tp_rank}
     {
         for (int i = 0; i < phases; ++i) {
             data_.emplace_back();
@@ -123,11 +121,12 @@ struct OutputProcessor::Impl {
         vector<Interval> sel_tokens;
         bool             has_ce = false;
         for (int i = 0; i < rc.size(); ++i) {
-            using Size = Interval::Size;
-            auto& c    = *rc[i];
-            all_tokens.emplace_back(c.history_len + c.inflight_input_len, Size{c.input_len});
-            sel_tokens.emplace_back(c.history_len + c.inflight_input_len + c.input_len - 1, Size{1});
-            if (!c.generating) {
+            using Size              = Interval::Size;
+            auto&               c   = *rc[i];
+            const SubmittedRow& row = *c.submitted;
+            all_tokens.emplace_back(row.history_len + c.inflight_input_len, Size{row.input_len});
+            sel_tokens.emplace_back(row.history_len + c.inflight_input_len + row.input_len - 1, Size{1});
+            if (!row.generating) {
                 sel_tokens.back() = {};
             }
             has_ce = has_ce || (bool)c.input_ce_loss;
@@ -158,8 +157,9 @@ struct OutputProcessor::Impl {
         int offset = 0;
 
         for (int i = 0; i < rc.size(); ++i) {
-            auto& c = *rc[i];
-            auto& g = c.req->gen_cfg;
+            auto&               c   = *rc[i];
+            const SubmittedRow& row = *c.submitted;
+            auto&               g   = c.req->gen_cfg;
             if (c.output_hidden_states) {
                 Matching m{c.output_hidden_states, c.hidden_states_offset};
                 int      type = 0;
@@ -205,7 +205,7 @@ struct OutputProcessor::Impl {
                     d.ce_loss_segments.push_back({c.req, c.ce_loss, m.src, !c.input_ce_loss});
                 }
             }
-            offset += c.input_len;
+            offset += row.input_len;
         }
 
         // logits depends on hidden states
@@ -271,9 +271,9 @@ struct OutputProcessor::Impl {
         }
     }
 
-    void ComputeAndOutputLogits(Data& data, const Tensor& h)
+    void ComputeAndOutputLogits(Data& data, const Tensor& h, const TensorMap& env)
     {
-        const int step_size = max_logits_len_;
+        const int step_size = model_.max_logits_len(env);
 
         // Coroutine frame
         int  p      = 0;
@@ -289,7 +289,7 @@ struct OutputProcessor::Impl {
             if (auto chunk = r & Interval{r.begin(), Size{step_size}}) {
                 // dbg(&chunk);
                 // Compute full logits by chunks
-                auto logits = lm_head_(h.slice(chunk.begin(), (int)chunk.size()));
+                auto logits = model_.Logits(h.slice(chunk.begin(), (int)chunk.size()), {}, env);
                 if (!success) {
                     success = OutputLogitsImpl(ranges, p, logits, chunk.begin(), 2);
                 }
@@ -364,7 +364,7 @@ struct OutputProcessor::Impl {
                 OutputHiddenStates(d.output_states, hidden_states, 2);
             }
             if (d.full_logits || d.full_ce_loss) {
-                ComputeAndOutputLogits(d, hidden_states);
+                ComputeAndOutputLogits(d, hidden_states, env);
             }
         }
 
@@ -381,9 +381,8 @@ struct OutputProcessor::Impl {
 
 OutputProcessor::~OutputProcessor() = default;
 
-OutputProcessor::OutputProcessor(
-    int vocab_size, int max_logits_len, int tp_rank, int phases, std::function<Tensor(const Tensor&)> lm_head):
-    impl_{std::make_unique<Impl>(vocab_size, max_logits_len, tp_rank, phases, std::move(lm_head))}
+OutputProcessor::OutputProcessor(LanguageModel& model, int tp_rank, int phases):
+    impl_{std::make_unique<Impl>(model, tp_rank, phases)}
 {
 }
 
