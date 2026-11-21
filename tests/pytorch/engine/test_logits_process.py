@@ -1,4 +1,7 @@
 # yapf: disable
+import asyncio
+
+import pytest
 import torch
 from transformers.generation.logits_process import (
     MinPLogitsWarper,
@@ -110,6 +113,26 @@ def test_process_bad_words():
         for w in bw:
             if w >= 0:
                 assert score[w] == filter_value
+
+
+@pytest.mark.parametrize('device', [
+    'cpu',
+    pytest.param('cuda', marks=pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')),
+])
+def test_padded_bad_words_keep_token_zero_banned(device):
+    from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+
+    scores = torch.tensor([[2., 0.], [0., 2.], [2., 0.], [2., 0.]], device=device)
+    bad_words = torch.tensor([[0, -1], [1, -1], [-1, -1], [0, 0]], device=device)
+    inputs = SamplingInputs(temperature=torch.full((4, ), 1e-5, device=device),
+                            bad_words=bad_words,
+                            bad_mask=bad_words >= 0,
+                            max_num_logprobs=-1,
+                            logits_processors=[[]] * 4,
+                            max_top_k=1)
+    processor = FusedLogitsProcessor(inputs)
+    logits, _ = asyncio.run(processor(scores))
+    assert processor.sampling(logits).tolist() == [1, 0, 0, 1]
 
 
 def test_processrepetition_penalty():
