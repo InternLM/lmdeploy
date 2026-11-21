@@ -271,6 +271,41 @@ class _DecodeEngine:
         )
 
 
+@pytest.mark.parametrize('backend_config', [PytorchEngineConfig, TurbomindEngineConfig])
+@pytest.mark.parametrize(('overrides', 'defaults', 'expected'), [
+    pytest.param({}, {}, 1.0, id='generation-default'),
+    pytest.param({}, {'repetition_penalty': 1.3}, 1.3, id='server-default'),
+    pytest.param({'repetition_penalty': None}, {'repetition_penalty': 1.3}, 1.3, id='null-uses-default'),
+    pytest.param({'repetition_penalty': 1.0}, {'repetition_penalty': 1.3}, 1.0, id='disable-penalty'),
+    pytest.param({'repetition_penalty': 1.5}, {'repetition_penalty': 1.3}, 1.5, id='penalize-repetition'),
+    pytest.param({'repetition_penalty': 0.5}, {'repetition_penalty': 1.3}, 0.5, id='encourage-repetition'),
+])
+def test_generate_forwards_repetition_penalty(monkeypatch, backend_config, overrides, defaults, expected):
+    observed = []
+
+    async def preprocess(**kwargs):
+        assert kwargs['messages'] == 'Repeat repeat repeat repeat'
+        assert kwargs['do_preprocess'] is False
+        observed.append(kwargs['gen_config'])
+        return SimpleNamespace(input_token_len=2)
+
+    engine = _DecodeEngine()
+    engine.backend_config = backend_config()
+    monkeypatch.setattr(engine, 'preprocess', preprocess)
+    context = _ServerContext(engine.backend_config, async_engine=engine)
+    context.default_gen_config = defaults
+    generate = _make_generate(context)
+    request = GenerateReqInput(prompt='Repeat repeat repeat repeat', max_tokens=10, top_k=0, **overrides)
+
+    result = asyncio.run(generate(request, raw_request=_RawRequest()))
+
+    assert result.text == 'x'
+    assert len(observed) == 1
+    assert observed[0].repetition_penalty == expected
+    assert observed[0].do_sample is True
+    assert observed[0].max_new_tokens == 10
+
+
 def test_generate_keeps_decode_logprobs_and_routed_experts():
     engine = _DecodeEngine()
     context = _ServerContext(engine.backend_config, async_engine=engine)
