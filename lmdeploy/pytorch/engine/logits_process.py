@@ -51,7 +51,7 @@ def _process_bad_words_(scores: torch.Tensor,
     """
     if is_ascend():
         from lmdeploy.pytorch.backends.ascend.logits import _process_bad_words_ as ascend_bad_words
-        return ascend_bad_words(scores, bad_words, mask)
+        return ascend_bad_words(scores, bad_words, mask, filter_value)
     # invalid badwords might be negative
     valid_bad_words = bad_words.where(mask, 0)
     filtered_scores = scores.gather(1, valid_bad_words)

@@ -35,6 +35,8 @@ class DeepseekV32ModelConfigBuilder(DeepseekV2ModelConfigBuilder):
     @classmethod
     def build(cls, hf_config, model_path: str | None = None, **kwargs):
         """build."""
+        if kwargs.get('device_type') == 'ascend' and hf_config.model_type == 'deepseek_v32':
+            raise ValueError('DeepSeek-V3.2 is not supported on Ascend: its DSA indexer requires CUDA preprocessing.')
         is_draft_model = kwargs.get('is_draft_model', False)
         config = DeepseekV2ModelConfigBuilder.build(hf_config, model_path=model_path, **kwargs)
 

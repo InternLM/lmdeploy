@@ -3,7 +3,9 @@
 A3."""
 
 import ast
+import asyncio
 import copy
+import importlib
 import subprocess
 import sys
 from pathlib import Path
@@ -73,7 +75,80 @@ def test_front_door_initializes_native_runtime(monkeypatch):
     try_import_deeplink('ascend')
     try_import_deeplink('npu')
     try_import_deeplink('cuda')
-    assert calls == ['native']
+    assert calls == ['native', 'native']
+
+
+@pytest.mark.parametrize('api', ['auto_awq', 'smooth_quant'])
+@pytest.mark.parametrize('device', ['npu', 'ascend'])
+def test_lite_device_aliases_initialize_and_pass_torch_device(monkeypatch, tmp_path, api, device):
+    from lmdeploy.pytorch.backends.ascend import runtime
+
+    module = importlib.import_module(f'lmdeploy.lite.apis.{api}')
+    calls = []
+
+    class ReachedCalibration(Exception):
+        pass
+
+    def calibrate(model, dataset, samples, seqlen, workdir, torch_device, **kwargs):
+        assert calls == ['initialized']
+        assert torch_device == 'npu'
+        raise ReachedCalibration
+
+    monkeypatch.setattr(runtime, 'initialize', lambda: calls.append('initialized'))
+    monkeypatch.setattr(module, 'calibrate', calibrate)
+    with pytest.raises(ReachedCalibration):
+        getattr(module, api)(str(tmp_path), device=device)
+
+
+def test_device_name_keeps_original_error_and_can_retry(monkeypatch):
+    from lmdeploy.pytorch.backends.ascend.op_backend import SocVersion
+
+    class TestSocVersion(SocVersion):
+        pass
+
+    original_error = RuntimeError('driver unavailable')
+    responses = iter([original_error, 'Ascend910'])
+
+    def get_device_name():
+        result = next(responses)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(torch, 'npu', SimpleNamespace(get_device_name=get_device_name), raising=False)
+    with pytest.raises(RuntimeError, match='driver unavailable') as exc_info:
+        TestSocVersion.is_Ascend910()
+    assert exc_info.value is original_error
+    assert TestSocVersion.is_Ascend910()
+    assert not TestSocVersion.is_Ascend310P()
+
+
+def test_ascend_sampling_excludes_banned_tokens_at_low_temperature():
+    from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+
+    words = torch.tensor([[1, -1], [0, -1], [-1, -1], [1, 1]])
+    scores = torch.tensor([[0., 2.], [2., 0.], [2., 0.], [0., 2.]])
+    sampling_inputs = SamplingInputs(temperature=torch.full((4, ), 1e-5),
+                                     bad_words=words,
+                                     bad_mask=words >= 0,
+                                     max_num_logprobs=-1,
+                                     logits_processors=[[]] * 4,
+                                     max_top_k=1)
+    with _context('ascend'):
+        processor = FusedLogitsProcessor(sampling_inputs)
+        logits, _ = asyncio.run(processor(scores))
+        assert processor.sampling(logits).tolist() == [0, 1, 0, 0]
+
+
+def test_validation_cli_rejects_ascend_graph_with_int8_kv(tmp_path):
+    result = subprocess.run([
+        sys.executable, str(ROOT / 'tools/ascend/validate_pipeline.py'),
+        '--device', 'ascend', '--quant-policy', '8', '--model', str(tmp_path / 'missing-model'),
+        '--output', str(tmp_path / 'output.json'),
+    ], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert 'Ascend INT8 KV cache validation requires --eager' in result.stderr
+    assert 'Traceback' not in result.stderr
 
 
 def test_engine_platform_name_is_ascend():
@@ -320,6 +395,13 @@ def test_native_cache_allocator_handles_small_mixed_dtype_pools():
         tensor.fill_(index + 1)
     for index, tensor in enumerate(allocation.tensor_views):
         assert torch.all(tensor == index + 1)
+
+
+def test_deepseek_v32_rejects_ascend_before_building_model_config():
+    from lmdeploy.pytorch.configurations.deepseek_v32 import DeepseekV32ModelConfigBuilder
+
+    with pytest.raises(ValueError, match='DeepSeek-V3.2 is not supported on Ascend.*DSA indexer'):
+        DeepseekV32ModelConfigBuilder.build(SimpleNamespace(model_type='deepseek_v32'), device_type='ascend')
 
 
 def test_glm_config_uses_native_sparse_cache_without_flashmla(monkeypatch, tmp_path):

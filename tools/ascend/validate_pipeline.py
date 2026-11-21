@@ -36,6 +36,8 @@ def main():
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--compare', type=Path)
     args = parser.parse_args()
+    if args.device == 'ascend' and args.quant_policy == 8 and not args.eager:
+        parser.error('Ascend INT8 KV cache validation requires --eager')
     if args.compare and args.sampling != 'greedy':
         parser.error('--compare checks exact greedy tokens; use --sampling greedy')
     if args.device == 'ascend':

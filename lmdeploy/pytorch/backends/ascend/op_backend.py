@@ -4,7 +4,7 @@ import math
 import os
 import re
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path
 from typing import cast
 
@@ -63,16 +63,9 @@ class SocVersion:
     Ascend910: str = 'Ascend910'
 
     @classmethod
-    @lru_cache(maxsize=1)
+    @cache
     def device_name(cls) -> str:
-        try:
-            return torch.npu.get_device_name()
-        except ImportError:
-            logger.warning('Failed to import torch_npu. Please make sure torch_npu is installed correctly.')
-        except Exception as e:
-            logger.warning(
-                f"Error during Ascend get device name: {str(e)}. Please check your Ascend environment configuration."
-            )
+        return torch.npu.get_device_name()
 
     @classmethod
     def is_Ascend310P(cls) -> bool:
