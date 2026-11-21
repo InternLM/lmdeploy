@@ -24,7 +24,7 @@ class DeepseekV2ModelConfigBuilder(AutoModelConfigBuilder):
         tp = kwargs.get('tp', 1)
         # update num_kv_heads for tp mode
         num_key_value_heads = cls.update_num_kv_heads(hf_config, tp, num_key_value_heads)
-        hf_config.use_flash_mla = flash_mla_available()
+        hf_config.use_flash_mla = (kwargs.get('device_type') != 'ascend' and flash_mla_available())
         num_layers = hf_config.num_hidden_layers
         model_paradigm = 'ar'
 

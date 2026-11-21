@@ -33,7 +33,10 @@ class SubCliLite:
         ArgumentHelper.calib_search_scale(parser)
         ArgumentHelper.dtype(parser)
         ArgumentHelper.trust_remote_code(parser)
-        parser.add_argument('--device', type=str, default='cuda', help='Device for weight quantization (cuda or npu)')
+        parser.add_argument('--device',
+                            type=str,
+                            default='cuda',
+                            help='Device for weight quantization (cuda, ascend or npu)')
         parser.add_argument('--w-bits', type=int, default=4, help='Bit number for weight quantization')
         parser.add_argument('--w-sym', action='store_true', help='Whether to do symmetric quantization')
         parser.add_argument('--w-group-size',
@@ -95,7 +98,10 @@ class SubCliLite:
                             type=str,
                             default='./work_dir',
                             help='The working directory for outputs. defaults to "./work_dir"')
-        parser.add_argument('--device', type=str, default='cuda', help='Device for weight quantization (cuda or npu)')
+        parser.add_argument('--device',
+                            type=str,
+                            default='cuda',
+                            help='Device for weight quantization (cuda, ascend or npu)')
         ArgumentHelper.calib_dataset(parser)
         ArgumentHelper.calib_samples(parser)
         ArgumentHelper.calib_seqlen(parser)

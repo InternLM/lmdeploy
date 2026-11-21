@@ -20,6 +20,8 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-latest
     strategy:
+      # Complete every configuration even if another build loses its runner.
+      fail-fast: false
       matrix:
         cuda_build_target: [cu130, cu128]
         python_version: ['3.10', '3.11', '3.12', '3.13']

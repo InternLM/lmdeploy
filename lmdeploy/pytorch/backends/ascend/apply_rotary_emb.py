@@ -1,0 +1,40 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+from torch import Tensor
+
+from lmdeploy.pytorch.kernels.ascend.apply_rotary_pos_emb import (
+    apply_rotary_pos_emb,
+    apply_rotary_pos_emb_interleaved,
+)
+
+from ..apply_rotary_emb import ApplyRotaryEmbImpl
+
+
+class AscendApplyRotaryEmbImpl(ApplyRotaryEmbImpl):
+    """Apply rotary embedding implementation."""
+
+    def forward(
+        self,
+        query: Tensor,
+        key: Tensor,
+        cos: Tensor,
+        sin: Tensor,
+        inplace: bool = True,
+        complex_mode: bool = False,
+        return_native_layout: bool = True,
+    ):
+        """forward."""
+        if complex_mode:
+            if inplace:
+                q_embed = query
+                k_embed = key
+            else:
+                q_embed = None
+                k_embed = None
+            return apply_rotary_pos_emb_interleaved(query, key, cos, sin, q_embed, k_embed, return_native_layout)
+        if inplace:
+            q_embed = None
+            k_embed = None
+        else:
+            q_embed = query.new_empty(query.shape)
+            k_embed = key.new_empty(key.shape)
+        return apply_rotary_pos_emb(query, key, cos, sin, q_embed, k_embed)

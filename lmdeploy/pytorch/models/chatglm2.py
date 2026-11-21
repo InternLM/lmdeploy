@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
 from collections.abc import Iterable
 from typing import Any
 
@@ -8,6 +7,7 @@ from torch import nn
 from torch.nn import functional as F
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.devices import is_ascend
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
@@ -91,6 +91,9 @@ class SelfAttention(torch.nn.Module):
 
     @staticmethod
     def _fill_rope(states: torch.Tensor, rope: torch.Tensor):
+        if is_ascend():
+            from lmdeploy.pytorch.backends.ascend.rotary import ascend_chatglm2_fill_rope
+            return ascend_chatglm2_fill_rope(states, rope)
         """Fill rope."""
         rope_part = states.chunk(2, -1)[0]
         rope = rope.unflatten(-1, (2, -1))

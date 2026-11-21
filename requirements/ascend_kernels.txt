@@ -1,0 +1,2 @@
+# Compiler for native Ascend kernels. GDN prefill/L2Norm sources are bundled.
+-r ascend_triton_npuir2.txt
