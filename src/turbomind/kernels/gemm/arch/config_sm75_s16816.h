@@ -177,6 +177,56 @@ struct Config_MXF4 {
         GroupAxis>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 32, 1, EpiM, EpiN>::Kernel;
 };
 
+// Dense NVFP4: E2M1 weights as the packed B operand with per-group-16 half
+// scales as V (the u4-dense orientation), so decode (small M) is aligned on
+// the activation A side (align.x = 1). Mirrors Config_U4_d with an E2M1 B.
+struct Config_NVFP4 {
+    template<class Config_,
+             int   Stages,
+             Order Raster,
+             class PolicyA,
+             class PolicyB,
+             bool SplitK,
+             int  EpiM = -1,
+             int  EpiN = -1>
+    using Type = typename Sm75_s16816<
+        kColMajor,
+        Operand_A<half, kRowMajor>,
+        Transform_Default,
+        VoidOperand,
+        Operand_B_Pack<fp4_e2m1_t, kRowMajor, 1>,
+        Transform_HMMA_16816<1, 0>,
+        Operand_UV_Pack<uint16_t, true>,
+        kRowMajor,
+        half,
+        -1>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 1, 16, EpiM, EpiN>::Kernel;
+};
+
+// Grouped (MoE) NVFP4: same E2M1 packed-B + per-group-16 half scales as the
+// dense config, but with group_axis = 0 (blocked A, per-expert weights) to
+// mirror the proven grouped U4 path. Reuses the dense NVFP4 packer layout.
+struct Config_NVFP4_g {
+    template<class Config_,
+             int   Stages,
+             Order Raster,
+             class PolicyA,
+             class PolicyB,
+             bool SplitK,
+             int  EpiM = -1,
+             int  EpiN = -1>
+    using Type = typename Sm75_s16816<
+        kColMajor,
+        Operand_A<half, kRowMajor>,
+        Transform_Default,
+        VoidOperand,
+        Operand_B_Pack<fp4_e2m1_t, kRowMajor, 1>,
+        Transform_HMMA_16816<1, 0>,
+        Operand_UV_Pack<uint16_t, true>,
+        kRowMajor,
+        half,
+        0>::template Type<Config_, Stages, Raster, PolicyA, PolicyB, SplitK, 1, 16, EpiM, EpiN>::Kernel;
+};
+
 struct Config_E4M3 {
     template<class Config_,
              int   Stages,
