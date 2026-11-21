@@ -48,11 +48,13 @@ def _process_bad_words_(scores: torch.Tensor,
         torch.Tensor: The ``scores`` tensor after bad-word filtering has
         been applied.
     """
-    # invalid badwords might be negative
-    valid_bad_words = bad_words.where(mask, 0)
-    filtered_scores = scores.gather(1, valid_bad_words)
-    filtered_scores[mask] = filter_value
-    scores.scatter_(1, valid_bad_words, filtered_scores)
+    indices = bad_words.where(mask, 0)
+    is_zero = indices == 0
+    # Padding maps to token 0. All writes to it must agree with its actual
+    # ban status so duplicate scatter indices cannot restore its score.
+    ban_zero = (is_zero & mask).any(dim=1, keepdim=True)
+    updates = torch.where(is_zero & ~ban_zero, scores[:, :1], filter_value)
+    scores.scatter_(1, indices, updates)
     return scores
 
 
