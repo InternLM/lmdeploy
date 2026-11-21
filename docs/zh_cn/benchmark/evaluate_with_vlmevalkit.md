@@ -28,11 +28,11 @@ lmdeploy serve api_server <model_path> --server-port 23333 <--other-options>
 `<task_name>` 是您评测任务的自定义名称（例如 `lmdeploy_qwen3vl-4b`）。`model` 参数应与 `lmdeploy serve` 命令中使用的 `<model_path>` 保持一致。
 
 ```python
-// filepath: VLMEvalKit/vlmeval/config.py
-// ...existing code...
+# filepath: VLMEvalKit/vlmeval/config.py
+# ...existing code...
 api_models = {
     # lmdeploy api
-    ...,
+    # ...existing API model entries...
     "<task_name>": partial(
         LMDeployAPI,
         api_base="http://0.0.0.0:23333/v1/chat/completions",
@@ -42,9 +42,9 @@ api_models = {
         temperature=0.7, # modify if needed
         max_new_tokens=16384, # modify if needed
     ),
-    ...
+    # ...existing API model entries...
 }
-// ...existing code...
+# ...existing code...
 ```
 
 3. **开始评测**
