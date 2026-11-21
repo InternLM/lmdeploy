@@ -11,9 +11,8 @@ def awq_linear(
     scales: Tensor,
     qzeros: Tensor,
     bias: Tensor | None = None,
-    all_reduce: bool = False,
     group_size: int = 0,
 ):
     return ext_ops.weight_quant_matmul(
-        x.squeeze(0), qweight, scales, offset=qzeros, bias=bias, all_reduce=all_reduce, group_size=group_size
+        x.squeeze(0), qweight, scales, offset=qzeros, bias=bias, group_size=group_size
     ).unsqueeze(0)

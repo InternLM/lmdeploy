@@ -2,6 +2,7 @@
 
 import torch
 
+import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.kernels.ascend.awq_kernels import awq_linear
 
 from ..awq_modules import LinearW4A16Impl
@@ -27,5 +28,7 @@ class AwqLinearW4A16Impl(LinearW4A16Impl):
         group: torch.distributed.ProcessGroup | None = None,
     ):
         """forward."""
-        out = awq_linear(x, qweight, scales, qzeros, bias, all_reduce, self.group_size)
+        out = awq_linear(x, qweight, scales, qzeros, bias, self.group_size)
+        if all_reduce:
+            dist.all_reduce(out, group=group)
         return out

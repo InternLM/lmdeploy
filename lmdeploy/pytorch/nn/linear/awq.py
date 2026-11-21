@@ -126,7 +126,7 @@ class AwqLinear(LinearBase):
         """Weight loader for rowwise linear."""
         if loaded_weight.dim() == 1:
             # bias
-            if rank == 0:
+            if rank != 0:
                 loaded_weight = torch.zeros_like(loaded_weight)
             return default_weight_loader(param, loaded_weight)
 
