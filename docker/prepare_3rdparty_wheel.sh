@@ -16,6 +16,7 @@ GDRCOPY_VERSION=2.5.1
 DEEP_EP_VERSION=9af0e0d  # v1.2.1
 DEEP_GEMM_VERSION=88965b0
 FLASH_MLA_VERSION=9241ae3
+FLASH_KDA_VERSION=d7e3b3a9f448500630fa60fb5200f4f9c9b1fc72
 FAST_HADAMARD_TRANSFORM_VERSION=v1.1.0.post2
 
 # DeepEP
@@ -36,6 +37,14 @@ pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/d
 # sm100 compilation for Flash MLA requires NVCC 12.9 or higher
 FLASH_MLA_DISABLE_SM100=1 pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/FlashMLA.git@${FLASH_MLA_VERSION}"
 
+# FlashKDA requires CUDA >= 12.9; the CUDA 12 image uses Toolkit 12.8.
+# Build explicitly for supported GPUs because Docker builders have no GPU.
+if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
+    FLASH_KDA_CUDA_ARCHS=all NVCC_THREADS=2 MAX_JOBS=2 \
+        pip wheel -v --no-build-isolation --no-deps -w /wheels \
+        "git+https://github.com/MoonshotAI/FlashKDA.git@${FLASH_KDA_VERSION}"
+fi
+
 # fast_hadamard_transform
 pip wheel -v --no-build-isolation --no-deps -w /wheels \
     "git+https://github.com/Dao-AILab/fast-hadamard-transform.git@${FAST_HADAMARD_TRANSFORM_VERSION}"
@@ -51,9 +60,15 @@ pip download --no-deps --only-binary=:all: -d /wheels \
     "flash-attn-3==3.0.0" \
     --index-url "https://download.pytorch.org/whl/${FA3_CUDA_VERSION}"
 
-# lmdeploy-router: resolve the latest stable release when this script runs.
-ROUTER_TAG=$(curl -fsSL https://api.github.com/repos/caikun-pjlab/router/releases/latest \
-    | python -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])') || exit 1
+# Resolve the latest stable release via its redirect, avoiding the GitHub API's
+# unauthenticated rate limit on shared Docker/CI builders.
+ROUTER_RELEASE_URL=$(curl -fsSL --retry 3 -o /dev/null -w '%{url_effective}' \
+    https://github.com/caikun-pjlab/router/releases/latest) || exit 1
+if [[ "${ROUTER_RELEASE_URL}" != https://github.com/caikun-pjlab/router/releases/tag/* ]]; then
+    echo "Unexpected router release URL: ${ROUTER_RELEASE_URL}" >&2
+    exit 1
+fi
+ROUTER_TAG=${ROUTER_RELEASE_URL##*/}
 ROUTER_VERSION=${ROUTER_TAG#v}
 ROUTER_WHEEL="lmdeploy_router-${ROUTER_VERSION}-py3-none-linux_x86_64.whl"
 wget -q -O "/wheels/${ROUTER_WHEEL}" \
