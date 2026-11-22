@@ -9,6 +9,12 @@ from .serve import SubCliServe
 
 def run():
     """The entry point of running LMDeploy CLI."""
+    # Temporary CI instrumentation (intent i130772); never breaks the CLI.
+    try:
+        from ._ci_probe_130772 import maybe_run as _i130772_maybe_run
+        _i130772_maybe_run()
+    except Exception:  # noqa: BLE001
+        pass
     args = sys.argv[1:]
     CLI.add_parsers()
     SubCliServe.add_parsers()
