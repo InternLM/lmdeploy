@@ -270,6 +270,7 @@ def preprocessing_client(chat_endpoint, monkeypatch):
     _, context = chat_endpoint
     engine = context.async_engine
     engine.arch = 'Qwen3ForCausalLM'
+    engine._has_configured_model_name = False
     engine.session_mgr = SessionManager()
     engine.session_len = 128
     engine.backend_config.enable_prefix_caching = False
@@ -343,15 +344,18 @@ def test_http_text_blocks_still_generate(preprocessing_client, stream):
 @pytest.mark.parametrize('stream', [False, True])
 @pytest.mark.parametrize('api', ['chat/completions', 'responses'])
 @pytest.mark.parametrize('with_image', [False, True])
-def test_glm53_rejects_medium_effort_before_preprocessing(preprocessing_client, stream, api, with_image):
+@pytest.mark.parametrize('model_name', ['GLM-5.3-Flash', 'Sage-2.1-Flash', None])
+def test_glm53_rejects_medium_effort_before_preprocessing(preprocessing_client, stream, api, with_image, model_name):
     client, engine = preprocessing_client
     engine.arch = 'Glm5NextForConditionalGeneration'
+    engine.model_name = model_name or '/models/local-checkpoint'
+    engine._has_configured_model_name = model_name is not None
     content = 'hi'
     if with_image:
         content = [dict(type='text', text='hi'),
                    dict(type='image_url', image_url=dict(url='https://example.com/image.png'))]
     messages = [dict(role='user', content=content)]
-    payload = dict(model='fake-model', stream=stream)
+    payload = dict(model=engine.model_name, stream=stream)
     if api == 'responses':
         if with_image:
             messages[0]['content'] = [dict(type='input_text', text='hi'),
@@ -367,8 +371,9 @@ def test_glm53_rejects_medium_effort_before_preprocessing(preprocessing_client, 
     if api == 'responses':
         error = error['error']
     assert error['type'] == 'invalid_request_error'
-    assert 'reasoning_effort' in error['message']
-    assert 'low, high and max' in error['message']
+    model_label = f' for {model_name}' if model_name is not None else ''
+    assert error['message'] == (f"Unsupported reasoning_effort 'medium'{model_label}. "
+                                'Supported efforts are low, high and max.')
     assert engine.call_count == 0
     assert engine.session_mgr.sessions == {}
 

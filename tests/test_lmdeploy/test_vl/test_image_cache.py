@@ -53,6 +53,26 @@ def native_glm_model(glm_model):
     return glm_model
 
 
+def test_image_placeholder_mismatch_reports_counts(glm_model):
+    image = Image.new('RGB', (4, 4))
+    with pytest.raises(ValueError) as error:
+        glm_model._preprocess_images([image], [1], None)
+
+    assert str(error.value) == 'Image placeholder count (0) does not match the number of images (1).'
+
+
+@pytest.mark.parametrize(('token_id', 'modality'), [(9, 'image'), (10, 'video')])
+def test_raw_media_placeholder_mismatch_reports_counts(glm_model, token_id, modality):
+    glm_model.input_video_token_id = 10
+    glm_model.processor.tokenizer = None
+
+    with pytest.raises(ValueError) as error:
+        glm_model._expand_raw_input_ids([token_id], {}, [], [])
+
+    assert str(error.value) == (f'{modality.capitalize()} placeholder count in input_ids (1) does not match '
+                                f'the number of {modality}s (0).')
+
+
 def test_image_cache_budget_and_inflight_ownership():
     def entry(value):
         return ProcessedImage(torch.full((4, 3), value), torch.tensor([1, 2, 2]), str(value))

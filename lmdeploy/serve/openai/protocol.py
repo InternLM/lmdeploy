@@ -196,8 +196,8 @@ class ChatCompletionRequest(BaseModel):
     )
     stop: str | list[str] | None = Field(
         default=None,
-        description=('Single-token stop strings are handled by the engine. The GLM token-ID chat parser also '
-                     'supports multi-token stops in assistant content.'),
+        description=('Single-token stop strings are handled by the engine. Compatible chat parsers '
+                     'also match multi-token stop strings in assistant content.'),
         examples=[None])
 
     stream: bool | None = False

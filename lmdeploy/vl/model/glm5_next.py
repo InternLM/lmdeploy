@@ -152,13 +152,13 @@ class GLM5NextVisionModel(VisionModel):
         video_count = input_prompt.count(self.input_video_token_id)
         if image_count != len(image_replacements):
             raise ValueError(
-                'raw GLM-5 input image placeholders do not match images: '
-                f'{image_count} placeholders for {len(image_replacements)} images.'
+                f'Image placeholder count in input_ids ({image_count}) does not match '
+                f'the number of images ({len(image_replacements)}).'
             )
         if video_count != len(video_replacements):
             raise ValueError(
-                'raw GLM-5 input video placeholders do not match videos: '
-                f'{video_count} placeholders for {len(video_replacements)} videos.'
+                f'Video placeholder count in input_ids ({video_count}) does not match '
+                f'the number of videos ({len(video_replacements)}).'
             )
 
         image_index = 0
@@ -194,8 +194,10 @@ class GLM5NextVisionModel(VisionModel):
             # IDs below instead of constructing a huge repeated text.
             input_prompt = self.processor.tokenizer(text=[input_prompt], padding=True,
                                                     return_tensors='pt')['input_ids'][0].tolist()
-        if input_prompt.count(self.image_token_id) != len(processed):
-            raise ValueError('GLM image placeholders must match the number of images')
+        image_count = input_prompt.count(self.image_token_id)
+        if image_count != len(processed):
+            raise ValueError(f'Image placeholder count ({image_count}) does not match '
+                             f'the number of images ({len(processed)}).')
         merge_length = self.processor.image_processor.merge_size**2
         input_ids, multimodal = [], []
         image_index = 0

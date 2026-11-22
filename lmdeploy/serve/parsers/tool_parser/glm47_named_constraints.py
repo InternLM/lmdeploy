@@ -79,7 +79,7 @@ def build_named_tool_format(tools: list[Tool], choice: ToolChoice, *, reasoning:
     vocab = tokenizer.get_added_vocab()
     needed = spellings if reasoning else Glm47ToolParser.token_id_terminals
     if any(tag not in vocab for tag in needed):
-        raise ValueError('GLM named tools require dedicated control token IDs')
+        raise ValueError('Named tool calls require dedicated control token IDs in the tokenizer.')
     token_ids = tuple((tag, vocab[tag]) for tag in spellings if tag in vocab)
     function = functions[0]
     schema = function.parameters if function.parameters is not None else True
