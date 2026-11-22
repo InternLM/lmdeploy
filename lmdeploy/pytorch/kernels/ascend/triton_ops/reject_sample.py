@@ -127,9 +127,9 @@ if _TRITON_AVAILABLE:
         start_idx = tl.where(
             offset == 0,
             0,
-            tl.load(cu_num_draft_tokens_ptr + offset - 1, is_greedy_mask),
+            tl.load(cu_num_draft_tokens_ptr + offset - 1, mask=is_greedy_mask, other=0),
         )
-        end_idx = tl.load(cu_num_draft_tokens_ptr + offset, is_greedy_mask)
+        end_idx = tl.load(cu_num_draft_tokens_ptr + offset, mask=is_greedy_mask, other=0)
         num_draft_tokens = end_idx - start_idx
 
         for pos in tl.range(0, BLOCK_SIZE):
@@ -137,25 +137,26 @@ if _TRITON_AVAILABLE:
             s = get_element(start_idx, (pos,))
             is_g = get_element(is_greedy_mask, (pos,))
             req_idx = block_idx * BLOCK_SIZE + pos
-            rejected = False
-            for i in range(n):
+            if is_g:
+                rejected = False
+                for i in range(n):
+                    if not rejected:
+                        draft_id = tl.load(draft_token_ids_ptr + s + i)
+                        target_id = tl.load(target_argmax_ptr + s + i)
+                        tl.store(
+                            output_token_ids_ptr + req_idx * (max_spec_len + 1) + i,
+                            target_id,
+                        )
+                        if draft_id != target_id:
+                            rejected = True
                 if not rejected:
-                    draft_id = tl.load(draft_token_ids_ptr + s + i)
-                    target_id = tl.load(target_argmax_ptr + s + i)
-                    tl.store(
-                        output_token_ids_ptr + req_idx * (max_spec_len + 1) + i,
-                        target_id,
+                    _bonus_store_kernel(
+                        bonus_token_ids_ptr,
+                        req_idx,
+                        output_token_ids_ptr,
+                        max_spec_len,
+                        n,
                     )
-                    if draft_id != target_id:
-                        rejected = True
-            if not rejected and is_g:
-                _bonus_store_kernel(
-                    bonus_token_ids_ptr,
-                    req_idx,
-                    output_token_ids_ptr,
-                    max_spec_len,
-                    n,
-                )
 
     @triton.jit(do_not_specialize=['max_spec_len'])
     def _rejection_random_kernel(
