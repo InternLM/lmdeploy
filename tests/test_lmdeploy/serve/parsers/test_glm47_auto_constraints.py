@@ -258,10 +258,8 @@ def test_missing_tokenizer_or_tools_does_not_add_constraints(context):
 
 def test_missing_control_ids_cannot_fall_back_to_string_matching(context, monkeypatch):
     monkeypatch.setattr(context.tokenizer, 'get_added_vocab', lambda: {})
-    with pytest.raises(ValueError) as error:
+    with pytest.raises(ValueError, match='dedicated control token IDs'):
         build_auto_tool_format(_request().tools, context.tokenizer)
-
-    assert str(error.value) == 'Automatic tool constraints require dedicated control token IDs in the tokenizer.'
 
 
 def test_auto_routing_preserves_request_and_history(context):

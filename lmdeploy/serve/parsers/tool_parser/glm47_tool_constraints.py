@@ -66,7 +66,7 @@ def build_auto_tool_format(
                  '<arg_value>', '</arg_value>')
     vocab = tokenizer.get_added_vocab()
     if not all(spelling in vocab for spelling in spellings):
-        raise ValueError('Automatic tool constraints require dedicated control token IDs in the tokenizer.')
+        raise ValueError('GLM auto tool constraints require dedicated control token IDs')
     ids = {spelling: vocab[spelling] for spelling in spellings}
     boundaries = list(ids.values())
 
