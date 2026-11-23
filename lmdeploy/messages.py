@@ -826,6 +826,13 @@ class EventType(enum.IntEnum):
     QUEUED = 1
     SCHEDULED = 2
     PREEMPTED = 3  # FIXME, currently ignored for simplicity
+    KV_LOAD_STARTED = 4
+    KV_LOAD_FINISHED = 5
+    KV_LOAD_FAILED = 6
+    KV_LOOKUP_STARTED = 7
+    KV_LOOKUP_FINISHED = 8
+    KV_LOAD_CANCELLED = 9
+    KV_LOOKUP_CANCELLED = 10
 
 
 # modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
@@ -839,13 +846,15 @@ class EngineEvent:
     """
     type: EventType
     timestamp: float
+    value: int | None = None
 
     @classmethod
-    def new_event(cls, event_type: EventType, timestamp: float | None = None) -> 'EngineEvent':
+    def new_event(cls, event_type: EventType, timestamp: float | None = None,
+                  value: int | None = None) -> 'EngineEvent':
         # Timestamps MUST use wall-clock time (time.time()) to maintain consistency
         # between csrc(std::chrono::system_clock) and python
         timestamp = time.time() if timestamp is None else timestamp
-        return cls(event_type, timestamp)
+        return cls(event_type, timestamp, value)
 
 
 @dataclass
@@ -869,11 +878,13 @@ class RequestMetrics:
     Attributes:
         token_timestamp: A wall-clock time when a token is generated.
         engine_events: list of engine events during inference.
+        first_token_timestamp: First native output time, preserved across output coalescing.
     """
     token_timestamp: float = 0.0
     engine_events: list[EngineEvent] = field(default_factory=list)
     spec_info: dict[str, Any] | None = None
     cached_tokens: int = 0
+    first_token_timestamp: float = 0.0
 
 
 @dataclass
