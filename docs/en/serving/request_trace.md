@@ -47,17 +47,21 @@ These are tracing identifiers; `request_id` remains the read-only gateway busine
 | `lmdeploy/pytorch/kv_connector/mooncake/store/scheduler.py`, `lmdeploy/pytorch/paging/kv_load_coordinator.py` | Observe existing Store lookup and load lifecycle                                             |
 | `requirements/serve.txt`, `tests/observability/`, `tests/test_lmdeploy/serve/test_request_trace_*.py`         | Serving dependencies, behavioral/transport regression tests and real-package checks          |
 
-## Export traces to a local Collector
+## Export traces to a Collector
 
 Install `lmdeploy[serve]` and set the endpoint before starting the API server.
 The serving dependencies include the OpenTelemetry SDK and both OTLP exporters;
 no separate trace extra is needed. Installing dependencies does not enable tracing.
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` in the deployment environment to the selected Collector's
+receiver URL. Use the protocol, TLS settings and resource values supplied for that deployment;
+the API server does not supply a fixed Collector address.
 
 ```bash
 pip install 'lmdeploy[serve]'
 
 export OTEL_SERVICE_NAME=lmdeploy-full
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.namespace.svc:4317
+: "${OTEL_EXPORTER_OTLP_ENDPOINT:?Set the Collector endpoint in the deployment environment}"
+export OTEL_EXPORTER_OTLP_ENDPOINT
 export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 export OTEL_RESOURCE_ATTRIBUTES="deployment.environment=prod,k8s.cluster.name=cluster,k8s.namespace.name=ns,k8s.pod.name=pod,k8s.node.name=node"
 export OTEL_BSP_MAX_QUEUE_SIZE=2048
