@@ -17,11 +17,10 @@ _provider = _tracer = None
 _pid = None
 _init_lock = threading.Lock()
 _SECRET = re.compile(r'authorization:|bearer\s+|(?<![A-Za-z0-9])sk-(?:ant-)?[A-Za-z0-9_-]+', re.I)
-_FORBIDDEN_ATTRIBUTES = frozenset((
-    'authorization', 'x-api-key', 'api_key', 'apikey', 'cookie', 'set-cookie',
-    'http.request.body', 'http.response.body', 'request.body', 'response.body',
-    'gen_ai.prompt', 'gen_ai.completion', 'llm.prompt', 'llm.completion',
-    'prompt', 'completion', 'password',
+_RESOURCE_ATTRIBUTES = frozenset((
+    'service.name', 'service.instance.id', 'deployment.environment',
+    'k8s.cluster.name', 'k8s.namespace.name', 'k8s.pod.name', 'k8s.node.name',
+    'inference.engine', 'inference.role',
 ))
 
 
@@ -43,6 +42,8 @@ def fail_open(func):
 
 
 def initialize():
+    """Initialize one process-local provider when an OTLP endpoint is
+    configured."""
     if not ENDPOINT or (_tracer is not None and _pid == os.getpid()):
         return
     with _init_lock:
@@ -71,8 +72,10 @@ def _initialize():
                                 'service.instance.id': f'{socket.gethostname()}:{os.getpid()}'})
     # This implementation is the non-P/D engine, regardless of external env overrides.
     resource = resource.merge(Resource({'inference.engine': 'lmdeploy', 'inference.role': 'full'}))
+    # Environment and SDK detectors are not trusted request-metadata sources.
+    # Keep only the platform's resource contract, including for affinity/IDs.
     resource = Resource({k: v for k, v in resource.attributes.items()
-                         if k.lower() not in _FORBIDDEN_ATTRIBUTES and metadata_string(k) is not None
+                         if k in _RESOURCE_ATTRIBUTES
                          and (metadata_string(v) is not None or type(v) in (int, bool)
                               or (type(v) is float and math.isfinite(v)))})
     capacity = int(os.getenv('OTEL_BSP_MAX_QUEUE_SIZE', '2048'))
@@ -93,6 +96,7 @@ _invalid_id_lock = threading.Lock()
 
 @fail_open
 def request_id(headers):
+    """Read a valid gateway request ID without generating or replacing it."""
     global _invalid_request_ids
     value = headers.get('x-request-id')
     if value is None:
@@ -123,6 +127,8 @@ def metadata_string(value):
 
 @fail_open
 def begin_http(headers, path, start_ns, outcome):
+    """Start the HTTP span with upstream context and accepted correlation
+    headers."""
     if _tracer is None:
         return None
     from opentelemetry import trace
@@ -160,6 +166,8 @@ def begin_http(headers, path, start_ns, outcome):
 
 @fail_open
 def begin_prompt(parent, start_ns, index, rid):
+    """Start one prompt span under its HTTP request, or a standalone library
+    span."""
     if _tracer is None or (index is not None and parent is None):
         return None
     from opentelemetry import trace
@@ -174,6 +182,7 @@ def begin_prompt(parent, start_ns, index, rid):
 
 @fail_open
 def correlation(span):
+    """Return hexadecimal trace and span IDs for local record correlation."""
     if span is None:
         return {}
     ctx = span.get_span_context()
@@ -182,6 +191,7 @@ def correlation(span):
 
 @fail_open
 def attributes(span, values):
+    """Attach available safe scalar values to a recording span."""
     if span is not None and span.is_recording():
         span.set_attributes({k: v for k, v in values.items() if isinstance(v, (str, int, bool, float))
                              and (not isinstance(v, float) or math.isfinite(v))
@@ -190,6 +200,8 @@ def attributes(span, values):
 
 @fail_open
 def finish_engine(t, status):
+    """Record engine usage and emit phases only when their boundaries are
+    known."""
     span = t.otel_span
     if span is None or not span.is_recording():
         return
@@ -255,6 +267,7 @@ def finish_engine(t, status):
 
 @fail_open
 def finish(span, status, end_ns=None, http_status=None, output=None):
+    """End a span with result metadata and a payload-free failure event."""
     if span is None:
         return
     from opentelemetry.trace import Status, StatusCode
@@ -271,6 +284,8 @@ def finish(span, status, end_ns=None, http_status=None, output=None):
 
 @fail_open
 def finish_http(outcome, status, http_status, elapsed, observation):
+    """Aggregate prompt usage and accepted-send observations into the HTTP
+    span."""
     span = outcome['otel_span']
     if span is None or not span.is_recording():
         return

@@ -125,10 +125,11 @@ policy. The gateway must propagate the valid
 `x-request-id`, `traceparent` and explicit `x-session-id` and export the referenced upstream span.
 
 The lists below describe the platform integration fields. The companion
-`request_trace_contract.json` contains them in machine-readable form. Safe scalar resource metadata
-from the SDK and `OTEL_RESOURCE_ATTRIBUTES` is preserved, including `service.namespace`,
-`deployment.environment.name`, `k8s.pod.uid` and `telemetry.sdk.*`. The gateway controls which of
-these additional fields it retains; their presence does not change engine or role identity.
+`request_trace_contract.json` contains them in machine-readable form. SDK and environment resource
+attributes are restricted to the list below, with scalar, size and credential checks. Other fields
+are omitted before export, including raw affinity and request/session IDs injected through
+`OTEL_RESOURCE_ATTRIBUTES`. Request/session IDs come only from the accepted request headers.
+Additional resource fields require an agreed platform contract update before being allowed here.
 
 Resource attributes:
 

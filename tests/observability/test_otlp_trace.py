@@ -209,10 +209,9 @@ class OTLPTests(unittest.TestCase):
                 self.assertEqual(attrs['inference.engine'], 'lmdeploy')
                 self.assertEqual(attrs['inference.role'], 'full')
                 self.assertEqual(attrs['k8s.pod.name'], 'test-pod')
-                self.assertEqual(attrs['service.namespace'], 'inference')
-                self.assertEqual(attrs['deployment.environment.name'], 'prod')
-                self.assertEqual(attrs['k8s.pod.uid'], 'pod-uid')
-                self.assertEqual(attrs['telemetry.sdk.language'], 'python')
+                for key in ('service.namespace', 'deployment.environment.name', 'k8s.pod.uid',
+                            'telemetry.sdk.language'):
+                    self.assertNotIn(key, attrs)
                 self.assertNotIn('authorization', attrs)
                 self.assertNotIn('prompt', attrs)
             finally:
@@ -585,13 +584,32 @@ class OTLPTests(unittest.TestCase):
                 endpoint = f'http://127.0.0.1:{port}'
                 with patch.dict(os.environ, {'OTEL_EXPORTER_OTLP_ENDPOINT': endpoint,
                      'OTEL_EXPORTER_OTLP_PROTOCOL': protocol, 'OTEL_SERVICE_NAME': 'lmdeploy-full',
+                     'OTEL_RESOURCE_ATTRIBUTES': (
+                         'deployment.environment=test,k8s.cluster.name=cluster,k8s.namespace.name=namespace,'
+                         'k8s.pod.name=pod,k8s.node.name=node,session.affinity=private-affinity-resource,'
+                         'SESSION.AFFINITY=private-affinity-uppercase,'
+                         'session.affinity_hashed=untrusted-affinity-hash,session.id=untrusted-resource-session,'
+                         'request.id=untrusted-resource-request,custom.metadata=unapproved-resource'),
                      'NO_PROXY': '*', 'no_proxy': '*'}, clear=True), \
                      patch.object(otel, 'ENDPOINT', endpoint), patch.object(otel, '_pid', None):
                     otel.initialize()
                     provider = otel._provider
                     try:
-                        self.request([(b'x-session-id', b'session.prod:42')], count=1)
+                        self.request([(b'x-session-id', b'session.prod:42'),
+                                      (b'x-request-id', b'req_gateway_123456'),
+                                      (b'x-session-affinity', b'private-affinity-header')], count=1)
                         self.assertTrue(provider.force_flush(5000))
+                        contract = json.loads((SOURCE / 'docs/en/serving/request_trace_contract.json')
+                                              .read_text())
+                        for req in received:
+                            for rs in req.resource_spans:
+                                resource = {a.key: a.value for a in rs.resource.attributes}
+                                self.assertEqual(set(resource), set(contract['resource_allowed_attributes']))
+                                self.assertEqual(resource['deployment.environment'].string_value, 'test')
+                                self.assertEqual(resource['k8s.node.name'].string_value, 'node')
+                            wire = req.SerializeToString()
+                            for forbidden in (b'private-affinity', b'untrusted-', b'unapproved-resource'):
+                                self.assertNotIn(forbidden, wire)
                         spans = [s for req in received for rs in req.resource_spans
                                  for ss in rs.scope_spans for s in ss.spans]
                         self.assertCountEqual([s.name for s in spans],
@@ -605,6 +623,7 @@ class OTLPTests(unittest.TestCase):
                         root = next(s for s in spans if s.name == 'llm_request')
                         attrs = {a.key: a.value.string_value for a in root.attributes}
                         self.assertEqual(attrs['session.id'], 'session.prod:42')
+                        self.assertEqual(attrs['request.id'], 'req_gateway_123456')
                     finally:
                         provider.shutdown()
                         otel._tracer = self.provider.get_tracer('test')

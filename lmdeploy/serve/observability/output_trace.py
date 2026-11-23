@@ -11,6 +11,8 @@ def _get(value, key, default=None):
 
 
 class OutputMetadata(NamedTuple):
+    """Immutable output indices and flags, without request or response
+    content."""
     # (choice index, reasoning present, content present, tool output present)
     outputs: tuple = ()
     terminal: bool = False
@@ -82,6 +84,7 @@ def summarize(payload=None, *, terminal=False):
 
 
 class ObservedBytes(bytes):
+    """Carry observation metadata alongside unchanged ASGI response bytes."""
     def __new__(cls, value, metadata):
         instance = super().__new__(cls, value)
         instance.trace_metadata = metadata
