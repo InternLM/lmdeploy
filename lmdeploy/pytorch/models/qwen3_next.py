@@ -11,7 +11,7 @@ import lmdeploy.pytorch.distributed as dist
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
-from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta, build_rmsnorm_gated
+from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta
 from lmdeploy.pytorch.nn.linear import (
     build_colwise_linear,
     build_merged_colwise_linear,
@@ -20,6 +20,7 @@ from lmdeploy.pytorch.nn.linear import (
     build_rowwise_linear,
 )
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
+from lmdeploy.pytorch.nn.norm import RMSNormGated
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -83,11 +84,11 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         self.make_params(self.num_v_heads, device=device)
         self.A_log_exp = None
 
-        self.norm = build_rmsnorm_gated(self.head_v_dim,
-                                        eps=self.layer_norm_epsilon,
-                                        activation=self.activation,
-                                        dtype=dtype,
-                                        device=device)
+        self.norm = RMSNormGated(self.head_v_dim,
+                                 eps=self.layer_norm_epsilon,
+                                 activation=self.activation,
+                                 dtype=dtype,
+                                 device=device)
         self.out_proj = build_o_proj(self.value_dim,
                                      self.hidden_size,
                                      bias=False,

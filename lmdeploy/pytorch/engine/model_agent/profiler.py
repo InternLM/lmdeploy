@@ -34,6 +34,10 @@ class AgentProfiler:
             self.profiler = None
 
     def _build_profiler(self):
+        from lmdeploy.pytorch.devices import is_ascend
+        if is_ascend():
+            from lmdeploy.pytorch.backends.ascend.profiler import _build_npu_profiler
+            return _build_npu_profiler(self)
         from lmdeploy.pytorch import envs
         activities = []
         if envs.torch_profile_cpu:

@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
 import math
 from collections.abc import Iterable
 from copy import deepcopy
@@ -11,6 +10,7 @@ import torch
 from torch import nn
 
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.pytorch.devices import is_ascend
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
 from lmdeploy.pytorch.nn import (
@@ -793,6 +793,13 @@ class DeepseekV2MoE(nn.Module):
             self._all_reduce = True
         else:
             self._all_reduce = False
+        self._shared_expert_tp_group = None
+        self._all_reduce_shared_experts = False
+        if is_ascend():
+            self._all_reduce = all_reduce and dp == 1 and world_size > 1 and dist_config.ep == 1
+            self._all_reduce_shared_experts = all_reduce and dp == 1 and dist_config.ep > 1 and dist_config.mlp_tp > 1
+            if self._all_reduce_shared_experts:
+                self._shared_expert_tp_group = dist_ctx.mlp_tp_group.gpu_group
 
     def forward(self, hidden_states: torch.Tensor, all_routed_experts: torch.Tensor = None):
         """forward."""
@@ -811,6 +818,8 @@ class DeepseekV2MoE(nn.Module):
 
         if self.shared_experts is not None:
             shared_states = self.shared_experts(hidden_states)
+            if self._all_reduce_shared_experts:
+                dist.all_reduce(shared_states, group=self._shared_expert_tp_group)
             out_states += shared_states
         out_states = out_states.reshape(batch_size, sequence_length, -1)
 
@@ -1253,6 +1262,13 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             inputs_embeds=inputs_embeds,
         )
 
+    def _map_modelslim_param_name(self, name, params_dict):
+        quant_config = getattr(self.config, 'quantization_config', None) or {}
+        if quant_config.get('quant_method') != 'modelslim':
+            return name
+        from lmdeploy.pytorch.backends.ascend.modelslim import map_modelslim_param_name
+        return map_modelslim_param_name(self.config, name, params_dict)
+
     def _load_weight_experts(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
                              expert_params_mapping: list):
         """Load weight experts."""
@@ -1260,16 +1276,29 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
             if weight_name not in name:
                 continue
             name = name.replace(weight_name, param_name)
+            name = self._map_modelslim_param_name(name, params_dict)
+            if name is None:
+                return
             param = params_dict[name]
             load_weight(param, loaded_weight, expert_id=expert_id, shard_id=shard_id)
             break
         else:
+            name = self._map_modelslim_param_name(name, params_dict)
+            if name is None:
+                return
             param = params_dict[name]
             load_weight(param, loaded_weight)
 
     def _load_weight_attention(self, name: str, loaded_weight: torch.Tensor, params_dict: dict[str, nn.Parameter],
                                update_pe_mapping: list):
         """Load weight attention."""
+        name = self._map_modelslim_param_name(name, params_dict)
+        if name is None:
+            return
+        quant_config = getattr(self.config, 'quantization_config', None) or {}
+        if quant_config.get('quant_method') == 'modelslim' and name.endswith(('.input_scale', '.input_offset')):
+            load_weight(params_dict[name], loaded_weight)
+            return
         device = next(iter(params_dict.values())).device
 
         def __update_pe(weight, head_dim: int, pe_dim_offset: int):
@@ -1357,6 +1386,9 @@ class DeepseekV2ForCausalLM(nn.Module, CudaGraphMixin):
         nextn_keys = [f'.layers.{num_hidden_layers+i}' for i in range(num_nextn_predict_layers)]
 
         params_dict = dict(self.named_parameters())
+        if (getattr(config, 'quantization_config', None) or {}).get('quant_method') == 'modelslim':
+            from lmdeploy.pytorch.backends.ascend.modelslim import convert_modelslim_weights
+            weights = convert_modelslim_weights(self, weights)
         for name, loaded_weight in weights:
             if 'rotary_emb.inv_freq' in name:
                 continue

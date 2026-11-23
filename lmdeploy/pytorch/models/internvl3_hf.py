@@ -10,6 +10,7 @@ from torch import nn
 from transformers.activations import ACT2FN
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.backends.default.compile import compile_for_cuda
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor, PreprocessInputResult
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
@@ -24,7 +25,7 @@ from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, vlm_model
 
 
-@torch.compile(dynamic=True)
+@compile_for_cuda(dynamic=True)
 def pre_rms_norm(q: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
     """Pre rms norm."""
     q = q.to(torch.float32)
@@ -35,7 +36,7 @@ def pre_rms_norm(q: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
     return variance
 
 
-@torch.compile(dynamic=True)
+@compile_for_cuda(dynamic=True)
 def post_rms_norm(q: torch.Tensor, k: torch.Tensor, weight_q: torch.Tensor, weight_k: torch.Tensor,
                   variance: torch.Tensor, eps: float, embed_dim: int, dtype: torch.dtype):
     """Post rms norm."""

@@ -20,6 +20,7 @@ __pycache__
 .mypy_cache
 .ruff_cache
 .venv
+.venv-*
 .cache
 *.egg-info
 .eggs
