@@ -11,7 +11,7 @@ from lmdeploy.pytorch.model_inputs import BuildModelContext, StepContextManager
 from lmdeploy.pytorch.models.intern_decision import InternDecisionForConditionalGeneration
 from lmdeploy.pytorch.models.patch import build_model_context, build_model_from_hf_config, build_patched_model
 from lmdeploy.pytorch.models.qwen3_5 import Qwen3_5ForConditionalGeneration
-from lmdeploy.pytorch.nn import RMSNorm
+from lmdeploy.pytorch.nn import RMSNorm, RMSNormGated
 
 
 def _tiny_config():
@@ -66,7 +66,9 @@ def test_zero_centered_norm_loading(model_path, dtype):
     # Gated norms use direct scales; they must not inherit the +1 convention.
     gated = {name: module for name, module in model.named_modules()
              if name.endswith('linear_attn.norm')}
+    assert bool(gated) == (module_name != 'qwen3_5_mtp')
     for name, norm in gated.items():
+        assert isinstance(norm, RMSNormGated)
         assert norm.weight.dtype == dtype
         weights.append((f'{name}.weight', torch.full_like(norm.weight, 0.25)))
     model.load_weights(weights)

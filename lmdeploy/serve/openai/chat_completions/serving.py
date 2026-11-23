@@ -72,8 +72,8 @@ def register(router: APIRouter, server_context) -> None:
           Deprecated: Use max_completion_tokens instead.
         - **repetition_penalty** (float): The parameter for repetition penalty.
           1.0 means no penalty
-        - **stop** (str | list[str] | None): To stop generating further
-          tokens. Only accept stop words that's encoded to one token idex.
+        - **stop** (str | list[str] | None): Single-token strings stop at the
+          engine. On the GLM token-ID parser path, multi-token strings stop in assistant content.
         - **response_format** (dict | None): To generate response according to given
           schema. Examples:
 
@@ -206,6 +206,7 @@ def register(router: APIRouter, server_context) -> None:
                 server_context,
                 request,
                 ChatRunnerOptions(
+                    match_glm_content_stop=True,
                     input_ids=resolved_input_ids,
                     do_preprocess=resolved_input_ids is None,
                     adapter_name=adapter_name,

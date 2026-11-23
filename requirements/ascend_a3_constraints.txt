@@ -1,0 +1,14 @@
+# Reproducible CANN 9.1.0 / Python 3.12 A3 image profile.
+# CPU PyTorch wheels avoid pulling an unused CUDA runtime into the NPU image.
+datasets==5.1.0
+numpy==1.26.4
+pandas==2.2.3
+# Arrow 26 requires NumPy 2 at import time; Triton-Ascend pins NumPy 1.26.
+pyarrow==25.0.0
+python-dateutil==2.9.0.post0
+ray==2.48.0
+torch==2.10.0+cpu
+torch-npu==2.10.0.post4
+torchvision==0.25.0+cpu
+transformers==5.17.0
+triton-ascend==3.2.2.post2

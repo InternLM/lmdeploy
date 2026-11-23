@@ -17,8 +17,9 @@ from transformers import PreTrainedTokenizerFast
 from lmdeploy._guided_decoding import compile_response_format
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.chat_runner import ChatRunner
+from lmdeploy.serve.core.content_stop import ChatContentStop
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
 from lmdeploy.serve.parsers.reasoning_parser import ReasoningParser, ReasoningParserManager
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser, _resolve_token_id_terminals
 from lmdeploy.serve.parsers.token_id_buffer import BoundaryIndex, BoundaryView, ControlSpan, LocatedText, ParseBuffer
@@ -131,6 +132,23 @@ def native_id_batches(v, batches, *, skip=True, spaces=True):
         rows.append((text, part, False))
     rows.append(('', [], True))
     return rows
+
+
+def test_stop_preview_respects_channels_bytes_and_carried_prefix(vocabulary):
+    v = vocabulary
+    parser = make_parser(v)
+    assert parser.supports_glm_content_stop
+    stop = ChatContentStop(['STOP_HERE'], False, parser.preview_stop_text)
+    assert stop.can_skip_token_steps(v.enc('STOP_HERE'))  # reasoning
+    close = v.ctl('</think>')
+    assert not stop.can_skip_token_steps(close)
+    parser.stream_chunk('</think>', close)
+    assert stop.can_skip_token_steps(v.enc('answer STOP'))
+    emitted = stop.filter_deltas([(DeltaMessage(content='answer STOP'), False)], final=False)
+    assert [msg.content for msg, _ in emitted] == ['answer ']
+    assert not stop.can_skip_token_steps(v.enc('_HERE tail'))
+    assert not stop.can_skip_token_steps(v.enc('emoji ') + v.enc('🙂')[:1])
+    assert not stop.can_skip_token_steps(v.ctl('<tool_call>'))
 
 
 def parsed(parser, rows, complete):

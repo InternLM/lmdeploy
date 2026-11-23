@@ -1,13 +1,16 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 import json
 import warnings
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import torch
 from pydantic import BaseModel, ConfigDict
 
 from lmdeploy.messages import GenerationConfig
+from lmdeploy.serve.core import generation_config as generation_config_module
 from lmdeploy.serve.core.generation_config import (
     build_generation_config,
     extract_request_gen_config,
@@ -202,6 +205,26 @@ def test_generate_request_sampling_defaults_match_chat_request():
         assert getattr(generate_request, name) == getattr(chat_request, name)
 
 
+def test_generate_request_repetition_penalty_changes_pytorch_sampling():
+    from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
+    from lmdeploy.pytorch.messages import SamplingParam
+    from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config
+
+    request = GenerateReqInput(prompt='Repeat.', repetition_penalty=1.5, top_k=1)
+    server_context = SimpleNamespace(default_gen_config={'repetition_penalty': 1.0})
+    config = build_serving_generation_config(request, server_context)
+    params = SamplingParam.from_gen_config(config)
+    processor = FusedLogitsProcessor(
+        SamplingInputs(repetition_penalty=torch.tensor([params.repetition_penalty]),
+                       generated_ids=torch.tensor([[0, 1]]),
+                       logits_processors=[[]],
+                       max_num_logprobs=-1,
+                       max_top_k=params.top_k))
+    logits, _ = asyncio.run(processor(torch.tensor([[6., -2., 5.]])))
+    torch.testing.assert_close(logits, torch.tensor([[4., -3., 5.]]))
+    assert processor.sampling(logits).item() == 2
+
+
 def test_generate_request_accepts_none_sampling_defaults():
     request = GenerateReqInput(prompt='hello')
     assert check_generate_request(request, _FakeServerContext()) == ''
@@ -225,7 +248,7 @@ def test_generate_request_sampling_merge_uses_server_defaults():
     assert gen_config.min_p == 0.1
 
 
-@patch('lmdeploy.serve.core.generation_config._load_hf_generation_config')
+@patch.object(generation_config_module, '_load_hf_generation_config')
 def test_resolve_default_gen_config_auto(mock_load):
     mock_load.return_value = {
         'temperature': 0.6,

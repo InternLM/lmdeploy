@@ -37,6 +37,7 @@ from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
 from lmdeploy.vl.media.base import MediaInputError
 
+from .content_stop import BufferedEngineStream, ChatContentStop
 from .exceptions import ErrorCode, RequestError, SafeRunException
 
 logger = get_logger('lmdeploy')
@@ -154,7 +155,8 @@ class AsyncEngine:
         logger.info(f'speculative_config={speculative_config}')
         backend_config = backend_config or (TurbomindEngineConfig()
                                             if backend == 'turbomind' else PytorchEngineConfig())
-        self.model_name = model_name if model_name else model_path
+        self.model_name = model_name or model_path
+        self._has_configured_model_name = bool(model_name)
         self.chat_template = get_chat_template(model_path, chat_template_config, trust_remote_code=trust_remote_code)
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         self.prompt_processor = MultimodalProcessor(self.tokenizer,
@@ -541,9 +543,10 @@ class AsyncEngine:
                 effort = (reasoning_effort if reasoning_effort is not None
                           else chat_template_kwargs.get('reasoning_effort'))
                 if effort is not None and effort not in ('low', 'high', 'max'):
+                    model_label = f' for {self.model_name}' if self._has_configured_model_name else ''
                     raise RequestError(
                         ErrorCode.INVALID_REQUEST,
-                        f'Unsupported reasoning_effort {effort!r} for GLM-5.3-Flash. '
+                        f'Unsupported reasoning_effort {effort!r}{model_label}. '
                         'Supported efforts are low, high and max.')
             if enable_thinking is not None:
                 logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
@@ -652,7 +655,10 @@ class AsyncEngine:
             return RequestError(ErrorCode.ENGINE_UNAVAILABLE)
         return RequestError(ErrorCode.INTERNAL_ERROR)
 
-    async def generate(self, request: PreprocessedRequest, stream_response: bool = True):
+    async def generate(self,
+                       request: PreprocessedRequest,
+                       stream_response: bool = True,
+                       content_stop: ChatContentStop | None = None):
         """Generate responses from a single-use preprocessed request.
 
         Raw prompts are intentionally rejected; call :meth:`preprocess` first.
@@ -709,12 +715,36 @@ class AsyncEngine:
                              token_ids=[])
                 return
             token_ids = input_ids.copy()
-            output_len, gen_len = 0, 0
-            state = DetokenizeState(input_len)
+            gen_len = 0
+            state = DetokenizeState(input_len, emitted_prefix_chars=0 if content_stop is not None else None)
             response = ''
             response_chunks = []
             finish_reason = None
             cached_tokens = 0
+
+            def decode_batch(batch: EngineOutput, rows: slice | None = None) -> GenOut:
+                nonlocal state, response, gen_len
+                ids_offset = state.ids_offset
+                token_ids.extend(batch.token_ids if rows is None else batch.token_ids[rows])
+                gen_len = len(token_ids) - input_len
+                response, state = self.tokenizer.detokenize_incrementally(
+                    token_ids, state, skip_special_tokens=gen_config.skip_special_tokens,
+                    spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
+                response_chunks.append(response)
+                out = GenOut(response, input_len, gen_len, token_ids=token_ids[ids_offset:],
+                             logprob_token_ids=logprob_token_ids, logprobs=batch.logprobs, logits=batch.logits,
+                             last_hidden_state=batch.last_hidden_state, routed_experts=batch.routed_experts,
+                             cache_block_ids=batch.cache_block_ids, cached_tokens=cached_tokens)
+                if rows is not None:
+                    if out.logprobs is not None:
+                        out.logprobs = out.logprobs[rows]
+                    if out.logits is not None:
+                        out.logits = out.logits[rows]
+                    if out.last_hidden_state is not None:
+                        out.last_hidden_state = out.last_hidden_state[rows]
+                return out
+
+            text_stop = None
             async with self.safe_run(handle,
                                      session=session,
                                      **prompt_input,
@@ -729,74 +759,90 @@ class AsyncEngine:
                 # We use this as default outputs in case the async_stream_infer of the Engine yields empty generator.
                 outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
 
+                read_ahead = None
+                resolve_separator = content_stop.resolve_separator if content_stop else None
+                if resolve_separator is not None:
+                    read_ahead = BufferedEngineStream(gen)
+                    gen = read_ahead
                 async for outputs in gen:
                     req_metrics = outputs.req_metrics
                     cached_tokens = req_metrics.cached_tokens if req_metrics is not None else 0
                     iteration_stats = IterationStats()  # per-iteration stats
                     specdecode_stats = SpeculativeDecodingStats(
                         self.num_spec_token) if self.num_spec_token > 0 else None
-                    metrics_processor.queue_update((outputs, req_stats, iteration_stats, specdecode_stats))
-                    # decode res
-                    if is_error(outputs.status):
+                    if content_stop is None:
+                        metrics_processor.queue_update((outputs, req_stats, iteration_stats, specdecode_stats))
+                    metric_output = outputs
+                    try:
+                        if is_error(outputs.status):
+                            break
+                        if hit_stop_token or not outputs.token_ids:
+                            continue
+                        hit_stop_token = outputs.token_ids[-1] in stop_ids
+                        visible_len = len(outputs.token_ids) - hit_stop_token
+                        before_batch = gen_len
+                        if (content_stop is not None and visible_len > 1
+                                and (state.prev_tokens is None or state.read_offset != len(state.prev_tokens)
+                                     or not content_stop.can_skip_token_steps(outputs.token_ids[:visible_len]))):
+                            steps = (slice(i, i + 1) for i in range(visible_len))
+                        else:
+                            steps = (slice(None, -1) if hit_stop_token else None,)
+                        for rows in steps:
+                            out = decode_batch(outputs, rows)
+                            if (resolve_separator is not None and read_ahead is not None and out.response
+                                    and not out.response.strip('\n') and content_stop.can_match_separator()):
+                                offset = gen_len - before_batch
+                                if state.emitted_prefix_chars:
+                                    # This ID already starts a non-newline UTF-8 character after the separator.
+                                    offset -= 1
+                                following = read_ahead.following_ids(outputs, offset, stop_ids)
+                                await resolve_separator(following)
+                            yield out
+                            if content_stop is not None and content_stop.matched:
+                                break
+
+                        if content_stop is None or not content_stop.matched or outputs.status == ResponseType.CANCEL:
+                            continue
+                        text_stop = content_stop.matched
+                        accepted = outputs.token_ids[:gen_len - before_batch]
+                        if outputs.status == ResponseType.SUCCESS:
+                            await handle.async_cancel(session_id)
+                            if gen_config.return_routed_experts:
+                                # Expert data is published only on FINISH or CANCEL.
+                                async for terminal in gen:
+                                    if terminal.status != ResponseType.SUCCESS:
+                                        outputs = terminal
+                                        break
+                                else:
+                                    outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
+                        status = outputs.status if is_error(outputs.status) else ResponseType.FINISH
+                        metric_output = dataclasses.replace(metric_output, status=status, token_ids=accepted)
                         break
-
-                    output_len = len(outputs.token_ids)
-                    if hit_stop_token or output_len == 0:
-                        continue
-
-                    # This assumes the engine will stop when stop token is hit
-                    if output_len and outputs.token_ids[-1] in stop_ids:
-                        hit_stop_token = 1
-
-                    token_ids += outputs.token_ids[:output_len - hit_stop_token]
-                    gen_len = len(token_ids) - input_len
-
-                    ids_offset = state.ids_offset
-                    response, state = self.tokenizer.detokenize_incrementally(
-                        token_ids,
-                        state,
-                        skip_special_tokens=gen_config.skip_special_tokens,
-                        spaces_between_special_tokens=gen_config.spaces_between_special_tokens)
-                    response_chunks.append(response)
-                    res = token_ids[ids_offset:]
-
-                    out = GenOut(response,
-                                 input_len,
-                                 gen_len,
-                                 finish_reason,
-                                 token_ids=res,
-                                 logprob_token_ids=logprob_token_ids,
-                                 routed_experts=outputs.routed_experts,
-                                 cache_block_ids=outputs.cache_block_ids,
-                                 cached_tokens=cached_tokens)
-                    if outputs.logprobs is not None:
-                        out.logprobs = (outputs.logprobs[:-hit_stop_token] if hit_stop_token else outputs.logprobs)
-                    if outputs.last_hidden_state is not None:
-                        out.last_hidden_state = (outputs.last_hidden_state[:-hit_stop_token]
-                                                 if hit_stop_token else outputs.last_hidden_state)
-                    if outputs.logits is not None:
-                        out.logits = (outputs.logits[:-hit_stop_token] if hit_stop_token else outputs.logits)
-                    yield out
+                    finally:
+                        if content_stop is not None:
+                            # One event per engine batch. A content stop completes the request at its accepted prefix.
+                            metrics_processor.queue_update(
+                                (metric_output, req_stats, iteration_stats, specdecode_stats))
                 # end of generator loop
                 self.request_logger.log_response(session_id, response_chunks)
 
                 if not is_error(outputs.status):
-                    if outputs.status == ResponseType.CANCEL:
+                    if outputs.status == ResponseType.CANCEL and text_stop is None:
                         finish_reason = 'abort'
                         metrics_processor.increase_failed_requests('abort')
                     else:
-                        finish_reason = ('stop' if outputs.token_ids
-                                         and outputs.token_ids[-1] in stop_ids else 'length')
+                        native_stop = outputs.token_ids and outputs.token_ids[-1] in stop_ids
+                        finish_reason = 'stop' if text_stop or native_stop else 'length'
                         metrics_processor.increase_succeeded_requests()
 
                     # utf-8 char at the end means it's a potential unfinished byte sequence
-                    if not response.endswith('�'):
+                    if content_stop is not None or not response.endswith('�'):
                         # avoid returning the last response twice
                         response = ''
                     token_ids, logits, last_hidden_state, logprobs = [], None, None, None
                     if input_logprobs_requested:
                         logprobs = outputs.logprobs
-                    elif gen_config.include_stop_str_in_output and finish_reason == 'stop':
+                    elif gen_config.include_stop_str_in_output and finish_reason == 'stop' and not text_stop:
                         # return the eos token id (MUST be in a list), eos string, eos token's logits and so on
                         token_ids = outputs.token_ids[-1:]
                         response = self.tokenizer.decode(token_ids, skip_special_tokens=False)
@@ -807,15 +853,23 @@ class AsyncEngine:
 
                     # router replay
                     routed_experts = outputs.routed_experts
-                    if routed_experts is not None and not isinstance(routed_experts, str) and (
-                            not gen_config.include_stop_str_in_output) and finish_reason == 'stop':
-                        routed_experts = routed_experts[:-1]
+                    if routed_experts is not None:
+                        if text_stop:
+                            # The backend already removed the rows before routed_experts_start_len.
+                            num_rows = input_len + gen_len - 1 - gen_config.routed_experts_start_len
+                            if isinstance(routed_experts, str):
+                                routed_experts = await handle.trim_routed_experts(routed_experts, num_rows)
+                            else:
+                                routed_experts = routed_experts[:num_rows]
+                        elif (not isinstance(routed_experts, str) and not gen_config.include_stop_str_in_output
+                              and finish_reason == 'stop'):
+                            routed_experts = routed_experts[:-1]
 
                     logger.info(f'session {session_id} finished, reason '
                                 f'"{finish_reason}", input_tokens '
                                 f'{input_len}, output_tokens {gen_len}')
-                    stop_sequence = None
-                    if finish_reason == 'stop':
+                    stop_sequence = text_stop
+                    if finish_reason == 'stop' and stop_sequence is None:
                         # Match against the same token IDs used by GenerationConfig,
                         # before the terminal token is discarded from visible output.
                         stop_sequence = next((word for word in gen_config.stop_words or []

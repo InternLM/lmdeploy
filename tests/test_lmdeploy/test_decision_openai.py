@@ -217,7 +217,6 @@ def test_non_json_content_type_uses_shared_error_response(http_service, content_
     {'input': []},
     {'input': 1}, {'model': None}, {'state': 'mixed protocols'}, {'images': []},
     {'prompt_cache_key': 'unsupported'}, {'questions': []},
-    {'questions': [dict(type='predicate', instructions='x')] * 17},
     {'questions': [dict(type='predicate', instructions=[])]},
     {'questions': [dict(type='predicate', instructions='x', unexpected=True)]},
     {'questions': [dict(type='choice', instructions='x', choices=[{'value': 'a'}])]},
@@ -367,6 +366,30 @@ def http_service():
     app.include_router(create_openai_router(context))
     with TestClient(app) as client:
         yield client, context
+
+
+@pytest.mark.parametrize('question_count', [16, 17, 29, 32, 33])
+@pytest.mark.parametrize('protocol', ['systemone', 'decisions'])
+def test_http_question_count_bounds(http_service, question_count, protocol):
+    client, context = http_service
+    names = [f'q{i}' for i in range(question_count)]
+    if protocol == 'systemone':
+        body = dict(model='intern-decision', state='text', questions={
+            name: dict(type='noul', instructions='Check the state.') for name in names})
+    else:
+        body = request([dict(type='predicate', name=name, instructions='Check the state.') for name in names])
+
+    response = client.post(f'/v1/{protocol}', json=body)
+    if question_count == 33:
+        assert response.status_code == 422
+        assert not context.async_engine.requests
+    else:
+        assert response.status_code == 200, response.text
+        answers = response.json()['answers']
+        answer_names = list(answers) if protocol == 'systemone' else [answer['name'] for answer in answers]
+        assert answer_names == names
+        assert len(context.async_engine.requests) == 1
+    assert not context.session_manager.sessions
 
 
 def test_http_protocol_dispatch_and_validation(http_service):

@@ -8,12 +8,14 @@ from typing import Any
 import torch
 from transformers import AutoProcessor
 
+from lmdeploy.pytorch.multimodal.data_type import get_image_mrope_pos_ids, make_multimodal_content_hash
 from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.model.base import (
     VISION_MODELS,
     MultimodalSpecialTokens,
     VisionModel,
 )
+from lmdeploy.vl.model.image_cache import ImageProcessorCache, ProcessedImage
 from lmdeploy.vl.model.preprocess_utils import (
     get_expanded_mm_items,
     get_processor_kwargs,
@@ -25,6 +27,7 @@ class GLM5NextVisionModel(VisionModel):
     """Prepare GLM-5.3 images/videos for the native PyTorch vision tower."""
 
     _arch = ['Glm5NextForConditionalGeneration']
+    supports_image_cache = True
 
     @classmethod
     def match(cls, config):
@@ -38,6 +41,7 @@ class GLM5NextVisionModel(VisionModel):
                 and hasattr(processor, 'video_processor')):
             raise ValueError('GLM-5.3 requires a native image/video processor from transformers>=5.17.0.')
         self.processor = processor
+        self.image_cache = ImageProcessorCache()
 
         self.image_token = processor.image_token
         self.video_token = processor.video_token
@@ -148,13 +152,13 @@ class GLM5NextVisionModel(VisionModel):
         video_count = input_prompt.count(self.input_video_token_id)
         if image_count != len(image_replacements):
             raise ValueError(
-                'raw GLM-5 input image placeholders do not match images: '
-                f'{image_count} placeholders for {len(image_replacements)} images.'
+                f'Image placeholder count in input_ids ({image_count}) does not match '
+                f'the number of images ({len(image_replacements)}).'
             )
         if video_count != len(video_replacements):
             raise ValueError(
-                'raw GLM-5 input video placeholders do not match videos: '
-                f'{video_count} placeholders for {len(video_replacements)} videos.'
+                f'Video placeholder count in input_ids ({video_count}) does not match '
+                f'the number of videos ({len(video_replacements)}).'
             )
 
         image_index = 0
@@ -171,12 +175,57 @@ class GLM5NextVisionModel(VisionModel):
                 expanded.append(token)
         return torch.tensor(expanded, dtype=torch.long)
 
+    def _preprocess_image(self, image, image_kwargs: dict) -> ProcessedImage:
+        output = self.processor.image_processor(images=[image], return_tensors='pt', **image_kwargs)
+        pixels = self._postprocess_mm_output(output['pixel_values'], self.mm_feature_dtype)
+        grid = output['image_grid_thw'][0].clone()
+        meta = dict(grid_thw=grid, image_token_id=self.image_token_id)
+        content_hash = make_multimodal_content_hash(pixels, meta, get_image_mrope_pos_ids(grid))
+        return ProcessedImage(pixels, grid, content_hash)
+
+    def _preprocess_images(self, images, input_prompt, mm_processor_kwargs):
+        image_kwargs = get_processor_kwargs(self.processor.image_processor,
+                                            (mm_processor_kwargs or {}).get('image'), modality='image')
+        processed = self.image_cache.process(images, self._preprocess_image, self.mm_feature_dtype, image_kwargs)
+
+        if isinstance(input_prompt, str):
+            # Images are already processed, so tokenize without the full
+            # processor's image/placeholder validation. Expand the special-token
+            # IDs below instead of constructing a huge repeated text.
+            input_prompt = self.processor.tokenizer(text=[input_prompt], padding=True,
+                                                    return_tensors='pt')['input_ids'][0].tolist()
+        image_count = input_prompt.count(self.image_token_id)
+        if image_count != len(processed):
+            raise ValueError(f'Image placeholder count ({image_count}) does not match '
+                             f'the number of images ({len(processed)}).')
+        merge_length = self.processor.image_processor.merge_size**2
+        input_ids, multimodal = [], []
+        image_index = 0
+        for token in input_prompt:
+            if token != self.image_token_id:
+                input_ids.append(token)
+                continue
+            item = processed[image_index]
+            num_tokens = int(item.image_grid_thw.prod().item()) // merge_length
+            start = len(input_ids)
+            input_ids.extend([self.image_token_id] * num_tokens)
+            multimodal.append(dict(modality=Modality.IMAGE,
+                                   pixel_values=item.pixel_values,
+                                   image_grid_thw=item.image_grid_thw,
+                                   content_hash=item.content_hash,
+                                   offset=(start, len(input_ids)),
+                                   image_token_id=self.image_token_id))
+            image_index += 1
+        return dict(input_ids=input_ids, multimodal=multimodal)
+
     def preprocess(self,
                    messages: list[dict],
                    input_prompt: str | list[int],
                    mm_processor_kwargs: dict[str, Any] | None = None):
         mm_items = self.collect_multimodal_items(messages)
         modalities = {item[0] for item in mm_items}
+        if self.backend == 'pytorch' and modalities == {Modality.IMAGE}:
+            return self._preprocess_images([item[1] for item in mm_items], input_prompt, mm_processor_kwargs)
         is_raw_video = (not isinstance(input_prompt, str)
                         and Modality.VIDEO in modalities)
         is_mixed = {Modality.IMAGE, Modality.VIDEO} <= modalities

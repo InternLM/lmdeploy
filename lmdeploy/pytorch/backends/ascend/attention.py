@@ -1,0 +1,179 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+from torch import Tensor
+
+from ..attention import AttentionImpl, AttentionMetadata
+
+
+@dataclass
+class AscendAttentionMetadata(AttentionMetadata):
+    kv_start_indices: Tensor | None = None
+    block_size: int = 64
+    attention_mask: Sequence[Tensor] = tuple()
+    is_prefill_no_cache: bool | None = None
+    max_q_seqlen: int = 1
+    max_kv_seq_len: int = 1
+    kv_flatten_size: int = 1
+    cu_seqlens_q_cpu: Tensor | None = None
+    kv_seqlens_cpu: Tensor | None = None
+    quant_meta: dict = None
+    has_initial_state: Tensor | None = None
+    is_multi_token_decoding: bool = False
+    spec_conv_offsets: Sequence[Tensor] | None = None
+    spec_state_offsets: Sequence[Tensor] | None = None
+    cache_seqlens: Tensor | None = None
+
+
+class AscendAttentionImpl(AttentionImpl[AscendAttentionMetadata]):
+    """Ascend attention implementation."""
+
+    def __init__(
+        self,
+        num_heads: int,
+        head_size: int,
+        scale: float = None,
+        num_kv_heads: int = None,
+        v_head_size: int = None,
+        alibi: bool = None,
+        sliding_window: int | tuple[int, int] | None = None,
+        logit_softcapping: float = None,
+        causal: bool = True,
+        **kwargs,
+    ):
+        assert causal
+        super().__init__(
+            num_heads,
+            head_size,
+            scale,
+            num_kv_heads,
+            v_head_size,
+            alibi,
+            sliding_window,
+            logit_softcapping,
+            causal=causal,
+            **kwargs,
+        )
+
+        from lmdeploy.pytorch.kernels.ascend.fill_kv_cache import fill_kv_cache
+        from lmdeploy.pytorch.kernels.ascend.pagedattention import paged_attention_fwd
+        from lmdeploy.pytorch.kernels.ascend.sparse_attention import sparse_attention_fwd
+
+        self.fill_kv_cache = fill_kv_cache
+        self.paged_attention_fwd = paged_attention_fwd
+        self.sparse_attention_fwd = sparse_attention_fwd
+
+    def forward(
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        k_cache: Tensor,
+        v_cache: Tensor,
+        attn_metadata: AscendAttentionMetadata,
+        k_scales_zeros: Tensor = None,
+        v_scales_zeros: Tensor = None,
+        learnable_sink: Tensor = None,
+        nsa_indices: Tensor = None,
+        inplace: bool = True,
+    ) -> Tensor:
+        """forward."""
+
+        block_offsets = attn_metadata.block_offsets
+        q_seqlens = attn_metadata.q_seqlens
+        cu_seqlens_q = attn_metadata.cu_seqlens_q
+        kv_seqlens = attn_metadata.kv_seqlens
+        cu_seqlens_q_cpu = attn_metadata.cu_seqlens_q_cpu
+        kv_seqlens_cpu = attn_metadata.kv_seqlens_cpu
+        is_decoding = attn_metadata.is_decoding
+        kv_start_indices = attn_metadata.kv_start_indices
+        block_size = attn_metadata.block_size
+        attn_mask = attn_metadata.attention_mask
+        is_prefill_no_cache = attn_metadata.is_prefill_no_cache
+        max_q_seqlen = attn_metadata.max_q_seqlen
+        max_kv_seq_len = attn_metadata.max_kv_seq_len
+        quant_bits = attn_metadata.quant_policy
+
+        if attn_metadata.quant_meta is not None:
+            k_scales_zeros = (
+                [next(attn_metadata.quant_meta['k_scales']), next(attn_metadata.quant_meta['k_zeros'])]
+                if 'k_scales' in attn_metadata.quant_meta
+                else []
+            )
+            v_scales_zeros = (
+                [next(attn_metadata.quant_meta['v_scales']), next(attn_metadata.quant_meta['v_zeros'])]
+                if 'v_scales' in attn_metadata.quant_meta
+                else []
+            )
+            kv_scales = next(attn_metadata.quant_meta['kv_scales']) if 'kv_scales' in attn_metadata.quant_meta else None
+            kv_zeros = next(attn_metadata.quant_meta['kv_zeros']) if 'kv_zeros' in attn_metadata.quant_meta else None
+        else:
+            k_scales_zeros = []
+            v_scales_zeros = []
+            kv_scales = None
+            kv_zeros = None
+
+        # fill kv cache
+        k_cache, v_cache = self.fill_kv_cache(
+            key,
+            value,
+            k_cache,
+            v_cache,
+            kv_start_indices,
+            k_scales_zeros=k_scales_zeros,
+            v_scales_zeros=v_scales_zeros,
+            quant_bits=quant_bits,
+        )
+
+        if inplace:
+            attn_output = query[..., : self.v_head_size]
+        else:
+            q_shape = query.shape
+            o_shape = q_shape[:-1] + (self.v_head_size,)
+            attn_output = query.new_empty(o_shape)
+
+        if nsa_indices is not None:
+            return self.sparse_attention_fwd(
+                query,
+                k_cache,
+                v_cache,
+                nsa_indices,
+                block_offsets,
+                cu_seqlens_q[1:],
+                kv_seqlens,
+                value_head_size=self.v_head_size,
+                softmax_scale=self.scale,
+                attn_output=attn_output,
+            )
+
+        attn_output = self.paged_attention_fwd(
+            query,
+            key,
+            value,
+            attn_output,
+            k_cache,
+            v_cache,
+            block_offsets,
+            q_seqlens=q_seqlens,
+            kv_seqlens=kv_seqlens,
+            max_q_seq_len=max_q_seqlen,
+            max_kv_seq_len=max_kv_seq_len,
+            is_decoding=is_decoding,
+            block_size=block_size,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            v_head_size=self.v_head_size,
+            attn_mask=attn_mask,
+            softmax_scale=self.scale,
+            is_prefill_no_cache=is_prefill_no_cache,
+            kv_scales=kv_scales,
+            kv_zeros=kv_zeros,
+            quant_bits=quant_bits,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_q_cpu=cu_seqlens_q_cpu,
+            kv_seqlens_cpu=kv_seqlens_cpu,
+        )
+
+        return attn_output

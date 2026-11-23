@@ -215,6 +215,7 @@ class TestGLM5NextProcessorCompatibility:
 
         model = GLM5NextVisionModel.__new__(GLM5NextVisionModel)
         model.model_path = 'glm5-next'
+        model.backend = ''
         model.hf_config = SimpleNamespace(image_token_id=42, video_token_id=43)
         return model
 
@@ -241,6 +242,35 @@ class TestGLM5NextProcessorCompatibility:
         model.build_preprocessor()
         assert model._shared_video_token
         return model
+
+    @pytest.mark.parametrize('raw', [False, True])
+    @pytest.mark.parametrize('cache_enabled', [False, True])
+    def test_cached_images_match_native_processor(self, real_model, raw, cache_enabled):
+        import torch
+        from PIL import Image
+
+        model = real_model
+        model.backend = 'pytorch'
+        model.mm_feature_dtype = torch.bfloat16
+        model.image_cache.max_bytes = 16 * 1024**2 if cache_enabled else 0
+        images = [Image.new('RGB', (56, 112), 'red'), Image.new('RGB', (112, 56), 'blue')]
+        messages = [dict(role='user', content=[dict(type='image', data=image) for image in images])]
+        prompt = '<|begin_of_image|><|image|><|end_of_image|>word_3<|begin_of_image|><|image|><|end_of_image|>'
+        input_prompt = model.processor.tokenizer.encode(prompt, add_special_tokens=False) if raw else prompt
+        options = {'min_image_tokens': 32, 'max_image_tokens': 64}
+        expected = model.processor(text=[prompt], images=images, images_kwargs=options, return_tensors='pt')
+        cold = model.preprocess(messages, input_prompt, {'image': options})
+        warm = model.preprocess(messages, input_prompt, {'image': options})
+        for result in (cold, warm):
+            assert result['input_ids'] == expected['input_ids'].flatten().tolist()
+            assert torch.equal(torch.cat([item['pixel_values'] for item in result['multimodal']]),
+                               expected['pixel_values'].to(model.mm_feature_dtype))
+            assert torch.equal(torch.stack([item['image_grid_thw'] for item in result['multimodal']]),
+                               expected['image_grid_thw'])
+        for cached, original in zip(warm['multimodal'], cold['multimodal']):
+            assert (cached['pixel_values'] is original['pixel_values']) == cache_enabled
+            start, end = cached['offset']
+            assert warm['input_ids'][start:end] == [model.image_token_id] * (end - start)
 
     @pytest.mark.parametrize('raw', [False, True])
     @pytest.mark.parametrize('mixed', [False, True])

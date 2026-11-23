@@ -5,6 +5,7 @@ engine."""
 import base64
 import copy
 import json
+import math
 import threading
 from io import BytesIO
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 from test_decision_service import FakeEngine, config
 
+from lmdeploy.intern_decision_encoding import ANSWER_SYMBOLS
 from lmdeploy.serve.openai.api_server import ServerContext, validation_exception_handler
 from lmdeploy.serve.openai.decision_protocol import SystemoneRequest
 from lmdeploy.serve.openai.endpoints import create_openai_router
@@ -68,7 +70,7 @@ class SystemoneEngine(FakeEngine):
 def service():
     context = ServerContext()
     context.async_engine = SystemoneEngine()
-    context.decision_context = config()
+    context.decision_context = config(symbol_ids={symbol: index + 32 for index, symbol in enumerate(ANSWER_SYMBOLS)})
     app = FastAPI()
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.include_router(create_openai_router(context))
@@ -81,6 +83,115 @@ def validate(row):
     for image in assets.prepare_assets(parsed).values():
         image.close()
     return parsed
+
+
+@pytest.mark.parametrize('criteria', [{'0': 'Calm', '1': 'Angry'}, {'low': 'Calm', 'high': 'Angry'}])
+def test_score_maps_are_rejected_before_engine_work(service, criteria):
+    client, engine = service
+    response = client.post('/v1/systemone', json=dict(state='text', questions={
+        'anger': dict(type='score', instructions='How frustrated?', criteria=criteria),
+    }))
+    assert response.status_code == 422
+    assert response.json()['error']['details'][0]['field'] == 'questions.anger.criteria'
+    assert not engine.requests and engine.session_mgr.count == 0
+
+
+def test_score_array_uses_zero_based_positions(service):
+    client, _ = service
+    response = client.post('/v1/systemone', json=dict(state='text', questions={
+        'anger': dict(type='score', instructions='How frustrated?', criteria=['1', '2', '3']),
+    }))
+    assert response.status_code == 200
+    answer = response.json()['answers']['anger']
+    assert answer['legend'] == {'0': '1', '1': '2', '2': '3'}
+    assert answer['score'] == pytest.approx(sum(int(i) * p for i, p in answer['probabilities'].items()))
+
+
+def test_unknown_fields_are_accepted_without_changing_engine_input(service, monkeypatch):
+    client, engine = service
+    observed = []
+    original = engine.preprocess
+
+    async def capture(messages, session, **kwargs):
+        observed.append(copy.deepcopy(messages))
+        assert 'seed' not in kwargs and 'x_trace_id' not in kwargs
+        return await original(messages, session, **kwargs)
+
+    monkeypatch.setattr(engine, 'preprocess', capture)
+    row = dict(state='text', questions={'q': dict(type='noul', instructions='Refund?')})
+    baseline = client.post('/v1/systemone', json=row)
+    response = client.post('/v1/systemone', json={**row, 'seed': 7, 'x_trace_id': 'trace', 'future_option': {'x': 1}})
+    assert baseline.status_code == response.status_code == 200
+    assert response.json()['answers'] == baseline.json()['answers']
+    assert observed[0] == observed[1]
+
+
+@pytest.mark.parametrize(('kind', 'logits', 'expected'), [
+    ('choice', [0.0], 1.0),
+    ('score', [0.0], 1.0),
+    ('choice', [0.0, 0.0, 0.0], 0.0),
+    ('score', [0.0, 0.0, 0.0], 0.0),
+    ('choice', [1000.0, 0.0, 0.0], 1.0),
+    ('score', [1000.0, 0.0, 0.0], 1.0),
+    ('choice', [math.log(3), 0.0], 0.5),
+    ('choice', [math.log(6), math.log(3), 0.0], 0.4),
+    ('choice', [0.0] * 62, 0.0),
+    ('score', [-1000.0, math.log(.57), math.log(.43)], 0.355),
+    ('score', [math.log(.5), -1000.0, math.log(.5)], 0.0),
+    ('score', [-1000.0] * 2 + [math.log(.2)] + [-1000.0] * 8 + [math.log(.8)], 0.4),
+])
+def test_confidence_uses_the_calibrated_distribution(service, monkeypatch, kind, logits, expected):
+    client, engine = service
+    original = engine.generate
+
+    async def scores(request, stream_response=True):
+        async for output in original(request, stream_response=stream_response):
+            row = {index + 32: value * config().temperature for index, value in enumerate(logits)}
+            output.logprobs = [row.copy() for _ in output.logprobs]
+            yield output
+
+    monkeypatch.setattr(engine, 'generate', scores)
+    criteria = [str(index) for index in range(len(logits))]
+    if kind == 'choice':
+        criteria = {label: label for label in criteria}
+    response = client.post('/v1/systemone', json=dict(state='text', questions={
+        'q': dict(type=kind, instructions='Decide.', criteria=criteria),
+    }))
+    assert response.status_code == 200, response.text
+    answer = response.json()['answers']['q']
+    assert answer['confidence'] == pytest.approx(expected, abs=2e-7)
+    assert sum(answer['probabilities'].values()) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize('literal', ['NaN', 'Infinity', '-Infinity', '1e400'])
+@pytest.mark.parametrize('location', ['state', 'instructions', 'criteria', 'multipart'])
+def test_non_finite_json_numbers_return_400_before_engine_work(service, literal, location):
+    client, engine = service
+    question = dict(type='score', instructions='Score.', criteria=['Low', 'High'])
+    row = dict(state='text', questions={'q': question})
+    nested = {'nested': ['NONFINITE']}
+    if location in ('state', 'multipart'):
+        row['state'] = nested
+    elif location == 'instructions':
+        question['instructions'] = nested
+    else:
+        question['criteria'][0] = nested
+    raw = json.dumps(row).replace('"NONFINITE"', literal)
+    if location == 'multipart':
+        response = client.post('/v1/systemone', files={'request': ('request.json', raw, 'application/json')})
+    else:
+        response = client.post('/v1/systemone', content=raw, headers={'Content-Type': 'application/json'})
+    assert response.status_code == 400
+    assert 'Non-finite' in response.json()['error']
+    assert not engine.requests and engine.session_mgr.count == 0
+
+
+def test_finite_numbers_and_non_finite_strings_remain_valid(service):
+    client, _ = service
+    row = dict(state={'large': 1e308, 'labels': ['NaN', 'Infinity']}, questions={
+        'q': dict(type='noul', instructions='Is large finite?'),
+    })
+    assert client.post('/v1/systemone', json=row).status_code == 200
 
 
 def test_nested_references_keep_order_keys_and_original_response_values(service):

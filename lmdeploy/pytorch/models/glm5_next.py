@@ -57,7 +57,7 @@ from lmdeploy.pytorch.nn import (
     ParallelLMHead,
     RMSNorm,
 )
-from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMeta, GatedDeltaMetaBuilder, build_rmsnorm_gated
+from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMeta, GatedDeltaMetaBuilder
 from lmdeploy.pytorch.nn.kpool import (
     kpool_expand_selected_groups,
     kpool_pooled_block_offsets,
@@ -72,6 +72,7 @@ from lmdeploy.pytorch.nn.linear import (
     build_qkv_proj,
     build_rowwise_linear,
 )
+from lmdeploy.pytorch.nn.norm import RMSNormGated
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 from lmdeploy.vl.constants import Modality
 
@@ -704,7 +705,7 @@ class Glm5NextLinearAttention(nn.Module):
         self.A_log.weight_loader = _load_vector_shard
         self.dt_bias.weight_loader = _load_vector_shard
 
-        self.o_norm = build_rmsnorm_gated(
+        self.o_norm = RMSNormGated(
             self.head_dim,
             eps=config.rms_norm_eps,
             activation='sigmoid',

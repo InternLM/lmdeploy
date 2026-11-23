@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import weakref
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -54,6 +55,26 @@ class TestScheduler:
     @pytest.fixture
     def scheduler(self, cache_config, scheduler_config, seq_meta):
         yield Scheduler(scheduler_config=scheduler_config, cache_config=cache_config, seq_meta=seq_meta)
+
+    @pytest.mark.parametrize('stop_first', [False, True])
+    def test_end_session_releases_multimodal_storage(self, scheduler, stop_first):
+        from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+
+        pixels = torch.ones(2, 2)
+        pixels_ref = weakref.ref(pixels)
+        seq = scheduler.add_session(0).add_sequence(
+            [1, 2, 3], multimodals={'image': [MultiModalData(pixels, 0, 2)]})
+        del pixels
+
+        if stop_first:
+            scheduler.stop_session(0)
+        assert pixels_ref() is not None
+
+        scheduler.end_session(0)
+        # Keep seq alive: terminal cleanup must release its large inputs
+        # even while state/sequence cycles or transfer bookkeeping survive.
+        assert seq.history_multimodals.empty()
+        assert pixels_ref() is None
 
     def test_schedule_base(self, scheduler, block_size, num_gpu_blocks):
         block_manager = scheduler.block_manager

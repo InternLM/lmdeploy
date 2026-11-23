@@ -9,6 +9,7 @@ from torch.profiler import record_function
 
 from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayState
 from lmdeploy.pytorch.compact_state import SSMStateMetadata
+from lmdeploy.pytorch.devices import is_ascend
 from lmdeploy.pytorch.distributed import get_dcp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 
@@ -84,6 +85,10 @@ class CudaGraphMixin:
         **kwargs,
     ):
         """Return True is model support cudagraph."""
+        if is_ascend():
+            from lmdeploy.pytorch.backends.ascend.graph_runner import support_cuda_graph
+            return support_cuda_graph(
+                self, input_ids, position_ids, past_key_values, attn_metadata, inputs_embeds, **kwargs)
         context = get_step_ctx_manager().current_context()
         return context.global_is_decoding()
 
@@ -116,6 +121,10 @@ class CudaGraphMixin:
                                past_key_values: list[list[torch.Tensor]], attn_metadata: Any,
                                inputs_embeds: Tensor = None, **kwargs) -> BuffType:
         """Make cudagraph buffers from forward inputs."""
+        if is_ascend():
+            from lmdeploy.pytorch.backends.ascend.graph_runner import make_buffers_cudagraph
+            return make_buffers_cudagraph(
+                self, graph_meta, input_ids, position_ids, past_key_values, attn_metadata, inputs_embeds, **kwargs)
         max_batches = graph_meta.max_batchs
         max_tokens = graph_meta.max_tokens
         num_blocks = graph_meta.num_blocks
@@ -209,6 +218,10 @@ class CudaGraphMixin:
                                past_key_values: list[list[torch.Tensor]], attn_metadata: Any, inputs_embeds: Tensor,
                                **kwargs) -> dict[str, Tensor]:
         """Fill cudagraph buffers from forward inputs."""
+        if is_ascend():
+            from lmdeploy.pytorch.backends.ascend.graph_runner import fill_buffers_cudagraph
+            return fill_buffers_cudagraph(
+                self, graph_meta, input_ids, position_ids, past_key_values, attn_metadata, inputs_embeds, **kwargs)
 
         context = get_step_ctx_manager().current_context()
         compact = None if context is None else context.ssm_state_meta
@@ -364,6 +377,9 @@ class CudaGraphMixin:
 
     def update_context_cudagraph(self, graph_meta: CudaGraphMeta, context: StepContext):
         """Update step context with input buffers."""
+        if is_ascend():
+            from lmdeploy.pytorch.backends.ascend.graph_runner import update_context_cudagraph
+            return update_context_cudagraph(self, graph_meta, context)
         input_buffers = graph_meta.input_buffers
         local_adapter_ids = context.local_adapter_ids
         if local_adapter_ids is not None:

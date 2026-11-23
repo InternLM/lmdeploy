@@ -31,16 +31,19 @@ def test_image_encode_decode():
     assert img1.tobytes() == img2.tobytes()
 
 
-def test_owned_image_bytes_do_not_wait_for_shared_pil():
+@pytest.mark.parametrize('defer_decode', [False, True])
+def test_owned_image_bytes_do_not_wait_for_shared_pil(defer_decode):
     from concurrent.futures import ThreadPoolExecutor
 
-    from lmdeploy.vl.media.image import ImageMediaIO, _shared_pil_lock
+    from lmdeploy.vl.media.image import EncodedImage, ImageMediaIO, _shared_pil_lock
 
     buffer = BytesIO()
     Image.new('RGB', (56, 112), 'red').save(buffer, format='PNG')
     with ThreadPoolExecutor(max_workers=1) as pool:
         with _shared_pil_lock:
-            image = pool.submit(ImageMediaIO().load_bytes, buffer.getvalue()).result(timeout=5)
+            image = pool.submit(ImageMediaIO(defer_decode=defer_decode).load_bytes, buffer.getvalue()).result(timeout=5)
+            if isinstance(image, EncodedImage):
+                image = pool.submit(image.decode).result(timeout=5)
     assert image.size == (56, 112) and image.getpixel((0, 0)) == (255, 0, 0)
 
 
@@ -108,8 +111,9 @@ def test_image_modes(source_mode, image_mode):
 
 
 @pytest.mark.parametrize('orientation', range(1, 10))
-def test_image_exif_orientation(tmp_path, orientation):
-    from lmdeploy.vl.media.image import ImageMediaIO
+@pytest.mark.parametrize('defer_decode', [False, True])
+def test_image_exif_orientation(tmp_path, orientation, defer_decode):
+    from lmdeploy.vl.media.image import EncodedImage, ImageMediaIO
 
     y, x = np.indices((112, 56))
     image = Image.fromarray(np.stack([x * 4, y * 2, (x + y) % 256], axis=-1).astype(np.uint8))
@@ -123,11 +127,13 @@ def test_image_exif_orientation(tmp_path, orientation):
     original = Image.open(BytesIO(data))
     original_pixels = original.tobytes()
     expected = ImageOps.exif_transpose(original).convert('RGB')
-    io = ImageMediaIO()
+    io = ImageMediaIO(defer_decode=defer_decode)
     outputs = [io.load_bytes(data), io.load_file(path),
-               load_image('data:image/jpeg;base64,' + base64.b64encode(data).decode()),
+               load_image('data:image/jpeg;base64,' + base64.b64encode(data).decode(), defer_decode=defer_decode),
                load_image('data:image/png;base64,' + encode_image_base64(original))]
     for actual in outputs:
+        if isinstance(actual, EncodedImage):
+            actual = actual.decode()
         assert actual.size == expected.size
         assert actual.tobytes() == expected.tobytes()
         assert ImageOps.exif_transpose(actual).tobytes() == actual.tobytes()
@@ -140,10 +146,11 @@ def test_image_exif_orientation(tmp_path, orientation):
     assert original.getexif()[274] == orientation
 
 
-def test_image_malformed_exif_remains_decodable():
+@pytest.mark.parametrize('defer_decode', [False, True])
+def test_image_malformed_exif_remains_decodable(defer_decode):
     import struct
 
-    from lmdeploy.vl.media.image import ImageMediaIO
+    from lmdeploy.vl.media.image import EncodedImage, ImageMediaIO
 
     buffer = BytesIO()
     Image.new('RGB', (56, 112), 'red').save(buffer, format='JPEG')
@@ -152,7 +159,9 @@ def test_image_malformed_exif_remains_decodable():
     payload = b'Exif\x00\x00XXXX\x00\x00\x00\x08' + bytes(32)
     data = jpeg[:2] + b'\xff\xe1' + struct.pack('>H', len(payload) + 2) + payload + jpeg[2:]
     reference = Image.open(BytesIO(data)).convert('RGB')
-    actual = ImageMediaIO().load_bytes(data)
+    actual = ImageMediaIO(defer_decode=defer_decode).load_bytes(data)
+    if isinstance(actual, EncodedImage):
+        actual = actual.decode()
     assert actual.size == reference.size
     assert actual.tobytes() == reference.tobytes()
     assert not actual.getexif()
@@ -177,7 +186,10 @@ def test_jpeg_video_frames_preserve_metadata(orientation):
 
 
 @pytest.mark.parametrize('orientation', [1, 6])
-def test_truncated_image(monkeypatch, orientation):
+@pytest.mark.parametrize('defer_decode', [False, True])
+def test_truncated_image(monkeypatch, orientation, defer_decode):
+    from lmdeploy.vl.media.image import EncodedImage
+
     buffer = BytesIO()
     exif = Image.Exif()
     exif[274] = orientation
@@ -189,7 +201,9 @@ def test_truncated_image(monkeypatch, orientation):
             Image.open(BytesIO(data)).load()
 
     # A data URL exercises the HTTP byte decoder without a network dependency.
-    im = load_image('data:image/jpeg;base64,' + base64.b64encode(data).decode())
+    im = load_image('data:image/jpeg;base64,' + base64.b64encode(data).decode(), defer_decode=defer_decode)
+    if isinstance(im, EncodedImage):
+        im = im.decode()
     assert im.size == ((1638, 2048) if orientation == 1 else (2048, 1638))
     assert im.mode == 'RGB'
 
