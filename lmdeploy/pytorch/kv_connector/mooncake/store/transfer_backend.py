@@ -131,12 +131,15 @@ class AscendTransferBackend(TransferBackend):
     directly to and from device HBM addresses, exactly as on CUDA. This is the
     proven store-path used by vllm-ascend; it needs no host staging or D2H/H2D copy.
 
-    When ``ASCEND_ENABLE_USE_FABRIC_MEM=1`` the backend instead follows
-    vllm-ascend's fabric-mem recipe (A3+HCCS): the store allocates its segment as
-    HIXL fabric memory reachable from every process, no engine is injected, no
-    buffer registration happens, and segment names carry no ``:port`` suffix.
-    That is what makes cross-segment transfers -- the load path under MLA key
-    striping -- actually work on A3.
+    Fabric-mem mode (``ASCEND_ENABLE_USE_FABRIC_MEM=1``) is *required*: the
+    external-engine path above only transfers within one process's segment, and
+    on current A3 drivers it cannot export device memory to another process, so
+    a store that places an object in a peer's segment fails with TRANSFER_FAIL.
+    The fabric recipe follows vllm-ascend (A3+HCCS): the store allocates its
+    segment as HIXL fabric memory reachable from every process, no engine is
+    injected, no buffer registration happens, and segment names carry no
+    ``:port`` suffix. That is what makes cross-segment transfers -- the load
+    path under MLA key striping -- actually work on A3.
     """
 
     device_type = 'npu'
@@ -145,8 +148,16 @@ class AscendTransferBackend(TransferBackend):
         # Fail fast if torch_npu is unavailable: this backend is only built on
         # Ascend, where torch_npu is a required dependency.
         import torch_npu  # noqa: F401  registers torch.npu
+        # Startup gate: without fabric memory a multi-worker deployment can
+        # place objects in a peer's segment and every such load fails, so
+        # refuse to start instead of serving silently-broken KV loads.
+        fabric = os.getenv(ASCEND_FABRIC_MEM_ENV, '0')
+        if fabric != '1':
+            raise RuntimeError(
+                f'{ASCEND_FABRIC_MEM_ENV}=1 is required for the Ascend Mooncake Store connector '
+                f'(got {fabric!r}): cross-process KV transfers need HIXL fabric memory.')
         self._transfer_engine: Any | None = None
-        self.use_fabric_mem = os.getenv(ASCEND_FABRIC_MEM_ENV, '0') == '1'
+        self.use_fabric_mem = True
 
     def _get_transfer_engine(self, local_hostname: str, device_name: str) -> Any:
         if self._transfer_engine is not None:
