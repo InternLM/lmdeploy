@@ -4,6 +4,95 @@
 
 支持的模型列表在[这里](../../supported_models/supported_models.md#pytorchengine-其他平台).
 
+## A3 原生后端安装
+
+当前 A3 PyTorch 后端由 LMDeploy 内部实现，无需 dlinfer。请使用未安装 dlinfer 的独立
+Python 环境，并先加载 CANN 9.1.0 和匹配的 NNAL/ATB 环境脚本。以下 Python 3.12
+源码安装配置与 [`Dockerfile_ascend_a3`](../../../../docker/Dockerfile_ascend_a3) 保持一致：
+
+```bash
+python3.12 -m venv .venv-ascend
+source .venv-ascend/bin/activate
+export TORCH_DEVICE_BACKEND_AUTOLOAD=0
+A3_WHEEL_DIR=$(mktemp -d)
+python -I -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
+    --index-url https://download.pytorch.org/whl/cpu \
+    -c requirements/ascend_a3_constraints.txt torch torchvision
+python -I -m pip download --no-deps --only-binary=:all: --dest "$A3_WHEEL_DIR" \
+    --index-url https://mirrors.huaweicloud.com/ascend/repos/pypi \
+    -r requirements/ascend_kernels.txt
+LMDEPLOY_TARGET_DEVICE=ascend python -I -m pip install --index-url https://pypi.org/simple \
+    --find-links "$A3_WHEEL_DIR" -c requirements/ascend_a3_constraints.txt \
+    -r requirements/ascend_kernels.txt . pyarrow
+python -I -m pip check
+python tools/ascend/check_runtime.py --require-kernels
+```
+
+`python -I -m pip check` 仅检查应用 venv。CANN 自带的可选 profiler 工具另有
+Python 依赖，其 SDK 元数据不计入应用检查；运行时检查仍保留完整 CANN 环境路径。
+
+在仓库根目录执行这些命令。CANN、torch_npu 和 Triton-Ascend 仍是运行依赖；
+GDN prefill/L2Norm 已连同来源记录和 MIT 许可纳入原生 kernel，无需克隆外部 kernel
+仓库。镜像在独立应用 venv 中固定 Torch 2.10.0+cpu、torch_npu 2.10.0.post4、
+torchvision 0.25.0+cpu 和 Triton-Ascend 3.2.2.post2。
+推理入口继续使用 `device_type="ascend"` 或 `--device ascend`。图模式通过
+`torch.npu.NPUGraph` 执行，可使用 `eager_mode=True` 或 `--eager-mode` 关闭。
+
+下方预构建镜像说明对应依赖 dlinfer 的旧版本。本次原生迁移面向 A3，A2 和 Atlas 300I Duo
+尚未在此后端上验证。使用容器时，可通过 `docker/Dockerfile_ascend_a3` 构建当前源码，
+其 CANN/PyTorch 组合需要与宿主驱动及运行时匹配。
+
+### GDN/MTP 状态正确性与编译器升级
+
+circular GDN 状态路径默认使用 `num_stages=1`，其他 recurrent 路径保留
+`num_stages=3`。AscendNPU-IR 1.2.0 的 `042c923d` 构建在自动多缓冲时可能写错
+FP32 中间状态，而当前输出仍然正确。MTP 后续读取这些状态后，贪婪采样的 target
+logits 和生成 token 会在重复运行间出现差异。单缓冲保护受影响编译器上的这条路径，
+新编译器也沿用这一默认值；正确的多缓冲并非在所有已测形状下都更快。
+
+上游修复 [`05f2adcf`](https://github.com/Ascend/AscendNPU-IR/commit/05f2adcf3db366377f7c5e6f5bb9bd3c61c36b3e)
+已进入 AscendNPU-IR 2.0.0（`efb71415`），由官方 Triton-Ascend 3.2.2.post2 wheel
+捆绑交付。已有兼容 A3 原生运行环境可以选择以下升级配置：
+
+```bash
+python -m pip install --no-deps -r requirements/ascend_triton_npuir2.txt \
+    --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi
+```
+
+请在拥有独立包文件的隔离环境执行。全新安装通过 `requirements/ascend_kernels.txt`
+已经选择这一编译器。组件升级实测环境为 Python 3.12.13、Torch 2.10.0+cpu、
+torch_npu 2.10.0.post4、CANN 9.1.0。Dockerfile 现在使用官方
+`9.1.0-a3-openeuler24.03-py3.12` 基础镜像和匹配的固定依赖配置。
+[官方优先推荐的 NPUIR 配套](https://ascendnpu-ir.gitcode.com/en/introduction/quick_start/version_compatibility.html)
+为 NPUIR 2.0.0 与 CANN 9.2.0；这里使用的是经过验证的编译器组件更新，CANN 运行时
+继续保持 9.1.0，也不会升级宿主机驱动或固件。
+
+Triton 优先选择自己捆绑的编译器。升级后应检查实际执行路径和构建号，仅查看
+`triton.__version__` 不足以确认：
+
+```python
+import subprocess
+from triton.backends.ascend.utils import _get_npucompiler_path
+
+compiler, compiler_env = _get_npucompiler_path()
+print(compiler)
+subprocess.run([compiler, '--version'], env=compiler_env, check=True)
+```
+
+在 A3 上执行状态回归：
+
+```bash
+python -m pytest -q --run-ascend-hardware \
+    tests/pytorch/ascend/hardware/test_gdn_state_writeback.py
+```
+
+测试覆盖 Q=1/2/4 的 eager/graph 模式，每次重放恢复初始状态，并将所有保存的状态与
+CPU 递推参考比较。[完整调查报告](https://github.com/silencelamb/lmdeploy/blob/docs/ascend-a3-validation-20261114/docs/zh_cn/advance/ascend_a3_validation/mtp_ray_investigation_20261116.md)
+记录了编译器 IR、固定版本、MTP 对照、随形状变化的性能和未覆盖范围。算子及 target
+主干计时不能替代端到端服务吞吐验收。
+
+## 旧版预构建镜像
+
 > \[!IMPORTANT\]
 > 我们已经在阿里云上提供了构建完成的鲲鹏CPU版本的镜像。
 > 请使用下面的命令来拉取镜像:

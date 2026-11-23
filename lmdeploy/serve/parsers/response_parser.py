@@ -8,13 +8,15 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from mmengine import Registry
 
-from lmdeploy.serve.openai.protocol import DeltaMessage
+from lmdeploy.serve.openai.protocol import DeltaMessage, ToolChoice
 from lmdeploy.utils import get_logger
 
 from .token_id_buffer import ControlSpan, LocatedText, ParseBuffer
 from .token_id_scanner import TokenIDProfile, TokenIDScanner, build_token_profile
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from transformers import PreTrainedTokenizerBase
 
     from lmdeploy.messages import GenerationConfig
@@ -119,6 +121,15 @@ def _normalize_request_messages(messages: list[dict]) -> list[dict] | None:
     for msg_idx, message in enumerate(messages):
         if not isinstance(message, dict) or message.get('role') != 'assistant':
             continue
+        reasoning = message.get('reasoning')
+        if reasoning is not None and message.get('reasoning_content') != reasoning:
+            if normalized_messages is None:
+                normalized_messages = list(messages)
+            message = dict(message)
+            # Keep the alias consumed by model templates; reasoning takes precedence.
+            message['reasoning_content'] = reasoning
+            normalized_messages[msg_idx] = message
+
         tool_calls = message.get('tool_calls')
         if not isinstance(tool_calls, list):
             continue
@@ -159,7 +170,8 @@ def normalize_chat_request(request: ChatCompletionRequest) -> ChatCompletionRequ
     - ``response_format``: ``ResponseFormat → dict``, ``type='text' → None``
     - ``stop``: ``str → list[str]``
     - ``max_completion_tokens``: resolves from deprecated ``max_tokens``
-    - ``messages``: tool call ``arguments`` JSON strings → dicts for template rendering
+    - ``messages``: ``reasoning`` → ``reasoning_content`` for template compatibility;
+      tool call ``arguments`` JSON strings → dicts for template rendering
     """
     if not hasattr(request, 'model_copy'):
         return request
@@ -205,6 +217,18 @@ class ResponseParser:
         tokenizer: PreTrainedTokenizerBase | None = None,
     ) -> None:
         pass
+
+    @classmethod
+    def render_tools(cls, request: ChatCompletionRequest) -> list[dict] | None:
+        """Return the tools in the shape this model's chat template reads.
+
+        Generation renders tools through the parser, so anything that has to
+        reproduce a generation prompt - token counting - must ask the parser
+        too, or the two prompts diverge.
+        """
+        from .tool_parser.tool_parser import dump_tools
+
+        return dump_tools(request).tools
 
     def __init__(self, request: ChatCompletionRequest):
         self.request = request
@@ -325,13 +349,15 @@ class BaseResponseParser(ResponseParser):
     def __init__(self, request: ChatCompletionRequest):
         rcls = type(self).reasoning_parser_cls
         tcls = type(self).tool_parser_cls
+        named_tool_choice = isinstance(request.tool_choice, ToolChoice)
+        mandatory_tool_choice = request.tool_choice == 'required' or named_tool_choice
         response_format = request.response_format
         format_type = (response_format.get('type') if isinstance(response_format, dict)
                        else getattr(response_format, 'type', None))
         # These grammars constrain the entire generated sequence, including
-        # its first token. Required tools instead use a tagged grammar below.
+        # its first token. Mandatory tool choices use a tagged grammar below.
         self._literal_output = (format_type in ('json_object', 'json_schema', 'regex_schema')
-                                and request.tool_choice != 'required')
+                                and not mandatory_tool_choice)
         if self._literal_output:
             template_kwargs = dict(request.chat_template_kwargs or {})
             template_kwargs['enable_thinking'] = False
@@ -364,17 +390,30 @@ class BaseResponseParser(ResponseParser):
         else:
             if request.tool_choice == 'required':
                 raise ValueError('`tool_choice="required"` requires a configured tool-call parser.')
+            if named_tool_choice:
+                raise ValueError('A named tool_choice requires a configured tool-call parser.')
             from .tool_parser.tool_parser import dump_tools
 
             self.request = dump_tools(request)
 
         self.request = normalize_chat_request(self.request)
-        if request.tool_choice == 'required':
-            required_response_format = self.tool_parser.build_required_response_format(
-                request.tools or [], reasoning=self.reasoning_enabled)
+        if mandatory_tool_choice:
+            if isinstance(request.tool_choice, ToolChoice):
+                required_response_format = self.tool_parser.build_named_response_format(
+                    request.tools or [], request.tool_choice, reasoning=self.reasoning_enabled,
+                    tokenizer=type(self).tokenizer)
+            else:
+                required_response_format = self.tool_parser.build_required_response_format(
+                    request.tools or [], reasoning=self.reasoning_enabled)
             # Internal structural tags override client response_format because
             # an engine can apply only one guided-decoding constraint.
             self.request = self.request.model_copy(update={'response_format': required_response_format})
+        elif (request.tool_choice == 'auto' and request.tools and self.tool_parser is not None
+              and self.request.response_format is None):
+            auto_response_format = self.tool_parser.build_auto_response_format(
+                request.tools, tokenizer=type(self).tokenizer)
+            if auto_response_format is not None:
+                self.request = self.request.model_copy(update={'response_format': auto_response_format})
 
         self._received_any_text = False
         self._stream_final_received = False
@@ -473,6 +512,49 @@ class BaseResponseParser(ResponseParser):
         """
         if self._scanner is not None:
             self._scanner.skip_special_tokens = gen_config.skip_special_tokens
+
+    @property
+    def supports_glm_content_stop(self) -> bool:
+        """Only opt in for GLM chat boundaries verified by the token-ID
+        parser."""
+        from .reasoning_parser import ReasoningParser
+        from .tool_parser.glm47_tool_parser import Glm47ToolParser
+
+        # A non-streaming content stop collects stream deltas instead of calling parse_complete().
+        if not self.request.stream and type(self).parse_complete is not BaseResponseParser.parse_complete:
+            return False
+        return (self._scanner is not None and type(self).stream_chunk is BaseResponseParser.stream_chunk
+                and self.reasoning_parser_cls in (None, ReasoningParser)
+                and self.tool_parser_cls in (None, Glm47ToolParser)
+                and not self._plain_text_tags and not self._reasoning_text_tags)
+
+    async def resolve_content_separator(self, following_ids: AsyncIterator[int | None]) -> None:
+        """Release post-tool newlines at their original tokens once the next
+        channel is known."""
+        if (not self._after_tool_block or self._pending
+                or (self._mode == self.MODE_REASONING and self.enable_thinking is not False)):
+            return
+        scanner = self._scanner
+        assert scanner is not None
+        async for token_id in following_ids:
+            if token_id is None or scanner.profile.controls.get(token_id) == self._tool_open_tag:
+                return
+            text = scanner.tokenizer.decode([token_id], skip_special_tokens=scanner.skip_special_tokens,
+                                            clean_up_tokenization_spaces=False)
+            if text.strip('\n'):
+                break
+        self._after_tool_block = False
+
+    def preview_stop_text(self, ids: list[int]) -> str | None:
+        """Return unmodified text for stop lookahead in a single plain or
+        reasoning channel."""
+        if self._scanner is None or self._pending or self._mode == self.MODE_TOOL or self._after_tool_block:
+            return None
+        text = self._scanner.preview_ordinary_text(ids)
+        if (text is not None and self._mode == self.MODE_REASONING and self.enable_thinking is not False
+                and not self._literal_output):
+            return ''
+        return text
 
     def _consume_located(
         self,

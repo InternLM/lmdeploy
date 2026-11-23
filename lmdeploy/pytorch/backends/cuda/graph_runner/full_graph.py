@@ -146,6 +146,7 @@ class CUDASingleGraphRunner:
         )
         self._pool = pool
         self._graph: torch.cuda.CUDAGraph | None = None
+        self._moe_valid_token_count: torch.Tensor | None = None
         self._use_graph = not fake_capture
         logger.info(f'Initialized CUDASingleGraphRunner with max_batches={max_batches}, max_tokens={max_tokens}, '
                     f'num_blocks={num_blocks}, is_decoding={is_decoding}, use_graph={self._use_graph}')
@@ -186,8 +187,15 @@ class CUDASingleGraphRunner:
 
     def _bind_inputs(self, **kwargs) -> dict[str, Any]:
         """Fill stable buffers and bind the current step context to them."""
+        context = self._ctx_mgr.current_context()
+        if context.dp_meta is not None:
+            if self._moe_valid_token_count is None:
+                self._moe_valid_token_count = torch.empty((), dtype=torch.int32, device=self.meta.device)
+            valid_tokens = 0 if context.is_dummy else kwargs['input_ids'].numel()
+            self._moe_valid_token_count.fill_(valid_tokens)
+            context.moe_valid_token_count = self._moe_valid_token_count
         padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
-        self.model.update_context_cudagraph(self.meta, self._ctx_mgr.current_context())
+        self.model.update_context_cudagraph(self.meta, context)
         return padded_kwargs
 
     def _capture_model(self, padded_kwargs: dict[str, Any], capture_stream: torch.cuda.Stream):

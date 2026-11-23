@@ -14,7 +14,9 @@ from lmdeploy.serve.openai.protocol import (
 )
 
 if TYPE_CHECKING:
-    from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool
+    from transformers import PreTrainedTokenizerBase
+
+    from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool, ToolChoice
 
     from ..token_id_buffer import BoundaryView
 
@@ -113,19 +115,41 @@ class ToolParser:
         return request
 
     @classmethod
+    def build_auto_response_format(
+        cls, tools: list[Tool], *, tokenizer: PreTrainedTokenizerBase | None,
+    ) -> dict[str, Any] | None:
+        """Optionally constrain auto tool calls without requiring a call."""
+        return None
+
+    @classmethod
     def build_required_response_format(cls, tools: list[Tool], *, reasoning: bool) -> dict[str, Any]:
         """Build the XGrammar structural-tag format for required tool calls."""
+        return cls._build_tool_choice_response_format(tools, tool_choice='required', reasoning=reasoning)
+
+    @classmethod
+    def build_named_response_format(cls, tools: list[Tool], tool_choice: ToolChoice,
+                                    *, reasoning: bool,
+                                    tokenizer: PreTrainedTokenizerBase | None = None) -> dict[str, Any]:
+        """Force exactly one call to the selected function."""
+        return cls._build_tool_choice_response_format(
+            tools, tool_choice=tool_choice.model_dump(mode='json'), reasoning=reasoning)
+
+    @classmethod
+    def _build_tool_choice_response_format(cls, tools: list[Tool], *, tool_choice: str | dict,
+                                          reasoning: bool) -> dict[str, Any]:
+        """Build a mandatory tool grammar for the model's native format."""
         structural_tag_model = cls.structural_tag_model
         if reasoning and cls.reasoning_structural_tag_model is not None:
             structural_tag_model = cls.reasoning_structural_tag_model
         if structural_tag_model is None:
-            raise ValueError(f'Tool parser {cls.__name__!r} does not support `tool_choice="required"`.')
+            mode = '`tool_choice="required"`' if tool_choice == 'required' else 'named tool_choice'
+            raise ValueError(f'Tool parser {cls.__name__!r} does not support {mode}.')
         import xgrammar as xgr
 
         return xgr.get_model_structural_tag(
             structural_tag_model,
             [tool.model_dump(mode='json') for tool in tools],
-            tool_choice='required',
+            tool_choice=tool_choice,
             reasoning=reasoning,
         ).model_dump(mode='json')
 

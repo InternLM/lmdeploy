@@ -43,6 +43,46 @@ checkpoint objects divided by the configured cache-region size. Prefix-cache hit
 the engine actually skips when a request is first scheduled. Turbomind currently reports scheduler metrics for DP 1;
 per-rank Turbomind metrics with DP greater than 1 are not yet supported.
 
+## Dedicated monitoring port
+
+Use `--monitoring-port` to serve `/health` and `/metrics` from a separate thread
+in each API process. This keeps monitoring requests off the inference API event
+loop during synchronous preprocessing:
+
+```bash
+lmdeploy serve api_server /path/to/model --server-port 9200 --monitoring-port 9300
+```
+
+For PyTorch DP serving, the local API processes use consecutive monitoring ports:
+`--dp 8 --monitoring-port 9300` uses `9300` through `9307` on a single host. For
+multiple hosts, each host uses its local DP count. Reserve these ports separately
+from the API ports. An occupied monitoring port fails
+server startup. Without this option, no extra listener is started.
+
+Point Prometheus scrapes and health checks at the monitoring ports. The original
+API endpoints remain available, but still share the inference event loop;
+routers are not automatically configured to use the new ports. The monitoring
+listener uses the same host, API keys, and TLS configuration as the API server.
+`/health` remains unauthenticated, while `/metrics` requires a configured API key.
+With `--disable-metrics`, only `/health` is exposed on the monitoring port.
+
+Metrics come from the same in-process Prometheus registry. Metric updates remain on
+the API loop, so a fast scrape may contain older data while that loop is blocked.
+`lmdeploy:scheduler_last_update_timestamp_seconds` reports when scheduler metrics
+were last updated (zero before the first update); it does not timestamp every
+token-level metric. Scheduler metrics are normally updated every 10 seconds.
+
+The monitoring `/health` reads a cached backend probe without waiting for the API
+loop. It includes `snapshot_age_seconds`, the time since the last snapshot update
+(`null` before the first completed probe). Healthy and sleeping snapshots
+expire after `LMDEPLOY_HEALTH_UNHEALTHY_AFTER` (default 90 seconds), returning HTTP
+503 until refreshed. This also covers an API loop that stops making progress.
+When the API listener starts draining, monitoring `/health` immediately returns
+HTTP 503, even if the backend snapshot is still healthy.
+The listener shares the process's Python GIL: it isolates event-loop stalls, not
+code that holds the GIL indefinitely, and does not speed up inference or abort
+requests.
+
 ## Setup Guide
 
 This section describes how to set up the monitoring stack (Prometheus + Grafana) provided in the `lmdeploy/monitoring` directory.

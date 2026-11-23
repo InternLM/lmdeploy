@@ -89,6 +89,7 @@ def _reindex_model_inputs_arspec(
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
         state_offsets=state_offsets,
+        ssm_state_meta=(inputs.ssm_state_meta.index_select(indices) if inputs.ssm_state_meta is not None else None),
         mrope_pos_ids=mrope_pos_ids,
     )
 
@@ -120,7 +121,7 @@ class ARSpecStepInputs(StepInputs):
         next_token_ids_flat = next_token_ids_expanded.flatten()[None, :]
         inputs = get_model_inputs_next_decoding(
             inputs, next_token_ids_flat,
-            max_q_seqlen=max_q_seqlen, model_metas=model_metas)
+            max_q_seqlen=max_q_seqlen, model_metas=model_metas, ssm_state_cursor=self.ssm_state_cursor)
 
         # update mrope pos ids
         mrope_pos_ids = inputs.mrope_pos_ids
@@ -184,7 +185,7 @@ class ARSpecStepInputs(StepInputs):
         input_ids[:, 0] = next_token_ids
         input_ids[:, 1:] = extra_inputs.output_draft_token_ids
         input_ids = input_ids.flatten()[None, :]
-        self.model_inputs = model_inputs.step(input_ids, step_seqlens)
+        self.model_inputs = model_inputs.step(input_ids, step_seqlens, ssm_state_cursor=self.ssm_state_cursor)
         self.extra_inputs = extra_inputs
 
         # advance sampling state

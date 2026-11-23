@@ -218,7 +218,8 @@ with set_envs():
         False,
     )
 
-    # memory trim
+    # multimodal memory
+    image_cache_max_bytes = env_to_int('LMDEPLOY_IMAGE_CACHE_MAX_BYTES', 4 * 1024**3)
     multimodal_session_trim_count = env_to_int('LMDEPLOY_MULTIMODAL_SESSION_TRIM_COUNT', 128)
 
     # model format
@@ -243,6 +244,9 @@ with set_envs():
 
     # Disable dense prefill for sparse MLA; set before startup.
     mla_disable_dense_prefill = env_to_bool('LMDEPLOY_MLA_DISABLE_DENSE_PREFILL', False)
+
+    # Set before startup: use unrotated BF16 KPool queries/cache instead of FP8.
+    glm53_kpool_bf16 = env_to_bool('LMDEPLOY_GLM53_KPOOL_BF16', False)
 
     # cudagraph
     # fake capture flag for debug cudagraph padding behavior

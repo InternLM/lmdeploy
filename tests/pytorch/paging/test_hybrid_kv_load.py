@@ -1,12 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+from threading import Event
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 import torch
 
 from lmdeploy.messages import KVTransferConfig
-from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig, SpecDecodeConfig
+from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
 from lmdeploy.pytorch.engine.inputs_maker import InputsMakerAsync
 from lmdeploy.pytorch.kv_connector import KVConnectorOutput, KVConnectorStepInput
 from lmdeploy.pytorch.kv_connector.base import KVConnectorOutputAggregator
@@ -16,7 +17,7 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging.kv_load_coordinator import KVLoadAdmission
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
-from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
+from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
 
 
 @pytest.fixture
@@ -39,8 +40,7 @@ def make_scheduler():
             connector.client.lookup = Mock(return_value=remote_hit)
         strategy = ARSequenceStrategy()
         if mtp:
-            strategy = ARSpecStrategyFactory(SimpleNamespace(bos_token_id=0), SpecDecodeConfig(
-                model='draft', method='qwen3_5_mtp', disable_prefix_cache_block_drop=no_drop)).build_sequence_strategy()
+            strategy = ARSpecSequenceStrategy(recompute_blocks=0 if no_drop else 1)
         scheduler = Scheduler(
             SchedulerConfig(max_batches=max_batches, max_session_len=64, max_request_output_len=16), config,
             SequenceMeta(4, strategy=strategy), kv_connector=connector)
@@ -53,14 +53,112 @@ def make_scheduler():
 
 
 def _publish_local_checkpoint(scheduler, step):
+    """Seed exact local states to test load arbitration, not save policy."""
     seq = scheduler.add_session(0).add_sequence(torch.arange(step))
     scheduler.block_manager.allocate(seq)
     scheduler.block_trie.allocate(seq)
-    assert scheduler.block_trie.state_checkpoints.reserve_save(seq) > 0
+    with patch.object(scheduler.seq_meta, 'prefill_save_alignment', 0):
+        assert scheduler.block_trie.state_checkpoints.reserve_save(seq) > 0
     assert scheduler.block_trie.state_checkpoints.publish_save(seq)
     checkpoint = seq.prefix_cache.trie_cursor.state_checkpoint
     scheduler.end_session(0)
     return checkpoint
+
+
+def test_lookup_prefetch_bounds_waiting_window_without_acquiring_paging_resources(make_scheduler):
+    scheduler, connector = make_scheduler(max_batches=2, remote_hit=0)
+    del connector.client.lookup  # Use the real submit/consume lifecycle.
+    connector.client._lookup = Mock(return_value=0)
+    seqs = [scheduler.add_session(i).add_sequence(torch.arange(21)) for i in range(5)]
+    free_blocks = scheduler.block_manager.get_num_free_gpu_blocks()
+    free_states = scheduler.state_manager.get_num_free()
+
+    scheduler.prefetch_kv_lookups()
+    for query in connector.client.queries.values():
+        query.future.result(timeout=2)
+    scheduler.prefetch_kv_lookups()
+
+    assert set(connector.client.queries) == {s.seq_id for s in seqs[:2]}
+    assert connector.client._lookup.call_count == 2
+    assert scheduler.block_manager.get_num_free_gpu_blocks() == free_blocks
+    assert scheduler.state_manager.get_num_free() == free_states
+    assert scheduler.block_trie.stats.num_query_tokens == 0
+    assert all(s.status == MessageStatus.WAITING and s.num_blocks == 0
+               and s.num_history_ids == 0 and not s.prefix_cache.restore.is_selected for s in seqs)
+    # Consuming the first result admits work without another query; refill
+    # advances the window even though the current token budget held its sibling.
+    assert scheduler.schedule(is_prefill=True).running == [seqs[0]]
+    scheduler.prefetch_kv_lookups()
+    assert set(connector.client.queries) == {s.seq_id for s in seqs[1:3]}
+
+
+def test_local_full_hit_cancels_prefetch_without_waiting_or_double_counting(make_scheduler):
+    scheduler, connector = make_scheduler()
+    checkpoint = _publish_local_checkpoint(scheduler, 16)
+    del connector.client.lookup
+    started, release = Event(), Event()
+
+    def lookup(*args):
+        started.set()
+        assert release.wait(timeout=2)
+        return 16
+
+    connector.client._lookup = lookup
+    seq = scheduler.add_session(1).add_sequence(torch.arange(17))
+    try:
+        scheduler.prefetch_kv_lookups()
+        assert started.wait(timeout=2)
+        assert not connector.client.queries[seq.seq_id].future.done()
+        assert not connector.is_lookup_pending(seq.seq_id)
+        assert scheduler.schedule(is_prefill=True).running == [seq]
+        assert seq.num_history_ids == seq.cached_tokens == 16
+        assert seq.prefix_cache.restore.slot == checkpoint.slot
+        assert connector.client.queries == {}
+        assert not connector._pending_loads
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize('local_step', [0, 8, 16])
+def test_prefetched_hit_rebases_against_local_checkpoint_at_admission(make_scheduler, local_step):
+    scheduler, connector = make_scheduler()
+    del connector.client.lookup
+    connector.client._lookup = Mock(return_value=16)
+    seq = scheduler.add_session(1).add_sequence(torch.arange(21))
+    scheduler.prefetch_kv_lookups()
+    assert connector.client.queries[seq.seq_id].future.result(timeout=2) == 16
+    if local_step:
+        _publish_local_checkpoint(scheduler, local_step)
+
+    output = scheduler.schedule(is_prefill=True)
+
+    assert connector.client._lookup.call_count == 1
+    assert connector.client.queries == {}
+    if local_step == 16:
+        assert output.running == [seq]
+        assert seq.cached_tokens == 16
+        assert not connector._pending_loads
+    else:
+        assert output.running == []
+        assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+        load = connector.build_connector_meta(output).load_requests[0]
+        assert len(load.block_ids) == (16 - local_step) // 4
+        scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+        assert scheduler.schedule(is_prefill=True).running == [seq]
+        assert seq.num_history_ids == seq.cached_tokens == 16
+
+
+@pytest.mark.parametrize('terminal', ['stop_session', 'end_session'])
+def test_lookup_prefetch_is_cancelled_when_waiting_request_leaves(make_scheduler, terminal):
+    scheduler, connector = make_scheduler()
+    connector.client._lookup = Mock(return_value=16)
+    seq = scheduler.add_session(1).add_sequence(torch.arange(21))
+    scheduler.prefetch_kv_lookups()
+    assert seq.seq_id in connector.client.queries
+    getattr(scheduler, terminal)(1)
+    scheduler.prefetch_kv_lookups()
+    assert connector.client.queries == {}
+    assert not connector._pending_loads
 
 
 def test_mooncake_producer_reports_zero_external_hit_rate_without_lookup(make_scheduler):
@@ -133,6 +231,7 @@ def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary
     # Build the next forward's real copy plans: the earlier local checkpoint
     # must not overwrite the state that was just loaded at H.
     maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.compact_state_manager = None
     maker.config = SimpleNamespace(is_ssm=True, enable_prefix_caching=True)
     maker.spec_decoding = mtp
     maker.state_checkpoints = scheduler.state_checkpoints
@@ -350,35 +449,55 @@ def test_hybrid_hit_rate_counts_admitted_lookups_without_recounting_load_complet
 
 
 @pytest.mark.parametrize('apc', [False, True])
-@pytest.mark.parametrize('remote_hit', [0, 16])
-def test_hybrid_remote_recompute_does_not_count_hits_again(make_scheduler, apc, remote_hit):
-    scheduler, connector = make_scheduler(apc=apc, remote_hit=0, num_gpu_blocks=6, state_budget=0)
+@pytest.mark.parametrize('mtp', [False, True])
+@pytest.mark.parametrize('initial_hit', [0, 16])
+@pytest.mark.parametrize(('remote_hit', 'load_success'), [(0, True), (8, True), (16, True), (16, False)])
+def test_hybrid_recompute_preserves_usage_without_recounting_hits(
+        make_scheduler, apc, mtp, initial_hit, remote_hit, load_success):
+    scheduler, connector = make_scheduler(
+        apc=apc, mtp=mtp, remote_hit=initial_hit, num_gpu_blocks=6, state_budget=0)
     seq = scheduler.add_session(1).add_sequence(torch.arange(21))
-    assert scheduler.schedule(is_prefill=True).running == [seq]
-    seq.set_step(4)
+    output = scheduler.schedule(is_prefill=True)
+    if initial_hit:
+        assert output.running == []
+        connector.build_connector_meta(output)
+        scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+        output = scheduler.schedule(is_prefill=True)
+    assert output.running == [seq]
+    assert seq.cached_tokens == initial_hit
+    seq.set_step(min(seq.num_history_ids + 4, seq.input_end_pos))
     seq.state.evict()
     # Exercise real eviction with local caching disabled as well: the flag
     # must be set by paging, not supplied by the test.
     pressure = scheduler.add_session(2).add_sequence(torch.arange(24) + 100)
     assert scheduler.eviction_helper.try_make_capacity_for(pressure, [seq], 0)
     assert seq.prefix_cache.suppress_match_stats
+    assert seq.cached_tokens == initial_hit
     scheduler.end_session(2)
 
     connector.client.lookup.return_value = remote_hit
     output = scheduler.schedule(is_prefill=True)
     if remote_hit:
+        assert output.running == []
         connector.build_connector_meta(output)
-        scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
-        assert seq.cached_tokens == 0
+        scheduler.update_connector_output(KVConnectorOutput(
+            finished_receiving={seq.seq_id}, failed_receiving=set() if load_success else {seq.seq_id}))
+        assert seq.num_history_ids == (remote_hit if load_success else 0)
+        assert seq.cached_tokens == initial_hit
         assert scheduler.schedule(is_prefill=True).running == [seq]
     else:
         assert output.running == [seq]
-    assert seq.cached_tokens == 0
+    assert seq.cached_tokens == initial_hit
     assert not seq.prefix_cache.suppress_match_stats
     assert scheduler.block_trie.stats.num_query_tokens == (21 if apc else 0)
     assert scheduler.block_trie.stats.num_hit_tokens == 0
     assert scheduler.schedule_metrics.external_prefix_cache_queries == 21
-    assert scheduler.schedule_metrics.external_prefix_cache_hits == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_hits == initial_hit
+
+    seq.state.stop()
+    seq.update_token_ids(torch.tensor([22]))
+    assert seq.cached_tokens == 0
+    assert not seq.prefix_cache.suppress_match_stats
 
 
 def test_hybrid_load_waits_for_pinned_local_restore_before_reusing_checkpoint_slot(make_scheduler):

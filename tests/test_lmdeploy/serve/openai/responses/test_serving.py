@@ -42,7 +42,7 @@ def test_http_unknown_content_is_rejected_with_its_location(responses_endpoint, 
         pytest.param('temperature', 2.1, id='temperature-above-range'),
         pytest.param('top_p', -0.1, id='top-p-below-range'),
         pytest.param('top_p', 1.1, id='top-p-above-range'),
-        pytest.param('top_k', -1, id='negative-top-k'),
+        pytest.param('top_k', -2, id='top-k-below-minus-one'),
         pytest.param('min_p', -0.1, id='min-p-below-range'),
         pytest.param('min_p', 1.1, id='min-p-above-range'),
     ],
@@ -58,6 +58,19 @@ def test_responses_rejects_invalid_sampling_parameter(
 
     assert response.status_code == 400
     assert json.loads(response.body)['error']['param'] == field_name
+
+
+@pytest.mark.parametrize('top_k', [-1, 0, 20])
+def test_responses_normalizes_top_k_override(responses_endpoint, fake_raw_request, top_k):
+    endpoint, context = responses_endpoint
+    context.default_gen_config = {'top_k': 10}
+    response = asyncio.run(endpoint(
+        ResponsesRequest(model='fake-model', input='Hi', top_k=top_k), fake_raw_request))
+
+    assert response['output_text'] == 'ok'
+    config = context.async_engine.preprocess_kwargs['gen_config']
+    assert config.top_k == max(0, top_k)
+    assert config.temperature == 1.0
 
 
 def test_responses_rejects_empty_input_list(responses_endpoint,

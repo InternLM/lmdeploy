@@ -469,9 +469,13 @@ def is_bf16_supported(device_type: str = 'cuda'):
 
 
 def try_import_deeplink(device_type: str):
+    if device_type == 'npu':
+        device_type = 'ascend'
+    if device_type == 'ascend':
+        from lmdeploy.pytorch.backends.ascend.runtime import initialize
+        initialize()
+        return
     deeplink_device_type_list = [
-        'ascend',
-        'npu',
         'maca',
         'camb',
     ]

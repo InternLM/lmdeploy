@@ -99,12 +99,9 @@ def get_speculative_config(args):
             model=args.speculative_draft_model,
             num_speculative_tokens=args.speculative_num_draft_tokens,
             dflash_block_size=dflash_block_size,
-            disable_prefix_cache_block_drop=args.speculative_disable_prefix_cache_block_drop,
         )
     elif dflash_block_size is not None:
         raise ValueError('--speculative-dflash-block-size requires --speculative-algorithm dflash.')
-    elif args.speculative_disable_prefix_cache_block_drop:
-        raise ValueError('--speculative-disable-prefix-cache-block-drop requires --speculative-algorithm.')
     return speculative_config
 
 
@@ -360,7 +357,7 @@ class ArgumentHelper:
                                    'with the highest probability')
 
     @staticmethod
-    def temperature(parser, default: float = 0.8):
+    def temperature(parser, default: float = 1.0):
         return parser.add_argument('-temp', '--temperature', type=float, default=default, help='Sampling temperature')
 
     @staticmethod
@@ -632,11 +629,21 @@ class ArgumentHelper:
         return parser.add_argument('--prefix-cache-decode-state-interval',
                                    type=int,
                                    default=0,
-                                   help='Token interval for SSM decode-state prefix-cache checkpoints. '
-                                   '0 disables decode checkpoint saves while keeping prefill/chunk checkpoints. '
-                                   'Use a positive multiple of block size only for long SSM decoding where later '
-                                   'requests can reuse decode prefixes; smaller values improve hit granularity '
-                                   'but use more checkpoint memory and copy work. Only used by the PyTorch engine.')
+                                   help='Token interval for SSM decode checkpoints, in multiples of actual block size. '
+                                   'With --prefix-cache-decode-save-first, count from the last successful checkpoint; '
+                                   'otherwise use absolute token positions. 0 disables periodic saves. '
+                                   'Need not be a multiple of --prefill-save-alignment. '
+                                   'Applies to local prefix caching and Mooncake Store in the PyTorch engine.')
+
+    @staticmethod
+    def prefix_cache_decode_save_first(parser):
+        """Save the first aligned checkpoint after each prompt."""
+        return parser.add_argument('--prefix-cache-decode-save-first',
+                                   action='store_true',
+                                   help='Save at the first safe --prefill-save-alignment boundary at or after '
+                                   'each prompt once decode has verified its dependencies. With '
+                                   '--prefix-cache-decode-state-interval 0, save only this first checkpoint per turn. '
+                                   'Disabled by default. Only used by the PyTorch engine.')
 
     @staticmethod
     def prefill_save_alignment(parser):
@@ -645,7 +652,8 @@ class ArgumentHelper:
                                    type=int,
                                    default=1024,
                                    help='Token alignment for linear-attention prefill state checkpoints, shared by '
-                                   'local prefix caching and Mooncake Store. Must be a positive multiple of cache '
+                                   'local prefix caching and Mooncake Store. Also aligns the first decode checkpoint '
+                                   'with --prefix-cache-decode-save-first. Must be a positive multiple of actual cache '
                                    'block size; intermediate aligned positions may be skipped. '
                                    'Ignored by full-attention-only models. '
                                    'Only used by the PyTorch engine.')
@@ -893,13 +901,6 @@ class ArgumentHelper:
                                 type=int,
                                 default=1,
                                 help='The number of speculative tokens to generate per step')
-
-        spec_group.add_argument(
-            '--speculative-disable-prefix-cache-block-drop',
-            action='store_true',
-            help='Reuse the trailing prefix-cache block for autoregressive MTP/EAGLE methods. '
-            'Can improve hybrid Mooncake Store hit rates; may affect speculative-token acceptance rates. '
-            'DFlash and DSpark are not supported.')
 
         spec_group.add_argument(
             '--speculative-dflash-block-size',

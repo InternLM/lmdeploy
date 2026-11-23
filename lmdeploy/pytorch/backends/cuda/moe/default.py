@@ -14,7 +14,7 @@ from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
 from ..step_metadata import register_piecewise_graph_impl
-from .ep_utils import gather_outputs_by_attn_tp, split_inputs_by_attn_tp
+from .ep_utils import gather_outputs_by_attn_tp, mask_invalid_tokens, split_inputs_by_attn_tp
 
 logger = get_logger('lmdeploy')
 
@@ -187,6 +187,7 @@ def dispatch_ll(
     if num_experts is not None and self.num_experts is not None:
         assert self.num_experts == num_experts
     topk_idx = topk_idx.to(torch.int64)
+    mask_invalid_tokens(topk_idx)
     expected_m = (hidden_states.shape[0] * self.get_buffer().group_size * topk_idx.shape[1] +
                   num_experts) // num_experts
 
@@ -225,6 +226,7 @@ def dispatch_async_ll(
     async_finish: bool = True,
 ):
     assert topk_idx.dtype == torch.int64
+    mask_invalid_tokens(topk_idx)
     if num_experts is not None and self.num_experts is not None:
         assert self.num_experts == num_experts
     (
@@ -460,12 +462,12 @@ class FusedMoEEPImpl(TritonFusedMoEImpl):
                      expert_list: list[int] = None,
                      act_func: Callable = None):
         """forward."""
-        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(hidden_states, topk_weights,
-                                                                                    topk_ids)
-
-        topk_weights = self.do_renormalize(topk_weights)
         step_ctx = get_step_ctx_manager().current_context()
         low_latency_mode = step_ctx.global_is_decoding()
+        hidden_states, topk_weights, topk_ids, split_size = split_inputs_by_attn_tp(
+            hidden_states, topk_weights, topk_ids, mask_padding=low_latency_mode)
+
+        topk_weights = self.do_renormalize(topk_weights)
         moe = self.fusedmoe_build(low_latency_mode)
         out_states = moe.forward(hidden_states, topk_weights, topk_ids, gate_up_weights, down_weights, expert_list,
                                  act_func=act_func)
