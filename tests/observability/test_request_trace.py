@@ -32,8 +32,13 @@ otel_spec = importlib.util.spec_from_file_location(
     'otel_trace', SOURCE / 'lmdeploy/serve/observability/otel_trace.py')
 otel = importlib.util.module_from_spec(otel_spec)
 otel_spec.loader.exec_module(otel)
+output_spec = importlib.util.spec_from_file_location(
+    'output_trace', SOURCE / 'lmdeploy/serve/observability/output_trace.py')
+output_trace = importlib.util.module_from_spec(output_spec)
+sys.modules[output_spec.name] = output_trace
+output_spec.loader.exec_module(output_trace)
 previous_observability = sys.modules.get('lmdeploy.serve.observability')
-sys.modules['lmdeploy.serve.observability'] = NS(otel_trace=otel)
+sys.modules['lmdeploy.serve.observability'] = NS(otel_trace=otel, output_trace=output_trace)
 previous_core = sys.modules.get('lmdeploy.trace')
 sys.modules['lmdeploy.trace'] = core
 try:
@@ -311,7 +316,7 @@ class ASGITests(RecordTestCase):
         self.assertEqual(self.records[-1]['status'], 'cancelled')
 
     def test_responses_cancelled_is_not_failed(self):
-        body = b'data: {"type":"response.failed","response":{"status":"cancelled"}}\n'
+        body = b'event: response.failed\ndata: {"type":"response.failed","response":{"status":"cancelled"}}\n'
         asyncio.run(self.invoke([body]))
         self.assertEqual(self.records[-1]['status'], 'cancelled')
 
@@ -1356,6 +1361,28 @@ class PromptIdentityTests(RecordTestCase):
 
 
 class SSEFramingTests(unittest.TestCase):
+    def test_invalid_choice_index_only_contributes_to_http_output(self):
+        for index in (-1, True, 'private-index'):
+            events = []
+            observer = obs.OutputObservation(0, on_output=lambda *args: events.append(args))
+            observer.feed(('data: ' + json.dumps({'choices': [{'index': index, 'text': 'private'}]})
+                           + '\n\n').encode())
+            self.assertIsNotNone(observer.first_output)
+            self.assertEqual(events, [])
+
+    def test_oversized_terminal_events_keep_outcome_without_parsing_content(self):
+        for event in ('response.completed', 'response.incomplete', 'response.failed'):
+            frame = (f'event: {event}\ndata: {{"type":"{event}","output":"'.encode()
+                     + b'x' * (1024 * 1024) + b'"}\n\n')
+            for bodies in ([frame], [frame[i:i + 4096] for i in range(0, len(frame), 4096)]):
+                observer = obs.OutputObservation(0)
+                for body in bodies:
+                    observer.feed(body)
+                self.assertTrue(observer.terminal)
+                self.assertEqual(observer.error, event == 'response.failed')
+                self.assertIsNone(observer.first_output)
+                self.assertFalse(observer.buffer)
+
     def test_complete_fragmented_and_coalesced_frames_have_same_semantics(self):
         frames = [
             b'data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}\n\n',

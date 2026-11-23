@@ -17,6 +17,12 @@ _provider = _tracer = None
 _pid = None
 _init_lock = threading.Lock()
 _SECRET = re.compile(r'authorization:|bearer\s+|(?<![A-Za-z0-9])sk-(?:ant-)?[A-Za-z0-9_-]+', re.I)
+_FORBIDDEN_ATTRIBUTES = frozenset((
+    'authorization', 'x-api-key', 'api_key', 'apikey', 'cookie', 'set-cookie',
+    'http.request.body', 'http.response.body', 'request.body', 'response.body',
+    'gen_ai.prompt', 'gen_ai.completion', 'llm.prompt', 'llm.completion',
+    'prompt', 'completion', 'password',
+))
 
 
 _failed = False
@@ -65,11 +71,10 @@ def _initialize():
                                 'service.instance.id': f'{socket.gethostname()}:{os.getpid()}'})
     # This implementation is the non-P/D engine, regardless of external env overrides.
     resource = resource.merge(Resource({'inference.engine': 'lmdeploy', 'inference.role': 'full'}))
-    allowed = {'service.name', 'service.instance.id', 'deployment.environment',
-               'k8s.cluster.name', 'k8s.namespace.name', 'k8s.pod.name', 'k8s.node.name',
-               'inference.engine', 'inference.role'}
     resource = Resource({k: v for k, v in resource.attributes.items()
-                         if k in allowed and metadata_string(v) is not None})
+                         if k.lower() not in _FORBIDDEN_ATTRIBUTES and metadata_string(k) is not None
+                         and (metadata_string(v) is not None or type(v) in (int, bool)
+                              or (type(v) is float and math.isfinite(v)))})
     capacity = int(os.getenv('OTEL_BSP_MAX_QUEUE_SIZE', '2048'))
     batch = int(os.getenv('OTEL_BSP_MAX_EXPORT_BATCH_SIZE', '512'))
     delay = int(os.getenv('OTEL_BSP_SCHEDULE_DELAY', '1000'))
@@ -128,7 +133,9 @@ def begin_http(headers, path, start_ns, outcome):
         {'traceparent': headers.get('traceparent', '')}, context=Context())
     parent = trace.get_current_span(context).get_span_context()
     attrs = {'http.request.method': 'POST', 'url.path': path, 'http.route': path,
-             'trace.context.missing': not parent.is_valid}
+             'trace.context.missing': not parent.is_valid,
+             'gen_ai.provider.name': 'lmdeploy',
+             'gen_ai.operation.name': outcome.get('operation', 'text_completion')}
     if parent.is_valid:
         outcome['upstream_context'] = context
     rid = outcome['request_id']
@@ -194,6 +201,7 @@ def finish_engine(t, status):
              'lmdeploy.choice_index': t.choice_index,
              'gen_ai.usage.input_tokens': t.prompt_tokens, 'gen_ai.usage.output_tokens': t.output_tokens,
              'gen_ai.usage.cached_tokens': t.cached_tokens, 'lmdeploy.backend': t.backend,
+             'gen_ai.usage.cache_read.input_tokens': t.cached_tokens,
              'lmdeploy.finish_reason': t.finish_reason,
              'lmdeploy.token_counts_complete': t.token_counts_complete,
              'gen_ai.latency.e2e': t.elapsed_seconds,
@@ -282,6 +290,8 @@ def finish_http(outcome, status, http_status, elapsed, observation):
                 values = [getattr(t, field) for t in selected]
                 if values and all(v is not None for v in values):
                     attrs['gen_ai.usage.' + key] = sum(values)
+            if 'gen_ai.usage.cached_tokens' in attrs:
+                attrs['gen_ai.usage.cache_read.input_tokens'] = attrs['gen_ai.usage.cached_tokens']
             models = {t.model for t in traces if t.model}
             if len(models) == 1:
                 attrs['gen_ai.request.model'] = attrs['gen_ai.response.model'] = models.pop()

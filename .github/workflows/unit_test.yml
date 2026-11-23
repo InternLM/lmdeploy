@@ -52,7 +52,7 @@ jobs:
       - name: Install lmdeploy
         run: |
           python3 -m pip install -r requirements/test.txt
-          python3 -m pip install -e '.[trace]'
+          python3 -m pip install -e '.[serve]'
       - name: Check env
         run: |
           python3 -m pip list

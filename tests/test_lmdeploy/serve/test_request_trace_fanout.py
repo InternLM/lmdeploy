@@ -31,6 +31,10 @@ def test_concurrent_choices_keep_output_usage_and_adapter_identity(monkeypatch, 
     monkeypatch.setattr(otel_trace, '_tracer', provider.get_tracer('fanout-test'))
     monkeypatch.setattr(request_trace, 'ENABLED', True)
     monkeypatch.setattr(request_trace, 'get_writer', lambda: None)
+    if stream:
+        def reject_reparse(*args):
+            raise AssertionError('The final fan-out frame must carry output metadata')
+        monkeypatch.setattr(request_trace, '_decode_json', reject_reparse)
     records = []
     monkeypatch.setattr(request_trace, 'emit', lambda event, rid, **kw: records.append(dict(event=event, **kw)))
 
@@ -102,6 +106,7 @@ def test_concurrent_choices_keep_output_usage_and_adapter_identity(monkeypatch, 
         assert set(prompts) == set(range(count))
         assert root.attributes['gen_ai.usage.input_tokens'] == 10
         assert root.attributes['gen_ai.usage.cached_tokens'] == 4
+        assert root.attributes['gen_ai.usage.cache_read.input_tokens'] == 4
         assert root.attributes['gen_ai.usage.output_tokens'] == sum(range(2, count + 2))
         assert root.attributes['lmdeploy.token_counts_complete']
         for span in [root, *prompts.values()]:

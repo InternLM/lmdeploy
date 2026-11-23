@@ -3,7 +3,9 @@
 Request phase timing follows vLLM request-level metrics: queue, Prefill to first token, and Decode
 from first to last token. Completed phase spans also expose these intervals in the platform
 waterfall. The first release covers ordinary generation and the native PyTorch Mooncake Store
-connector. P/D and Proxy tracing are outside this release. TurboMind supports
+connector. PyTorch tracing is enabled only for the Hybrid (full-engine) role; Prefill and Decode
+roles do not install this observer. P/D and Proxy tracing are outside this release.
+TurboMind supports
 ordinary request timing; this change does not add a new Store connector to TurboMind.
 
 ## Purpose and implementation
@@ -39,16 +41,21 @@ These are tracing identifiers; `request_id` remains the read-only gateway busine
 | `lmdeploy/serve/core/async_engine.py`, `lmdeploy/serve/openai/endpoints/completions.py`                       | Attach per-prompt state, assign batch positions and observe the existing generation path     |
 | `lmdeploy/serve/core/chat_runner.py`, `lmdeploy/serve/openai/chat_completions/`                               | Pass the resolved model and explicit choice identity through existing preprocessing metadata |
 | `lmdeploy/serve/observability/request_trace.py`                                                               | HTTP middleware, timing aggregation, bounded SSE observation and asynchronous JSONL writing  |
+| `lmdeploy/serve/observability/output_trace.py`                                                                | Payload-free metadata shared by streaming adapters and the accepted-send observer            |
 | `lmdeploy/serve/observability/otel_trace.py`                                                                  | SDK initialization, parent propagation, metadata filtering, spans and OTLP export            |
 | `lmdeploy/messages.py`, `lmdeploy/pytorch/messages.py`                                                        | Carry optional Store event boundaries and counts with ordinary engine output                 |
 | `lmdeploy/pytorch/kv_connector/mooncake/store/scheduler.py`, `lmdeploy/pytorch/paging/kv_load_coordinator.py` | Observe existing Store lookup and load lifecycle                                             |
-| `setup.py`, `tests/observability/`, `tests/test_lmdeploy/serve/test_request_trace_*.py`                       | Optional trace dependencies, behavioral/transport regression tests and real-package checks   |
+| `requirements/serve.txt`, `tests/observability/`, `tests/test_lmdeploy/serve/test_request_trace_*.py`         | Serving dependencies, behavioral/transport regression tests and real-package checks          |
 
 ## Export traces to a local Collector
 
-Install `lmdeploy[trace]` and set the endpoint before starting the API server:
+Install `lmdeploy[serve]` and set the endpoint before starting the API server.
+The serving dependencies include the OpenTelemetry SDK and both OTLP exporters;
+no separate trace extra is needed. Installing dependencies does not enable tracing.
 
 ```bash
+pip install 'lmdeploy[serve]'
+
 export OTEL_SERVICE_NAME=lmdeploy-full
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.namespace.svc:4317
 export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
@@ -70,13 +77,16 @@ Never send JSONL to the trace pipeline. Collector persistent buffering is deploy
 
 The private provider uses ParentBased(ALWAYS_ON), a bounded BatchSpanProcessor and asynchronous
 export. It respects an upstream unsampled flag; there is no additional random source sampling.
+With JSONL disabled, unsampled HTTP requests skip prompt observers and output inspection while
+preserving ordinary response behavior and valid request-ID correlation.
 Invalid startup settings fail startup; runtime instrumentation/export failures do not replace an
 inference result. No SDK work or per-token span creation is added to the engine output loop.
 
 LMDeploy emits `llm_request` (HTTP SERVER), `inference` (one per prompt), and the INTERNAL
 `model.prefill` and `model.decode` phases when their complete boundaries are known.
 Choose either HTTP or prompt usage when aggregating tokens. GenAI latency attributes use seconds.
-OTLP timestamps are epoch nanoseconds. Store and visible output timings are scalar attributes on the prompt span.
+OTLP timestamps are epoch nanoseconds. Store and visible output timings are scalar attributes on
+the prompt span.
 Input preparation is the scalar `lmdeploy.preprocess_seconds`, with no separate span.
 Stage durations are not pure GPU kernel times.
 
@@ -110,8 +120,11 @@ Register engine `lmdeploy` and role `full` and retain the platform's error-trace
 policy. The gateway must propagate the valid
 `x-request-id`, `traceparent` and explicit `x-session-id` and export the referenced upstream span.
 
-The complete allowlists below make the integration contract explicit. The companion
-`request_trace_contract.json` contains the same lists in machine-readable form.
+The lists below describe the platform integration fields. The companion
+`request_trace_contract.json` contains them in machine-readable form. Safe scalar resource metadata
+from the SDK and `OTEL_RESOURCE_ATTRIBUTES` is preserved, including `service.namespace`,
+`deployment.environment.name`, `k8s.pod.uid` and `telemetry.sdk.*`. The gateway controls which of
+these additional fields it retains; their presence does not change engine or role identity.
 
 Resource attributes:
 
@@ -146,6 +159,7 @@ gen_ai.response.model
 gen_ai.usage.input_tokens
 gen_ai.usage.output_tokens
 gen_ai.usage.cached_tokens
+gen_ai.usage.cache_read.input_tokens
 gen_ai.latency.time_to_first_token
 gen_ai.latency.e2e
 lmdeploy.prompt_index
@@ -172,6 +186,11 @@ lmdeploy.tpot_seconds
 lmdeploy.token_counts_complete
 lmdeploy.preprocess_seconds
 ```
+
+`gen_ai.usage.cache_read.input_tokens` is the standard cache-read count. The existing
+`gen_ai.usage.cached_tokens` carries the same value for platform compatibility; do not add them.
+The platform accepts scalar attributes only, so finish reasons remain `lmdeploy.finish_reason`
+rather than introducing the array-valued `gen_ai.response.finish_reasons`.
 
 Span events:
 
@@ -206,10 +225,11 @@ JSONL files are written to:
 <root>/lmdeploy/<hostname>/<YYYYMMDDTHHMMSS.ffffffZ>.<PID>.jsonl
 ```
 
-The observer handles ordinary complete SSE frames directly, with a shared bounded parser for
-fragmented/coalesced/CRLF frames. It decodes JSON semantically without scanning for each possible
-field name first. Each accepted ASGI body is parsed once; per-choice semantic flags are routed by
-explicit wire indices, even when one frame contains multiple choices. Unknown or ambiguous owners
+Streaming adapters attach only choice indices and semantic flags to their existing serialized
+frames. The observer consumes that metadata after a successful ASGI send, without reparsing JSON.
+A shared bounded parser remains for unannotated fragmented/coalesced/CRLF frames.
+Per-choice flags are routed by explicit wire indices, even when one frame contains multiple choices.
+Unknown or ambiguous owners
 only contribute to HTTP observations, never to a guessed prompt. No shared last-yield state is used.
 Per-request engine observers are bound once before generation; token counts and
 status are read once per output. None of these paths retain generated text.
@@ -321,8 +341,10 @@ Prefill/Decode include scheduling, preemption and host processing; they are not 
 KV lookup/load may overlap queue time, so stage durations must not be added together. API output
 observations are accepted server sends, not client network receipt times.
 
-A final-only batch containing several tokens supplies a last-token observation but no first-token
-boundary. Its Prefill/Decode, TTFT and TPOT are null. A backend that already provides incremental
+PyTorch carries the earliest generated-token timestamp on the request before output coalescing;
+later batches retain it without additional engine output. A multi-token batch without an explicit
+first-token timestamp supplies only a last-token observation, leaving Prefill/Decode, TTFT and TPOT
+unknown. A backend that already provides incremental
 outputs retains the available boundaries even when the HTTP response is aggregated. Scoring-only
 requests do not invent a generated token. A known single-token Decode interval is zero.
 If the newest token batch lacks timing, last-token and Decode/TPOT remain unknown rather than
@@ -339,8 +361,10 @@ time is a Python callback observation, while PyTorch supplies model-agent timing
 can limit boundary precision; missing boundaries cannot diagnose an unobserved interval.
 
 Visible stages are observed from Chat/Completions, Responses, Messages and native Generate SSE.
-Nonstream JSON and hidden reasoning do not infer visible stage times. SSE lines are bounded to
-1 MiB; oversized or malformed lines can leave stages unknown without changing the response body.
+Nonstream JSON and hidden reasoning do not infer visible stage times. The fallback parser bounds SSE
+lines to 1 MiB; oversized or malformed lines can leave stages unknown without changing the response
+body. Responses terminal event headers preserve completion for oversized terminal payloads.
+Annotated frames are observed without this parser limit.
 Records accepted in one ASGI body share its observation timestamp; parsing time is not counted as
 a visible output gap. Frames use JSON semantics, including escaped keys; words inside generated
 text are never classified as events.
@@ -414,18 +438,67 @@ The import smoke skips when torch is unavailable and otherwise imports the real 
 
 ## Machine validation
 
-The API-usage and resource-bound corrections passed 619 current CPU/interface checks and
-56 subtests. SDK 1.27 ran 113 tests (three dependency skips); the full runtime exercised the
-real-package tests and both protobuf transports. These corrections have not been remeasured
-with GPU inference. The machine measurements below are a prior baseline, not a measurement
-of the current correction's performance overhead.
+### PyTorch with Router and Mooncake Store
+
+The current tracing corrections passed 119 observability tests, including real gRPC and
+HTTP/protobuf export, and 3,039 serving tests. Three tests requiring an unbuilt TurboMind
+C++ extension were skipped. These checks use the real serving package and cover output
+ownership, unchanged response bytes, mounted APIs, text stops, oversized terminal events,
+unsampled requests and native first-token timestamps across output coalescing.
+
+GLM-5.3-Flash (revision `3f1971b7b5f7a528c9c4ef6212c8785298a8c24a`) ran on one
+eight-H200 node with PyTorch DP8/EP8, MTP5 and Mooncake Store. Settings included batch size
+32, context length 524,288, prefill chunk limit 8,192, cache fraction 0.7 and prefix caching.
+The runtime used Python 3.12.3, PyTorch 2.12.1/CUDA 13.0, Transformers 5.17.0 and
+OpenTelemetry SDK/exporters 1.45.2, checked against the declared serving dependencies.
+
+AgentX used 70 concurrent trajectories from `semianalysis_cc_traces_weka_062126_256k`,
+streaming requests, a 256,000-token workload context limit and dataset seed 20260910.
+This seed fixes workload selection, not model generation. Each mode had a warmup and
+900-second measurement, followed by a 30-second drain and 10-second cancellation settlement.
+The reported throughput uses the approximately 940-second window. The same separate CPU
+client ran both modes. Model and client startup were outside the measurement window.
+
+The comparison covers tracing disabled in both Router and LMDeploy versus their full
+sampling and asynchronous OTLP export through a local Collector to the gateway. JSONL is
+disabled in both modes. Collector file export is also disabled during measurement.
+
+| Metric (completed requests) |  Trace off | Full sampling | Change |
+| --------------------------- | ---------: | ------------: | -----: |
+| Successful requests         |      1,064 |         1,064 |  0.00% |
+| Mean TTFT (ms)              |  1,373.116 |     1,325.361 | -3.48% |
+| Median TTFT (ms)            |    903.918 |       911.211 | +0.81% |
+| p99 TTFT (ms)               | 10,339.701 |     9,642.086 | -6.75% |
+| Mean TPOT/ITL (ms/token)    |     24.549 |        25.125 | +2.35% |
+| Output tokens/s             |    886.763 |       864.199 | -2.54% |
+| Requests/s                  |      1.132 |         1.132 |  0.00% |
+| Goodput (requests/s)        |      0.790 |         0.749 | -5.25% |
+| Mean input tokens           | 93,967.212 |    93,855.014 | -0.12% |
+| Mean output tokens          |    783.420 |       763.485 | -2.54% |
+
+Goodput requires TTFT at most 3,000 ms and per-user output throughput at least 40 tokens/s.
+Latency and token statistics describe completed requests; they do not include unfinished
+requests. Matching 1,059 requests by trajectory and turn gives identical mean output length,
+with mean TTFT changing by -3.91% and mean ITL by +2.04%. These are sequential runs, not a
+universal overhead bound: generation, cache state and scheduling can differ. Lower TTFT does
+not establish a tracing speedup, and the throughput change accompanies different output lengths.
+
+The Collector accepted and exported 5,712 spans during the full-sampling run, with zero
+refused or failed exports and an empty queue at completion. The off run exported no new spans.
+These counters establish OTLP transport delivery, not final gateway filtering or query acceptance.
+The deployment's five business span names, parent relationships and timing boundaries are
+unchanged by the streaming metadata optimization.
+
+### Earlier cross-backend validation
+
+The following measurements predate the current corrections and describe a separate workload.
 
 Validation passed 2,560 CPU checks, 212 existing Store scheduling/loading checks and
 three TurboMind native grammar checks (plus 41 subtests). The trace suite also ran
 with the minimum supported OpenTelemetry SDK/exporters 1.27.0: 105 passed and three
 runtime-dependent tests skipped in that isolated environment. Current SDK/exporters
 1.45.2 were tested with the full runtime. Real gRPC and HTTP/protobuf export ran on both
-SDK versions. The unit-test workflow installs the optional trace dependencies.
+SDK versions. The unit-test workflow installs the serving dependencies, including tracing.
 
 Both backends were tested with Qwen3-Coder-480B-A35B-Instruct-FP8 on four H200 GPUs,
 TP4/EP1, Python 3.12, PyTorch 2.12.1/CUDA 13.0 and Transformers 5.17.0. Runtime and

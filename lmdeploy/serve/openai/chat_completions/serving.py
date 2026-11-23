@@ -15,6 +15,7 @@ from lmdeploy.serve.core.chat_runner import (
     ChatRunnerOptions,
 )
 from lmdeploy.serve.core.exceptions import RequestError
+from lmdeploy.serve.observability.request_trace import trace_frame
 from lmdeploy.serve.openai.endpoints.common import validate_request
 from lmdeploy.serve.openai.errors import (
     create_error_response,
@@ -316,10 +317,10 @@ def register(router: APIRouter, server_context) -> None:
                         response_json['cache_session_id'] = chat_runner.session.session_id
                         response_json['cache_block_ids'] = chunk.cache_block_ids
                         response_json['remote_token_ids'] = chunk.token_ids
-                    yield f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n'
+                    yield trace_frame(f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n', response_json)
                 if final_usage is not None:
-                    yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
-                yield 'data: [DONE]\n\n'
+                    yield trace_frame(f'data: {create_stream_usage_response_json(final_usage)}\n\n')
+                yield trace_frame('data: [DONE]\n\n', terminal=True)
             finally:
                 await chat_runner.close()
 
@@ -328,8 +329,9 @@ def register(router: APIRouter, server_context) -> None:
                 async for chunk in _completion_stream_generator():
                     yield chunk
             except RequestError as error:
-                yield f'data: {json.dumps({"error": request_error_payload(error)}, ensure_ascii=False)}\n\n'
-                yield 'data: [DONE]\n\n'
+                error_payload = {'error': request_error_payload(error)}
+                yield trace_frame(f'data: {json.dumps(error_payload, ensure_ascii=False)}\n\n', error_payload)
+                yield trace_frame('data: [DONE]\n\n', terminal=True)
 
         # Streaming response
         if request.stream:

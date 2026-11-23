@@ -13,6 +13,7 @@ import shortuuid
 from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
+from lmdeploy.serve.observability.request_trace import trace_frame
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, UsageInfo
 from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
@@ -329,10 +330,10 @@ async def _collate_streams(
                     break
 
             for payload in _batch_stream_payloads(payloads):
-                yield f'data: {json.dumps(payload, ensure_ascii=False)}\n\n'
+                yield trace_frame(f'data: {json.dumps(payload, ensure_ascii=False)}\n\n', payload)
             if error_event is not None:
-                yield f'data: {json.dumps(error_event, ensure_ascii=False)}\n\n'
-                yield 'data: [DONE]\n\n'
+                yield trace_frame(f'data: {json.dumps(error_event, ensure_ascii=False)}\n\n', error_event)
+                yield trace_frame('data: [DONE]\n\n', terminal=True)
                 return
             if stream_error is not None:
                 raise stream_error
@@ -346,8 +347,8 @@ async def _collate_streams(
                 'choices': [],
                 'usage': _aggregate_usage(ordered_usages).model_dump(),
             }
-            yield f'data: {json.dumps(usage_response, ensure_ascii=False)}\n\n'
-        yield 'data: [DONE]\n\n'
+            yield trace_frame(f'data: {json.dumps(usage_response, ensure_ascii=False)}\n\n', usage_response)
+        yield trace_frame('data: [DONE]\n\n', terminal=True)
     finally:
         stopping.set()
         await _shield_cleanup(_cancel_tasks(tasks),

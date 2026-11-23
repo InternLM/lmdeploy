@@ -434,7 +434,10 @@ def serve(model_path: str,
         # router replay
         if backend_config.enable_return_routed_experts:
             backend_config.enable_transfer_obj_ref = True
+    from lmdeploy.serve.observability.request_trace import supported_engine
     from lmdeploy.trace import ENABLED as TRACE_ENABLED
+
+    trace_enabled = TRACE_ENABLED and supported_engine(backend, backend_config)
 
     server_context.async_engine = pipeline_class(
         model_path=model_path,
@@ -446,7 +449,7 @@ def serve(model_path: str,
         trust_remote_code=trust_remote_code,
         speculative_config=speculative_config,
         allowed_media_domains=allowed_media_domains,
-        enable_request_trace=TRACE_ENABLED,
+        enable_request_trace=trace_enabled,
         **kwargs)
     set_parsers(server_context, reasoning_parser, tool_call_parser)
     if task is not None:
@@ -470,7 +473,7 @@ def serve(model_path: str,
                                                                ssl_certfile=ssl_certfile)
                                                           if monitoring_port is not None else None))
 
-    app_class = _TracingFastAPI if TRACE_ENABLED else FastAPI
+    app_class = _TracingFastAPI if trace_enabled else FastAPI
     if disable_fastapi_docs:
         app = app_class(docs_url=None,
                         redoc_url=None,
@@ -493,7 +496,7 @@ def serve(model_path: str,
         app.add_middleware(
             CORSMiddleware,
             allow_origins=allow_origins,
-            expose_headers=[HEADER] if TRACE_ENABLED else [],
+            expose_headers=[HEADER] if trace_enabled else [],
             allow_credentials=allow_credentials,
             allow_methods=allow_methods,
             allow_headers=allow_headers,

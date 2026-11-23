@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
+from lmdeploy.serve.observability.request_trace import trace_frame
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
 from lmdeploy.serve.openai.errors import (
     create_error_response,
@@ -370,18 +371,20 @@ def register(router: APIRouter, server_context) -> None:
                             response_json['cache_session_id'] = sessions[gen_index].session_id
                             response_json['cache_block_ids'] = res.cache_block_ids
                             response_json['remote_token_ids'] = res.token_ids
-                        yield f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n'
+                        yield trace_frame(f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n', response_json)
             except RequestError as e:
-                yield f'data: {json.dumps({"error": request_error_payload(e)}, ensure_ascii=False)}\n\n'
-                yield 'data: [DONE]\n\n'
+                error_payload = {'error': request_error_payload(e)}
+                yield trace_frame(f'data: {json.dumps(error_payload, ensure_ascii=False)}\n\n', error_payload)
+                yield trace_frame('data: [DONE]\n\n', terminal=True)
                 return
             if final_usage is not None:
                 final_usage.prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
                 if counters is not None:
                     final_usage.completion_tokens_details = CompletionTokensDetails(
                         reasoning_tokens=sum(counter.reasoning_tokens for counter in counters))
-                yield f'data: {json.dumps(create_stream_usage_response_json(final_usage), ensure_ascii=False)}\n\n'
-            yield 'data: [DONE]\n\n'
+                usage_payload = create_stream_usage_response_json(final_usage)
+                yield trace_frame(f'data: {json.dumps(usage_payload, ensure_ascii=False)}\n\n')
+            yield trace_frame('data: [DONE]\n\n', terminal=True)
 
         # Streaming response
         if request.stream:

@@ -32,7 +32,13 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeInitRequest,
 )
 from lmdeploy.serve.managers import Session, SessionManager
-from lmdeploy.serve.observability.request_trace import RequestTrace, get_writer, trace_generate, trace_preprocess
+from lmdeploy.serve.observability.request_trace import (
+    RequestTrace,
+    get_writer,
+    supported_engine,
+    trace_generate,
+    trace_preprocess,
+)
 from lmdeploy.serve.processors import MultimodalProcessor
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import _get_and_verify_max_len, _stop_words, get_hf_gen_cfg, get_logger
@@ -156,8 +162,8 @@ class AsyncEngine:
                  allowed_media_domains: list[str] | None = None,
                  enable_request_trace: bool = False,
                  **kwargs) -> None:
-        self.request_trace_enabled = enable_request_trace
-        if enable_request_trace:
+        self.request_trace_enabled = enable_request_trace and supported_engine(backend, backend_config)
+        if self.request_trace_enabled:
             get_writer()
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'speculative_config={speculative_config}')
@@ -832,6 +838,8 @@ class AsyncEngine:
                                     outputs = EngineOutput(ResponseType.INTERNAL_ENGINE_ERROR, [])
                         status = outputs.status if is_error(outputs.status) else ResponseType.FINISH
                         metric_output = dataclasses.replace(metric_output, status=status, token_ids=accepted)
+                        if request.trace is not None and status == ResponseType.FINISH:
+                            request.trace.terminal = True
                         break
                     finally:
                         if content_stop is not None:

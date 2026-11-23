@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lmdeploy.serve.observability import otel_trace
+from lmdeploy.serve.observability import otel_trace, output_trace
 from lmdeploy.trace import ENABLED, LOG_ENABLED
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,30 @@ _decode_json = json.JSONDecoder().decode
 
 def enabled():
     return ENABLED
+
+
+@otel_trace.fail_open
+def _annotate_frame(frame, payload, terminal):
+    return output_trace.ObservedString(frame, output_trace.summarize(payload, terminal=terminal))
+
+
+def trace_frame(frame, payload=None, *, terminal=False):
+    """Attach flags to a serialized frame only when this request is
+    observed."""
+    if not enabled():
+        return frame
+    outcome = request_outcome_context.get()
+    if outcome is None or not outcome.get('observe', True):
+        return frame
+    annotated = _annotate_frame(frame, payload, terminal)
+    return frame if annotated is None else annotated
+
+
+def supported_engine(backend, config):
+    """This observer describes full-engine serving, including explicit library
+    opt-in."""
+    role = getattr(config, 'role', None)
+    return backend != 'pytorch' or role is None or getattr(role, 'name', role) == 'Hybrid'
 
 
 def _http_log_context(span, headers):
@@ -331,15 +355,22 @@ class RequestTrace:
             self.last_token = None
             now = time.monotonic()
             if self.previous_delivery is not None:
-                self.max_delivery_gap = max(self.max_delivery_gap or 0, now - self.previous_delivery)
+                gap = now - self.previous_delivery
+                if self.max_delivery_gap is None or gap > self.max_delivery_gap:
+                    self.max_delivery_gap = gap
             self.previous_delivery = now
             if (metrics is not None and math.isfinite(metrics.token_timestamp)
                     and metrics.token_timestamp > 0):
                 # A final-only multi-token batch supplies no first-token boundary.
                 # Preserve backend mode and leave the split unknown in that case.
-                if self.generated_tokens == 0 and (status == 'SUCCESS' or token_count == 1):
-                    self.first_token = metrics.token_timestamp
-                    self.delivery_delay = interval(metrics.token_timestamp, time.time())
+                if self.generated_tokens == 0:
+                    first = getattr(metrics, 'first_token_timestamp', 0)
+                    if math.isfinite(first) and 0 < first <= metrics.token_timestamp:
+                        self.first_token = first
+                    elif token_count == 1:
+                        self.first_token = metrics.token_timestamp
+                    if self.first_token is not None:
+                        self.delivery_delay = interval(self.first_token, time.time())
                 self.last_token = metrics.token_timestamp
         self.generated_tokens += token_count
 
@@ -455,7 +486,9 @@ def trace_preprocess(func):
         prompt_index = kwargs.pop('trace_prompt_index', None)
         choice_index = kwargs.pop('trace_choice_index', None)
         model = kwargs.pop('trace_model', None)
-        if not enabled() or (args and not getattr(args[0], 'request_trace_enabled', True)):
+        outcome = request_outcome_context.get()
+        if (not enabled() or (args and not getattr(args[0], 'request_trace_enabled', True))
+                or (outcome is not None and outcome.get('observe') is False)):
             return await func(*args, **kwargs)
         trace = RequestTrace(prompt_index=prompt_index, choice_index=choice_index)
         engine = args[0] if args else None
@@ -530,8 +563,12 @@ class RequestTraceMiddleware:
         get_writer()
 
     async def __call__(self, scope, receive, send):
+        path = scope.get('path', '')
+        root = scope.get('root_path', '')
+        if root and (path == root or path.startswith(root + '/')):
+            path = path[len(root):]
         if (not enabled() or scope['type'] != 'http' or scope.get('method') != 'POST'
-                or scope.get('path') not in ('/v1/chat/completions', '/v1/completions',
+                or path not in ('/v1/chat/completions', '/v1/completions',
                                             '/v1/responses', '/v1/messages', '/generate')):
             return await self.app(scope, receive, send)
         # HTTP correlation is read-only; prompt state and spans are independent.
@@ -547,10 +584,30 @@ class RequestTraceMiddleware:
             key = key.lower()
             if key in wanted:
                 headers.setdefault(key.decode('ascii'), value.decode('latin1'))
-        outcome['operation'] = ('chat' if scope['path'] in ('/v1/chat/completions', '/v1/messages')
+        outcome['operation'] = ('chat' if path in ('/v1/chat/completions', '/v1/messages')
                                 else 'text_completion')
         outcome['request_id'] = otel_trace.request_id(headers)
-        outcome['otel_span'] = otel_trace.begin_http(headers, scope['path'], received_ns, outcome)
+        outcome['otel_span'] = otel_trace.begin_http(headers, path, received_ns, outcome)
+        span = outcome['otel_span']
+        outcome['observe'] = LOG_ENABLED or (span is not None and span.is_recording())
+        if not outcome['observe']:
+            # Keep correlation and the decision in child tasks without allocating prompt
+            # observers or inspecting any response body for an unsampled request.
+            token = request_outcome_context.set(outcome)
+
+            async def correlated_send(message):
+                if message['type'] == 'http.response.start' and outcome['request_id'] is not None:
+                    response_headers = message.get('headers', [])
+                    if not any(k.lower() == b'x-request-id' for k, _ in response_headers):
+                        message = dict(message, headers=[*response_headers,
+                            (b'x-request-id', outcome['request_id'].encode())])
+                await send(message)
+
+            try:
+                return await self.app(scope, receive, correlated_send)
+            finally:
+                outcome['closed'] = True
+                request_outcome_context.reset(token)
         outcome['log_context'] = _http_log_context(outcome['otel_span'], headers)
         outcome_token = request_outcome_context.set(outcome)
         first_body = None
@@ -663,6 +720,7 @@ class OutputObservation:
         self.sse = self.terminal = self.error = self.cancelled = False
         self.buffer = bytearray()
         self.skipping = False
+        self.event_failed = False
         self.first_output = self.reasoning_first = self.reasoning_last = self.content_first = None
         self.previous_output = self.max_output_gap = None
 
@@ -671,6 +729,10 @@ class OutputObservation:
         # many SSE records. Avoid splitlines() allocations and repeated copying
         # of a partial line split over many small body messages.
         observed_at = time.monotonic()
+        metadata = getattr(body, 'trace_metadata', None)
+        if isinstance(metadata, output_trace.OutputMetadata):
+            self.observe_metadata(metadata, observed_at)
+            return
         # The server normally sends one complete SSE record per body. Keep
         # split, coalesced, CRLF and oversized records on the bounded slow path.
         if (not self.buffer and not self.skipping and len(body) <= 1024 * 1024
@@ -686,6 +748,7 @@ class OutputObservation:
             if len(self.buffer) + size > 1024 * 1024:
                 self.buffer.clear()
                 self.skipping = True
+                self.error |= self.event_failed
             if not self.skipping:
                 if not self.buffer and newline >= 0:
                     self._line(body[offset:end].strip(), observed_at)
@@ -699,6 +762,15 @@ class OutputObservation:
             offset = end
 
     def _line(self, line, observed_at):
+        if not line:
+            self.event_failed = False
+            return
+        if line.startswith(b'event:'):
+            event = line[6:].strip()
+            self.terminal |= event in (b'response.completed', b'response.incomplete',
+                                       b'response.failed', b'message_stop')
+            self.event_failed = event in (b'response.failed', b'error')
+            return
         if not line.startswith(b'data:'):
             return
         data = line[5:].strip()
@@ -709,68 +781,23 @@ class OutputObservation:
             # SSE is UTF-8; avoid json.loads(bytes)' repeated encoding detection.
             obj = _decode_json(data.decode('utf-8'))
         except (ValueError, UnicodeError, RecursionError):
+            self.error |= self.event_failed
             return
         if not isinstance(obj, dict):
             return
-        kind = obj.get('type', '')
-        error = obj.get('error')
-        response = obj.get('response')
-        response_cancelled = isinstance(response, dict) and response.get('status') == 'cancelled'
-        if response_cancelled or (isinstance(error, dict) and error.get('code') == 'request_cancelled'):
-            self.cancelled = True
-        elif error or kind in ('error', 'response.failed'):
-            self.error = True
-        self.terminal |= kind in ('message_stop', 'response.completed', 'response.incomplete', 'response.failed')
+        self.observe_metadata(output_trace.summarize(obj), observed_at)
+
+    def observe_metadata(self, metadata, observed_at):
+        self.terminal |= metadata.terminal
+        self.error |= metadata.error
+        self.cancelled |= metadata.cancelled
         reasoning = content = tool = False
-        choices = obj.get('choices')
-        if isinstance(choices, list):
-            for choice in choices:
-                if not isinstance(choice, dict):
-                    continue
-                delta = choice.get('delta') or {}
-                choice_reasoning = choice_content = choice_tool = False
-                if isinstance(delta, dict):
-                    choice_reasoning = bool(delta.get('reasoning_content') or delta.get('reasoning'))
-                    choice_content = bool(delta.get('content'))
-                    choice_tool = bool(delta.get('tool_calls') or delta.get('function_call'))
-                choice_content |= bool(choice.get('text'))
-                reasoning |= choice_reasoning
-                content |= choice_content
-                tool |= choice_tool
-                if self.on_output is not None and (choice_reasoning or choice_content or choice_tool):
-                    index = choice.get('index')
-                    if index is None or (type(index) is int and index >= 0):
-                        self.on_output(index, choice_reasoning, choice_content, choice_tool, observed_at)
-                self.cancelled |= choice.get('finish_reason') == 'abort'
-                self.error |= choice.get('finish_reason') in ('error', 'parse_error')
-        delta = obj.get('delta')
-        if kind in ('response.reasoning_text.delta', 'response.reasoning_summary_text.delta'):
-            reasoning |= bool(delta)
-        elif kind == 'response.output_text.delta':
-            content |= bool(delta)
-        elif kind == 'response.function_call_arguments.delta':
-            tool |= bool(delta)
-        elif kind == 'response.output_item.added':
-            item = obj.get('item')
-            tool |= isinstance(item, dict) and item.get('type') == 'function_call'
-        elif isinstance(delta, dict):
-            reasoning |= bool(delta.get('thinking'))
-            content |= bool(delta.get('text'))
-            tool |= bool(delta.get('partial_json'))
-        block = obj.get('content_block')
-        if isinstance(block, dict):
-            reasoning |= bool(block.get('thinking'))
-            content |= bool(block.get('text'))
-            tool |= block.get('type') == 'tool_use'
-        meta = obj.get('meta_info')
-        if isinstance(meta, dict):
-            content |= bool(obj.get('text'))
-            finish = meta.get('finish_reason')
-            if isinstance(finish, dict):
-                self.cancelled |= finish.get('type') == 'abort'
-                self.error |= finish.get('type') == 'error'
-        if not isinstance(choices, list) and self.on_output is not None and (reasoning or content or tool):
-            self.on_output(None, reasoning, content, tool, observed_at)
+        for index, has_reasoning, has_content, has_tool in metadata.outputs:
+            reasoning |= has_reasoning
+            content |= has_content
+            tool |= has_tool
+            if self.on_output is not None and (index is None or index >= 0):
+                self.on_output(index, has_reasoning, has_content, has_tool, observed_at)
         self.observe(reasoning, content, tool, observed_at)
 
     def observe(self, reasoning, content, tool, now):
@@ -784,7 +811,9 @@ class OutputObservation:
             if self.first_output is None:
                 self.first_output = now
             if self.previous_output is not None:
-                self.max_output_gap = max(self.max_output_gap or 0, now - self.previous_output)
+                gap = now - self.previous_output
+                if self.max_output_gap is None or gap > self.max_output_gap:
+                    self.max_output_gap = gap
             self.previous_output = now
 
     def summary(self):

@@ -27,7 +27,7 @@ except ImportError:
     SDK = False
 
 
-@unittest.skipUnless(SDK, 'install lmdeploy[trace] to test SDK and OTLP wire transport')
+@unittest.skipUnless(SDK, 'install lmdeploy[serve] to test SDK and OTLP wire transport')
 class OTLPTests(unittest.TestCase):
     def setUp(self):
         self.exporter = InMemorySpanExporter()
@@ -196,7 +196,9 @@ class OTLPTests(unittest.TestCase):
 
     def test_configurable_service_keeps_real_engine_role_and_privacy(self):
         with patch.dict(os.environ, {'OTEL_SERVICE_NAME': 'registered-lmdeploy-service',
-                'OTEL_RESOURCE_ATTRIBUTES': 'inference.engine=other,inference.role=decode,k8s.pod.name=test-pod',
+                'OTEL_RESOURCE_ATTRIBUTES': ('inference.engine=other,inference.role=decode,k8s.pod.name=test-pod,'
+                    'service.namespace=inference,deployment.environment.name=prod,k8s.pod.uid=pod-uid,'
+                    'authorization=private,prompt=private'),
                 'OTEL_EXPORTER_OTLP_ENDPOINT': 'http://127.0.0.1:1'}, clear=True), \
                 patch.object(otel, '_provider', None), patch.object(otel, '_tracer', None), \
                 patch.object(otel, '_pid', None):
@@ -207,6 +209,12 @@ class OTLPTests(unittest.TestCase):
                 self.assertEqual(attrs['inference.engine'], 'lmdeploy')
                 self.assertEqual(attrs['inference.role'], 'full')
                 self.assertEqual(attrs['k8s.pod.name'], 'test-pod')
+                self.assertEqual(attrs['service.namespace'], 'inference')
+                self.assertEqual(attrs['deployment.environment.name'], 'prod')
+                self.assertEqual(attrs['k8s.pod.uid'], 'pod-uid')
+                self.assertEqual(attrs['telemetry.sdk.language'], 'python')
+                self.assertNotIn('authorization', attrs)
+                self.assertNotIn('prompt', attrs)
             finally:
                 otel._provider.shutdown()
         for service in ('', 'bad\nservice', 'Bearer private', 's' * 1025):
