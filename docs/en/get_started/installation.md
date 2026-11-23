@@ -20,6 +20,23 @@ conda activate lmdeploy
 pip install lmdeploy
 ```
 
+## FlashKDA in CUDA 13 Docker builds
+
+Images built from `docker/Dockerfile` or `docker/Dockerfile_dev` with
+`--build-arg CUDA_VERSION=cu130` include a pinned [FlashKDA](https://github.com/MoonshotAI/FlashKDA)
+wheel. CUDA 12.8 builds retain the Triton KDA implementation.
+
+FlashKDA is disabled by default because FLA 0.5.2 does not check GPU architecture
+before selecting it. On supported SM90+ GPUs, such as H100 or H200, pass
+`-e FLA_FLASH_KDA=1` to `docker run` to enable it for eligible KDA prefill calls.
+Keep `FLA_DISABLE_BACKEND_DISPATCH` unset. Set `FLA_FLASH_KDA=0` to use Triton again;
+restart the service after changing these variables. KDA decode is unchanged.
+
+The GLM-5.3 KDA prefill adapter already supplies FlashKDA's required options.
+Verify dispatch with a prefill trace: FlashKDA emits `_flash_kda_fwd_prepare` and
+`_flash_kda_fwd_recurrence` kernels. Compare prefill outputs and recurrent states,
+and validate model quality before enabling it for production traffic.
+
 ## Install from source
 
 By default, LMDeploy will build with NVIDIA CUDA support, utilizing both the Turbomind and PyTorch backends. TurboMind requires C++20 for both host C++ and CUDA compilation, CMake 3.25.2 or newer, and CUDA Toolkit 12.0 or newer. Use a C++20-capable host compiler supported by your CUDA Toolkit, such as GCC 10 or newer on Linux or Visual Studio 2022 on Windows.

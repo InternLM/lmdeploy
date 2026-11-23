@@ -4,6 +4,8 @@ ENV CUDA_VER=12.6 \
     PYTHON_VERSION=3.10 \
     PATH=/opt/py3/bin:/root/.local/bin:/usr/local/cuda/bin:${PATH}
 
+# Jetson PyTorch wheels require cuDSS ABI 0; the cudss metapackage now selects
+# ABI 1. Install the compatible runtime and register its library directory.
 RUN --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/tmp/download \
     export CUDA_SUFFIX=$(echo $CUDA_VER | sed 's/\./-/g') && \
@@ -16,8 +18,10 @@ RUN --mount=type=cache,target=/root/.cache \
     rm -rf *.deb *.deb.* && \
     apt update -y && \
     apt-get install -y --no-install-recommends \
-        cuda-toolkit-${CUDA_SUFFIX} cuda-compat-${CUDA_SUFFIX} libcudnn9-cuda-12 libcusparselt0 cudss \
+        cuda-toolkit-${CUDA_SUFFIX} cuda-compat-${CUDA_SUFFIX} libcudnn9-cuda-12 libcusparselt0 libcudss0-cuda-12 \
         git libopenblas-dev python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv && \
+    echo /usr/lib/aarch64-linux-gnu/libcudss/12 > /etc/ld.so.conf.d/cudss.conf && \
+    ldconfig && \
     apt-get clean -y && \
     rm -rf /var/lib/apt/lists/* && \
     python${PYTHON_VERSION} -m venv /opt/py3 && \
