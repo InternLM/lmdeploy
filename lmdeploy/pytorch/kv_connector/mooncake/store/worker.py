@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import gc
 import socket
 import threading
 import time
@@ -46,6 +47,38 @@ def _load_mooncake_store_factory() -> StoreFactory:
             'MooncakeStoreConnector requires the mooncake-transfer-engine package. '
             'Install it before enabling the connector.') from e
     return MooncakeDistributedStore
+
+
+# Stores retired by shutdown(), parked so they are NEVER destroyed in
+# userspace. Two teardown routes must both be blocked on the Ascend fabric-mem
+# path (ASCEND_ENABLE_USE_FABRIC_MEM=1), because each ends in the same driver
+# deadlock (devmm giant-page unmap: devmm_svm_ioctl_lock vs hdcdrv, immortal D
+# state, SIGKILL-proof) for 16GB segments -- see
+# test_speed/debug/mc_teardown_deadlock/:
+#   1. store.close(): the explicit call (16GB 4/4 wedge in the minimal repro).
+#   2. pybind destruction: interpreter finalization clears module globals,
+#      which frees the retired store and runs its C++ destructor -- the
+#      destructor walks the same unmap (wedged 2026-10-28 on dev2: 16GB
+#      retire-into-plain-list exited shutdown() cleanly, then hung in D state
+#      3s after sys.exit, right after "AscendDirectTransport destructor").
+# So the store must be *leaked* to process death: no close, no destruction.
+# The kernel's single-threaded exit path reclaims the segment and the master
+# drops the client registration after its TTL -- exactly how vllm-ascend's
+# AscendStoreConnector stays clean (its store is never closed and never
+# destroyed; it leaks through finalization).
+#
+# Mechanism: the list holds a self-reference, so finalization's module-global
+# decref cannot free it (refcount stays >= 1), and gc.freeze() moves it to the
+# permanent generation, which finalization collections never sweep. Verified
+# on CPython 3.12.13: a __del__ object parked this way is never finalized.
+_RETIRED_STORES: list[Any] = []
+_RETIRED_STORES.append(_RETIRED_STORES)
+
+
+def _retire_store(store: Any) -> None:
+    """Park a store so neither close() nor object destruction ever runs."""
+    _RETIRED_STORES.append(store)
+    gc.freeze()
 
 
 def _get_local_hostname() -> str:
@@ -671,7 +704,14 @@ class MooncakeStoreWorker:
         return matched_tokens
 
     def shutdown(self) -> None:
-        """Release Mooncake resources exactly once."""
+        """Release Mooncake resources exactly once.
+
+        The MooncakeDistributedStore itself is the one exception: it is parked
+        in _RETIRED_STORES via _retire_store() instead of being closed, because
+        both close() and destruction deadlock on Ascend fabric segments (see
+        _RETIRED_STORES). zmq endpoints and the transfer threads are still
+        torn down eagerly.
+        """
         lookup_server = self.lookup_server
         self.lookup_server = None
         if lookup_server is not None:
@@ -690,23 +730,10 @@ class MooncakeStoreWorker:
         store = self.store
         self.store = None
         if store is not None:
-            self._close_store(store)
+            logger.info(
+                'Mooncake Store interaction: operation=retire global_rank=%d tp_rank=%d tp_size=%d '
+                '(store intentionally not closed or destroyed; segment reclaimed at process exit)',
+                *self._rank_fields(),
+            )
+            _retire_store(store)
         self._transfer_backend.close()
-
-    def _close_store(self, store: Any) -> None:
-        logger.info(
-            'Mooncake Store interaction before: operation=close global_rank=%d tp_rank=%d tp_size=%d',
-            *self._rank_fields(),
-        )
-        start = time.perf_counter()
-        ret = store.close()
-        status = 'ok' if ret in (None, 0) else 'error'
-        log = logger.info if status == 'ok' else logger.warning
-        log(
-            'Mooncake Store interaction after: operation=close global_rank=%d tp_rank=%d tp_size=%d '
-            'status=%s elapsed_ms=%.3f ret=%s',
-            *self._rank_fields(),
-            status,
-            (time.perf_counter() - start) * 1000,
-            ret,
-        )
