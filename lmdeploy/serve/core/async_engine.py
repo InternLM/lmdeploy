@@ -5,7 +5,7 @@ import concurrent.futures
 import dataclasses
 import random
 import time
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from copy import deepcopy
 from typing import Any, Literal
 
@@ -702,7 +702,14 @@ class AsyncEngine:
             return
         session._remove_on_request_exit = True
         runtime_error = None
-        async with session.request_handle() as handle:
+        async with AsyncExitStack() as stack:
+            try:
+                handle = await stack.enter_async_context(session.request_handle())
+            except asyncio.CancelledError:
+                # safe_run only accounts for cancellations after routing.
+                metrics_processor.increase_failed_requests('cancel')
+                remove_session_once()
+                raise
             if session.epoch is not None and session.epoch != self.epoch:
                 logger.info(f'[generate] session {session_id} got aborted before starting inference, '
                                f'session.epoch={session.epoch}, async_engine.epoch={self.epoch}')
