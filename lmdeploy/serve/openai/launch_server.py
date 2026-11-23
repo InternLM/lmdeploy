@@ -58,9 +58,20 @@ def get_host_ip():
 
 def _run_server(gpu_ids: list[int], model_path: str, **kwargs):
     """Launch a server process."""
-    cuda_visible_devices = ','.join([str(_) for _ in gpu_ids])
     os.setpgrp()
-    if len(gpu_ids) > 0:
+    if gpu_ids:
+        config = kwargs.get('backend_config')
+        if getattr(config, 'moe_backend', 'default') != 'default':
+            # This frontend owns one Ray GPU resource. Its actor still needs
+            # the same device ordinals as the other EP ranks for symmetric IPC.
+            visible = os.environ.get('CUDA_VISIBLE_DEVICES')
+            peers = visible.split(',') if visible is not None else list(map(str, range(config.dp)))
+            if len(peers) < config.dp:
+                raise ValueError(f'MegaMoE requires {config.dp} peer GPUs, got {peers}.')
+            os.environ['LMDEPLOY_EP_CUDA_VISIBLE_DEVICES'] = ','.join(peers[:config.dp])
+            cuda_visible_devices = ','.join(peers[index] for index in gpu_ids)
+        else:
+            cuda_visible_devices = ','.join(map(str, gpu_ids))
         os.environ['CUDA_VISIBLE_DEVICES'] = cuda_visible_devices
     try:
         serve(model_path, **kwargs)

@@ -161,6 +161,10 @@ class SubCliServe:
         ArgumentHelper.dcp(pt_group)
         ArgumentHelper.enable_microbatch(pt_group)
         ArgumentHelper.enable_eplb(pt_group)
+        pt_group.add_argument('--moe-backend',
+                              choices=['default', 'deepgemm_mega_moe', 'flashinfer_mega_moe'],
+                              default='default',
+                              help='Routed MoE backend for GLM-5.3-Flash decode on a single SM90 node.')
         ArgumentHelper.role(pt_group)
         ArgumentHelper.migration_backend(pt_group)
         ArgumentHelper.cudagraph_capture_batch_sizes(pt_group)
@@ -268,6 +272,10 @@ class SubCliServe:
             raise ValueError('--kv-transfer-config is supported only by the PyTorch engine; '
                              'set --backend pytorch to enable a KV connector')
 
+        moe_backend = getattr(args, 'moe_backend', 'default')
+        if moe_backend != 'default' and (backend != 'pytorch' or args.nnodes != 1):
+            raise ValueError('--moe-backend requires the PyTorch engine on a single node.')
+
         if backend == 'pytorch':
             from lmdeploy.messages import PytorchEngineConfig
             adapters = get_lora_adapters(args.adapters)
@@ -300,6 +308,7 @@ class SubCliServe:
                 cudagraph_capture_batch_sizes=args.cudagraph_capture_batch_sizes,
                 enable_microbatch=args.enable_microbatch,
                 enable_eplb=args.enable_eplb,
+                moe_backend=moe_backend,
                 enable_metrics=not args.disable_metrics,
                 role=EngineRole[args.role],
                 migration_backend=MigrationBackend[args.migration_backend],

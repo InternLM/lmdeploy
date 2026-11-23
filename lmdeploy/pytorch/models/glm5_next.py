@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Sequence
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn.functional as F
@@ -86,6 +86,9 @@ from .glm_moe_dsa_mtp import GlmMoeDsaMTPModel, GlmMoeDsaMultiTokenPredictor
 from .qwen3_vl import Qwen3VLInputProcessor
 from .utils.cudagraph import PiecewiseCudaGraphMixin
 from .utils.model import build_embedding, vlm_model
+
+if TYPE_CHECKING:
+    from lmdeploy.pytorch.backends.cuda.moe.mega_moe import Sm90MegaMoE
 
 Glm5NextVisionRMSNorm = RMSNorm
 
@@ -532,7 +535,7 @@ class Glm5NextMoE(DeepseekV2MoE):
     fused_moe_fp32_acc = True
     shared_expert_cls = Glm5NextMLP
 
-    def __init__(self, config: Any, layer_idx: int, *args, **kwargs):
+    def __init__(self, config: Any, layer_idx: int, *args, mega_moe: Sm90MegaMoE | None = None, **kwargs):
         kwargs.setdefault('prefix', f'model.layers.{layer_idx}.mlp')
         super().__init__(config, layer_idx, *args, **kwargs)
         dist_config = get_dist_manager().current_config()
@@ -554,6 +557,102 @@ class Glm5NextMoE(DeepseekV2MoE):
                 'The GLM-5.3 router does not permit fake '
                 'routing or EPLB expert remapping.')
         self.gate.noaux_tc_router = Glm5NextNoauxTCRouter(config)
+        self.mega_moe = mega_moe
+        self._piecewise_mega_forward = None
+        if mega_moe is not None:
+            mega_moe.configure_experts(self.experts)
+            if mega_moe.prefill_capacity:
+                from lmdeploy.pytorch.backends.cuda.step_metadata import register_piecewise_graph_impl
+
+                register_piecewise_graph_impl(self)
+            for name in ('_mega_gate_up', '_mega_gate_up_scale', '_mega_down_scale', '_mega_shared_gate_up',
+                         '_mega_shared_gate_up_scale', '_mega_shared_down', '_mega_shared_down_scale'):
+                self.register_buffer(name, None, persistent=False)
+
+    @property
+    def mega_moe_weights(self):
+        if self.mega_moe is None or self._mega_gate_up_scale is None:
+            return None
+        gate_up = self.experts.gate_up.weight if self._mega_gate_up is None else self._mega_gate_up
+        down = self.experts.down
+        down_scale = down.weight_scale_inv if self._mega_down_scale is None else self._mega_down_scale
+        return (gate_up, self._mega_gate_up_scale), (down.weight, down_scale)
+
+    @property
+    def mega_moe_shared_weights(self):
+        if self.mega_moe is None or self._mega_shared_gate_up is None:
+            return None
+        down = self.shared_experts.down_proj
+        weight = down.weight if self._mega_shared_down is None else self._mega_shared_down
+        scale = down.weight_scale_inv if self._mega_shared_down_scale is None else self._mega_shared_down_scale
+        return (self._mega_shared_gate_up, self._mega_shared_gate_up_scale), (weight, scale)
+
+    def process_weights_after_loading(self):
+        """Prepare the SM90 decode weights and scales after checkpoint loading."""
+        if self.mega_moe is not None:
+            (gate, gate_scale), (_, down_scale) = self.mega_moe.prepare_weights(self.experts, self.mega_moe_weights)
+            # Derived buffers follow the model on sleep/wakeup. Resolve
+            # aliased checkpoint parameters on each call to avoid a copy.
+            self._mega_gate_up = None if gate.is_set_to(self.experts.gate_up.weight) else gate
+            self._mega_gate_up_scale = gate_scale
+            self._mega_down_scale = None if down_scale.is_set_to(self.experts.down.weight_scale_inv) else down_scale
+            if self.mega_moe.fuses_shared_expert:
+                (gate, gate_scale), (down, down_scale) = self.mega_moe.prepare_shared_weights(
+                    self.shared_experts, self.mega_moe_shared_weights)
+                self._mega_shared_gate_up, self._mega_shared_gate_up_scale = gate, gate_scale
+                down_proj = self.shared_experts.down_proj
+                self._mega_shared_down = None if down.is_set_to(down_proj.weight) else down
+                self._mega_shared_down_scale = (None if down_scale.is_set_to(down_proj.weight_scale_inv)
+                                                else down_scale)
+
+    def supports_piecewise_cuda_graph(self) -> bool:
+        """Choose the EP collective using live DP metadata."""
+        return True
+
+    def enable_piecewise_cuda_graph(self) -> None:
+        """Keep MegaMoE workspace selection and the collective eager."""
+        if self._piecewise_mega_forward is not None:
+            return
+
+        from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import (
+            ViewTolerantPaddedAdapter,
+            eager_boundary,
+            get_piecewise_graph_execution,
+        )
+
+        @eager_boundary(adapter_factory=ViewTolerantPaddedAdapter, reuse_bridge_after_next_step=True)
+        def run_eager(hidden_states, topk_weights, topk_ids):
+            execution = get_piecewise_graph_execution()
+            assert execution is not None
+            rows = execution.raw_tokens
+            return self._forward_experts_impl(hidden_states[:rows], topk_weights[:rows], topk_ids[:rows])
+
+        def piecewise_forward(hidden_states, topk_weights, topk_ids):
+            if get_piecewise_graph_execution() is None:
+                return self._forward_experts_impl(hidden_states, topk_weights, topk_ids)
+            return run_eager(hidden_states, topk_weights, topk_ids)
+
+        self._piecewise_mega_forward = piecewise_forward
+
+    def _forward_experts(self, hidden_states, topk_weights, topk_ids):
+        if self._piecewise_mega_forward is not None:
+            return self._piecewise_mega_forward(hidden_states, topk_weights, topk_ids)
+        return self._forward_experts_impl(hidden_states, topk_weights, topk_ids)
+
+    def _forward_experts_impl(self, hidden_states, topk_weights, topk_ids):
+        runner = None
+        if self.mega_moe is not None:
+            runner = self.mega_moe.for_step(get_step_ctx_manager().current_context())
+        if runner is None:
+            return super()._forward_experts(hidden_states, topk_weights, topk_ids)
+        weights = self.mega_moe_weights
+        if weights is None:
+            raise RuntimeError('MegaMoE weights have not been initialized.')
+        shared_weights = self.mega_moe_shared_weights
+        if shared_weights is not None:
+            return runner(hidden_states, topk_weights, topk_ids, weights, shared_weights=shared_weights)
+        routed = runner(hidden_states, topk_weights, topk_ids, weights)
+        return self._add_shared_expert(hidden_states, routed)
 
     def forward(
         self,
@@ -1325,7 +1424,8 @@ class Glm5NextDecoderLayer(nn.Module):
                  config: Any,
                  layer_idx: int,
                  dtype: torch.dtype | None = None,
-                 device: torch.device | None = None):
+                 device: torch.device | None = None,
+                 mega_moe: Sm90MegaMoE | None = None):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
@@ -1348,7 +1448,7 @@ class Glm5NextDecoderLayer(nn.Module):
             is_sparse = (config.n_routed_experts is not None
                          and layer_idx >= config.first_k_dense_replace
                          and layer_idx % config.moe_layer_freq == 0)
-        self.mlp = (Glm5NextMoE(config, layer_idx, dtype=dtype, device=device)
+        self.mlp = (Glm5NextMoE(config, layer_idx, dtype=dtype, device=device, mega_moe=mega_moe)
                     if is_sparse else Glm5NextMLP(
                         config, dtype=dtype, device=device,
                         prefix=f'model.layers.{layer_idx}.mlp'))
@@ -1492,8 +1592,14 @@ class Glm5NextModel(nn.Module):
                                             dtype=dtype,
                                             device=device,
                                             is_tp=True)
+        build_ctx = get_build_model_context()
+        mega_moe = None
+        if build_ctx.moe_backend != 'default':
+            from lmdeploy.pytorch.backends.cuda.moe.mega_moe import build_sm90_mega_moe
+
+            mega_moe = build_sm90_mega_moe(config, dtype, device, build_ctx)
         self.layers = nn.ModuleList([
-            Glm5NextDecoderLayer(config, layer_idx, dtype=dtype, device=device)
+            Glm5NextDecoderLayer(config, layer_idx, dtype=dtype, device=device, mega_moe=mega_moe)
             for layer_idx in range(config.num_hidden_layers)
         ])
         self.norm = RMSNorm(config.hidden_size,

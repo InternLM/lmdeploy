@@ -62,12 +62,14 @@ class StandardDecoderPiecewiseGraphRuntime:
         model: PiecewiseCudaGraphMixin,
         max_capture_tokens: int,
         token_stride: int = _DEFAULT_TOKEN_STRIDE,
+        exact_capture_tokens: tuple[int, ...] = (),
     ) -> None:
         if token_stride < 1:
             raise ValueError('token_stride must be positive')
         self.model = model
         self.max_capture_tokens = max_capture_tokens
         self.token_stride = token_stride
+        self.exact_capture_tokens = frozenset(size for size in exact_capture_tokens if 0 < size <= max_capture_tokens)
 
     def get_capture_token_sizes(self) -> list[int]:
         """Return fixed-stride token buckets, including the configured cap."""
@@ -75,7 +77,7 @@ class StandardDecoderPiecewiseGraphRuntime:
             return []
         sizes = list(range(self.token_stride, self.max_capture_tokens, self.token_stride))
         sizes.append(self.max_capture_tokens)
-        return sizes
+        return sorted(set(sizes) | self.exact_capture_tokens)
 
     def get_piecewise_graph_descriptor(
         self,
@@ -199,6 +201,8 @@ class StandardDecoderPiecewiseGraphRuntime:
     def _round_up_token_bucket(self, raw_tokens: int) -> int | None:
         if not 0 < raw_tokens <= self.max_capture_tokens:
             return None
+        if raw_tokens in self.exact_capture_tokens:
+            return raw_tokens
         rounded = ((raw_tokens + self.token_stride - 1) // self.token_stride) * self.token_stride
         return min(rounded, self.max_capture_tokens)
 

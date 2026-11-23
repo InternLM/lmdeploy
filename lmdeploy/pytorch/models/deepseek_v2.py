@@ -801,6 +801,18 @@ class DeepseekV2MoE(nn.Module):
             if self._all_reduce_shared_experts:
                 self._shared_expert_tp_group = dist_ctx.mlp_tp_group.gpu_group
 
+    def _add_shared_expert(self, hidden_states, output):
+        if self.shared_experts is not None:
+            shared_states = self.shared_experts(hidden_states)
+            if self._all_reduce_shared_experts:
+                dist.all_reduce(shared_states, group=self._shared_expert_tp_group)
+            output += shared_states
+        return output
+
+    def _forward_experts(self, hidden_states, topk_weights, topk_ids):
+        routed = self.experts(hidden_states, topk_weights, topk_ids)
+        return self._add_shared_expert(hidden_states, routed)
+
     def forward(self, hidden_states: torch.Tensor, all_routed_experts: torch.Tensor = None):
         """forward."""
         batch_size, sequence_length, hidden_dim = hidden_states.shape
@@ -810,17 +822,12 @@ class DeepseekV2MoE(nn.Module):
             routed_experts = all_routed_experts[:, self.layer_idx, :]
         topk_weights, topk_ids = self.gate(hidden_states, routed_experts=routed_experts)
 
-        out_states = self.experts(
+        out_states = self._forward_experts(
             hidden_states,
             topk_weights,
             topk_ids,
         )
 
-        if self.shared_experts is not None:
-            shared_states = self.shared_experts(hidden_states)
-            if self._all_reduce_shared_experts:
-                dist.all_reduce(shared_states, group=self._shared_expert_tp_group)
-            out_states += shared_states
         out_states = out_states.reshape(batch_size, sequence_length, -1)
 
         if self._all_reduce:

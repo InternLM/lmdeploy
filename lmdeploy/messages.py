@@ -563,6 +563,7 @@ class PytorchEngineConfig:
             it to True if you want to update weights after create the pipeline
         enable_microbatch: enable microbatch for specified model
         enable_eplb: enable eplb for specified model
+        moe_backend: Routed MoE backend for GLM-5.3-Flash decode on SM90.
         enable_metrics: enable metrics system
         role: role of engin, options: ['Hybrid', 'Prefill',
             'Decode']. Default to `EngineRole.Hybrid`.
@@ -646,9 +647,14 @@ class PytorchEngineConfig:
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
     piecewise_cudagraph_max_tokens: int | None = None
+    moe_backend: Literal['default', 'deepgemm_mega_moe', 'flashinfer_mega_moe'] = 'default'
 
     def __post_init__(self):
         """Check input validation."""
+        if self.moe_backend not in ('default', 'deepgemm_mega_moe', 'flashinfer_mega_moe'):
+            raise ValueError(f'Unsupported PyTorch MoE backend: {self.moe_backend!r}.')
+        if self.moe_backend != 'default' and (self.dp, self.ep, self.tp, self.device_type) != (8, 8, 1, 'cuda'):
+            raise ValueError('SM90 MegaMoE requires CUDA and DP8 + EP8 + TP1.')
         if self.kernel_block_size == -1:
             self.kernel_block_size = self.block_size
         assert self.dtype in ['auto', 'float16', 'bfloat16']

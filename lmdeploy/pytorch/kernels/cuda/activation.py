@@ -14,6 +14,7 @@ fast_expf = tl.math.exp
 def _silu_and_mul_kernel(
     gateup_ptr,
     out_ptr,
+    scale_ptr,
     N: tl.constexpr,
     M,
     stride_gum: tl.constexpr,
@@ -23,13 +24,14 @@ def _silu_and_mul_kernel(
     BLOCK_SIZE_N: tl.constexpr,
     SWIGLU_LIMIT: tl.constexpr,
     PRECISE_MUL: tl.constexpr,
+    GATE_UP_INTERLEAVE: tl.constexpr,
+    scale_stride,
 ):
     """Silu and mul kernel."""
     n_block_id = tl.program_id(0)
     m_id_start = tl.program_id(1)
     m_id_stride = tl.num_programs(1)
 
-    up_ptr = gateup_ptr + N * stride_gun
     offs_n = n_block_id * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
 
     if N % BLOCK_SIZE_N == 0:
@@ -37,11 +39,17 @@ def _silu_and_mul_kernel(
     else:
         mask = offs_n < N
 
-    gate_ptrs = gateup_ptr + m_id_start * stride_gum + offs_n * stride_gun
-    up_ptrs = up_ptr + m_id_start * stride_gum + offs_n * stride_gun
+    if GATE_UP_INTERLEAVE:
+        weight_col = offs_n // GATE_UP_INTERLEAVE * (2 * GATE_UP_INTERLEAVE) + offs_n % GATE_UP_INTERLEAVE
+        up_offset = GATE_UP_INTERLEAVE
+    else:
+        weight_col = offs_n
+        up_offset = N
+    gate_ptrs = gateup_ptr + m_id_start * stride_gum + weight_col * stride_gun
+    up_ptrs = gate_ptrs + up_offset * stride_gun
     out_ptrs = out_ptr + m_id_start * stride_om + offs_n * stride_on
 
-    for _ in tl.range(m_id_start, M, m_id_stride):
+    for m in tl.range(m_id_start, M, m_id_stride):
         gate = tl.load(gate_ptrs, mask=mask)
         up = tl.load(up_ptrs, mask=mask)
         if SWIGLU_LIMIT is not None:
@@ -59,6 +67,17 @@ def _silu_and_mul_kernel(
             gate = gate.to(gateup_ptr.dtype.element_ty)
         out = gate * up
 
+        if scale_ptr is not None:
+            # Match the BF16 store of standalone SwiGLU before measuring amax.
+            groups: tl.constexpr = BLOCK_SIZE_N // 128
+            rounded = out.to(gateup_ptr.dtype.element_ty).reshape(groups, 128)
+            amax = tl.maximum(tl.max(tl.abs(rounded), 1), 1.e-6).to(tl.float32)
+            scale = amax * (1.0 / 448.0)
+            quantized = rounded.to(tl.float32) * (448.0 / amax[:, None])
+            out = tl.clamp(quantized, -448.0, 448.0).reshape(BLOCK_SIZE_N)
+            scale_col = n_block_id * groups + tl.arange(0, groups)
+            tl.store(scale_ptr + m + scale_col * scale_stride, scale, mask=scale_col < N // 128)
+
         tl.store(out_ptrs, out, mask=mask)
 
         gate_ptrs += m_id_stride * stride_gum
@@ -69,15 +88,22 @@ def _silu_and_mul_kernel(
 def silu_and_mul(gate_up: torch.Tensor,
                  out: torch.Tensor = None,
                  swiglu_limit: float | None = None,
-                 precise_mul: bool = False):
+                 precise_mul: bool = False,
+                 gate_up_interleave: int = 0,
+                 quantize_fp8: bool = False):
     """Silu and mul."""
     assert gate_up.dim() == 2
 
     M = gate_up.size(0)
     N = gate_up.size(-1) // 2
-    if out is None:
-        out_shape = (M, N)
-        out = gate_up.new_empty(out_shape)
+    scales = None
+    if quantize_fp8:
+        assert out is None and N % 128 == 0
+        pitch = triton.cdiv(M, 4) * 4
+        scales = torch.empty_strided((M, N // 128), (1, pitch), device=gate_up.device, dtype=torch.float32)
+        out = gate_up.new_empty((M, N), dtype=torch.float8_e4m3fn)
+    elif out is None:
+        out = gate_up.new_empty((M, N))
 
     BLOCK_SIZE_N = triton.next_power_of_2(N)
     BLOCK_SIZE_N = min(BLOCK_SIZE_N, 512)
@@ -93,6 +119,7 @@ def silu_and_mul(gate_up: torch.Tensor,
     grid = (grid_size0, grid_size1)
     _silu_and_mul_kernel[grid](gate_up,
                                out,
+                               scales,
                                N,
                                M,
                                stride_gum=gate_up.stride(0),
@@ -102,10 +129,12 @@ def silu_and_mul(gate_up: torch.Tensor,
                                BLOCK_SIZE_N=BLOCK_SIZE_N,
                                SWIGLU_LIMIT=swiglu_limit,
                                PRECISE_MUL=precise_mul,
+                               GATE_UP_INTERLEAVE=gate_up_interleave,
+                               scale_stride=0 if scales is None else scales.stride(1),
                                num_warps=num_warps,
                                num_stages=num_stages)
 
-    return out
+    return (out, scales) if quantize_fp8 else out
 
 
 @triton.jit

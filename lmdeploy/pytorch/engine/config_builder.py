@@ -105,6 +105,7 @@ class ConfigBuilder:
             eager_mode=engine_config.eager_mode,
             device_type=engine_config.device_type,
             piecewise_cudagraph_max_tokens=engine_config.piecewise_cudagraph_max_tokens,
+            moe_backend=engine_config.moe_backend,
         )
         return backend_config
 
