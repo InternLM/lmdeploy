@@ -60,6 +60,7 @@ class FusedMoENormal:
         self.fp8_dtype = fp8_dtype
         self.scale_fmt = scale_fmt
         self.fp32_acc = fp32_acc
+        self.gate_up_projection: Callable | None = None
         self.token_dispatcher = DeepEPTokenDispatcherNormal(
             group=ep_group,
             num_experts=num_experts,
@@ -95,7 +96,8 @@ class FusedMoENormal:
         out_states = fused_moe_v3_fp8(x, recv_topk_ids, recv_topk_weights, (up_weights, up_scale),
                                       (down_weights, down_scale), recv_tokens_per_expert,
                                       act_func=act_func, scale_fmt=self.scale_fmt,
-                                      fp32_acc=self.fp32_acc, output_scale=self.output_scale)
+                                      fp32_acc=self.fp32_acc, output_scale=self.output_scale,
+                                      gate_up_projection=self.gate_up_projection)
         return self.token_dispatcher.combine(out_states)
 
     def capture(self):
@@ -127,7 +129,8 @@ class FusedMoENormal:
         return fused_moe_v3_fp8(state['recv_hidden_states'], state['recv_topk_idx'], state['recv_topk_weights'],
                                 (up_weight, up_scale), (down_weight, down_scale), state['recv_tokens_per_expert'],
                                 act_func=act_func, scale_fmt=self.scale_fmt,
-                                fp32_acc=self.fp32_acc, output_scale=self.output_scale)
+                                fp32_acc=self.fp32_acc, output_scale=self.output_scale,
+                                gate_up_projection=self.gate_up_projection)
 
     def per_token_group_quant_fp8(self,
                                   x: torch.Tensor,
@@ -449,6 +452,7 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
         self.fp8_dtype = fp8_dtype
         self.num_max_dispatch_tokens_per_rank = num_max_dispatch_tokens_per_rank
         self.layer_idx = layer_idx
+        self.prefill_gate_up_projection: Callable | None = None
         try:
             import deep_gemm  # noqa: F401
             self.use_deep_gemm = True
@@ -612,6 +616,8 @@ class FusedDeepEpMoEBlockedF8Impl(TritonFusedMoEBlockedF8Impl):
                                        chunk_size=16 * 1024,
                                        output_scale=self.output_scale,
                                        **({'fp32_acc': self.fp32_acc} if hasattr(self, 'fp32_acc') else {}))
+        if not low_latency_mode:
+            deepep_moe.gate_up_projection = self.prefill_gate_up_projection
         return deepep_moe
 
 

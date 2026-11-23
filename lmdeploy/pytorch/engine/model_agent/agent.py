@@ -522,6 +522,8 @@ class BaseModelAgent:
             with prefill_preparation_scope():
                 for num_tokens in tqdm(token_sizes, desc='Warming up prefill', disable=self.rank != 0):
                     inputs = self._make_prefill_warmup_inputs(1, num_tokens)
+                    if self.dist_config.dp > 1 and self.backend_config.moe_backend != 'default':
+                        inputs.build_dp_meta([num_tokens] * self.dist_config.world_size)
                     start = time.perf_counter()
                     logger.debug('Warmup prefill num_tokens=%d start.', num_tokens)
                     self._forward_impl(inputs)
@@ -1502,6 +1504,10 @@ class BaseModelAgent:
 
         spec_model_ctx = self.spec_agent.build_model_context()
 
+        moe_backend = self.backend_config.moe_backend
+        if moe_backend != 'default' and self.model_config.hf_config.model_type != 'glm5_next':
+            raise ValueError('SM90 MegaMoE is supported for GLM-5.3-Flash block-FP8 weights.')
+
         build_model_ctx = BuildModelContext(language_model_only=self.misc_config.language_model_only,
                                             state_cache_is_indexed=self.model_config.state_cache_is_indexed,
                                             enable_deterministic=self.backend_config.enable_deterministic,
@@ -1513,6 +1519,7 @@ class BaseModelAgent:
                                             tie_word_embeddings=self.model_config.tie_word_embeddings,
                                             num_spec_tokens=self.spec_agent.num_spec_tokens,
                                             max_batch_size=self.cache_config.max_batches,
+                                            moe_backend=moe_backend,
                                             spec_model_ctx=spec_model_ctx)
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))

@@ -39,6 +39,7 @@ class LinearWeightsBlockedF8(LinearWeights):
                          expert_list=expert_list)
         self.scale_fmt = scale_fmt
         self.block_size = block_size
+        self.gate_up_interleave = 0
         weight_scale_inv = torch.empty((num_experts, div_up(out_features, block_size), div_up(in_features, block_size)),
                                        dtype=torch.float32,
                                        device=device)
@@ -55,11 +56,25 @@ class LinearWeightsBlockedF8(LinearWeights):
 
     def update_weight(self, weight: torch.Tensor, weight_scale_inv: torch.Tensor):
         """Update weight."""
+        base_weight_loader = self.weight._base_weight_loader
         super().update_weight(weight=weight)
+        self.weight._base_weight_loader = base_weight_loader
         weight_loader = self.weight_scale_inv.weight_loader
         weight_scale_inv = torch.nn.Parameter(weight_scale_inv, requires_grad=False)
         weight_scale_inv.weight_loader = weight_loader
         self.register_parameter('weight_scale_inv', weight_scale_inv)
+
+    def weight_loader_ep(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int, shard_id: str):
+        if not self.gate_up_interleave or param is self.bias:
+            return super().weight_loader_ep(param, loaded_weight, expert_id, shard_id)
+
+        # The scale parameter keeps the checkpoint [gate, up] block layout.
+        shard = {'gate': 0, 'up': 1}[shard_id]
+        for local_expert in self.expert_map.get(expert_id, ()):
+            rows = self.gate_up_interleave
+            hidden = param.size(2)
+            target = param.data[local_expert].view(-1, 2, rows, hidden)[:, shard]
+            target.view(torch.uint8).copy_(loaded_weight.reshape(target.shape).view(torch.uint8))
 
     def weight_loader_scale_ep(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, expert_id: int,
                                shard_id: str):

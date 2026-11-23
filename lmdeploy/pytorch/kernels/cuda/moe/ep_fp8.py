@@ -147,6 +147,14 @@ def _deepgemm_grouped_fp8_nt_contiguous(input_tuple, w_tuple, out: torch.Tensor,
     return deep_gemm.m_grouped_fp8_gemm_nt_contiguous(input_tuple, w_tuple, out, m_indices)
 
 
+def project_gate_up(input_fp8, weight_fp8, m_indices, act_func, gemm=_deepgemm_grouped_fp8_nt_contiguous):
+    activations, _ = input_fp8
+    n = weight_fp8[0].size(1)
+    gate_up = torch.empty((activations.size(0), n), device=activations.device, dtype=torch.bfloat16)
+    gemm(input_fp8, weight_fp8, gate_up, m_indices)
+    return silu_and_mul(gate_up) if act_func is None else act_func(gate_up)
+
+
 def fused_moe_v3_fp8(
     hidden_states_fp8: tuple[torch.Tensor, torch.Tensor],
     topk_idx,
@@ -158,6 +166,7 @@ def fused_moe_v3_fp8(
     scale_fmt: str | None = None,
     fp32_acc: bool = False,
     output_scale: float = 1.0,
+    gate_up_projection: Callable | None = None,
 ):
     hidden_states_fp8, hidden_states_scale = hidden_states_fp8
     if num_recv_tokens_per_expert is None:
@@ -167,7 +176,6 @@ def fused_moe_v3_fp8(
         return torch.zeros_like(hidden_states_fp8, dtype=torch.bfloat16)
     from lmdeploy.pytorch.third_party.deep_gemm import get_mn_major_tma_aligned_tensor
     m, k = hidden_states_fp8.size()
-    n = w13_weight_fp8[0].size(1)
     block_size = k // hidden_states_scale.size(1)
     # Keep DeepEP's BF16 transport dtype independent of local accumulation precision.
     gather_out = torch.empty_like(hidden_states_fp8, dtype=torch.bfloat16)
@@ -186,17 +194,17 @@ def fused_moe_v3_fp8(
                    input_tensor, input_tensor_scale, m_indices, output_index)
     del hidden_states_fp8
 
-    gateup_output = torch.empty((all_tokens, n), device=gather_out.device, dtype=torch.bfloat16)
     input_tensor_scale = get_mn_major_tma_aligned_tensor(input_tensor_scale)
-    _deepgemm_grouped_fp8_nt_contiguous((input_tensor, input_tensor_scale), w13_weight_fp8, gateup_output, m_indices)
-
-    if act_func is None:
-        down_input = silu_and_mul(gateup_output.view(-1, n))
+    packed_input = input_tensor, input_tensor_scale
+    if gate_up_projection is None:
+        down_input = project_gate_up(packed_input, w13_weight_fp8, m_indices, act_func)
     else:
-        down_input = act_func(gateup_output.view(-1, n))
-    del gateup_output
-    down_input_fp8, down_input_scale = per_token_group_quant_fp8(down_input, block_size, scale_fmt=scale_fmt)
-    down_input_scale = get_mn_major_tma_aligned_tensor(down_input_scale)
+        down_input = gate_up_projection(packed_input, w13_weight_fp8, m_indices, num_recv_tokens_per_expert, act_func)
+    if isinstance(down_input, tuple):
+        down_input_fp8, down_input_scale = down_input
+    else:
+        down_input_fp8, down_input_scale = per_token_group_quant_fp8(down_input, block_size, scale_fmt=scale_fmt)
+        down_input_scale = get_mn_major_tma_aligned_tensor(down_input_scale)
     down_output = torch.empty((all_tokens, k), device=gather_out.device, dtype=torch.bfloat16)
     _deepgemm_grouped_fp8_nt_contiguous((down_input_fp8, down_input_scale), w2_weight_fp8, down_output, m_indices)
     ep_gather(down_output, topk_idx, topk_weights, output_index, gather_out,

@@ -31,6 +31,7 @@ class DPMeta:
     dp_is_decoding: bool = False
     dp_batches: list[int] = None
     dp_draft_num_tokens: list[int] = None
+    dp_token_counts: tuple[int, ...] | None = None
 
     @staticmethod
     def _gather_tp_sizes(tp: int, seqlen: int, num_tokens: list[int], dist_ctx: dist.DistContext, layer_type: str):
@@ -61,7 +62,7 @@ class DPMeta:
         else:
             moe_tp_sizes = cls._gather_tp_sizes(moe_tp, seqlen, num_tokens, dist_ctx, layer_type='moe')
 
-        return DPMeta(tp_sizes=tp_sizes, moe_tp_sizes=moe_tp_sizes)
+        return DPMeta(tp_sizes=tp_sizes, moe_tp_sizes=moe_tp_sizes, dp_token_counts=tuple(num_tokens))
 
     def sync_tp_size(self, tp_size: int):
         self.tp_sizes = [tp_size] * len(self.tp_sizes)
@@ -581,6 +582,7 @@ class BuildModelContext:
     tie_word_embeddings: bool = False
     num_spec_tokens: int = 0
     max_batch_size: int = 0
+    moe_backend: str = 'default'
     spec_model_ctx: SpecModelBuildContext = field(default_factory=SpecModelBuildContext)
 
     @property

@@ -79,9 +79,19 @@ def _make_piecewise_graph_manager(model: torch.nn.Module, model_config: ModelCon
     from .piecewise import PiecewiseGraphManager
     from .standard import StandardDecoderPiecewiseGraphRuntime
 
+    exact_capture_tokens = ()
+    if backend_config.moe_backend != 'default':
+        from lmdeploy.pytorch.envs import glm53_mega_prefill_capacity
+
+        if glm53_mega_prefill_capacity > 0:
+            # In mixed DP steps, ranks with decode requests have few local
+            # tokens. GLM prefill requires exact logical token extents.
+            exact_capture_tokens = tuple(cache_config.cudagraph_capture_batch_sizes or
+                                         _get_capture_batch_size_impl(cache_config.max_batches))
     runtime = StandardDecoderPiecewiseGraphRuntime(
         model,
         min(max_capture_tokens, cache_config.max_prefill_token_num),
+        exact_capture_tokens=exact_capture_tokens,
     )
     if not runtime.get_capture_token_sizes():
         return None
@@ -202,8 +212,8 @@ class CUDAGraphRunner(GraphRunner):
         are phase-dispatching (attention, causal conv, gated delta all select
         the decode kernel from live metadata), so decode requests keep the
         decode kernel while the captured pieces are shared with the prefill
-        rank. EP/DeepEP collectives are within-DP, so DP ranks may diverge
-        between piecewise and eager safely.
+        rank. Expert collectives are eager boundaries, so all EP ranks
+        still enter them in layer order when another rank executes eagerly.
         """
         manager = self._piecewise_graph_manager
         if manager is None or step_context.global_is_decoding():
