@@ -152,6 +152,9 @@ def validate_dflash_dist_config(dist_config: Any):
     """Validate the initially supported DFlash distribution shape."""
     if dist_config is None:
         return
+    if getattr(dist_config, 'dcp', 1) > 1:
+        raise ValueError('DFlash does not support dcp > 1: draft cache writes and non-causal '
+                         'block attention require an unsharded cache. Set dcp=1.')
     if getattr(dist_config, 'dp', 1) != 1:
         raise ValueError('DFlash V1 does not support data parallelism. Set dp=1.')
     if getattr(dist_config, 'ep', 1) != 1:

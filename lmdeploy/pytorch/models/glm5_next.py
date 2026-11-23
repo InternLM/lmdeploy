@@ -40,7 +40,7 @@ from lmdeploy.pytorch.consts import (
     GLM5_KPOOL_TAIL_K_STATE,
     GLM5_KPOOL_TAIL_SCORE_STATE,
 )
-from lmdeploy.pytorch.distributed import get_dist_group, get_dist_manager, get_tp_world_rank
+from lmdeploy.pytorch.distributed import all_reduce, get_dist_group, get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.engine.cache_engine.schema import BlockCacheRequest
 from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul_masked_post_quant_fwd
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager, get_step_ctx_manager
@@ -563,7 +563,7 @@ class Glm5NextMoE(DeepseekV2MoE):
         if self._fp32_tp_reduce:
             output_dtype = out.dtype
             out = out.float()
-            get_dist_group('moe').all_reduce_(out)
+            all_reduce(out, group=get_dist_group('moe').gpu_group)
             out = out.to(output_dtype)
         return out
 

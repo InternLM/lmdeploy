@@ -131,7 +131,12 @@ def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl
     if get_dcp_world_rank()[0] > 1:
         if spec.block_sparse_size != 1:
             raise ValueError('DCP attention does not support block-sparse attention '
-                             f'(block_sparse_size={spec.block_sparse_size})')
+                             f'(block_sparse_size={spec.block_sparse_size}). Use dcp=1.')
+        if tuple(sliding_window) != (-1, -1):
+            raise ValueError('GQA DCP does not support sliding-window attention '
+                             f'(sliding_window={spec.sliding_window}). Use dcp=1.')
+        if not spec.causal:
+            raise ValueError('GQA DCP does not support non-causal attention (causal=False). Use dcp=1.')
         from .cp import DCPAttentionImpl
         return DCPAttentionImpl(use_fa3=enable_fa3, **common_args)
     elif enable_fa3:
