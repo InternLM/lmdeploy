@@ -266,6 +266,12 @@ with set_envs():
     enable_symm_mem_lmhead = env_to_bool('LMDEPLOY_ENABLE_SYMM_MEM_LMHEAD', False)
     symm_mem_lmhead_max_mb = max(1, env_to_int('LMDEPLOY_SYMM_MEM_LMHEAD_MAX_MB', 64))
 
+    # Hybrid-engine latency control: bound prefill service while decode is runnable.
+    interleaved_prefill_tokens = env_to_int('LMDEPLOY_INTERLEAVED_PREFILL_TOKENS', 0)
+    interleaved_decode_rounds = env_to_int('LMDEPLOY_INTERLEAVED_DECODE_ROUNDS', 1)
+    dp_prefill_period = env_to_int('LMDEPLOY_DP_PREFILL_PERIOD', 0)
+    dp_prefill_trace = env_to_bool('LMDEPLOY_DP_PREFILL_TRACE', False)
+
     # opt-ttft
     opt_ttft_policy = env_to_choice('LMDEPLOY_PT_TTFT_POLICY', 'size', {'fifo', 'size'})
     opt_ttft_short_turns = max(1, env_to_int('LMDEPLOY_PT_TTFT_SHORT_TURNS', 3))

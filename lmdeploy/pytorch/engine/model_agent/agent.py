@@ -18,6 +18,7 @@ import torch.distributed as dist
 from torch.profiler import record_function
 from tqdm.auto import tqdm
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.graph_runner import prefill_preparation_scope
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
@@ -127,6 +128,7 @@ class BatchedOutputs:
     kv_connector_output: KVConnectorOutput | None = None
     decode_checkpoint_mask: torch.Tensor | None = None
     ssm_state_access_id: int | None = None
+    dp_schedule_round: int | None = None
 
     @classmethod
     def connector_only(cls, output: KVConnectorOutput | None) -> 'BatchedOutputs':
@@ -374,6 +376,7 @@ class BaseModelAgent:
         self.cache_stream = torch.cuda.Stream()
 
         self.dist_ctx = dist_ctx
+        self._dp_schedule_round = 0
         self.device_ctx = device_ctx
 
         device = 'cuda'
@@ -830,6 +833,14 @@ class BaseModelAgent:
 
         # pad batch size for decoding
         all_num_tokens = gathered_meta.all_num_tokens
+        if _envs.dp_prefill_period > 1 or _envs.dp_prefill_trace:
+            # Every participating rank counts the same collective, including
+            # locally dummy ranks. No extra synchronization is needed.
+            self._dp_schedule_round += 1
+            if _envs.dp_prefill_trace and self.rank == 0 and not global_is_decoding:
+                prefill = (~gathered_meta.is_dummy.bool() & ~gathered_meta.is_decoding.bool()).tolist()
+                logger.info('DP admission round=%d time=%.6f prefill_ranks=%d tokens=%s',
+                            self._dp_schedule_round, time.time(), sum(prefill), all_num_tokens)
         if global_is_decoding:
             padding_batch_size = max(all_num_tokens)
             padding_batch_size = self.spec_agent.get_padding_batch_size(padding_batch_size)
@@ -1265,6 +1276,8 @@ class BaseModelAgent:
             batched_output = BatchedOutputs(next_token_ids=None, stopped=None)
         if batched_output is not None:
             batched_output.kv_connector_output = connector_output
+            if _envs.dp_prefill_period > 1 and dp > 1:
+                batched_output.dp_schedule_round = self._dp_schedule_round
             batched_output.ssm_state_access_id = ssm_state_access_id
             if ssm_state_access_id is None:
                 self._push_output(batched_output)

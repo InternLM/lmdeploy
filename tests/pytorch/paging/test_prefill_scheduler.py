@@ -216,8 +216,9 @@ def test_scheduler_long_first_short_turn_admits_only_final_prefix_hit():
     assert cache_hit_tail.num_token_ids == 1
 
 
-def test_scheduler_budget_gate_uses_prefix_hit_to_admit_sibling():
-    scheduler, block_size = _make_prefix_cache_scheduler(max_batches=2, max_prefill_token_num=16)
+@pytest.mark.parametrize('engine_budget,turn_budget', [(16, None), (32, 16)])
+def test_scheduler_budget_gate_uses_prefix_hit_to_admit_sibling(engine_budget, turn_budget):
+    scheduler, block_size = _make_prefix_cache_scheduler(max_batches=2, max_prefill_token_num=engine_budget)
 
     cached = scheduler.add_session(0).add_sequence([1] * block_size)
     scheduler.schedule(is_prefill=True)
@@ -226,7 +227,7 @@ def test_scheduler_budget_gate_uses_prefix_hit_to_admit_sibling():
     almost_full = scheduler.add_session(1).add_sequence([4] * (block_size - 1))
     cache_hit_tail = scheduler.add_session(2).add_sequence([1] * block_size + [3])
 
-    output = scheduler.schedule(is_prefill=True)
+    output = scheduler.schedule(is_prefill=True, token_budget=turn_budget)
 
     assert output.running == [almost_full, cache_hit_tail]
     assert cache_hit_tail.num_history_ids == block_size
@@ -1009,3 +1010,28 @@ def test_scheduler_accepts_prefix_hit_that_starts_middle_long_context_chunk():
     assert seq.cached_tokens == block_size * 2
     assert scheduler.block_trie.stats.num_query_tokens == len(token_ids)
     assert scheduler.block_trie.stats.num_hit_tokens == block_size * 2
+
+
+def test_busy_prefill_budget_limits_allocation_and_chunk_input_together():
+    from lmdeploy.pytorch.engine.inputs_maker import LongContextChunker
+
+    scheduler, block_size = _make_scheduler_for_long_context_chunks(12)
+    seq = scheduler.add_session(0).add_sequence(range(2 * block_size))
+    assert not scheduler.has_waiting_long_prefill()
+    assert scheduler.has_waiting_long_prefill(token_budget=block_size)
+    assert scheduler.schedule(is_prefill=True, token_budget=block_size).running == [seq]
+    chunker = LongContextChunker(2 * block_size)
+    chunker.set_seq(seq, block_size)
+    assert chunker.next_chunk_size()[0] == seq.kv_token_limit == block_size
+    assert seq.num_blocks == 1
+    assert scheduler.cache_config.max_prefill_token_num == 2 * block_size
+    scheduler.shutdown()
+
+
+def test_busy_budget_counts_all_short_prefill_rows():
+    scheduler, block_size = _make_scheduler_for_long_context_chunks(12)
+    first = scheduler.add_session(0).add_sequence(range(block_size))
+    scheduler.add_session(1).add_sequence(range(block_size))
+    assert scheduler.schedule(is_prefill=True, token_budget=block_size).running == [first]
+    assert first.kv_token_limit is None
+    scheduler.shutdown()
