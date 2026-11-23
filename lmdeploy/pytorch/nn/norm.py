@@ -76,8 +76,8 @@ class RMSNorm(nn.Module):
 
     Args:
         offset_weight: If True, the checkpoint stores the RMSNorm scale as an
-            offset from 1. The loader computes ``1 + offset`` in FP32 and stores
-            the resulting scale in ``weight``.
+            offset from 1. To preserve precision, the loader needs to compute
+            ``1 + offset`` in FP32 and store the result in FP32.
     """
 
     def __init__(
