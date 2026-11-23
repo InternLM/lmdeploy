@@ -80,7 +80,8 @@ class TransferBackend:
 
     def register_buffer(self, store: Any,
                         registration: MooncakeStoreRegistration) -> int:
-        """Register one KV-cache region and return the status code (0 on success)."""
+        """Register one KV-cache region and return the status code (0 on
+        success)."""
         raise NotImplementedError
 
     def make_ready_event(self) -> Any:
@@ -95,9 +96,8 @@ class TransferBackend:
 class CudaTransferBackend(TransferBackend):
     """Direct GPU-HBM registration, matching the original H200 implementation.
 
-    Buffers are registered with the store and the store owns its TransferEngine,
-    exactly as before this abstraction was introduced. Kept as a distinct class so
-    the CUDA path is explicit and never accidentally changes.
+    Buffers are registered with the store and the store owns its TransferEngine, exactly as before this abstraction was
+    introduced. Kept as a distinct class so the CUDA path is explicit and never accidentally changes.
     """
 
     device_type = 'cuda'
