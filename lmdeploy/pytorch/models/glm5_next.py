@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import os
+
 import re
 from collections.abc import Iterable, Sequence
 from functools import partial
@@ -57,10 +59,18 @@ from lmdeploy.pytorch.nn import (
 )
 from lmdeploy.pytorch.nn.gated_delta import GatedDeltaMeta, GatedDeltaMetaBuilder, build_rmsnorm_gated
 from lmdeploy.pytorch.nn.kpool import (
+    kpool_compress_bf16,
+    kpool_decode_update,
     kpool_expand_selected_groups,
+    kpool_partition_update,
     kpool_pooled_block_offsets,
+    kpool_read_bf16_paged_cache,
     kpool_read_packed_cache,
     kpool_rotate_query,
+    kpool_score_bf16,
+    kpool_topk,
+    kpool_write_bf16_paged_cache,
+    kpool_write_bf16_paged_cache_batched,
 )
 from lmdeploy.pytorch.nn.linear import (
     build_batched_linear,
@@ -107,6 +117,26 @@ def _glm_swiglu_impl(intermediate: torch.Tensor,
                      precise_mul: bool = False,
                      masked_m: torch.Tensor | None = None) -> torch.Tensor:
     """GLM/DeepSeek-V4 clamped SwiGLU used by dense and routed experts."""
+    # The CUDA Triton activation has no Ascend lowering and specializes
+    # CUDA-only constants.  Keep the exact clamp/SwiGLU arithmetic on NPU.
+    # shortcut: masked_m is CUDA-EP only; dlinfer fuses the whole expert MLP,
+    # so this partial never carries a mask on Ascend.
+    if intermediate.device.type != 'cuda':
+        input_shape = intermediate.shape
+        intermediate = intermediate.flatten(0, -2)
+        try:
+            # One fused Ascend Triton kernel (fp32 arithmetic inside)
+            # replaces the eager clamp/sigmoid/mul chain and its per-call
+            # fp32 casts.  Parity vs eager: bitwise except 1 bf16 ulp on
+            # ~0.0004% of boundary values.
+            from dlinfer.vendor.ascend.triton_ops.swiglu import swiglu_clamp
+            output = swiglu_clamp(intermediate, swiglu_limit)
+        except Exception:
+            gate, up = intermediate.chunk(2, dim=-1)
+            gate = gate.float().clamp_max(swiglu_limit)
+            up = up.float().clamp(min=-swiglu_limit, max=swiglu_limit)
+            output = (gate * torch.sigmoid(gate) * up).to(intermediate.dtype)
+        return output.unflatten(0, input_shape[:-1])
     from lmdeploy.pytorch.kernels.cuda.activation import silu_and_mul, silu_and_mul_moe_ep
     if masked_m is not None:
         return silu_and_mul_moe_ep(intermediate, masked_m, swiglu_limit=swiglu_limit, precise_mul=precise_mul)
@@ -122,6 +152,87 @@ _GLM53_COMPACT_FP8_MOE_ACT = partial(
     _glm_swiglu_impl, swiglu_limit=10.0, precise_mul=True)
 _GLM53_COMPACT_FP8_MOE_ACT.masked_post_quant = partial(
     silu_and_mul_masked_post_quant_fwd, swiglu_limit=10.0, precise_mul=True)
+
+
+# Device-memory ceiling for one FP32 KPool score tile on the BF16 paged path.
+_KPOOL_BF16_SCORE_TILE_BYTES = 64 * 1024 * 1024
+
+# Scheduler session cap (``--session-len``) for the fixed-shape decode KPool
+# selection below.  ``None`` keeps the full page-table width; score tiling
+# still bounds memory, but every replay then scans the whole table.
+_KPOOL_DECODE_SESSION_TOKENS: int | None = None
+
+
+def set_kpool_decode_session_tokens(session_len: int | None):
+    """Publish the per-request token ceiling of fixed-shape KPool decode."""
+    global _KPOOL_DECODE_SESSION_TOKENS
+    _KPOOL_DECODE_SESSION_TOKENS = session_len
+
+
+def _paged_kpool_topk_npu(qbar: torch.Tensor, cache: torch.Tensor,
+                          pool_lens: torch.Tensor,
+                          block_table: torch.Tensor, width: int, k: int):
+    """Top-k KPool groups of a decode batch via the Ascend Triton kernel.
+
+    Thin dispatcher so the model file never imports triton itself: returns
+    ``(values, ids)`` with absolute group ids, or ``None`` off Ascend or on
+    any kernel failure, selecting the caller's portable gather loop.
+    """
+    if qbar.device.type != 'npu':
+        return None
+    try:
+        from lmdeploy.pytorch.kernels.dlinfer.kpool_scores import (
+            paged_kpool_topk_bf16)
+    except Exception:
+        return None
+    return paged_kpool_topk_bf16(qbar, cache, pool_lens, block_table,
+                                 width, k)
+
+
+def _paged_kpool_expand_npu(best_ids: torch.Tensor,
+                            kv_seqlens: torch.Tensor,
+                            pool_size: int,
+                            topk: int):
+    """Fuse KPool blend + expand + tail-append into one Ascend launch.
+
+    Returns ``[rows, topk + pool_size - 1]`` int32 logical token ids, or
+    ``None`` off Ascend / on kernel failure, selecting the caller's python
+    blend as fallback.
+    """
+    if best_ids.device.type != 'npu':
+        return None
+    try:
+        from lmdeploy.pytorch.kernels.dlinfer.kpool_scores import (
+            paged_kpool_expand_npu)
+    except Exception:
+        return None
+    return paged_kpool_expand_npu(best_ids, kv_seqlens, pool_size, topk)
+
+
+def _paged_kpool_update_npu(keys: torch.Tensor, scores: torch.Tensor,
+                            tail_k_state: torch.Tensor,
+                            tail_score_state: torch.Tensor,
+                            state_ids: torch.Tensor,
+                            history_lengths: torch.Tensor,
+                            cache: torch.Tensor, block_table: torch.Tensor,
+                            ape: torch.Tensor) -> bool:
+    """One-launch KPool decode update via the Ascend Triton kernel.
+
+    Returns False off Ascend / on any kernel failure; the caller then
+    keeps its eager per-step loop.  LMD_KPOOL_FUSED_UPDATE=0 disables.
+    """
+    if os.environ.get('LMD_KPOOL_FUSED_UPDATE', '1') != '1':
+        return False
+    if keys.device.type != 'npu':
+        return False
+    try:
+        from lmdeploy.pytorch.kernels.dlinfer.kpool_scores import (
+            paged_kpool_update_npu)
+    except Exception:
+        return False
+    return paged_kpool_update_npu(keys, scores, tail_k_state, tail_score_state,
+                                  state_ids, history_lengths, cache,
+                                  block_table, ape)
 
 
 class Glm5NextVisionPatchEmbed(Glm4vVisionPatchEmbed):
@@ -449,7 +560,8 @@ class Glm5NextMLP(DeepseekV2MLP):
             kwargs['is_shared_expert'] = False
         super().__init__(config, *args, **kwargs)
         self.swiglu_limit = config.swiglu_limit
-        if dist_config.dp == 1:
+        if (dist_config.dp == 1
+                and os.environ.get('LMD_TP_REDUCE_FP32', '1') == '1'):
             self.down_proj.tp_reduce_dtype = torch.float32
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -458,6 +570,27 @@ class Glm5NextMLP(DeepseekV2MLP):
             _glm_swiglu_impl(gate_up,
                               self.swiglu_limit,
                               precise_mul=True))
+
+
+_FUSED_NOAUX_ROUTER_STATE: dict = {'ok': None}
+
+
+def _fused_noaux_router_available() -> bool:
+    """Probe once whether Ascend's fused noaux_tc router op is registered."""
+    if os.environ.get('GLM53_DISABLE_FUSED_ROUTER') == '1':
+        return False
+    if _FUSED_NOAUX_ROUTER_STATE['ok'] is not None:
+        return _FUSED_NOAUX_ROUTER_STATE['ok']
+    ok = False
+    try:
+        # The op lives in the torch_npu ``npu`` namespace once the custom OPP
+        # package (vllm-ascend's custom_transformer vendor dir, exported via
+        # ASCEND_CUSTOM_OPP_PATH before process start) is scanned by CANN.
+        ok = hasattr(torch.ops.npu, 'npu_moe_gating_top_k')
+    except Exception:
+        ok = False
+    _FUSED_NOAUX_ROUTER_STATE['ok'] = ok
+    return ok
 
 
 class Glm5NextNoauxTCRouter(nn.Module):
@@ -501,6 +634,39 @@ class Glm5NextNoauxTCRouter(nn.Module):
         correction_bias: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return normalized weights and expert ids."""
+        if router_logits.device.type == 'npu':
+            if _fused_noaux_router_available():
+                from lmdeploy.pytorch.kernels.dlinfer import moe_gating_top_k
+                # D6: the npu op returns int32 ids natively and dlinfer
+                # consumes int32; the int64 round trip was 2 casts/layer.
+                # The op also requires bias.dtype == logits.dtype; the
+                # fp32 param cast is cached (param is static).
+                bias = correction_bias
+                if bias.dtype != router_logits.dtype:
+                    bias = getattr(self, '_bias_cast', None)
+                    if bias is None or bias.dtype != router_logits.dtype:
+                        bias = correction_bias.to(router_logits.dtype)
+                        self._bias_cast = bias
+                topk_weights, topk_ids = moe_gating_top_k(
+                    router_logits,
+                    bias,
+                    top_k=self.top_k,
+                    k_group=self.topk_group,
+                    group_count=self.n_group,
+                    renorm=1 if self.renormalize else 0,
+                    norm_type=1,  # sigmoid
+                    routed_scaling_factor=1.0,
+                    eps=1e-20,
+                )
+                return topk_weights, topk_ids
+            # Eager fallback. GLM-5.3 uses n_group=1.
+            scores = torch.sigmoid(router_logits.float())
+            choice_scores = scores + correction_bias.float().view(1, -1)
+            _, topk_ids = torch.topk(choice_scores, self.top_k, dim=-1)
+            topk_weights = scores.gather(-1, topk_ids)
+            if self.renormalize:
+                topk_weights = topk_weights / topk_weights.sum(dim=-1, keepdim=True).clamp_min(1e-20)
+            return topk_weights, topk_ids.to(torch.int64)
         from lmdeploy.pytorch.kernels.cuda.moe.route_noaux_tc import (
             fused_noaux_tc_routing,
         )
@@ -529,6 +695,9 @@ class Glm5NextMoE(DeepseekV2MoE):
     router_routed_scaling_factor = 1.0
     fused_moe_output_scale = 2.5
     fused_moe_fp32_acc = True
+    # GLM-5.3 clamps SwiGLU at +-10; the fused MC2 expert op applies the
+    # clamp in-kernel from this limit.
+    fused_moe_swiglu_limit = 10.0
     shared_expert_cls = Glm5NextMLP
 
     def __init__(self, config: Any, layer_idx: int, *args, **kwargs):
@@ -542,7 +711,14 @@ class Glm5NextMoE(DeepseekV2MoE):
             self._all_reduce = False
             if dist_config.dp == 1 and self.shared_experts is not None:
                 down_proj = self.shared_experts.down_proj
-                down_proj.all_reduce = down_proj.tp > 1
+                # dlinfer's patched DeepseekV2MoE.forward already sums the
+                # shared-expert partials over the MLP TP group under EP;
+                # reducing again inside down_proj would multiply the shared
+                # output by the TP size.
+                down_proj.all_reduce = (
+                    down_proj.tp > 1
+                    and not getattr(self, '_all_reduce_shared_experts', False)
+                )
         # Keep the shared+routed local sum and the generic expert kernels.
         # Promote only the final TP collective: BF16 collective reduction
         # order depends on message size (AR versus multi-token verification).
@@ -719,7 +895,8 @@ class Glm5NextLinearAttention(nn.Module):
             is_tp=True,
             all_reduce=all_reduce,
         )
-        if get_dist_manager().current_config().dp == 1:
+        if (get_dist_manager().current_config().dp == 1
+                and os.environ.get('LMD_TP_REDUCE_FP32', '1') == '1'):
             self.o_proj.tp_reduce_dtype = torch.float32
         self.kda = Kda()
 
@@ -771,7 +948,34 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
                          device=device,
                          all_reduce=all_reduce,
                          prefix=f'model.layers.{layer_idx}.self_attn')
-        if get_dist_manager().current_config().dp == 1:
+        # Some GLM configs expose q_lora_rank after the DeepSeek parent has
+        # selected its sparse path.  Ensure the unabsorbed projection exists
+        # for Ascend's dense prefill path as well.
+        if self.q_lora_rank is not None and not hasattr(self, 'fused_qkv_a_proj'):
+            # q_a_proj and kv_a_proj_with_mqa are genuinely int8 (with
+            # weight_scale/weight_offset) in the checkpoint, same as q_b_proj
+            # and o_proj. Only kv_b_proj ships as plain BF16. Use the model's
+            # real quantization_config so the merged projection is
+            # dequantized correctly (quant_config=None previously made the
+            # Ascend linear interpret raw int8 weights as float, inflating
+            # every full-attention layer's query/KV-latent projection by
+            # roughly 1/weight_scale and corrupting attention output).
+            quantization_config = getattr(config, 'quantization_config', None)
+            self.fused_qkv_a_proj = build_merged_colwise_linear(
+                self.hidden_size,
+                [self.q_lora_rank, self.kv_lora_rank + self.qk_rope_head_dim],
+                bias=getattr(config, 'attention_bias', False),
+                dtype=dtype,
+                device=device,
+                is_tp=False,
+                quant_config=quantization_config,
+                out_names=[0, 1],
+                prefix=f'model.layers.{layer_idx}.self_attn.fused_qkv_a_proj')
+        # q_b_proj / o_proj come from the DeepSeek parent, which already
+        # builds them with this model's quantization_config (they are int8 in
+        # the checkpoint). kv_b_proj is the only plain-BF16 one of the group.
+        if (get_dist_manager().current_config().dp == 1
+                and os.environ.get('LMD_TP_REDUCE_FP32', '1') == '1'):
             self.o_proj.tp_reduce_dtype = torch.float32
         # DeepSeek keeps these latent-norm parameters in FP32.  GLM-5.3's
         # checkpoint and SGLang runtime keep them in the activation dtype;
@@ -816,16 +1020,27 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         )
         self.kpool_attention = CudaKPoolAttention(self._forward_attention)
         dense_mla_impl = self.attn_fwd.impl
-        self.decode_attn_fwd = FlashMLASparseImpl(
-            mla_index_topk=self.index_topk,
-            mla_index_tail=self.index_kpool - 1,
-            num_heads=dense_mla_impl.num_heads,
-            head_size=dense_mla_impl.head_size,
-            scale=dense_mla_impl.scale,
-            num_kv_heads=dense_mla_impl.num_kv_heads,
-            v_head_size=dense_mla_impl.v_head_size,
-            use_fa3=getattr(dense_mla_impl, 'use_fa3', False),
-        )
+        # Ascend uses dlinfer's native paged attention for the latent cache
+        # layout; CUDA FlashMLA must not be imported there.
+        self.use_dense_dlinfer = type(dense_mla_impl).__module__.startswith(
+            'lmdeploy.pytorch.backends.dlinfer')
+        if self.use_dense_dlinfer:
+            # Ascend stores pooled keys as plain BF16 in a token-block-aligned
+            # paged cache (vLLM-Ascend's GLM KPool layout) and scores them in
+            # FP32, instead of the CUDA packed FP8 + Hadamard layout.
+            self.indexer.paged_bf16_cache = True
+            self.decode_attn_fwd = self.attn_fwd
+        else:
+            self.decode_attn_fwd = FlashMLASparseImpl(
+                mla_index_topk=self.index_topk,
+                mla_index_tail=self.index_kpool - 1,
+                num_heads=dense_mla_impl.num_heads,
+                head_size=dense_mla_impl.head_size,
+                scale=dense_mla_impl.scale,
+                num_kv_heads=dense_mla_impl.num_kv_heads,
+                v_head_size=dense_mla_impl.v_head_size,
+                use_fa3=getattr(dense_mla_impl, 'use_fa3', False),
+            )
         from lmdeploy.pytorch.backends.cuda.step_metadata import register_piecewise_graph_impl
 
         self._piecewise_forward = None
@@ -917,8 +1132,11 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         tail."""
         if tail_state is None or len(tail_state) != 2 or state_ids is None:
             raise RuntimeError('GLM-5.3 KPool requires raw key/score rings and stable state ids.')
-        if not tail_state[0].is_cuda:
-            raise RuntimeError('GLM-5.3 KPool cache updates require CUDA tensors.')
+        # transfer_to_npu aliases is_cuda to is_npu, so the device type
+        # picks the Ascend eager loop.
+        if tail_state[0].device.type != 'cuda':
+            return self._update_kpool_cache_npu(hidden_states, tail_state,
+                                                state_ids, attn_metadata)
         if attn_metadata.is_decoding:
             key = self.indexer.project_key(hidden_states)[0]
             score = self.indexer.project_compress_score(hidden_states)[0]
@@ -937,6 +1155,121 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         write_raw_ring(*tail_state, key, score, state_ids, history,
                        attn_metadata.q_seqlens, attn_metadata.cu_seqlens_q)
         return result
+
+    def _update_kpool_cache_npu(self, hidden_states, tail_state, state_ids,
+                                attn_metadata):
+        """Ascend: eager KPool update against the BF16 paged pool cache."""
+        tail_k_state, tail_score_state = tail_state
+        if tail_k_state.ndim != 3:
+            raise RuntimeError(
+                'Ascend KPool tail state must be [state, pool, head_dim], '
+                f'got {tuple(tail_k_state.shape)} (spec-token rings are '
+                'CUDA-only).')
+        history_lengths = attn_metadata.kv_seqlens - attn_metadata.q_seqlens
+        indexer_k_cache = self.indexer.get_block_cache()
+        key = self.indexer.project_key(hidden_states)[0]
+        score = self.indexer.project_compress_score(hidden_states)[0]
+        if attn_metadata.is_decoding:
+            batch_size = state_ids.numel()
+            if not batch_size or key.size(0) % batch_size:
+                raise RuntimeError(
+                    'KPool decode rows must be divisible by request count.')
+            steps = key.size(0) // batch_size
+            key = key.unflatten(0, (batch_size, steps))
+            score = score.unflatten(0, (batch_size, steps))
+            if steps == 1 and _paged_kpool_update_npu(
+                    key[:, 0], score[:, 0], tail_k_state, tail_score_state,
+                    state_ids, history_lengths, indexer_k_cache,
+                    attn_metadata.block_offsets,
+                    self.indexer.index_kpool_compress_ape):
+                return indexer_k_cache
+            for step in range(steps):
+                update = kpool_decode_update(
+                    key[:, step], score[:, step], tail_k_state,
+                    tail_score_state, state_ids, history_lengths + step,
+                    self.index_kpool)
+                pooled = kpool_compress_bf16(
+                    update.closed_keys, update.closed_scores,
+                    self.indexer.index_kpool_compress_ape)
+                kpool_write_bf16_paged_cache_batched(
+                    indexer_k_cache, attn_metadata.block_offsets,
+                    update.group_ids, pooled, self.index_kpool,
+                    update.should_close)
+                tail_k_state.index_copy_(0, update.safe_state_ids,
+                                        update.next_tail_keys)
+                tail_score_state.index_copy_(0, update.safe_state_ids,
+                                            update.next_tail_scores)
+            return indexer_k_cache
+
+        q_seqlens = attn_metadata.q_seqlens.tolist()
+        kv_seqlens = attn_metadata.kv_seqlens.tolist()
+        if len(q_seqlens) != len(kv_seqlens):
+            raise RuntimeError('KPool query/KV batch lengths do not match.')
+        if state_ids.numel() != len(q_seqlens):
+            raise RuntimeError(
+                'KPool state id count does not match the request batch.')
+
+        token_offset = 0
+        for batch_idx, (q_len, kv_len) in enumerate(
+                zip(q_seqlens, kv_seqlens)):
+            q_len = int(q_len)
+            kv_len = int(kv_len)
+            history_len = kv_len - q_len
+            if history_len < 0:
+                raise RuntimeError(
+                    f'KPool received q_len={q_len} greater than kv_len={kv_len}.')
+            state_id = int(state_ids[batch_idx].item())
+            previous_tail_len = history_len % self.index_kpool
+            if state_id >= 0:
+                previous_tail_k = tail_k_state[
+                    state_id, :previous_tail_len]
+                previous_tail_score = tail_score_state[
+                    state_id, :previous_tail_len]
+            else:
+                previous_tail_k = key.new_zeros(
+                    previous_tail_len, self.indexer.head_dim)
+                previous_tail_score = score.new_zeros(
+                    previous_tail_len, self.indexer.head_dim)
+
+            token_end = token_offset + q_len
+            update = kpool_partition_update(
+                key[token_offset:token_end],
+                score[token_offset:token_end],
+                history_length=history_len,
+                pool_size=self.index_kpool,
+                tail_keys=previous_tail_k,
+                tail_scores=previous_tail_score,
+            )
+            if update.closed_group_ids.numel():
+                pooled = kpool_compress_bf16(
+                    update.closed_keys,
+                    update.closed_scores,
+                    self.indexer.index_kpool_compress_ape,
+                )
+                kpool_write_bf16_paged_cache(
+                    indexer_k_cache,
+                    attn_metadata.block_offsets[batch_idx],
+                    update.closed_group_ids,
+                    pooled,
+                    self.index_kpool,
+                )
+
+            if state_id >= 0:
+                tail_k_state[state_id].zero_()
+                tail_score_state[state_id].zero_()
+                tail_len = update.tail_keys.size(0)
+                if tail_len:
+                    tail_k_state[state_id, :tail_len].copy_(
+                        update.tail_keys)
+                    tail_score_state[state_id, :tail_len].copy_(
+                        update.tail_scores)
+            token_offset = token_end
+
+        if token_offset != key.size(0):
+            raise RuntimeError(
+                f'KPool metadata accounts for {token_offset} tokens, '
+                f'but projections contain {key.size(0)}.')
+        return indexer_k_cache
 
     def _write_kpool_prefill_pools(self, key, score, tail_state, valid_rows, attn_metadata):
         """Write prefill pools from row-local scratch; caller persists
@@ -963,6 +1296,11 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         kpool_metadata: Any = None,
     ) -> torch.Tensor:
         """Score/select on rank 0; expand decode group ids on each TP rank."""
+        if getattr(self.indexer, 'paged_bf16_cache', False):
+            # Ascend BF16 paged pools: score with vLLM-Ascend's FP32 head
+            # reduction and select through the shared Torch reference.
+            return self._select_kpool_indices_bf16(
+                hidden_states, q_lora, indexer_k_cache, attn_metadata)
         if (hidden_states.is_cuda and not attn_metadata.is_decoding
                 and attn_metadata.max_kv_seqlen <= self.index_topk):
             # The shared Top-K returns ascending ids when every group fits.
@@ -1133,6 +1471,298 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
             token_offset = token_end
         return torch.cat(logical_parts, dim=0)
 
+    def _select_kpool_indices_bf16(
+        self,
+        hidden_states: torch.Tensor,
+        q_lora: torch.Tensor,
+        indexer_k_cache: torch.Tensor,
+        attn_metadata: Any,
+    ) -> torch.Tensor:
+        """Select pooled history against the BF16 paged KPool cache.
+
+        This mirrors vLLM-Ascend's lightning indexer: one FP32 head-reduced
+        query ``qbar`` per row, plain FP32 dot products against the BF16
+        pooled keys (no per-head ReLU), group top-k, and expansion with the
+        causal tail packed behind the pooled history.  Decode rows reuse the
+        same loop because every decode step is a one-row query window whose
+        history ends at its own position.
+        """
+        dist_ctx = get_dist_manager().current_context()
+        tp_group = dist_ctx.attn_tp_group
+        is_owner = tp_group.rank == 0
+        total_rows = hidden_states.size(1)
+        output_width = self.index_topk + self.index_kpool - 1
+        # Single-token decode is fully batchable at fixed shapes with no
+        # ``tolist()`` D2H sync, so NPU graph capture routes through the
+        # dedicated device-only path below.  The gate is shape-derived (one
+        # query row per request), so it is constant across graph replays.
+        if (attn_metadata.is_decoding
+                and total_rows == attn_metadata.q_seqlens.numel()):
+            return self._select_kpool_indices_bf16_decode(
+                hidden_states, q_lora, indexer_k_cache, attn_metadata)
+        if is_owner:
+            query = self.indexer.project_query(q_lora)[0]
+            head_gate = self.indexer.project_head_gate(hidden_states)[0]
+            q_seqlens = attn_metadata.q_seqlens.tolist()
+            kv_seqlens = attn_metadata.kv_seqlens.tolist()
+            if len(q_seqlens) != len(kv_seqlens):
+                raise RuntimeError(
+                    'KPool query/KV batch lengths do not match.')
+            row_parts = []
+            token_offset = 0
+            for batch_idx, (q_len, kv_len) in enumerate(
+                    zip(q_seqlens, kv_seqlens)):
+                q_len = int(q_len)
+                kv_len = int(kv_len)
+                history_len = kv_len - q_len
+                token_end = token_offset + q_len
+                row_seq_lens = history_len + torch.arange(
+                    1,
+                    q_len + 1,
+                    dtype=torch.int64,
+                    device=hidden_states.device,
+                )
+                num_groups = (history_len + q_len) // self.index_kpool
+                pooled_keys = kpool_read_bf16_paged_cache(
+                    indexer_k_cache, attn_metadata.block_offsets[batch_idx],
+                    num_groups)
+                # Bound the FP32 score tile so long prefill chunks stay in
+                # device memory, matching the chunked Ascend indexer.
+                row_chunk = max(1, _KPOOL_BF16_SCORE_TILE_BYTES //
+                                max(1, num_groups * 4))
+                for chunk_start in range(0, q_len, row_chunk):
+                    chunk_rows = min(q_len - chunk_start, row_chunk)
+                    row = token_offset + chunk_start
+                    chunk_seq_lens = row_seq_lens[chunk_start:chunk_start +
+                                                  chunk_rows]
+                    chunk_group_lengths = torch.div(
+                        chunk_seq_lens,
+                        self.index_kpool,
+                        rounding_mode='floor',
+                    )
+                    logits = kpool_score_bf16(
+                        query[row:row + chunk_rows],
+                        head_gate[row:row + chunk_rows],
+                        pooled_keys,
+                        self.indexer.softmax_scale,
+                    )
+                    selected = kpool_topk(logits, chunk_group_lengths,
+                                          self.index_kpool, self.index_topk,
+                                          seq_lens=chunk_seq_lens)
+                    row_parts.append(selected)
+                token_offset = token_end
+            if token_offset != total_rows:
+                raise RuntimeError(
+                    f'KPool metadata accounts for {token_offset} rows, '
+                    f'but queries contain {total_rows}.')
+            logical_indices = (torch.cat(row_parts, dim=0) if row_parts else
+                               torch.empty((0, output_width),
+                                           dtype=torch.int32,
+                                           device=hidden_states.device))
+        else:
+            logical_indices = torch.empty(
+                (total_rows, output_width),
+                dtype=torch.int32,
+                device=hidden_states.device,
+            )
+        if dist_ctx.dist_config.attn_tp > 1:
+            group = tp_group.gpu_group
+            source_rank = dist_ctx.rank - tp_group.rank
+            dist.broadcast(logical_indices, src=source_rank, group=group)
+        return logical_indices
+
+    def _select_kpool_indices_bf16_decode(
+        self,
+        hidden_states: torch.Tensor,
+        q_lora: torch.Tensor,
+        indexer_k_cache: torch.Tensor,
+        attn_metadata: Any,
+    ) -> torch.Tensor:
+        """Fixed-shape batched KPool selection for single-token decode.
+
+        The per-request loop above drives every branch from ``tolist()``ed
+        lengths, which D2H-syncs and cannot be captured into an
+        ``torch.npu.NPUGraph``.  In plain decode each request contributes
+        exactly one query row, so the selection collapses to one batched
+        shape: on Ascend a single Triton launch (ported from vllm-ascend's
+        GLM-Next lightning indexer) first scores the whole static width
+        with device-side pooled lengths; otherwise - or whenever that
+        kernel is unavailable - gather the pooled groups of group tiles of
+        the page table, score with the same math as :func:`kpool_score_bf16`,
+        and merge each tile's top-k exactly.  Both paths yield absolute
+        group ids and reproduce :func:`kpool_topk`'s short-row/long-row
+        semantics with device-side ``where``/``topk``.
+
+        The static width is capped by the scheduler session length when
+        published via :func:`set_kpool_decode_session_tokens`; the scheduler
+        guarantees no request exceeds it, so no valid group is lost.  What
+        remains of the width is scanned in fixed group tiles bounded by
+        ``_KPOOL_BF16_SCORE_TILE_BYTES``: a whole-width gather once pinned
+        one ``[batch, max_groups, head_dim]`` BF16 tile (plus its FP32
+        scoring copy) per captured graph, which alone could exhaust the
+        device when the pool table was wide.
+
+        Every Python value comes from a tensor *shape* (buffer sizes stay
+        constant across replays of a captured graph); the per-replay values -
+        ``kv_seqlens`` and the page tables - stay device tensors.  Padded
+        replay rows carry zero history, select nothing and emit the all -1
+        row the sparse attention op already tolerates from reserved slot 0.
+        """
+        dist_ctx = get_dist_manager().current_context()
+        tp_group = dist_ctx.attn_tp_group
+        is_owner = tp_group.rank == 0
+        batch_size = attn_metadata.q_seqlens.numel()
+        output_width = self.index_topk + self.index_kpool - 1
+        kv_seqlens = attn_metadata.kv_seqlens.to(torch.int64)
+        group_lengths = torch.div(kv_seqlens, self.index_kpool,
+                                  rounding_mode='floor')
+        group_budget = self.index_topk // self.index_kpool
+
+        if is_owner:
+            query = self.indexer.project_query(q_lora)[0]
+            head_gate = self.indexer.project_head_gate(hidden_states)[0]
+            # The Triton path consumes the raw page table; only the
+            # gather fallback below widens it to int64 indices.
+            block_table = attn_metadata.block_offsets
+            # A request can never hold more closed pools than its page table
+            # addresses, and the scheduler caps every request below the
+            # session length, so the replay-stable group ceiling of a
+            # captured graph is the smaller of the two.
+            entries_per_block = indexer_k_cache.size(1)
+            max_groups = block_table.size(1) * entries_per_block
+            if _KPOOL_DECODE_SESSION_TOKENS is not None:
+                max_groups = min(
+                    max_groups,
+                    -(-_KPOOL_DECODE_SESSION_TOKENS // self.index_kpool))
+
+            query_weight = head_gate.float() * self.indexer.softmax_scale
+            qbar = torch.einsum('rh,rhd->rd', query_weight, query.float())
+
+            topk_k = min(group_budget, max_groups)
+            best_vals = None
+            best_ids = None
+            # Ascend fast path, ported from vllm-ascend's GLM-Next lightning
+            # indexer: one Triton launch scores the whole static width with
+            # device-side pooled lengths, so key reads follow the actual
+            # request lengths while out-of-range groups come back as LOWEST
+            # sentinels.  The gather loop below reads at static width, which
+            # a wide pool makes prohibitive however short the requests are.
+            picked = _paged_kpool_topk_npu(qbar, indexer_k_cache,
+                                           group_lengths, block_table,
+                                           max_groups, topk_k)
+            if picked is not None:
+                best_vals, best_ids = picked
+            else:
+                # One BF16 gathered key, its FP32 scoring copy, and FP32
+                # logs per (row, group) bound a tile's working set.
+                bytes_per_group = indexer_k_cache.size(-1) * 6 + 4
+                tile_groups = max(
+                    1, _KPOOL_BF16_SCORE_TILE_BYTES //
+                    max(1, batch_size * bytes_per_group))
+                # Keep at least one group budget per tile so tile-wise
+                # top-k merges are exact: any entry of the global top-k
+                # sits inside its own tile's top-k.
+                tile_groups = min(max(tile_groups, group_budget),
+                                  max_groups)
+                group_ids_all = torch.arange(
+                    max_groups, dtype=torch.int64,
+                    device=hidden_states.device)
+                block_offsets = block_table.to(torch.int64)
+                # ``max(1, ...)`` keeps ``range`` valid when
+                # ``max_groups == 0`` (the loop body then never runs and
+                # ``best_ids`` stays None).
+                for chunk_start in range(0, max_groups,
+                                         max(1, tile_groups)):
+                    chunk_groups = min(tile_groups, max_groups - chunk_start)
+                    group_ids = group_ids_all[chunk_start:chunk_start +
+                                              chunk_groups]
+                    page_columns = torch.div(group_ids, entries_per_block,
+                                             rounding_mode='floor')
+                    pages = block_offsets.index_select(1, page_columns)
+                    slots = torch.remainder(group_ids,
+                                            entries_per_block).unsqueeze(
+                                                0).expand(batch_size, -1)
+                    # Unfilled slots read foreign or stale pools; the -inf mask
+                    # below keeps their scores (Inf/NaN included) out of the
+                    # selection.
+                    pooled_keys = indexer_k_cache[pages, slots, 0]
+                    logits = torch.einsum('rd,rgd->rg', qbar,
+                                          pooled_keys.float())
+
+                    valid_groups = (group_ids.unsqueeze(0)
+                                    < group_lengths.unsqueeze(1))
+                    logits = logits.float().masked_fill(
+                        ~valid_groups, float('-inf'))
+                    # ``aclnnTopk`` requires k <= column count, and eager steps
+                    # can present a single-page table (warmup decode:
+                    # max_groups == 8).
+                    chunk_k = min(group_budget, chunk_groups)
+                    top_vals, top_ids = torch.topk(logits, chunk_k, dim=-1,
+                                                   sorted=False)
+                    top_ids = top_ids + chunk_start
+                    if best_vals is None:
+                        best_vals, best_ids = top_vals, top_ids
+                    else:
+                        cand_vals = torch.cat([best_vals, top_vals], dim=-1)
+                        cand_ids = torch.cat([best_ids, top_ids], dim=-1)
+                        best_vals, order = torch.topk(
+                            cand_vals, topk_k, dim=-1, sorted=False)
+                        best_ids = cand_ids.gather(1, order)
+                    # Release the tile before allocating the next one.
+                    del pooled_keys, logits, top_vals, top_ids
+
+            # D6-r3: the blend + expand + tail-append below was ~60 tiny
+            # elementwise/scatter kernels per indexer layer per decode step
+            # (6.3ms/step across the 11 KPool indexer layers); one Triton
+            # launch reproduces its exact index math, selected-column order
+            # included (sparse-attention reduction order is observable).
+            if best_ids is None:
+                best_ids = torch.empty((batch_size, 0), dtype=torch.int64,
+                                       device=hidden_states.device)
+            logical_indices = _paged_kpool_expand_npu(
+                best_ids, kv_seqlens, self.index_kpool, self.index_topk)
+            if logical_indices is None:
+                long_ids = best_ids
+                if long_ids.size(-1) < group_budget:
+                    # Whenever this bites every row is short and ``long_ids``
+                    # is discarded by the ``where`` blend below.
+                    long_ids = torch.cat([
+                        long_ids,
+                        torch.full(
+                            (batch_size,
+                             group_budget - long_ids.size(-1)),
+                            -1, dtype=torch.int64,
+                            device=hidden_states.device),
+                    ], dim=-1)
+                ranks = torch.arange(
+                    group_budget, dtype=torch.int64,
+                    device=hidden_states.device)
+                chronological = torch.where(
+                    ranks.unsqueeze(0) < group_lengths.unsqueeze(1),
+                    ranks.unsqueeze(0).expand(batch_size, -1),
+                    torch.full((batch_size, group_budget), -1,
+                               dtype=torch.int64,
+                               device=hidden_states.device))
+                is_long = (group_lengths > group_budget).unsqueeze(1)
+                selected_groups = torch.where(is_long, long_ids,
+                                              chronological)
+
+                logical_indices = kpool_expand_selected_groups(
+                    selected_groups, group_lengths, self.index_kpool,
+                    self.index_topk, seq_lens=kv_seqlens)
+        else:
+            logical_indices = torch.empty(
+                (batch_size, output_width),
+                dtype=torch.int32,
+                device=hidden_states.device,
+            )
+
+        if dist_ctx.dist_config.attn_tp > 1:
+            group = tp_group.gpu_group
+            source_rank = dist_ctx.rank - tp_group.rank
+            dist.broadcast(logical_indices, src=source_rank, group=group)
+        return logical_indices
+
     def _kpool_indices(
         self,
         hidden_states: torch.Tensor,
@@ -1243,6 +1873,99 @@ class Glm5NextSparseAttention(DeepseekV32Attention):
         q_len = unabsorbed_query.size(0)
         nope_size = self.kv_lora_rank
         kpool_tail_state = None if tail_k is None else (tail_k, tail_score)
+
+        if self.use_dense_dlinfer:
+            # Ascend keeps the KPool indexer on vLLM-Ascend's BF16 pooled
+            # layout and runs long queries and decode through dlinfer's
+            # native NoPE sparse MLA.  Short prefill windows keep the
+            # decompressed dense MHA below, which is the precision-validated
+            # short-sequence path.  DlinferAttentionMetadata names the batch
+            # max ``max_kv_seq_len``.
+            use_sparse = attn_metadata.is_decoding or int(
+                attn_metadata.max_kv_seq_len) > self.index_topk
+            logical_indices = self._kpool_indices(
+                hidden_states,
+                q_lora,
+                kpool_tail_state,
+                state_ids,
+                attn_metadata,
+                return_indices=use_sparse,
+                topk_indices_buffer=topk_indices_buffer,
+                skip_topk=skip_topk,
+                kpool_metadata=kpool_metadata,
+            )
+            if use_sparse:
+                # Absorb W_KC once; the NoPE op consumes the latent query
+                # [tokens, heads, kv_lora_rank] against the latent paged
+                # cache, mirroring vLLM-Ascend's sparse_mla dispatch.
+                query_states = self._absorbed_query(
+                    unabsorbed_query, num_heads)
+                attn_output = self.decode_attn_fwd(
+                    query_states,
+                    key_states,
+                    key_states[..., :nope_size],
+                    past_key_value[0],
+                    past_key_value[0][..., :nope_size],
+                    attn_metadata,
+                    k_scales_zeros=(None if len(past_key_value) == 2 else
+                                    past_key_value[2]),
+                    v_scales_zeros=(None if len(past_key_value) == 2 else
+                                    past_key_value[3]),
+                    nsa_indices=logical_indices,
+                )
+                attn_bmm_out = attn_output.new_empty(
+                    q_len, num_heads, self.v_head_dim)
+                self.vc(attn_output, attn_bmm_out)
+                return attn_bmm_out
+            # Short prefill.  Populate the ordinary latent cache, then gather
+            # complete request histories for each short sequence.  If a
+            # backend cache view is unavailable, fall back to the current
+            # window.
+            try:
+                self.attn_fwd.impl.fill_kv_cache(
+                    key_states, value_states, past_key_value[0],
+                    past_key_value[0][..., :nope_size],
+                    attn_metadata.kv_start_indices,
+                    k_scales_zeros=[], v_scales_zeros=[],
+                    quant_bits=attn_metadata.quant_policy)
+                cache = past_key_value[0][..., :nope_size]
+            except Exception:
+                cache = None
+            latent_current = key_states[..., :nope_size]
+            q = unabsorbed_query
+            outputs = []
+            q_starts = attn_metadata.cu_seqlens_q.tolist()
+            kv_lens = attn_metadata.kv_seqlens.tolist()
+            for req, (start_i, end_i) in enumerate(zip(q_starts[:-1], q_starts[1:])):
+                qs = q[start_i:end_i]
+                length = int(kv_lens[req])
+                qlen = end_i - start_i
+                # For an initial prefill there is no prefix history. Read the
+                # freshly projected latent directly instead of round-tripping
+                # through the paged cache whose physical layout differs across
+                # dlinfer backends. Cache gather is only needed when a request
+                # has a real prefix (length > current query window).
+                if cache is not None and cache.dim() == 4 and length > qlen:
+                    pos = torch.arange(length, device=cache.device)
+                    block_ids = attn_metadata.block_offsets[req][pos // attn_metadata.block_size].long()
+                    offsets = pos.remainder(attn_metadata.block_size).long()
+                    latent = cache[block_ids, offsets, 0]
+                else:
+                    latent = latent_current[start_i:end_i, 0]
+                kv_states = self.kv_b_proj(latent).view(
+                    -1, num_heads, self.qk_nope_head_dim + self.v_head_dim)
+                key, value = kv_states.split(
+                    [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
+                scores = torch.einsum('qhd,khd->hqk', qs.float(), key.float()) * self.softmax_scale
+                # Prefix keys precede the current query window; only mask
+                # future positions within the newly supplied tokens.
+                prefix = max(0, key.size(0) - qlen)
+                mask = torch.triu(torch.ones((qlen, key.size(0)), device=scores.device, dtype=torch.bool), 1 + prefix)
+                scores = scores.masked_fill(mask[None], torch.finfo(scores.dtype).min)
+                outputs.append(torch.einsum(
+                    'hqk,khd->qhd', scores.softmax(-1).to(value.dtype), value))
+            return torch.cat(outputs, dim=0)
+
         if not attn_metadata.is_decoding:
             use_sparse = (envs.mla_disable_dense_prefill
                           or int(attn_metadata.max_kv_seqlen) > self.index_topk)
@@ -1527,8 +2250,11 @@ class Glm5NextModel(nn.Module):
                 f'GLM-5.3 expects {len(self.layers)} layer caches, got {len(past_key_values)}.'
             )
         kpool_metadata = None
-        if hidden_states.is_cuda and (attn_metadata.is_decoding
-                                      or attn_metadata.max_kv_seqlen > self.config.index_topk):
+        # CUDA step-metadata helpers only; the NPU path reads its own
+        # dlinfer metadata (is_cuda lies on NPU under transfer_to_npu).
+        if hidden_states.device.type == 'cuda' and (
+                attn_metadata.is_decoding
+                or attn_metadata.max_kv_seqlen > self.config.index_topk):
             first_full_layer = next(layer for layer in self.layers if not layer.is_linear_attention)
             page_size = first_full_layer.self_attn.indexer.get_block_cache().size(1)
             if attn_metadata.is_decoding:
@@ -1541,7 +2267,8 @@ class Glm5NextModel(nn.Module):
                     attn_metadata.block_offsets, hidden_states.size(1),
                     self.config.index_kpool, page_size=page_size)
         hc_input_fp32 = None
-        prepare_hc_fp32 = hidden_states.is_cuda and hidden_states.size(0) * hidden_states.size(1) <= 32
+        prepare_hc_fp32 = (hidden_states.device.type == 'cuda'
+                           and hidden_states.size(0) * hidden_states.size(1) <= 32)
         for layer, past_key_value in zip(self.layers, past_key_values):
             kpool_tail_state = None
             if not layer.is_linear_attention:
@@ -1828,27 +2555,42 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
             raise RuntimeError(
                 f'GLM-5.3 is missing named state caches: {missing}.')
 
-        # These specs are deliberately unlayered: their leading dimension is
-        # the compact KDA/full-attention row.  Runtime storage leads with the
-        # request-state slot, so transpose once into layer-major views.
-        kda_conv = named_states[GLM5_KDA_CONV_STATE].transpose(0, 1)
-        kda_recurrent = named_states[
-            GLM5_KDA_RECURRENT_STATE].transpose(0, 1)
-        tail_k = named_states[GLM5_KPOOL_TAIL_K_STATE].transpose(0, 1)
-        tail_score = named_states[
-            GLM5_KPOOL_TAIL_SCORE_STATE].transpose(0, 1)
-        linear_caches = list(zip(kda_conv, kda_recurrent))
-        kpool_tail_states = list(zip(tail_k, tail_score))
-        full_caches = list(past_key_values)
-        interleaved_caches = []
-        for layer_idx in range(self.config.num_hidden_layers):
-            if is_glm5_kda_layer(self.config, layer_idx):
-                interleaved_caches.append(linear_caches.pop(0))
-            else:
-                interleaved_caches.append((*full_caches.pop(0), *kpool_tail_states.pop(0)))
-        if linear_caches or full_caches:
-            raise RuntimeError(
-                'GLM-5.3 cache counts do not match its hybrid layer map.')
+        # D6: this structure is identical every step (same pools, same layer
+        # map); rebuilding it cost ~5ms/step of host python while the device
+        # idled at the step boundary.  Cache keyed on pool-tensor identities.
+        _key = (id(named_states[GLM5_KDA_CONV_STATE]),
+                id(named_states[GLM5_KDA_RECURRENT_STATE]),
+                id(named_states[GLM5_KPOOL_TAIL_K_STATE]),
+                id(named_states[GLM5_KPOOL_TAIL_SCORE_STATE]),
+                id(past_key_values))
+        _cache = self.__dict__.get('_d6_interleave_cache')
+        if _cache is not None and _cache[0] == _key:
+            interleaved_caches = _cache[1]
+        else:
+            # These specs are deliberately unlayered: their leading dimension
+            # is the compact KDA/full-attention row.  Runtime storage leads
+            # with the request-state slot, so transpose once into layer-major
+            # views.
+            kda_conv = named_states[GLM5_KDA_CONV_STATE].transpose(0, 1)
+            kda_recurrent = named_states[
+                GLM5_KDA_RECURRENT_STATE].transpose(0, 1)
+            tail_k = named_states[GLM5_KPOOL_TAIL_K_STATE].transpose(0, 1)
+            tail_score = named_states[
+                GLM5_KPOOL_TAIL_SCORE_STATE].transpose(0, 1)
+            linear_caches = list(zip(kda_conv, kda_recurrent))
+            kpool_tail_states = list(zip(tail_k, tail_score))
+            full_caches = list(past_key_values)
+            interleaved_caches = []
+            for layer_idx in range(self.config.num_hidden_layers):
+                if is_glm5_kda_layer(self.config, layer_idx):
+                    interleaved_caches.append(linear_caches.pop(0))
+                else:
+                    interleaved_caches.append(
+                        (*full_caches.pop(0), *kpool_tail_states.pop(0)))
+            if linear_caches or full_caches or kpool_tail_states:
+                raise RuntimeError(
+                    'GLM-5.3 cache counts do not match its hybrid layer map.')
+            self.__dict__['_d6_interleave_cache'] = (_key, interleaved_caches)
 
         input_ids = context.input_ids
         pixel_values = None
@@ -1901,6 +2643,15 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
             ('.gate_up_proj', '.up_proj', 1),
         ]
         kda_params_mapping = [
+            # GLM checkpoints nest the KDA forget-gate tensors under
+            # ``forget_gate.``; the module keeps f_a_proj/g_a_proj merged in
+            # fg_a_proj and flat f_b_proj/dt_bias/A_log.  These specific names
+            # must precede the bare ``.f_a_proj``/``.g_a_proj`` rules.
+            ('.fg_a_proj', '.forget_gate.f_a_proj', 0),
+            ('.fg_a_proj', '.forget_gate.g_a_proj', 1),
+            ('.f_b_proj', '.forget_gate.f_b_proj', None),
+            ('.dt_bias', '.forget_gate.dt_bias', None),
+            ('.A_log', '.forget_gate.A_log', None),
             ('.fg_a_proj', '.f_a_proj', 0),
             ('.fg_a_proj', '.g_a_proj', 1),
             ('.qkv_proj', '.q_proj', 'q'),
@@ -1923,6 +2674,8 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
 
         params_dict = dict(self.named_parameters())
         for checkpoint_name, loaded_weight in weights:
+            if checkpoint_name == 'rot.weight':
+                continue
             is_visual_weight = checkpoint_name.startswith('model.visual.')
             if checkpoint_name.startswith('model.visual.'):
                 if getattr(self.visual, '_is_dummy_mod', False):
@@ -1932,6 +2685,11 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
                 name = checkpoint_name.replace('model.language_model.',
                                                'model.', 1)
             layer_idx = self._layer_idx(name)
+            if is_mtp and layer_idx is None:
+                continue
+            if is_mtp and ('shared_head.head' in name or
+                           '.embed_tokens.' in name):
+                continue
             if is_mtp:
                 if layer_idx != self.config.num_hidden_layers:
                     continue
@@ -1957,6 +2715,87 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
                                           expert_params_mapping)
                 continue
 
+            # Sparse-MLA layers merge the checkpoint's separate q_a_proj and
+            # kv_a_proj_with_mqa projections into one fused_qkv_a_proj module
+            # (out_names=[0, 1]). Route every tensor into its output shard:
+            # the int8 weight and its per-channel dequant scale both slice
+            # along the merged output axis in MergedW8A8Linear.weight_loader.
+            # weight_offset is all-zero in this checkpoint (symmetric quant)
+            # and the dynamic W8A8 linear keeps no offset parameter, so it
+            # intentionally loads nowhere.
+            if ('.q_a_proj.' in name
+                    or '.kv_a_proj_with_mqa.' in name):
+                shard_id = 0 if '.q_a_proj.' in name else 1
+                # Match the stem without a trailing dot: after
+                # removesuffix('.weight_scale') the name ends right at
+                # 'q_a_proj', so a '.q_a_proj.' pattern never matches there.
+                src = ('.q_a_proj' if shard_id == 0
+                       else '.kv_a_proj_with_mqa')
+                if name.endswith('.weight'):
+                    target = name.replace(src, '.fused_qkv_a_proj')
+                elif name.endswith('.weight_scale'):
+                    target = (name.removesuffix('.weight_scale')
+                              .replace(src, '.fused_qkv_a_proj')
+                              + '.scale')
+                else:
+                    continue
+                if target in params_dict:
+                    load_weight(params_dict[target], loaded_weight,
+                                shard_id=shard_id)
+                continue
+
+            # ModelSlim static W8A8 stores auxiliary tensors as
+            # weight_scale/weight_offset while LMDeploy linear modules expose
+            # deq_scale/input_offset.
+            if name.endswith(('.weight_scale', '.weight_offset')):
+                root, suffix = name.rsplit('.', 1)
+                targets = (('.deq_scale', '.scale', '.weight_scale')
+                           if suffix == 'weight_scale' else
+                           ('.input_offset', '.quant_bias', '.offset'))
+                for target in targets:
+                    candidate = root + target
+                    if candidate in params_dict:
+                        load_weight(params_dict[candidate], loaded_weight)
+                        break
+                else:
+                    # Dense gate_proj/up_proj scales have no standalone
+                    # target: the merged gate_up_proj.scale is the only live
+                    # parameter.  Without this fallback the scale is silently
+                    # dropped and gate_up_proj.scale stays uninitialized,
+                    # zeroing every dense MLP layer after dequantization.
+                    for param_name, weight_name, shard_id in stacked_params_mapping:
+                        if weight_name not in root:
+                            continue
+                        stacked_root = root.replace(weight_name, param_name)
+                        for target in targets:
+                            candidate = stacked_root + target
+                            if candidate in params_dict:
+                                load_weight(params_dict[candidate],
+                                            loaded_weight,
+                                            shard_id=shard_id)
+                                break
+                        break
+                continue
+
+            hc_name_map = (
+                ('.attn_hc.fn', '.hc_attn_fn'),
+                ('.attn_hc.base', '.hc_attn_base'),
+                ('.attn_hc.scale', '.hc_attn_scale'),
+                ('.ffn_hc.fn', '.hc_ffn_fn'),
+                ('.ffn_hc.base', '.hc_ffn_base'),
+                ('.ffn_hc.scale', '.hc_ffn_scale'),
+            )
+            for source, target in hc_name_map:
+                if source in name:
+                    candidate = name.replace(source, target)
+                    if candidate in params_dict:
+                        load_weight(params_dict[candidate], loaded_weight)
+                        break
+            else:
+                candidate = None
+            if candidate is not None:
+                continue
+
             is_kda = (layer_idx is not None
                       and is_glm5_kda_layer(self.config, layer_idx)
                       and '.self_attn.' in name)
@@ -1965,9 +2804,12 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
                     if weight_name not in name:
                         continue
                     name = name.replace(weight_name, param_name)
-                    load_weight(params_dict[name],
-                                loaded_weight,
-                                shard_id=shard_id)
+                    if shard_id is None:
+                        load_weight(params_dict[name], loaded_weight)
+                    else:
+                        load_weight(params_dict[name],
+                                    loaded_weight,
+                                    shard_id=shard_id)
                     break
                 else:
                     load_weight(params_dict[name], loaded_weight)
@@ -1988,8 +2830,12 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 if weight_name not in name:
                     continue
-                name = name.replace(weight_name, param_name)
-                load_weight(params_dict[name],
+                candidate = name.replace(weight_name, param_name)
+                # Dense GLM blocks keep separate gate/up projections.  Only
+                # stack when the target packed parameter actually exists.
+                if candidate not in params_dict:
+                    continue
+                load_weight(params_dict[candidate],
                             loaded_weight,
                             shard_id=shard_id)
                 break
@@ -2029,8 +2875,34 @@ class Glm5NextMTPAttention(Glm5NextSparseAttention):
         cache = (caches.row(binding.cache_name, binding.consumer_row)
                  if hasattr(caches, 'row') else
                  caches[binding.cache_name][binding.consumer_row])
-        if not cache.is_cuda:
-            raise RuntimeError('GLM-5.3 KPool cache updates require CUDA tensors.')
+        if cache.device.type != 'cuda':
+            # Ascend: read this step's raw tail from the pageable token
+            # cache, update pools/tails eagerly, then persist the projected
+            # tokens.  Rejected positions are overwritten on their next visit.
+            block_size = cache.size(1)
+            history = (attn_metadata.kv_seqlens - attn_metadata.q_seqlens).long()
+            tail_length = history.remainder(self.index_kpool)
+            slots = torch.arange(self.index_kpool, device=history.device)
+            positions = history[:, None] - tail_length[:, None] + slots
+            block_offsets = attn_metadata.block_offsets.long()
+            blocks = block_offsets.gather(1, positions.div(block_size, rounding_mode='floor'))
+            tails = cache[blocks, positions.remainder(block_size)]
+            tails = tails.masked_fill((slots >= tail_length[:, None])[..., None, None], 0)
+            state_ids = torch.arange(history.numel(), device=history.device)
+            result = super()._update_kpool_cache(
+                hidden_states,
+                (tails[:, :, 0].contiguous(), tails[:, :, 1].contiguous()),
+                state_ids, attn_metadata)
+            total_tokens = hidden_states.size(1)
+            batch = state_ids.repeat_interleave(attn_metadata.q_seqlens,
+                                                output_size=total_tokens)
+            token_ids = torch.arange(total_tokens, device=history.device)
+            positions = history[batch] + token_ids - attn_metadata.cu_seqlens_q[batch]
+            blocks = block_offsets[batch, positions.div(block_size, rounding_mode='floor')]
+            key = self.indexer.project_key(hidden_states)[0]
+            score = self.indexer.project_compress_score(hidden_states)[0]
+            cache[blocks, positions.remainder(block_size)] = torch.stack((key, score), dim=1)
+            return result
         key = self.indexer.project_key(hidden_states)[0]
         score = self.indexer.project_compress_score(hidden_states)[0]
         tail_keys, tail_scores, state_ids = kpool_gather_token_tail_cuda(
@@ -2112,6 +2984,31 @@ class Glm5NextMTPModel(GlmMoeDsaMTPModel):
         return super().prepare_inputs_for_generation(past_key_values, inputs_embeds, context)
 
     _layer_idx = staticmethod(Glm5NextForConditionalGeneration._layer_idx)
+
+    def _load_weight_experts(self, name, loaded_weight, params_dict,
+                             expert_params_mapping):
+        for param_name, weight_name, expert_id, shard_id in expert_params_mapping:
+            if weight_name not in name:
+                continue
+            name = name.replace(weight_name, param_name)
+            if name.endswith('.weight_offset'):
+                root = name.removesuffix('.weight_offset')
+                name = next((root + suffix for suffix in
+                             ('.input_offset', '.quant_bias', '.offset')
+                             if root + suffix in params_dict), None)
+            elif name.endswith('.weight_scale'):
+                root = name.removesuffix('.weight_scale')
+                name = next((root + suffix for suffix in
+                             ('.deq_scale', '.scale', '.weight_scale')
+                             if root + suffix in params_dict), None)
+            if name is not None and name in params_dict:
+                load_weight(params_dict[name], loaded_weight,
+                            expert_id=expert_id, shard_id=shard_id)
+            return
+        if name.endswith(('.weight_scale', '.weight_offset')):
+            return
+        if name in params_dict:
+            load_weight(params_dict[name], loaded_weight)
 
     def load_weights(self, weights):
         weights = ((name, weight) for name, weight in weights

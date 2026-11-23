@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
+import os
 
 import torch
 from torch.profiler import ProfilerActivity, profile
@@ -43,7 +44,8 @@ class AgentProfiler:
         if len(activities) > 0:
             logger.warning(f'Profiler start on {self.name}. '
                            'Please Note that profiling might harm performance.')
-            profiler = profile(activities=activities)
+            _ws = os.environ.get('LMDEPLOY_PROFILE_WITH_STACK', '0') == '1'
+            profiler = profile(activities=activities, with_stack=_ws)
             return profiler
         else:
             return None

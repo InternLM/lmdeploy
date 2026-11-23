@@ -115,6 +115,7 @@ class FusedMoEW8A8BuildSpec(BuildSpec[FusedMoEW8A8Impl]):
     quant_dtype: torch.dtype | None
     ep_size: int
     ep_group: dist.ProcessGroup | None
+    swiglu_limit: float = 0.0
 
 class FusedMoEStaticF8Impl(ABC):
     """Fused MoE static FP8 implementation."""

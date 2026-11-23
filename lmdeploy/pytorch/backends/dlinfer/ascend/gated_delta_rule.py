@@ -32,6 +32,9 @@ class AscendGatedDeltaMeta(GatedDeltaMeta):
         self.cache_seqlens = getattr(attn_metadata, 'cache_seqlens', None)
         self.state_ids = state_ids.clamp(0)
         self.conv_state_indices = self.state_ids.to(torch.int32)
+        # D6: index paths want int64; deriving it per KDA layer
+        # triples the glue kernels. Once per step here instead.
+        self.state_ids_i64 = self.state_ids.to(torch.int64)
 
 
 class AscendGatedDeltaMetaImpl(GatedDeltaMetaImpl):
