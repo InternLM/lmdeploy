@@ -138,6 +138,9 @@ class InputsMakerConfig:
     enable_chunked_prefill: bool = False
     use_mrope: bool = False
     prefill_interval: int = 16
+    interleaved_prefill_tokens: int = 0
+    interleaved_decode_rounds: int = 1
+    dp_prefill_period: int = 0
 
     @staticmethod
     def from_engine(engine: 'Engine'):
@@ -164,6 +167,9 @@ class InputsMakerConfig:
             enable_decode_checkpoints=cache_config.enable_decode_checkpoints,
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
+            interleaved_prefill_tokens=max(0, _envs.interleaved_prefill_tokens),
+            interleaved_decode_rounds=max(0, _envs.interleaved_decode_rounds),
+            dp_prefill_period=max(0, _envs.dp_prefill_period),
             use_mrope=model_config.use_mrope,
             **kwargs,
         )
@@ -190,15 +196,16 @@ class LongContextChunker:
         """Is enabled."""
         return self.seq is not None
 
-    def is_long_context(self, seq: 'SchedulerSequence'):
+    def is_long_context(self, seq: 'SchedulerSequence', token_budget: int | None = None):
         """Is long context."""
-        limit = get_long_context_chunk_limit(seq, self.max_prefill_token_num)
+        capacity = self.max_prefill_token_num if token_budget is None else token_budget
+        limit = get_long_context_chunk_limit(seq, capacity)
         if seq._seq_meta.prefill_save_alignment:
             plan = plan_long_context_chunk(seq, limit, include_multimodals=False)
             return not plan.is_last_chunk
-        return seq.num_token_ids > min(self.max_prefill_token_num, limit)
+        return seq.num_token_ids > min(capacity, limit)
 
-    def set_seq(self, seq: 'SchedulerSequence'):
+    def set_seq(self, seq: 'SchedulerSequence', token_budget: int | None = None):
         """Set the sequence currently being chunked."""
         self.seq = seq
         self.next_step = seq.num_history_ids
@@ -208,7 +215,8 @@ class LongContextChunker:
         self.multimodals = sort_long_context_multimodals(input_mm)
         # Input/restore happens before set_seq; each new turn or re-admission
         # rebuilds this capacity. Only history/checkpoint cuts vary while active.
-        self.max_prefill_num = get_long_context_chunk_capacity(seq, self.max_prefill_token_num)
+        capacity = self.max_prefill_token_num if token_budget is None else token_budget
+        self.max_prefill_num = get_long_context_chunk_capacity(seq, capacity)
         self.has_multimodal = has_long_context_multimodal(self.multimodals)
 
     def next_chunk_size(self):
@@ -347,11 +355,14 @@ class _ForwardInputsTask:
     def __init__(self,
                  maker: 'InputsMakerAsync',
                  prefill: bool,
-                 enable_empty: bool = False):
+                 enable_empty: bool = False,
+                 token_budget: int | None = None):
         self.maker = maker
         self.scheduler = maker.scheduler
         self.state = _ForwardInputsState(prefill=prefill, enable_empty=enable_empty)
         self.result = _ForwardInputsResult()
+        self.token_budget = token_budget
+        self.budget_args = {} if token_budget is None else dict(token_budget=token_budget)
 
     def run(self):
         """Select one executor forward while preserving scheduling order.
@@ -480,7 +491,7 @@ class _ForwardInputsTask:
             if len(maker.running_seqs) == 0:
                 return False
             return not self.state.prefill
-        return getattr(maker, '_last_forward_kind', None) == 'long_context_chunk'
+        return maker.protect_decode_turn() or getattr(maker, '_last_forward_kind', None) == 'long_context_chunk'
 
     def _should_try_short_prefill_first(self):
         """Allow short/normal prefill quota before an active non-final
@@ -494,7 +505,7 @@ class _ForwardInputsTask:
 
     def _select_prefill_work(self):
         maker = self.maker
-        has_waiting_long_prefill = self.scheduler.has_waiting_long_prefill()
+        has_waiting_long_prefill = self.scheduler.has_waiting_long_prefill(**self.budget_args)
         if has_waiting_long_prefill and not maker._is_long_context_chunk_turn_due():
             self._try_short_prefill()
             if self.result.is_empty():
@@ -596,14 +607,15 @@ class _ForwardInputsTask:
         scheduler_output = self.scheduler.schedule(is_prefill=True,
                                                    prealloc_size=prealloc_size,
                                                    allow_long_prefill=allow_long_prefill,
-                                                   prefer_long_prefill=prefer_long_prefill)
+                                                   prefer_long_prefill=prefer_long_prefill,
+                                                   **self.budget_args)
         running = scheduler_output.running
         result = _ForwardInputsResult(running=running,
                                       swap_in_map=scheduler_output.swap_in_map,
                                       swap_out_map=scheduler_output.swap_out_map)
 
-        if len(running) == 1 and maker.long_context_chunker.is_long_context(running[0]):
-            maker.long_context_chunker.set_seq(running[0])
+        if len(running) == 1 and maker.long_context_chunker.is_long_context(running[0], self.token_budget):
+            maker.long_context_chunker.set_seq(running[0], self.token_budget)
             if maker.long_context_chunker.is_last_chunk():
                 # A prefix-cache restore can skip past a large multimodal
                 # span, leaving a tail that fits the multimodal-expanded chunk
@@ -811,6 +823,9 @@ class InputsMakerAsync:
     def _init_runtime_state(self):
         """Initialize request-local scheduling state."""
         self._decode_count = 0
+        self._decode_turns_remaining = 0
+        self._next_dp_round = None
+        self._deferred_prefill_rounds = 0
         self._last_forward_kind = None
         self._last_compact_decode_banks = None
         self._short_prefill_turns_since_long_chunk = 0
@@ -824,6 +839,9 @@ class InputsMakerAsync:
         """Discard request-local scheduling state after sleep cancels
         sessions."""
         self._decode_count = 0
+        self._decode_turns_remaining = 0
+        self._next_dp_round = None
+        self._deferred_prefill_rounds = 0
         self._last_forward_kind = None
         self._last_compact_decode_banks = None
         self._short_prefill_turns_since_long_chunk = 0
@@ -1578,7 +1596,32 @@ class InputsMakerAsync:
     @record_function('make_forward_inputs')
     def _make_forward_inputs(self, prefill: bool, enable_empty: bool = False):
         """Make forward inputs for ModelAgent._async_step_background()"""
-        return _ForwardInputsTask(self, prefill, enable_empty).run()
+        return _ForwardInputsTask(self, prefill, enable_empty, self.busy_prefill_budget()).run()
+
+    def busy_prefill_budget(self) -> int | None:
+        """Limit admission and first-chunk allocation only while real decode rows exist."""
+        budget = getattr(self.config, 'interleaved_prefill_tokens', 0)
+        if not budget or self.config.role != EngineRole.Hybrid:
+            return None
+        if not any(seq.status == MessageStatus.RUNNING for seq in self.running_seqs):
+            return None
+        return min(budget, self.config.max_prefill_token_num)
+
+    def observe_dp_round(self, round_id: int, prefetched: bool):
+        """Estimate the next collective round from the worker that produced this output."""
+        self._next_dp_round = round_id + 1 + int(prefetched)
+
+    def protect_decode_turn(self) -> bool:
+        """Keep a submitted prompt or prefix chunk from repeatedly displacing decode."""
+        period = getattr(self.config, 'dp_prefill_period', 0)
+        upcoming = getattr(self, '_next_dp_round', None)
+        if period > 1 and upcoming is not None:
+            # Delay only when the rank can do useful decode work. A local
+            # bound still admits a waiter if asynchronous input delivery
+            # repeatedly misses the shared phase.
+            return (upcoming % period != 0 and self._deferred_prefill_rounds < period
+                    and self.busy_prefill_budget() is not None)
+        return getattr(self, '_decode_turns_remaining', 0) > 0 and self.busy_prefill_budget() is not None
 
     def do_prefill_pnode(self):
         return True
@@ -1591,6 +1634,8 @@ class InputsMakerAsync:
         # do decoding if not waiting
         if not scheduler.has_waiting() and not pending_last_chunk:
             self._decode_count = 0
+            return False
+        if self.protect_decode_turn():
             return False
         if pending_last_chunk:
             return True
@@ -1623,8 +1668,7 @@ class InputsMakerAsync:
 
         both dp=1 and dp>1 are supported.
         """
-        scheduler = self.scheduler
-        return not scheduler.has_ready()
+        return not self.scheduler.has_ready() and not self.protect_decode_turn()
 
     async def _send_next_inputs_impl(self, enable_empty: bool = False):
         self.scheduler.resume_completed_migrations()
@@ -1653,9 +1697,28 @@ class InputsMakerAsync:
             self._last_compact_decode_banks = None
             raise
         self._last_forward_kind = self._forward_kind(inputs, forward_inputs['delta'])
+        if getattr(self.config, 'interleaved_prefill_tokens', 0) and self.config.role == EngineRole.Hybrid:
+            self._record_interleaved_dispatch(inputs)
         self.scheduler.tick()
         self.forward_inputs = forward_inputs
         return forward_inputs, next_running
+
+    def _record_interleaved_dispatch(self, inputs: ModelInputs | None):
+        """Charge real work only after the executor accepts the forward."""
+        if self._last_forward_kind is None or (inputs is not None and inputs.is_dummy):
+            return
+        if self._next_dp_round is not None:
+            self._next_dp_round += 1
+        if self._last_forward_kind == 'decode':
+            self._decode_turns_remaining = max(0, self._decode_turns_remaining - 1)
+            if self.config.dp_prefill_period > 1 and (self.scheduler.has_waiting()
+                                                      or self.long_context_chunker.enabled()):
+                self._deferred_prefill_rounds += 1
+            else:
+                self._deferred_prefill_rounds = 0
+        else:
+            self._decode_turns_remaining = self.config.interleaved_decode_rounds
+            self._deferred_prefill_rounds = 0
 
     async def send_next_inputs(self):
         return await self._send_next_inputs_impl()

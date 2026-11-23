@@ -213,9 +213,9 @@ class Scheduler:
         """Whether the latest prefill turn encountered a pending lookup."""
         return self._prefill_scheduler.last_schedule_had_pending_lookup
 
-    def has_waiting_long_prefill(self):
+    def has_waiting_long_prefill(self, token_budget: int | None = None):
         """Whether a waiting request would need a non-final prefill chunk."""
-        return self._prefill_scheduler.has_waiting_long_prefill(self.waiting)
+        return self._prefill_scheduler.has_waiting_long_prefill(self.waiting, token_budget)
 
     def reserve_long_context_chunk(self,
                                    seq: SchedulerSequence,
@@ -364,7 +364,8 @@ class Scheduler:
                  is_prefill: bool,
                  prealloc_size: int = 0,
                  allow_long_prefill: bool = True,
-                 prefer_long_prefill: bool = False):
+                 prefer_long_prefill: bool = False,
+                 token_budget: int | None = None):
         """Select the next prefill batch.
 
         Decode capacity is admitted by :meth:`schedule_running`.
@@ -385,6 +386,7 @@ class Scheduler:
             num_running=self.num_running(),
             turn_policy=turn_policy,
             prealloc_size=prealloc_size,
+            token_budget=token_budget,
         )
         return SchedulerOutput(
             running=running,

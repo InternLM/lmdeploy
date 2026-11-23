@@ -1972,3 +1972,64 @@ def test_compact_checkpoint_export_keeps_multimodal_and_shifted_dependencies_who
     assert not span[0] - shift < plan.chunk_end < span[1]
     assert not span[0] - shift < plan.checkpoint_step < span[1]
     assert all(data.end <= plan.chunk_end for spans in (plan.multimodals or {}).values() for data in spans)
+
+
+def test_interleaved_turn_preserves_decode_and_releases_idle_budget():
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Hybrid, interleaved_prefill_tokens=256,
+                                   max_prefill_token_num=512, prefill_interval=16, max_batches=32)
+    seq = SimpleNamespace(status=MessageStatus.RUNNING)
+    maker.running_seqs = [seq]
+    maker.scheduler = SimpleNamespace(has_waiting=lambda: True, waiting=[SimpleNamespace(num_token_ids=512)])
+    maker.long_context_chunker = LongContextChunker(512)
+    maker._decode_count = 0
+    maker._decode_turns_remaining = 1
+    assert maker.busy_prefill_budget() == 256
+    assert not maker.do_prefill_default()
+    maker._decode_turns_remaining = 0
+    assert maker.do_prefill_default()
+    seq.status = MessageStatus.STOPPED
+    maker._decode_turns_remaining = 1
+    assert maker.busy_prefill_budget() is None
+    assert maker.do_prefill_default()
+
+
+def test_busy_dp_admission_uses_shared_phase_and_bounds_local_deferral():
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(role=EngineRole.Hybrid, interleaved_prefill_tokens=256,
+                                   max_prefill_token_num=512, dp_prefill_period=4)
+    seq = SimpleNamespace(status=MessageStatus.RUNNING)
+    maker.running_seqs = [seq]
+    maker._deferred_prefill_rounds = 1
+    for step, expected_protection in [(7, True), (8, False), (9, True)]:
+        maker._next_dp_round = step
+        assert maker.protect_decode_turn() == expected_protection
+    maker._deferred_prefill_rounds = 4
+    assert not maker.protect_decode_turn()
+    maker._deferred_prefill_rounds = 0
+    seq.status = MessageStatus.STOPPED
+    assert not maker.protect_decode_turn()
+
+
+def test_interleaved_accounting_tracks_submitted_work_and_worker_feedback():
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(dp_prefill_period=2, interleaved_decode_rounds=2)
+    maker.scheduler = SimpleNamespace(has_waiting=lambda: True)
+    maker._decode_turns_remaining = 0
+    maker._deferred_prefill_rounds = 0
+    maker.observe_dp_round(41, prefetched=True)
+    assert maker._next_dp_round == 43
+    maker._last_forward_kind = 'long_context_chunk'
+    maker._record_interleaved_dispatch(SimpleNamespace(is_dummy=False))
+    assert (maker._decode_turns_remaining, maker._next_dp_round) == (2, 44)
+    maker._last_forward_kind = 'decode'
+    maker._record_interleaved_dispatch(SimpleNamespace(is_dummy=True))
+    assert (maker._decode_turns_remaining, maker._next_dp_round) == (2, 44)
+    maker._last_forward_kind = None
+    maker._record_interleaved_dispatch(None)  # connector-only poll
+    assert (maker._decode_turns_remaining, maker._next_dp_round) == (2, 44)
+    maker._last_forward_kind = 'decode'
+    maker._record_interleaved_dispatch(None)  # real decode delta
+    assert (maker._decode_turns_remaining, maker._deferred_prefill_rounds, maker._next_dp_round) == (1, 1, 45)
+    maker.observe_dp_round(48, prefetched=False)
+    assert maker._next_dp_round == 49

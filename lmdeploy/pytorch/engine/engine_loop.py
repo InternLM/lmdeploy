@@ -554,6 +554,11 @@ class EngineLoop:
             self.state_checkpoints.publish_forward(ssm_state_access_id)
         forward_inputs, next_running = await self._prefetch_next_inputs()
         out = await self.executor.get_output_async()
+        observed_round = getattr(out, 'dp_schedule_round', None)
+        if observed_round is not None:
+            # One forward can already be prefetched behind this result.
+            # This is an admission hint, never a collective ordering contract.
+            self.inputs_maker.observe_dp_round(observed_round, prefetched=next_running is not None)
         completed_access_id = out.ssm_state_access_id if out is not None else None
         if completed_access_id != ssm_state_access_id:
             raise RuntimeError('Compact completion does not match the submitted forward access.')

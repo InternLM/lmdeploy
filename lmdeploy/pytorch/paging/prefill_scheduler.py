@@ -71,8 +71,9 @@ class _PrefillTurnPolicy(enum.Enum):
 class _PrefillReorderer:
     """Order waiting prefills without applying scheduler side effects."""
 
-    def __init__(self, prefill_scheduler: '_PrefillScheduler'):
+    def __init__(self, prefill_scheduler: '_PrefillScheduler', token_budget: int | None = None):
         self.prefill_scheduler = prefill_scheduler
+        self.token_budget = token_budget
         self._info_cache: dict[int, _PrefillReorderInfo] = {}
 
     def reorder(self,
@@ -133,8 +134,8 @@ class _PrefillReorderer:
             return info
 
         prefill = self.prefill_scheduler
-        chunk_limit = prefill._long_context_chunk_limit(seq)
-        kv_token_limit = prefill._prefill_kv_token_limit(seq)
+        chunk_limit = prefill._long_context_chunk_limit(seq, self.token_budget)
+        kv_token_limit = prefill._prefill_kv_token_limit(seq, self.token_budget)
         if kv_token_limit is None:
             info = _PrefillReorderInfo(prefill_token_count=seq.num_token_ids,
                                        is_nonfinal_long_prefill=False,
@@ -463,8 +464,10 @@ class _PrefillAdmissionAttempt:
                  prealloc_size: int,
                  batch_prefill_tokens: int,
                  batch_has_prefill: bool,
-                 turn_policy: _PrefillTurnPolicy):
+                 turn_policy: _PrefillTurnPolicy,
+                 token_budget: int | None = None):
         self.prefill_scheduler = prefill_scheduler
+        self.token_budget = token_budget
         self.seq = seq
         self.stopped = stopped
         self.evictable_waiting = evictable_waiting
@@ -693,12 +696,12 @@ class _PrefillAdmissionAttempt:
         prefill = self.prefill_scheduler
         seq = self.seq
         if ((self.turn_policy.allows_nonfinal_long_prefill and not self.batch_has_prefill)
-                or prefill._prefill_kv_token_limit(seq) is None):
+                or prefill._prefill_kv_token_limit(seq, self.token_budget) is None):
             return None
 
         if not self._try_match_prefix_for_prefill_gate():
             return _PrefillAdmissionResult.skip()
-        if prefill._prefill_kv_token_limit(seq) is not None:
+        if prefill._prefill_kv_token_limit(seq, self.token_budget) is not None:
             self._prefix_match.rollback(
                 'non-final chunk requires a dedicated prefill forward')
             return _PrefillAdmissionResult.skip()
@@ -710,8 +713,9 @@ class _PrefillAdmissionAttempt:
         """Reject a second prefill that exceeds this turn's token budget."""
         prefill = self.prefill_scheduler
         seq = self.seq
-        prefill_token_count = prefill._prefill_admission_token_count(seq)
-        token_budget = prefill.cache_config.max_prefill_token_num
+        prefill_token_count = prefill._prefill_admission_token_count(seq, self.token_budget)
+        token_budget = (self.token_budget if self.token_budget is not None
+                        else prefill.cache_config.max_prefill_token_num)
         if (not self.batch_has_prefill
                 or self.batch_prefill_tokens + prefill_token_count
                 <= token_budget):
@@ -725,7 +729,7 @@ class _PrefillAdmissionAttempt:
         if not self._try_match_prefix_for_prefill_gate():
             return rejection
 
-        prefill_token_count = prefill._prefill_admission_token_count(seq)
+        prefill_token_count = prefill._prefill_admission_token_count(seq, self.token_budget)
         if self.batch_prefill_tokens + prefill_token_count > token_budget:
             self._prefix_match.rollback('still exceeds prefill token budget')
             return rejection
@@ -737,7 +741,7 @@ class _PrefillAdmissionAttempt:
         """Apply chunk allocation limits and reclaim prefill capacity."""
         prefill = self.prefill_scheduler
         seq = self.seq
-        alloc_size = prefill._prepare_prefill_allocation(seq, self.prealloc_size)
+        alloc_size = prefill._prepare_prefill_allocation(seq, self.prealloc_size, self.token_budget)
         self._effective_prealloc_size = alloc_size
         if self._try_make_capacity(alloc_size):
             return True
@@ -760,7 +764,7 @@ class _PrefillAdmissionAttempt:
         # remaining prefill tail. Charge the admitted batch with the
         # post-match/post-rollback cost, not the conservative pre-match
         # estimate used to decide whether this sequence is worth trying.
-        prefill_token_count = prefill._prefill_admission_token_count(seq)
+        prefill_token_count = prefill._prefill_admission_token_count(seq, self.token_budget)
         prefill.block_manager.allocate(seq, self._effective_prealloc_size)
         if prefill.block_trie.enabled:
             prefill.block_trie.allocate(seq)
@@ -817,11 +821,11 @@ class _PrefillScheduler:
             _envs.opt_ttft_aging_sec,
         )
 
-    def _long_context_chunk_limit(self, seq: SchedulerSequence):
+    def _long_context_chunk_limit(self, seq: SchedulerSequence, token_budget: int | None = None):
         """Return the token budget for one long-context chunk."""
         return get_long_context_chunk_limit(
             seq,
-            self.cache_config.max_prefill_token_num,
+            self.cache_config.max_prefill_token_num if token_budget is None else token_budget,
         )
 
     def _next_long_context_chunk_end(
@@ -839,17 +843,17 @@ class _PrefillScheduler:
         )
         return plan.chunk_end
 
-    def _prefill_kv_token_limit(self, seq: SchedulerSequence):
+    def _prefill_kv_token_limit(self, seq: SchedulerSequence, token_budget: int | None = None):
         """Limit KV allocation for a non-final long-context prefill chunk."""
-        max_prefill_num = self._long_context_chunk_limit(seq)
+        max_prefill_num = self._long_context_chunk_limit(seq, token_budget)
         if seq.num_token_ids <= max_prefill_num and not seq._seq_meta.prefill_save_alignment:
             return None
         end = self._next_long_context_chunk_end(seq, max_prefill_num)
         return end if end < seq.num_history_ids + seq.num_token_ids else None
 
-    def _prefill_admission_token_count(self, seq: SchedulerSequence):
+    def _prefill_admission_token_count(self, seq: SchedulerSequence, token_budget: int | None = None):
         """Return token budget cost for the next prefill or chunk."""
-        kv_token_limit = self._prefill_kv_token_limit(seq)
+        kv_token_limit = self._prefill_kv_token_limit(seq, token_budget)
         if kv_token_limit is None:
             return seq.num_token_ids
         return max(0, kv_token_limit - seq.num_history_ids)
@@ -858,9 +862,10 @@ class _PrefillScheduler:
         self,
         seq: SchedulerSequence,
         prealloc_size: int,
+        token_budget: int | None = None,
     ):
         """Apply chunk KV limit and return the effective prealloc size."""
-        kv_token_limit = self._prefill_kv_token_limit(seq)
+        kv_token_limit = self._prefill_kv_token_limit(seq, token_budget)
         if kv_token_limit is None:
             seq.kv_token_limit = None
             return prealloc_size
@@ -868,10 +873,10 @@ class _PrefillScheduler:
         seq.kv_token_limit = kv_token_limit
         return 0
 
-    def has_waiting_long_prefill(self, waiting: SeqList):
+    def has_waiting_long_prefill(self, waiting: SeqList, token_budget: int | None = None):
         """Whether a waiting request needs a non-final prefill chunk."""
         return any(
-            self._prefill_kv_token_limit(seq) is not None
+            self._prefill_kv_token_limit(seq, token_budget) is not None
             for seq in waiting
         )
 
@@ -916,6 +921,7 @@ class _PrefillScheduler:
         num_running: int,
         turn_policy: _PrefillTurnPolicy,
         prealloc_size: int = 0,
+        token_budget: int | None = None,
     ):
         """Select and activate one prefill batch."""
         self.last_schedule_had_pending_lookup = False
@@ -926,7 +932,7 @@ class _PrefillScheduler:
         if max_batches <= 0 or not waiting:
             return running
 
-        waiting = _PrefillReorderer(self).reorder(
+        waiting = _PrefillReorderer(self, token_budget).reorder(
             waiting,
             turn_policy=turn_policy,
         )
@@ -943,6 +949,7 @@ class _PrefillScheduler:
                 batch_prefill_tokens=batch_prefill_tokens,
                 batch_has_prefill=bool(running),
                 turn_policy=turn_policy,
+                token_budget=token_budget,
             ).run()
 
             if admission.action is _PrefillAdmissionAction.LOAD_STARTED:
