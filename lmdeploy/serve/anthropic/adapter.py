@@ -8,7 +8,8 @@ from typing import Any, TypeVar
 
 import shortuuid
 
-from lmdeploy.serve.openai.protocol import Tool, ToolChoice, ToolChoiceFuncName
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, Tool, ToolChoice, ToolChoiceFuncName
+from lmdeploy.serve.parsers.tool_parser.tool_parser import dump_tools
 
 from .protocol import (
     ContentBlockParam,
@@ -17,6 +18,7 @@ from .protocol import (
     MessageTextBlock,
     MessageThinkingBlock,
     MessageToolUseBlock,
+    ThinkingConfig,
     ToolChoiceParam,
     ToolChoiceToolParam,
     ToolParam,
@@ -151,17 +153,11 @@ def _text_from_blocks(blocks: list[ContentBlockParam | dict[str, Any]], field_na
             text = block.get('text')
             content = block.get('content')
             tool_use_id = block.get('tool_use_id')
-            tool_name = block.get('name')
-            tool_input = block.get('input')
-            thinking = block.get('thinking')
         else:
             block_type = block.type
             text = block.text
             content = block.content
             tool_use_id = block.tool_use_id
-            tool_name = block.name
-            tool_input = block.input
-            thinking = block.thinking
         if block_type == 'text':
             if text is None:
                 raise ValueError(f'Missing `text` in `{field_name}` content block at index {idx}.')
@@ -170,11 +166,13 @@ def _text_from_blocks(blocks: list[ContentBlockParam | dict[str, Any]], field_na
             result_text = _text_from_block_content(content, field_name=f'{field_name}[{idx}].content')
             out.append(f'\n[tool_result id={tool_use_id or ""}]\n{result_text}\n[/tool_result]\n')
         elif block_type == 'tool_use':
-            tool_payload = _stringify_block_value(tool_input)
-            out.append(f'\n[tool_use name={tool_name or ""}]\n{tool_payload}\n[/tool_use]\n')
+            # assistant tool calls ride on ``tool_calls`` (see
+            # ``to_lmdeploy_messages``), never flattened into the content
+            pass
         elif block_type in ('thinking', 'redacted_thinking'):
-            if thinking:
-                out.append(f'\n[thinking]\n{thinking}\n[/thinking]\n')
+            # assistant reasoning rides on ``reasoning_content`` (see
+            # ``to_lmdeploy_messages``), never flattened into the content
+            pass
         else:
             out.append(f'\n[{block_type}]\n{_stringify_block_value(block)}\n[/{block_type}]\n')
     return ''.join(out)
@@ -192,6 +190,37 @@ def _block_get(block: ContentBlockParam | dict[str, Any], key: str, default: Any
     if isinstance(block, dict):
         return block.get(key, default)
     return getattr(block, key, default)
+
+
+def _reasoning_from_blocks(blocks: list[ContentBlockParam | dict[str, Any]]) -> str | None:
+    """Concatenate ``thinking`` block texts, mirroring the generation path."""
+
+    parts = []
+    for block in blocks:
+        if _block_get(block, 'type') == 'thinking':
+            thinking = _block_get(block, 'thinking')
+            if thinking:
+                parts.append(thinking)
+    return ''.join(parts) or None
+
+
+def _tool_calls_from_blocks(blocks: list[ContentBlockParam | dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """Build OpenAI-style tool calls from ``tool_use`` blocks, mirroring the
+    generation path."""
+
+    tool_calls = []
+    for block in blocks:
+        if _block_get(block, 'type') == 'tool_use':
+            tool_calls.append(
+                dict(
+                    id=_block_get(block, 'id') or f'call_{shortuuid.random()}',
+                    type='function',
+                    function=dict(
+                        name=_block_get(block, 'name') or '',
+                        arguments=json.dumps(_block_get(block, 'input') or {}),
+                    ),
+                ))
+    return tool_calls or None
 
 
 def _convert_image_source_to_url(source: Any) -> str:
@@ -391,17 +420,69 @@ def to_lmdeploy_messages(
             lm_messages.extend(_convert_system_message(message.content))
             continue
         content = text_from_content(message.content, field_name=f'messages[{idx}].content')
-        lm_messages.append(dict(role=message.role, content=content))
+        lm_message = dict(role=message.role, content=content)
+        if message.role == 'assistant' and isinstance(message.content, list):
+            # structured like the generation path; thinking-mode templates
+            # (deepseek) require reasoning_content/tool_calls on assistant turns
+            reasoning = _reasoning_from_blocks(message.content)
+            if reasoning:
+                lm_message['reasoning_content'] = reasoning
+            tool_calls = _tool_calls_from_blocks(message.content)
+            if tool_calls:
+                lm_message['tool_calls'] = tool_calls
+        lm_messages.append(lm_message)
     if merge_inline_system:
         return _merge_system_messages(lm_messages)
     return lm_messages
 
 
-def count_input_tokens(async_engine, messages: list[dict[str, str]]) -> int:
+def chat_template_kwargs_from_thinking(thinking: ThinkingConfig | None) -> dict[str, bool] | None:
+    """Map an Anthropic ``thinking`` config to chat template kwargs.
+
+    Shared by the messages and count_tokens endpoints so that token
+    counting applies the same template switches (``enable_thinking``)
+    as generation; otherwise the two counts drift apart whenever a
+    thinking config changes the rendered prompt (e.g. a closed
+    ``</think>`` prefix).
+    """
+
+    if thinking is None:
+        return None
+    return {'enable_thinking': thinking.type != 'disabled'}
+
+
+def render_count_tools(response_parser_cls, tools: list[Tool] | None) -> list[dict] | None:
+    """Render tools the way this model's generation path renders them.
+
+    Templates disagree on the shape they expect: most read the dumped
+    function schema, GPT-OSS reads the full `type`/`function` wrapper. The
+    parser class owns that choice for generation, so counting asks it too
+    instead of guessing.
+    """
+
+    if not tools:
+        return None
+    request = ChatCompletionRequest(model='', messages=[], tools=tools)
+    # no parser configured, or a lightweight stub injected by a test
+    render = getattr(response_parser_cls, 'render_tools', None)
+    if render is None:
+        return dump_tools(request).tools
+    return render(request)
+
+
+def count_input_tokens(async_engine,
+                       messages: list[dict[str, str]],
+                       tools: list[dict] | None = None,
+                       chat_template_kwargs: dict | None = None) -> int:
     """Approximate Anthropic token counting using LMDeploy
     tokenizer/template."""
 
-    prompt = async_engine.chat_template.messages2prompt(messages)
+    # Tool schemas are rendered into the prompt by the chat template, so a
+    # count that leaves them out is not the count the same request produces.
+    # `tools` arrives in the model-specific shape `render_count_tools` builds.
+    prompt = async_engine.chat_template.messages2prompt(messages,
+                                                        tools=tools,
+                                                        **(chat_template_kwargs or {}))
     token_ids = async_engine.tokenizer.encode(prompt, add_bos=True)
     return len(token_ids)
 

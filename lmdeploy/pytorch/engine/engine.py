@@ -3,6 +3,7 @@ import asyncio
 import ctypes
 import gc
 import os
+import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -542,8 +543,16 @@ class Engine(EngineBase):
         """Finally process for dist."""
         logger.info('Cleanup executor.')
         self.migration_event = None
-        self.scheduler.shutdown()
-        self.executor.release()
+        try:
+            self.scheduler.shutdown()
+        except BaseException:
+            try:
+                self.executor.release()
+            except BaseException:
+                logger.exception('Executor release also failed after scheduler shutdown failure.')
+            raise
+        else:
+            self.executor.release()
 
     def update_params(self, request: Any):
         """Update params."""
@@ -679,10 +688,32 @@ class Engine(EngineBase):
             raise
         finally:
             logger.debug('Engine main loop finally cleanup.')
-            if engine_loop is not None:
-                engine_loop.stop()
-            self._engine_loop = None
-            self._loop_finally()
+            original_error = sys.exc_info()[1]
+            try:
+                try:
+                    if engine_loop is not None:
+                        engine_loop.stop()
+                    if (self.cache_config.compact_state_capacity is not None
+                            and self.cache_config.use_mooncake_store):
+                        self._block_new_inputs()
+                        self._cancel_and_end_all_sessions()
+                        await self.executor.drain_for_shutdown()
+                        self.scheduler.finish_kv_transfers_after_worker_drain()
+                except BaseException:
+                    # Do not turn a failed drain into a terminal ownership proof.
+                    try:
+                        self._loop_finally()
+                    except BaseException:
+                        logger.exception('Additional cleanup failure after shutdown drain failed.')
+                    raise
+                else:
+                    self._loop_finally()
+            except BaseException:
+                if original_error is None:
+                    raise
+                logger.exception('Cleanup failed; preserving the original engine loop error.')
+            finally:
+                self._engine_loop = None
 
     def close(self):
         if self.executor.device_type == 'cuda':

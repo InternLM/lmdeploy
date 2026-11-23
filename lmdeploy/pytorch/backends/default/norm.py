@@ -1,7 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
-from ..norm import LayerNormImpl, RMSNormImpl
+from lmdeploy.utils import get_logger
+
+from ..norm import LayerNormImpl, RMSNormGatedImpl, RMSNormImpl
 
 
 class DefaultRMSNormImpl(RMSNormImpl):
@@ -49,3 +51,46 @@ class DefaultLayerNormImpl(LayerNormImpl):
         if residual is None:
             return x
         return x, residual
+
+
+class DefaultRMSNormGatedImpl(RMSNormGatedImpl):
+    """FLA adapter shared with backends that previously used the FLA module.
+
+    Keep vendor imports lazy and retain the existing autotuning workaround. The adapter owns no parameters; FLA receives
+    the public layer's weight.
+    """
+
+    def __init__(self, hidden_size: int, eps: float = 1e-6, activation: str = 'silu'):
+        self.hidden_size = hidden_size
+        self.eps = eps
+        self.activation = activation
+        self._fla_forward = None
+
+    def forward(self,
+                x: torch.Tensor,
+                weight: torch.Tensor | None,
+                z: torch.Tensor,
+                residual: torch.Tensor | None = None,
+                prenorm: bool = False,
+                residual_in_fp32: bool = False):
+        """Call the same functional entry point as FusedRMSNormGated."""
+        if self._fla_forward is None:
+            from fla.modules.fused_norm_gate import rms_norm_gated
+            try:
+                # Preserve the old factory's avoidance of NB specialization.
+                from fla.modules.fused_norm_gate import layer_norm_gated_fwd_kernel
+                keys = layer_norm_gated_fwd_kernel.fn.keys
+                if 'NB' in keys:
+                    keys.remove('NB')
+            except Exception:
+                get_logger('lmdeploy').debug('patch layer_norm_gated_fwd_kernel autotuning failed.')
+            self._fla_forward = rms_norm_gated
+        return self._fla_forward(x,
+                                 z,
+                                 weight,
+                                 None,
+                                 self.activation,
+                                 residual=residual,
+                                 eps=self.eps,
+                                 prenorm=prenorm,
+                                 residual_in_fp32=residual_in_fp32)

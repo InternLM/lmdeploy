@@ -3,6 +3,7 @@ import enum
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from math import gcd
 from typing import Any
 
 import torch
@@ -169,8 +170,11 @@ class CacheConfig:
     quant_policy: QuantPolicy = QuantPolicy.NONE
     device_type: str = 'cuda'
     num_state_caches: int = None
+    # Internal geometry derived from the model/backend state layout at startup.
+    compact_state_capacity: 'SSMStateCapacity | None' = None
     prefix_cache_state_budget: int = 0
     prefix_cache_decode_state_interval: int = 0
+    prefix_cache_decode_save_first: bool = False
     prefill_save_alignment: int = 1024
     prefill_save_last_only: bool = False
     mooncake_state_save_slots: int = 8
@@ -194,8 +198,6 @@ class CacheConfig:
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         assert self.prefill_save_alignment > 0, 'invalid prefill_save_alignment'
         assert self.mooncake_state_save_slots > 0, 'invalid mooncake_state_save_slots'
-        if self.use_mooncake_store and self.prefix_cache_decode_state_interval > 0:
-            raise ValueError('Mooncake Store and prefix_cache_decode_state_interval cannot be enabled together')
         if self.window_size > 1 and self.enable_prefix_caching:
             logger.warning('Prefix caching is not available for window attention.')
             self.enable_prefix_caching = False
@@ -226,6 +228,18 @@ class CacheConfig:
     def needs_prefix_cache_identity(self) -> bool:
         """Local APC and Mooncake Store need stable multimodal identities."""
         return self.enable_prefix_caching or self.use_mooncake_store
+
+    @property
+    def enable_decode_checkpoints(self) -> bool:
+        """Whether an SSM cache owner can save accepted decode states."""
+        return bool(self.states_shapes and (self.enable_prefix_caching or self.num_store_state_caches)
+                    and (self.prefix_cache_decode_save_first or self.prefix_cache_decode_state_interval))
+
+    @property
+    def state_lookup_alignment(self) -> int:
+        """Cover prefill, decode and retry boundaries; interval 0 keeps prefill
+        alignment."""
+        return gcd(self.prefill_save_alignment, self.prefix_cache_decode_state_interval)
 
 
 class TPMode(enum.Enum):
@@ -445,6 +459,70 @@ class MemDecodeConfig:
             raise ValueError('router_path is required when adaptive_router is enabled.')
 
 
+@dataclass(frozen=True)
+class SSMStateCapacity:
+    """Separate request capacity from private state-unit capacity.
+
+    This is an internal geometry contract, not a reinterpretation of
+    ``CacheConfig.num_state_caches``. ``request_slots`` includes reserved slot
+    zero; checkpoint and Store budgets count shared units, not extra banks.
+    """
+
+    request_slots: int
+    max_update_tokens: int
+    checkpoint_budget: int = 0
+    store_budget: int = 0
+
+    def __post_init__(self):
+        values = (self.request_slots, self.max_update_tokens,
+                  self.checkpoint_budget, self.store_budget)
+        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in values):
+            raise ValueError('Compact state capacities must be non-negative integers.')
+        if self.request_slots == 0:
+            if any(values[1:]):
+                raise ValueError('Stateless models must have zero compact state capacities.')
+        elif self.max_update_tokens == 0:
+            raise ValueError('Stateful models need at least one update token.')
+
+    @classmethod
+    def from_cache_config(cls, cache: CacheConfig, max_update_tokens: int) -> 'SSMStateCapacity':
+        """Normalize default state slots and derive capacity for a stateful
+        target."""
+        # CacheConfig.states_shapes is populated later than executor selection.
+        store_budget = (cache.mooncake_state_save_slots
+                        if cache.use_mooncake_store and cache.kv_transfer_config.is_kv_producer else 0)
+        if cache.num_state_caches is None:
+            cache.num_state_caches = cache.max_batches + 2 + cache.prefix_cache_state_budget + store_budget
+        return cls.from_state_slots(cache.num_state_caches, cache.prefix_cache_state_budget,
+                                    store_budget, max_update_tokens)
+
+    @classmethod
+    def from_state_slots(cls, num_state_caches: int | None, checkpoint_budget: int,
+                    store_budget: int, max_update_tokens: int) -> 'SSMStateCapacity':
+        """Preserve A=M-B-S, R=A-1; absence of state allocates nothing."""
+        if num_state_caches is None:
+            return cls(0, 0)
+        request_slots = num_state_caches - checkpoint_budget - store_budget
+        if request_slots < 1:
+            raise ValueError('State capacity must include reserved request slot zero.')
+        return cls(request_slots, max_update_tokens, checkpoint_budget, store_budget)
+
+    @property
+    def request_capacity(self) -> int:
+        return max(0, self.request_slots - 1)
+
+    @property
+    def bank_width(self) -> int:
+        """One private destination per verified token (AR=1, MTPk=1+k)."""
+        return self.max_update_tokens if self.request_slots else 0
+
+    @property
+    def num_units(self) -> int:
+        if not self.request_slots:
+            return 0
+        return 1 + self.request_capacity * self.bank_width + self.checkpoint_budget + self.store_budget
+
+
 @dataclass
 class StateCacheSpec:
     """Spec for a named sequence-scoped state cache (e.g. compressor
@@ -505,6 +583,8 @@ class ModelConfig:
 
     # Named state-cache specs for models that need layered sequence state.
     state_cache_specs: list[StateCacheSpec] = field(default_factory=list)
+    # Model/backend storage contract, not a runtime feature toggle.
+    state_cache_is_indexed: bool = False
     use_standard_kv_cache: bool = True
 
     # A model can reject generic prefix-cache reuse when its auxiliary state
@@ -762,7 +842,6 @@ class SpecDecodeConfig:
     dist_config: DistConfig = field(default_factory=DistConfig)
     target_layer_ids: tuple[int, ...] | None = None
     mask_token_id: int | None = None
-    disable_prefix_cache_block_drop: bool = False
 
     @classmethod
     def from_config(
@@ -777,7 +856,6 @@ class SpecDecodeConfig:
         model_format: str = None,
         hf_overrides: dict[str, Any] = None,
         dist_config: DistConfig = None,
-        disable_prefix_cache_block_drop: bool = False,
     ):
         draft_model = model or target_model
         dist_config = dist_config or DistConfig()
@@ -853,7 +931,6 @@ class SpecDecodeConfig:
             num_speculative_tokens=num_speculative_tokens,
             target_layer_ids=target_layer_ids,
             mask_token_id=mask_token_id,
-            disable_prefix_cache_block_drop=disable_prefix_cache_block_drop,
         )
         return obj
 
@@ -924,7 +1001,7 @@ class QuantizationConfig:
             if quant_dtype is None:
                 # awq does not need a quant dtype, this is just a placeholder
                 quant_dtype = 'bfloat16'
-        elif quant_method == 'smooth_quant':
+        elif quant_method in ('smooth_quant', 'modelslim'):
             if quant_dtype is None:
                 quant_dtype = 'int8'
         elif quant_method == 'fp8':
@@ -969,6 +1046,9 @@ class QuantizationConfig:
         """Get quant method for module."""
         if module_kind not in {'linear', 'moe', 'norm'}:
             raise ValueError(f'Unsupported quant module kind: {module_kind}')
+        if self.quant_method == 'modelslim':
+            from lmdeploy.pytorch.backends.ascend.modelslim import get_modelslim_quant_method
+            return get_modelslim_quant_method(self, prefix, module_kind)
         if self.quant_method == 'compressed-tensors':
             if module_kind == 'norm':
                 return None

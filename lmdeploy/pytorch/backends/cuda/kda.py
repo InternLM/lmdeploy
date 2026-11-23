@@ -2,8 +2,8 @@
 """CUDA KDA backend composed from FLA and shared LMDeploy operators.
 
 KDA is distinct from LMDeploy's gated-delta rule, but its CUDA implementation does not need copied GLM kernels. This
-adapter owns only LMDeploy cache/state semantics, reuses FLA convolution/prefill, and shares the TileLang recurrent
-state-ring kernel with gated-delta rule for both AR and MTP decode.
+adapter owns only LMDeploy cache/state semantics, supports legacy rings and indexed state units, and shares the TileLang
+recurrent kernel with gated-delta rule for both AR and MTP decode.
 """
 
 from copy import copy
@@ -37,7 +37,8 @@ def _store_state(state: torch.Tensor, value: torch.Tensor,
 class CudaKdaImpl(KdaImpl):
     """FLA prefill and shared channelwise gated-delta decode."""
 
-    def __init__(self):
+    def __init__(self, indexed_state: bool = False):
+        self.indexed_state = indexed_state
         try:
             from fla.modules.conv.triton.ops import (
                 causal_conv1d_fwd,
@@ -62,8 +63,8 @@ class CudaKdaImpl(KdaImpl):
         register_step_metadata_impl(self)
 
     def get_step_metadata_provider(self):
-        """Reuse FLA chunk-index preparation outside model forward."""
-        return GatedDeltaStepMetaUpdater()
+        """Select preparation for the construction-time state layout."""
+        return GatedDeltaStepMetaUpdater(indexed_state=self.indexed_state)
 
     def supports_piecewise_cuda_graph(self) -> bool:
         """Keep recurrence, convolution and live state updates eager."""
@@ -142,7 +143,8 @@ class CudaKdaImpl(KdaImpl):
         return output
 
     def _decode_recurrent(self, q, k, v, g, beta, A_log, dt_bias, initial_state,
-                          output_final_state=True, lower_bound=None, state_indices=None, cache_seqlens=None, **kwargs):
+                          output_final_state=True, lower_bound=None, state_indices=None, cache_seqlens=None,
+                          output_state_indices=None,  **kwargs):
         """Keep AR and MTP on the same recurrence and gate arithmetic."""
         gate_args = {}
         if lower_bound is not None:
@@ -153,7 +155,9 @@ class CudaKdaImpl(KdaImpl):
         return self.recurrent_func(q, k, v, g=g, beta=beta,
                                    initial_state=initial_state, output_final_state=output_final_state,
                                    use_qk_l2norm_in_kernel=True, transpose_state_layout=True,
-                                   state_indices=state_indices, cache_seqlens=cache_seqlens, **gate_args)
+                                   state_indices=state_indices, cache_seqlens=cache_seqlens,
+                                   output_state_indices=output_state_indices,
+                                   **gate_args)
 
     def _forward_spec_decode(self, mixed_qkv, raw_gate, raw_beta, conv_state,
                              recurrent_state, metadata, **kwargs):
@@ -246,6 +250,10 @@ class CudaKdaImpl(KdaImpl):
         head_dim: int,
         lower_bound: float,
     ) -> torch.Tensor:
+        if self.indexed_state:
+            return self.forward_indexed(
+                mixed_qkv, raw_gate, raw_beta, conv_weight, conv_bias, a_log, dt_bias,
+                conv_state, recurrent_state, metadata, num_heads, head_dim, lower_bound)
         if (getattr(metadata, 'num_spec_tokens', 0) or 0) > 0:
             return self._forward_spec(
                 mixed_qkv, raw_gate, raw_beta, conv_state, recurrent_state,
@@ -313,3 +321,51 @@ class CudaKdaImpl(KdaImpl):
             )
         _store_state(recurrent_state, final_state, metadata)
         return output
+
+
+    def forward_indexed(
+        self,
+        mixed_qkv: torch.Tensor,
+        raw_gate: torch.Tensor,
+        raw_beta: torch.Tensor,
+        conv_weight: torch.Tensor,
+        conv_bias: torch.Tensor | None,
+        a_log: torch.Tensor,
+        dt_bias: torch.Tensor,
+        conv_state: torch.Tensor,
+        recurrent_state: torch.Tensor,
+        metadata: Any,
+        num_heads: int,
+        head_dim: int,
+        lower_bound: float,
+    ) -> torch.Tensor:
+        from .causal_conv1d import CausalConv1dTilelangImpl
+        ids = metadata.ssm_state_meta
+        mixed = CausalConv1dTilelangImpl.forward_indexed(
+            mixed_qkv, conv_weight, conv_bias, conv_state, metadata, 'silu')
+        q, k, v = [x.unflatten(-1, (num_heads, head_dim))
+                   for x in mixed.split(num_heads * head_dim, dim=-1)]
+        # Chunk prefill requires dense inputs; the recurrent decode kernel
+        # already accepts Q/K/V strides. Avoid three payload copies in decode.
+        if not metadata.is_decoding:
+            q, k, v = [x.contiguous() for x in (q, k, v)]
+        gate = raw_gate.unflatten(-1, (num_heads, head_dim)).contiguous()
+        beta = raw_beta.contiguous()
+        if metadata.is_decoding:
+            batch, width = ids.output_state_ids.shape
+            q, k, v = [x[0].unflatten(0, (batch, width)) for x in (q, k, v)]
+            gate, beta = [x[0].unflatten(0, (batch, width)).contiguous() for x in (gate, beta)]
+            output, _ = self._decode_recurrent(
+                q, k, v, g=gate, beta=beta, A_log=a_log, dt_bias=dt_bias, lower_bound=lower_bound,
+                initial_state=recurrent_state, output_final_state=True,
+                state_indices=ids.input_state_ids, output_state_indices=ids.output_state_ids)
+            return output.flatten(0, 1).unsqueeze(0)
+        from lmdeploy.pytorch.kernels.cuda.indexed_chunk_gated_delta import indexed_chunk_kda
+        prefill = metadata.ssm_prefill_meta
+        return indexed_chunk_kda(
+            q, k, v, gate, beta, recurrent_state, ids.input_state_ids, ids.output_state_ids[:, 0],
+            A_log=a_log, dt_bias=dt_bias, use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True,
+            use_beta_sigmoid_in_kernel=True, safe_gate=True, lower_bound=lower_bound, state_v_first=True,
+            cu_seqlens=prefill.cu_seqlens, chunk_indices=prefill.chunk_indices,
+            chunk_offsets=prefill.chunk_offsets, checkpoint_ids=prefill.checkpoint_ids,
+            checkpoint_offsets=prefill.checkpoint_offsets)

@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 
 from lmdeploy.vl import load_image, load_video
@@ -51,6 +54,65 @@ def _preprocess(model, messages, mm_processor_kwargs=None):
     result = model.preprocess(messages=list(messages), input_prompt=input_prompt,
                               mm_processor_kwargs=mm_processor_kwargs)
     return result['multimodal'][0]
+
+
+def test_video_legacy_options_keep_loader_metadata_and_disable_resampling():
+    import torch
+
+    from lmdeploy.vl.model.base import MultimodalSpecialTokens
+
+    model = Qwen3VLModel.__new__(Qwen3VLModel)
+    model.mm_tokens = MultimodalSpecialTokens(image_token_id=42, video_token_id=43)
+    model.processor = Mock(return_value={
+        'input_ids': torch.tensor([[43, 1, 43]]),
+        'video_grid_thw': torch.tensor([[2, 2, 2]]),
+        'pixel_values_videos': torch.zeros(8, 1),
+    })
+    model.processor.video_processor = SimpleNamespace(size={'shortest_edge': 64, 'longest_edge': 1024})
+    metadata = {'total_num_frames': 64, 'fps': 8, 'frames_indices': [0, 21, 42, 63]}
+    options = {'fps': 1, 'num_frames': 2, 'do_sample_frames': True,
+               'video_metadata': [{'fps': 999}], 'max_pixels': 256}
+    messages = [{'role': 'user', 'content': [
+        {'type': Modality.VIDEO, 'data': object(), 'video_metadata': metadata}]}]
+
+    result = model.preprocess(messages, 'video prompt', {'video': options})
+
+    assert model.processor.call_args.kwargs['videos_kwargs'] == {
+        'size': {'shortest_edge': 64, 'longest_edge': 256},
+        'video_metadata': [metadata], 'do_resize': True, 'do_sample_frames': False,
+    }
+    assert result['input_ids'] == [43, 1, 43]
+    assert len(result['multimodal']) == 2
+    assert metadata['fps'] == 8 and options['video_metadata'] == [{'fps': 999}]
+
+
+@pytest.mark.parametrize('count', [1, 2])
+def test_raw_image_ids_keep_processor_placeholders(qwen3vl_model, sample_messages, monkeypatch, count):
+    import torch
+
+    model = qwen3vl_model
+    messages = [{'role': 'user', 'content': sample_messages[0]['content'] * count}]
+    processor_texts = []
+    processor_call = type(model.processor).__call__
+
+    def track_text(processor, *args, **kwargs):
+        processor_texts.append(kwargs.get('text'))
+        return processor_call(processor, *args, **kwargs)
+
+    monkeypatch.setattr(type(model.processor), '__call__', track_text)
+    options = {'image': {'min_pixels': 65536, 'max_pixels': 65536}}
+    token = model.processor.image_token
+    reference_text = ' and '.join([token] * count)
+    reference = model.preprocess(messages, reference_text, options)
+    raw_ids = model.processor.tokenizer.encode(reference_text, add_special_tokens=False)
+    result = model.preprocess(messages, raw_ids, options)
+
+    assert processor_texts == [[reference_text], [token * count]]
+    assert len(result['multimodal']) == len(reference['multimodal']) == count
+    assert result['input_ids'] == reference['input_ids']
+    for actual, expected in zip(result['multimodal'], reference['multimodal']):
+        assert actual['offset'] == expected['offset']
+        torch.testing.assert_close(actual['pixel_values'], expected['pixel_values'], rtol=0, atol=0)
 
 
 def test_image_with_custom_pixels(qwen3vl_model, sample_messages):

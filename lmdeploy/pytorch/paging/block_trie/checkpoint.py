@@ -185,6 +185,11 @@ class StateCheckpointIndex:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason='checkpoint is not published')
 
+        reference = checkpoint.state_reference
+        if reference is not None and (not reference.active or reference.phase not in ('submitted', 'ready')):
+            return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
+                                               reason='compact checkpoint producer is not readable')
+
         step = checkpoint.step
         if step <= 0:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,

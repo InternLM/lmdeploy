@@ -163,6 +163,7 @@ class TurboMind:
         self.is_dummy = self.model_comm.is_dummy_node()
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         self._grammar_compiler = None
+        self._grammar_tokenizer_info = None
         if not _engine_config.empty_init:
             with torch.cuda.device(self.devices[0]):
                 model_loader.export()
@@ -178,6 +179,7 @@ class TurboMind:
         if self._grammar_compiler is None:
             tokenizer_info = TokenizerInfo.from_huggingface(
                 self.tokenizer.model.model, vocab_size=self._vocab_size)
+            self._grammar_tokenizer_info = tokenizer_info
             self._grammar_compiler = _tm.GrammarCompiler(tokenizer_info)
         return self._grammar_compiler
 
@@ -718,7 +720,8 @@ class TurboMindInstance:
         if gen_config.response_format is not None:
             try:
                 compiler = self.tm_model.grammar_compiler
-                grammar = compile_response_format(compiler, gen_config.response_format)
+                grammar = compile_response_format(
+                    compiler, gen_config.response_format, tokenizer_info=self.tm_model._grammar_tokenizer_info)
                 self.model_inst.set_grammar(grammar)
             except (ValueError, KeyError) as e:
                 logger.warning(f'Failed to initialize guided decoding, '

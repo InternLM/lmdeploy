@@ -1,6 +1,6 @@
 import pytest
 import torch
-from transformers import AutoConfig
+from transformers import PretrainedConfig
 
 from lmdeploy.utils import FlattenedTensorBucket, _get_and_verify_max_len
 
@@ -76,15 +76,12 @@ def test_flattened_tensor_bucket_preallocated_buffer():
         assert '1-D tensor' in str(e)
 
 
-def test_get_and_verify_max_len():
-    # with PretrainedConfig
-    config = AutoConfig.from_pretrained('OpenGVLab/InternVL-Chat-V1-5-AWQ', trust_remote_code=True)
-    assert (_get_and_verify_max_len(config, None) == 32768)
-    assert (_get_and_verify_max_len(config, 1024) == 1024)
-    assert (_get_and_verify_max_len(config, 102400) == 102400)
-
-    # with PretrainedConfig
-    config = AutoConfig.from_pretrained('internlm/internlm2-chat-7b', trust_remote_code=True)
+@pytest.mark.parametrize('nested', [False, True], ids=['text', 'vl'])
+def test_get_and_verify_max_len(nested):
+    # Test length lookup without depending on remote model configuration code.
+    config = PretrainedConfig(max_position_embeddings=32768)
+    if nested:
+        config = PretrainedConfig(llm_config=config)
     assert (_get_and_verify_max_len(config, None) == 32768)
     assert (_get_and_verify_max_len(config, 1024) == 1024)
     assert (_get_and_verify_max_len(config, 102400) == 102400)

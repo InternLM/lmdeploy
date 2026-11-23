@@ -90,6 +90,7 @@ def build_prefix_block_hashes(
     extra_identity: bytes | bytearray | memoryview | str = b'',
     previous_hashes: Sequence[bytes] = (),
     block_extra_identities: Mapping[int, bytes] | None = None,
+    token_lookahead: int = 0,
 ) -> tuple[bytes, ...]:
     """Build stable, prefix-chained hashes for complete token blocks.
 
@@ -98,12 +99,17 @@ def build_prefix_block_hashes(
     active adapter from ``extra_identity``. A mutable partial tail is
     intentionally excluded. ``previous_hashes`` lets callers extend an
     append-only request without rehashing its existing prefix.
+    ``token_lookahead`` includes the accepted successors consumed by shifted
+    draft KV. Only blocks with all those successors present are hashed; their
+    encoding is distinct from legacy target-only blocks of any size.
     """
+    if token_lookahead < 0:
+        raise ValueError('token_lookahead must be non-negative')
     identity = _identity_bytes(extra_identity)
     if len(identity) >= 2**32:
         raise ValueError('extra_identity is too large')
 
-    full_block_count = len(token_ids) // block_size
+    full_block_count = max(0, len(token_ids) - token_lookahead) // block_size
     block_hashes = []
     for block_hash in previous_hashes:
         if not isinstance(block_hash, (bytes, bytearray, memoryview)):
@@ -123,7 +129,7 @@ def build_prefix_block_hashes(
         return tuple(block_hashes)
 
     first_new_token = first_new_block * block_size
-    complete_token_end = full_block_count * block_size
+    complete_token_end = full_block_count * block_size + token_lookahead
     packed_numpy_tokens = None
     if (isinstance(token_ids, np.ndarray) and token_ids.ndim == 1
             and token_ids.dtype.kind in ('i', 'u')):
@@ -134,31 +140,34 @@ def build_prefix_block_hashes(
                 complete_token_end,
             ))
 
-    block_struct = _token_block_struct(block_size)
+    block_struct = _token_block_struct(block_size + token_lookahead)
+    hash_schema = _BLOCK_HASH_SCHEMA
+    if token_lookahead:
+        hash_schema = b'lmdeploy-mooncake-prefix-block-lookahead-v1\x00' + struct.pack('>I', token_lookahead)
     encoded_block_size = struct.pack('>I', block_size)
     encoded_identity = struct.pack('>I', len(identity)) + identity
-    packed_block_bytes = block_struct.size
+    packed_block_bytes = block_size * 8
     for block_index in range(first_new_block, full_block_count):
         digest = hashlib.sha256()
-        digest.update(_BLOCK_HASH_SCHEMA)
+        digest.update(hash_schema)
         if parent_hash is not None:
             digest.update(parent_hash)
         digest.update(encoded_block_size)
         if packed_numpy_tokens is not None:
             packed_offset = (block_index - first_new_block) * packed_block_bytes
             digest.update(
-                packed_numpy_tokens[packed_offset:packed_offset + packed_block_bytes])
+                packed_numpy_tokens[packed_offset:packed_offset + block_struct.size])
         else:
             start = block_index * block_size
             digest.update(
                 _pack_python_token_block(
-                    token_ids[start:start + block_size],
+                    token_ids[start:start + block_size + token_lookahead],
                     block_struct,
                 ))
         digest.update(encoded_identity)
         if block_extra_identities and block_index in block_extra_identities:
-            # Text-only hashes retain their existing byte format. Multimodal
-            # blocks add a domain-separated, length-prefixed stable identity.
+            # Multimodal blocks add a domain-separated, length-prefixed stable
+            # identity covering both block tokens and their lookahead.
             extra = block_extra_identities[block_index]
             digest.update(b'\x00multimodal-v1\x00')
             digest.update(struct.pack('>I', len(extra)))
@@ -166,6 +175,68 @@ def build_prefix_block_hashes(
         parent_hash = digest.digest()
         block_hashes.append(parent_hash)
     return tuple(block_hashes)
+
+
+def build_compact_state_schema(state_specs, *, spec_identity: str, tp_size: int) -> str:
+    """Fingerprint ordered recovery fields, never addresses or local capacity.
+
+    The fingerprint describes format compatibility, not a weight version. Callers supply retained compact tensor specs,
+    whose shapes already include their ordered layer rows.
+    """
+    if (not isinstance(spec_identity, str) or not spec_identity
+            or type(tp_size) is not int or tp_size <= 0):
+        raise ValueError('Compact Store schema requires execution contract and positive TP size.')
+    fields = []
+    for spec in state_specs:
+        if not spec.store_cacheable or spec.desc.size <= 0:
+            raise ValueError('Compact Store schema contains only nonempty recovery fields.')
+        fields.append(dict(name=spec.name, shape=list(spec.desc.shape), dtype=str(spec.desc.dtype),
+                           layer_ids=None if spec.layer_rows is None else list(spec.layer_rows.layer_ids)))
+    if not fields or len({field['name'] for field in fields}) != len(fields):
+        raise ValueError('Compact Store schema requires unique ordered recovery fields.')
+    payload = dict(format='compact-state-v1', recovery='recurrent-and-ordered-conv-history-v1',
+                   spec_identity=spec_identity, tp_size=tp_size, fields=fields)
+    encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
+    return 'compact-state-v1:' + hashlib.sha256(encoded).hexdigest()
+
+
+def build_compact_store_schema(state_specs, *, block_plans, spec_identity: str,
+                               tp_size: int, block_size: int, quant_policy: int) -> str:
+    """Bind recovery state AND the ordered target/draft KV wire layout.
+
+    Realize one logical block on meta, never the live capacity or GPU storage. Typed field semantics distinguish equal-
+    byte layouts; pool/view bindings, offsets and strides distinguish physical encodings of those same fields. Both key
+    groups use this identity, so incompatible KV cannot hit merely because the state fields happen to match. Weight
+    version isolation remains the caller-owned model_name/cache_prefix namespace contract.
+    """
+    state_schema = build_compact_state_schema(state_specs,
+                                               spec_identity=spec_identity, tp_size=tp_size)
+    if type(block_size) is not int or block_size <= 0:
+        raise ValueError('Compact Store requires a positive logical block size.')
+    layouts = []
+    for plan in block_plans:
+        allocation = plan.allocate(1, device='meta')
+        pools = allocation.pools
+        fields = []
+        for spec, view in zip(plan.tensor_specs, allocation.tensor_views, strict=True):
+            owners = [i for i, pool in enumerate(pools) if view.untyped_storage() is pool.tensor.untyped_storage()]
+            if len(owners) != 1:
+                raise ValueError('Compact Store KV field must belong to exactly one retained pool.')
+            fields.append(dict(name=spec.name, shape=list(spec.desc.shape), dtype=str(spec.desc.dtype),
+                               alignment=spec.desc.alignment, consumer_rows=spec.consumer_rows,
+                               per_row_contiguous=spec.per_row_contiguous, store_cacheable=spec.store_cacheable,
+                               pool=owners[0], view_shape=list(view.shape), stride=list(view.stride()),
+                               byte_offset=view.storage_offset() * view.element_size()))
+        layouts.append(dict(kernel_blocks_per_logical_block=plan.kernel_blocks_per_logical_block, fields=fields,
+                            pools=[dict(shape=list(pool.tensor.shape), dtype=str(pool.tensor.dtype),
+                                        stride=list(pool.tensor.stride()), entry_axis=pool.entry_axis,
+                                        transfer_ranges=pool.transfer_ranges) for pool in pools]))
+    if not layouts:
+        raise ValueError('Compact Store requires the retained target KV plan.')
+    payload = dict(format='compact-store-v1', state_schema=state_schema, block_size=block_size,
+                   quant_policy=int(quant_policy), layouts=layouts)
+    encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
+    return 'compact-state-v1:' + hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -177,9 +248,12 @@ class MooncakeStoreKeyMetadata:
     tp_size: int
     block_size: int
     kv_head_replica_num: int = 1
+    state_schema: str | None = None
 
     def __post_init__(self) -> None:
         validate_kv_head_replica_num(self.kv_head_replica_num, self.tp_size)
+        if self.state_schema is not None and re.fullmatch(r'compact-state-v1:[0-9a-f]{64}', self.state_schema) is None:
+            raise ValueError('Invalid compact Store state schema fingerprint.')
 
     @property
     def num_kv_head_shards(self) -> int:
@@ -200,10 +274,12 @@ def build_store_key(
         raise ValueError(f'block_hash must contain {MOONCAKE_BLOCK_HASH_BYTES} bytes')
 
     prefix = f'{metadata.cache_prefix}@' if metadata.cache_prefix else ''
+    # Compact recovery is one KV+state contract. Legacy keys remain unchanged.
+    state_schema = f'@state:{metadata.state_schema}' if metadata.state_schema else ''
     return (
         f'{prefix}{metadata.model_name}'
         f'@tp_rank:{kv_head_rank}'
-        f'@group:{group_id}'
+        f'@group:{group_id}{state_schema}'
         f'@{block_hash.hex()}'
     )
 
@@ -375,15 +451,51 @@ class MooncakeStoreLoadRequest:
     block_hashes: tuple[bytes, ...]
     remote_block_count: int = 0
     state_slot: int | None = None
+    state_unit_id: int | None = None
+
+    def __post_init__(self):
+        if self.state_unit_id is not None:
+            if self.state_slot is not None or type(self.state_unit_id) is not int or self.state_unit_id <= 0:
+                raise ValueError('Direct compact load needs one positive unit ID, not a legacy state slot.')
+
+    @property
+    def state_destination(self) -> int | None:
+        """Physical transfer destination; its mode remains explicit on the
+        wire."""
+        return self.state_unit_id if self.state_unit_id is not None else self.state_slot
 
 
 @dataclass(frozen=True)
 class MooncakeStoreStateSave:
-    """An exact prefill state copied into a save-owned snapshot slot."""
+    """An exact verified state; equal source/destination means already
+    frozen."""
 
     source_slot: int
     snapshot_slot: int
     boundary_tokens: int
+
+
+@dataclass(frozen=True)
+class MooncakeStoreCompactStateSave:
+    """Direct immutable unit at c, independent of forward/KV end e.
+
+    The scheduler owns the unit lease through all-worker I/O completion. This serializable record carries no physical
+    owner or Python reference handle.
+    """
+
+    unit_id: int
+    boundary_tokens: int
+    forward_end: int
+    boundary_hash: bytes
+
+    def __post_init__(self):
+        if type(self.unit_id) is not int or self.unit_id <= 0:
+            raise ValueError('Direct compact save requires a positive unit ID.')
+        if (type(self.boundary_tokens) is not int or type(self.forward_end) is not int
+                or not 0 < self.boundary_tokens <= self.forward_end):
+            raise ValueError('Compact checkpoint boundary must be within its forward end.')
+        if not isinstance(self.boundary_hash, bytes) or len(self.boundary_hash) != MOONCAKE_BLOCK_HASH_BYTES:
+            raise ValueError('Compact state boundary requires an exact prefix block hash.')
 
 
 @dataclass(frozen=True)
@@ -396,7 +508,7 @@ class MooncakeStoreSaveRequest:
     block_ids: tuple[int, ...]
     logical_block_ids: tuple[int, ...]
     block_hashes: tuple[bytes, ...]
-    state: MooncakeStoreStateSave | None = None
+    state: MooncakeStoreStateSave | MooncakeStoreCompactStateSave | None = None
 
 
 @dataclass(frozen=True)
@@ -408,7 +520,8 @@ class MooncakeStoreConnectorMetadata(KVConnectorMetadata):
 
     def get_state_save_copies(self) -> tuple[tuple[int, int], ...]:
         return tuple((request.state.source_slot, request.state.snapshot_slot)
-                     for request in self.save_requests if request.state is not None)
+                     for request in self.save_requests if isinstance(request.state, MooncakeStoreStateSave)
+                     and request.state.source_slot != request.state.snapshot_slot)
 
     def get_save_block_leases(self) -> tuple[KVSaveBlockLease, ...]:
         return tuple(

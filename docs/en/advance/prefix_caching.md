@@ -43,11 +43,9 @@ This policy reduces checkpoint copies and Store submissions for append-only
 agent conversations, at the cost of fewer intermediate prefixes for edited
 or branching conversations. Full-attention-only models ignore it.
 
-MTP configurations that rewind cache hits by full blocks still require KV
-beyond the saved state boundary for remote reuse. This policy does not save
-that suffix, so the latest state may be unusable remotely without those blocks
-already in Store. GLM MTP with local prefix caching uses token lookahead
-instead of block rewind and does not require that extra Store margin.
+Supported MTP methods use token lookahead instead of block rewind for both
+local and Store matches, so they do not require extra KV blocks beyond the
+saved state boundary for remote reuse.
 
 ## GLM-5.3-Flash
 

@@ -9,6 +9,7 @@ import torch
 
 from lmdeploy.messages import LogitsProcessor
 from lmdeploy.pytorch import envs
+from lmdeploy.pytorch.devices import is_ascend
 
 from ..messages import SchedulerSequence
 from .guided_process import GuidedDecodingManager
@@ -48,6 +49,9 @@ def _process_bad_words_(scores: torch.Tensor,
         torch.Tensor: The ``scores`` tensor after bad-word filtering has
         been applied.
     """
+    if is_ascend():
+        from lmdeploy.pytorch.backends.ascend.logits import _process_bad_words_ as ascend_bad_words
+        return ascend_bad_words(scores, bad_words, mask, filter_value)
     # invalid badwords might be negative
     valid_bad_words = bad_words.where(mask, 0)
     filtered_scores = scores.gather(1, valid_bad_words)
@@ -260,6 +264,8 @@ class SamplingInputs:
     response_formats: list[str, ...] = ()
     logits_processors: list[list[LogitsProcessor]] = None
     max_num_logprobs: None | int = None
+    # sorted union of requested candidate ids for input-logprob rows
+    logprob_extra_token_ids: None | torch.LongTensor = None
     all_ids: None | torch.Tensor = None
     num_ignore_eos: torch.Tensor = None
     batch_size: int = 0

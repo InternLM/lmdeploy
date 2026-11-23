@@ -88,6 +88,16 @@ class TokenIDScanner:
     def _decode(self, ids: list[int], skip: bool) -> str:
         return self.tokenizer.decode(ids, skip_special_tokens=skip, clean_up_tokenization_spaces=False)
 
+    def preview_ordinary_text(self, ids: list[int]) -> str | None:
+        """Preview a standalone ByteLevel batch without advancing the
+        scanner."""
+        if self._waiting or not self.control_ids.isdisjoint(ids):
+            return None
+        text = self._decode(ids, self.skip_special_tokens)
+        # An incomplete byte sequence can hide an earlier stop in the native
+        # incremental decoder. Let individual tokens determine its boundary.
+        return text if text and '\ufffd' not in text else None
+
     def scan(self, text: str, ids: list[int], *, engine_final: bool = False) -> LocatedText:
         # AsyncEngine's independent final result discards unrendered pending
         # bytes and decodes include_stop_str with skip_special_tokens=False.

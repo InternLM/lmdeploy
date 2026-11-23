@@ -54,15 +54,18 @@ def test_chat_echoes_rendered_prompt_only_when_requested(chat_endpoint, fake_raw
         assert seen == set(range(n))
 
 
+@pytest.mark.parametrize('return_token_ids', [False, True])
 @pytest.mark.parametrize('first_index', [0, 1])
 @pytest.mark.parametrize('rendered', ['[user]Hello[assistant]', None])
-def test_staggered_choices_keep_prompt_on_each_first_chunk(chat_endpoint, fake_raw_request, first_index, rendered):
+def test_staggered_choices_keep_prompt_on_each_first_chunk(
+        chat_endpoint, fake_raw_request, first_index, rendered, return_token_ids):
     endpoint, context = chat_endpoint
     original_preprocess = context.async_engine.preprocess
 
     async def preprocess(prompt, session, **kwargs):
         await original_preprocess(prompt, session, **kwargs)
-        return SimpleNamespace(inputs={'prompt': rendered}, index=kwargs['gen_config'].random_seed - 42)
+        return SimpleNamespace(inputs={'prompt': rendered, 'input_ids': [10, 11, 12, 13]},
+                               index=kwargs['gen_config'].random_seed - 42)
 
     async def run():
         release = [asyncio.Event(), asyncio.Event()]
@@ -96,11 +99,15 @@ def test_staggered_choices_keep_prompt_on_each_first_chunk(chat_endpoint, fake_r
         context.async_engine.generate = generate
         response = await endpoint(ChatCompletionRequest(
             model='fake-model', messages=[{'role': 'user', 'content': 'Hello'}], seed=42,
-            n=2, stream=True, return_prompt_text=True, stream_options={'include_usage': True}), fake_raw_request)
+            n=2, stream=True, return_prompt_text=True, return_token_ids=return_token_ids,
+            stream_options={'include_usage': True}), fake_raw_request)
         try:
             first = json.loads((await anext(response.body_iterator)).removeprefix('data: '))
             assert [choice['index'] for choice in first['choices']] == [first_index]
             assert first['prompt_text'] == rendered
+            assert ('prompt_token_ids' in first) is return_token_ids
+            if return_token_ids:
+                assert first['prompt_token_ids'] == [10, 11, 12, 13]
 
             # Queue the leading choice's second delta first, then the other
             # choice's first delta, while the consumer is suspended at yield.
@@ -113,12 +120,15 @@ def test_staggered_choices_keep_prompt_on_each_first_chunk(chat_endpoint, fake_r
             assert [choice['delta']['content'] for choice in merged['choices']] == [
                 f'{index}-second' if index == first_index else f'{index}-first' for index in range(2)]
             assert merged['prompt_text'] == rendered
+            assert ('prompt_token_ids' in merged) is return_token_ids
+            if return_token_ids:
+                assert merged['prompt_token_ids'] == [10, 11, 12, 13]
 
             finish.set()
             remaining = [event async for event in response.body_iterator]
             assert remaining[-1] == 'data: [DONE]\n\n'
             payloads = [json.loads(event.removeprefix('data: ')) for event in remaining[:-1]]
-            assert all('prompt_text' not in payload for payload in payloads)
+            assert all('prompt_text' not in payload and 'prompt_token_ids' not in payload for payload in payloads)
             assert payloads[-1]['choices'] == []
             assert payloads[-1]['usage']['completion_tokens'] == 5
             assert {choice['index'] for payload in payloads for choice in payload['choices']

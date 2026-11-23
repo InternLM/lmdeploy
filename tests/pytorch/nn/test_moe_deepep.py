@@ -265,17 +265,27 @@ def test_normal_dispatcher_accepts_explicit_token_limit_for_common_buffer(monkey
     assert FakeBuffer.low_latency_size_hint_args[0] == 256
 
 
-def test_deepep_token_limit_is_inferred_from_engine_max_batch_size():
+@pytest.mark.parametrize('max_batch,num_spec,ep_size,expected', [
+    (1, 0, 4, 32), (16, 0, 4, 32), (17, 0, 4, 32), (33, 0, 4, 64),
+    (1, 0, 8, 16), (17, 0, 8, 32), (1, 0, 3, 128), (32, 3, 4, 128),
+    (33, 3, 4, 160), (0, 0, 4, 128),
+    (1, 0, 6, 64), (1, 0, 128, 1), (1, 0, 256, 1),
+])
+def test_deepep_token_limit_is_inferred_from_engine_max_batch_size(monkeypatch, max_batch, num_spec, ep_size, expected):
     from lmdeploy.messages import PytorchEngineConfig
     from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
     from lmdeploy.pytorch.model_inputs import BuildModelContext
 
-    engine_config = PytorchEngineConfig(max_batch_size=32)
+    monkeypatch.setattr('lmdeploy.pytorch.distributed.get_ep_world_rank', lambda: (ep_size, 0))
+    engine_config = PytorchEngineConfig(max_batch_size=max_batch)
     cache_config = ConfigBuilder.build_cache_config(engine_config)
-    build_ctx = BuildModelContext(max_batch_size=cache_config.max_batches, num_spec_tokens=3)
+    build_ctx = BuildModelContext(max_batch_size=cache_config.max_batches, num_spec_tokens=num_spec)
 
-    assert cache_config.max_batches == 32
-    assert build_ctx.deep_ep_max_tokens_per_rank == 128
+    assert cache_config.max_batches == max_batch
+    capacity = build_ctx.deep_ep_max_tokens_per_rank
+    assert capacity == expected
+    assert capacity * ep_size % 128 == 0
+    assert capacity >= max_batch * (1 + num_spec)
 
 
 def test_eplb_env_vars_are_lmdeploy_prefixed():
@@ -667,13 +677,17 @@ def test_bf16_ep_build_and_forward(monkeypatch, fp32_acc, output_scale, decode):
         calls.append((args, kwargs))
         return SimpleNamespace(forward=forward)
 
+    def split_inputs(x, w, i, mask_padding=False):
+        assert mask_padding is decode
+        return x, w, i, None
+
     monkeypatch.setitem(sys.modules, 'deep_gemm', SimpleNamespace())
     monkeypatch.setattr(default, '_build_deepep_moe', build)
     monkeypatch.setattr(td, 'use_deepep', True)
     monkeypatch.setattr(td.DeepEPBuffer, 'set_explicitly_destroy', lambda: None)
     monkeypatch.setattr(default, 'get_deepep_state', lambda: SimpleNamespace(enable=lambda: None))
     monkeypatch.setattr(default, 'register_piecewise_graph_impl', lambda impl: None)
-    monkeypatch.setattr(default, 'split_inputs_by_attn_tp', lambda x, w, i: (x, w, i, None))
+    monkeypatch.setattr(default, 'split_inputs_by_attn_tp', split_inputs)
     monkeypatch.setattr(default, 'gather_outputs_by_attn_tp', lambda x, size: x)
     monkeypatch.setattr(default, 'get_step_ctx_manager', lambda: SimpleNamespace(
         current_context=lambda: SimpleNamespace(global_is_decoding=lambda: decode)))
