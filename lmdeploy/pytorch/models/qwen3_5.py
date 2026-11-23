@@ -663,7 +663,7 @@ class Qwen3_5Attention(nn.Module):
             head_dim,
             config.rms_norm_eps,
             quant_config=quantization_config,
-            zero_centered=True,
+            offset_weight=True,
             device=device,
             prefix=add_prefix('q_norm', prefix),
         )
@@ -671,7 +671,7 @@ class Qwen3_5Attention(nn.Module):
             head_dim,
             config.rms_norm_eps,
             quant_config=quantization_config,
-            zero_centered=True,
+            offset_weight=True,
             device=device,
             prefix=add_prefix('k_norm', prefix),
         )
@@ -766,14 +766,14 @@ class Qwen3_5DecoderLayer(nn.Module):
             config.hidden_size,
             config.rms_norm_eps,
             quant_config=quantization_config,
-            zero_centered=True,
+            offset_weight=True,
             device=device,
             prefix=add_prefix('input_layernorm', prefix),
         )
 
         # build attention layer norm
         self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, config.rms_norm_eps, zero_centered=True, device=device)
+            config.hidden_size, config.rms_norm_eps, offset_weight=True, device=device)
 
     def forward(
         self,
@@ -849,7 +849,7 @@ class Qwen3_5TextModel(nn.Module):
         self._aux_hidden_state_layers_set: frozenset[int] = frozenset(self.aux_hidden_state_layers)
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, zero_centered=True, device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, offset_weight=True, device=device)
 
         # build rotary embedding
         self.rotary_emb = build_rotary_embedding_from_config(config, device=device)

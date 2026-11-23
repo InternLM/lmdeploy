@@ -13,8 +13,8 @@ OFFSETS = [2**-9, 0.24609375, -1.0, 0.0, 0.0001, -0.37, 3.0, 2**-9]
 
 @pytest.mark.parametrize('dtype', DTYPES)
 @pytest.mark.parametrize('checkpoint_dtype', DTYPES)
-def test_zero_centered_scale_is_folded_in_fp32(dtype, checkpoint_dtype):
-    norm = RMSNorm(len(OFFSETS), dtype=dtype, device='cpu', zero_centered=True)
+def test_offset_weight_scale_is_folded_in_fp32(dtype, checkpoint_dtype):
+    norm = RMSNorm(len(OFFSETS), dtype=dtype, device='cpu', offset_weight=True)
     assert norm.weight.dtype == torch.float32
 
     offset = torch.tensor(OFFSETS, dtype=checkpoint_dtype)
@@ -38,16 +38,16 @@ def test_direct_scale_keeps_dtype_and_value(dtype):
 
 
 @pytest.mark.parametrize('rank', [0, 1])
-@pytest.mark.parametrize('zero_centered', [False, True])
-def test_tp_shard_composes_with_zero_centered(rank, zero_centered, monkeypatch):
+@pytest.mark.parametrize('offset_weight', [False, True])
+def test_tp_shard_composes_with_offset_weight(rank, offset_weight, monkeypatch):
     monkeypatch.setattr(norm_module, 'get_tp_world_rank', lambda layer_type=None: (2, rank))
     hidden_size = len(OFFSETS)
-    norm = RMSNorm(hidden_size, dtype=torch.bfloat16, device='cpu', tp=True, zero_centered=zero_centered)
+    norm = RMSNorm(hidden_size, dtype=torch.bfloat16, device='cpu', tp=True, offset_weight=offset_weight)
     assert norm.weight.shape == (hidden_size // 2, )
 
     loaded = torch.tensor(OFFSETS, dtype=torch.bfloat16)
     load_weight(norm.weight, loaded)
     shard = loaded.chunk(2)[rank]
-    expected = shard.float() + 1.0 if zero_centered else shard
+    expected = shard.float() + 1.0 if offset_weight else shard
     assert norm.weight.dtype == expected.dtype
     torch.testing.assert_close(norm.weight, expected, rtol=0, atol=0)

@@ -41,7 +41,7 @@ def _tiny_config():
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16, torch.float32])
 @pytest.mark.parametrize('checkpoint_dtype', [torch.bfloat16, torch.float16, torch.float32])
 @torch.inference_mode()
-def test_zero_centered_norm_loading(model_path, dtype, checkpoint_dtype):
+def test_offset_weight_norm_loading(model_path, dtype, checkpoint_dtype):
     module_name, class_name = model_path.split('.')
     model_class = getattr(importlib.import_module(f'lmdeploy.pytorch.models.{module_name}'), class_name)
     config = Qwen3NextConfig(**_TINY_TEXT) if module_name == 'qwen3_next' else _tiny_config()
