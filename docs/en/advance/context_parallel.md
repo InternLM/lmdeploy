@@ -70,3 +70,49 @@ disables DCP.
   `--quant-policy fp8`.
 - Sliding-window attention, MemDecode, prefill/decode disaggregation,
   external KV-cache connectors, and the TileLang attention backend are not supported.
+- GQA DCP rejects active sliding windows at the individual layer boundary,
+  including mixed local/global models such as Gemma 3. Non-causal GQA attention
+  and SDAR/dLLM block-sparse attention (`dllm_block_length > 1`) are also rejected.
+- DFlash with `dcp > 1` is unsupported: its draft cache writes and non-causal
+  block attention do not implement DCP. Llama EAGLE3 is rejected when its
+  unsharded draft cache would reuse the DCP target's incompatible page table.
+  These combinations must use `dcp=1`. Compatible speculative methods that
+  share the target's cache layout, such as `deepseek_mtp`, remain supported.
+
+### Communication policy and compatibility
+
+`--communication-backend nccl` is the default and uses native collectives unless
+an existing operation-specific environment variable explicitly opts into an
+optimization. `--communication-backend auto` opts into eligible symmetric-memory
+gathers and TP all-reduce, with native fallback for unsupported inputs/topologies.
+
+The existing `LMDEPLOY_ENABLE_FLASHINFER_ALLREDUCE`,
+`LMDEPLOY_ENABLE_SYMM_MEM_ALLREDUCE`, and `LMDEPLOY_ENABLE_SYMM_MEM_LMHEAD`
+options retain their TP/LM-head scope. An explicit FlashInfer opt-in takes
+precedence over `auto` for TP all-reduce and preserves DeepSeek V3.2's
+all-reduce + residual + RMSNorm dispatch. Enabling both legacy all-reduce
+providers is an error. Legacy TP options do not enable DCP gather optimization.
+
+`LMDEPLOY_SYMM_MEM_LMHEAD_MAX_MB` continues to limit the LM-head gather workspace
+per rank (default 64 MiB, minimum 1 MiB), including with `auto`. It does not set
+the size of DCP query/prefix workspaces. Communication settings must agree
+across ranks in each group.
+
+### GQA FP8 prefill precision
+
+DCP prefill uses the current chunk's unquantized K/V and combines it with cached
+prefix K/V, dequantized using the cache's per-tensor scales. Decode reads all K/V
+from the cache. This follows the MLA DCP prefill strategy, but differs from
+ordinary GQA prefill, which reads both current and prefix K/V from the cache.
+Consequently, enabling DCP, changing prefill chunk boundaries, or reusing a
+prefix can change which tokens undergo FP8 rounding; bitwise-equivalent outputs
+are not promised, and the difference is not evidence of a communication error.
+
+`tests/pytorch/test_dcp_gqa_reference.py` covers full/chunked prefill, reuse of
+cached prefix pages, and single/multi-token decode with BF16, E4M3, and E5M2.
+It checks cache ownership and compares against both an independent FP32
+attention oracle with the same K/V precision and the non-DCP GQA path. For its
+fixed bounded inputs, the oracle tolerance is `rtol=atol=0.02`; the non-DCP and
+chunk-boundary comparison tolerances are 0.02 (BF16), 0.04 (E4M3), and 0.08
+(E5M2). These are regression thresholds for the fixture, not model-accuracy
+guarantees.
