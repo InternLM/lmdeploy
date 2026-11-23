@@ -155,7 +155,8 @@ class AsyncEngine:
         logger.info(f'speculative_config={speculative_config}')
         backend_config = backend_config or (TurbomindEngineConfig()
                                             if backend == 'turbomind' else PytorchEngineConfig())
-        self.model_name = model_name if model_name else model_path
+        self.model_name = model_name or model_path
+        self._has_configured_model_name = bool(model_name)
         self.chat_template = get_chat_template(model_path, chat_template_config, trust_remote_code=trust_remote_code)
         self.tokenizer = Tokenizer(model_path, trust_remote_code=trust_remote_code)
         self.prompt_processor = MultimodalProcessor(self.tokenizer,
@@ -542,9 +543,10 @@ class AsyncEngine:
                 effort = (reasoning_effort if reasoning_effort is not None
                           else chat_template_kwargs.get('reasoning_effort'))
                 if effort is not None and effort not in ('low', 'high', 'max'):
+                    model_label = f' for {self.model_name}' if self._has_configured_model_name else ''
                     raise RequestError(
                         ErrorCode.INVALID_REQUEST,
-                        f'Unsupported reasoning_effort {effort!r} for GLM-5.3-Flash. '
+                        f'Unsupported reasoning_effort {effort!r}{model_label}. '
                         'Supported efforts are low, high and max.')
             if enable_thinking is not None:
                 logger.warning('enable_thinking is deprecated, use chat_template_kwargs["enable_thinking"] instead')
