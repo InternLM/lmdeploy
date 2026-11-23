@@ -1,8 +1,8 @@
 # yapf: disable
+import pytest
 import torch
 from transformers.generation.logits_process import (
     MinPLogitsWarper,
-    RepetitionPenaltyLogitsProcessor,
     TemperatureLogitsWarper,
     TopKLogitsWarper,
     TopPLogitsWarper,
@@ -112,27 +112,26 @@ def test_process_bad_words():
                 assert score[w] == filter_value
 
 
-def test_processrepetition_penalty():
+@pytest.mark.parametrize('device', ['cpu', pytest.param(
+    'cuda', marks=pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA is unavailable'))])
+@pytest.mark.parametrize('dtype', [torch.float32, torch.float16, torch.bfloat16])
+def test_process_repetition_penalty(device, dtype):
     from lmdeploy.pytorch.engine.logits_process import _process_repetition_penalty_
-    batch_size = 4
-    num_tokens = 16
-    scores = torch.rand(batch_size, num_tokens)
-    input_ids = torch.tensor([
-        [0, 1],
-        [3, 6],
-        [4, 4],
-        [0, 0],
-    ])
-    penalties = 1 + torch.rand(batch_size)
 
-    gt = []
-    for score, ids, penalty in zip(scores, input_ids, penalties):
-        warper = RepetitionPenaltyLogitsProcessor(penalty.item())
-        gt.append(warper(ids[None], score[None].clone()))
-    gt = torch.cat(gt)
+    scores = torch.tensor([[-6., -3., 0., 3., 6., 9.]] * 4, dtype=dtype, device=device)
+    # The duplicate token must be penalized only once. Unseen tokens retain
+    # their scores, including negative scores.
+    input_ids = torch.tensor([[0, 2, 4, 4], [0, 2, 4, 4], [1, 2, 3, 3], [1, 3, 5, 5]], device=device)
+    penalties = torch.tensor([1., 1.5, 0.5, 2.], device=device)
+    expected = torch.tensor([
+        [-6., -3., 0., 3., 6., 9.],  # Identity.
+        [-9., -3., 0., 3., 4., 9.],  # Penalize: multiply negatives, divide positives.
+        [-6., -1.5, 0., 6., 6., 9.],  # A coefficient below one encourages repetition.
+        [-6., -6., 0., 1.5, 6., 4.5],  # Each batch row uses its own history and penalty.
+    ], dtype=dtype, device=device)
 
     out = _process_repetition_penalty_(scores, input_ids, penalties)
-    torch.testing.assert_close(out, gt)
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
 
 
 def test_filter_topk_sorted():
