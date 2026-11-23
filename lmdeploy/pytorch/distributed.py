@@ -28,6 +28,32 @@ class DistGroup:
     gpu_gather_group: dist.ProcessGroup = None
     communicator: 'DeviceCommunicator' = None
 
+    def supports_optimized_all_reduce(self) -> bool:
+        """Whether this group has an optimized all-reduce implementation."""
+        return self.communicator is not None and self.communicator.supports_optimized_all_reduce()
+
+    def supports_fused_all_reduce_residual_rms_norm(self) -> bool:
+        """Whether this group can fuse all-reduce, residual and RMSNorm."""
+        return (self.communicator is not None
+                and self.communicator.supports_fused_all_reduce_residual_rms_norm())
+
+    def try_fused_all_reduce_residual_rms_norm(self,
+                                               input: torch.Tensor,
+                                               residual: torch.Tensor,
+                                               weight: torch.Tensor,
+                                               eps: float):
+        """Run fused all-reduce, residual and RMSNorm, or return ``None``."""
+        if self.communicator is None:
+            return None
+        return self.communicator.try_fused_all_reduce_residual_rms_norm(
+            input=input, residual=residual, weight=weight, eps=eps)
+
+    def all_reduce_(self, tensor: torch.Tensor):
+        """All-reduce a tensor in place on this group."""
+        if self.communicator is not None:
+            return self.communicator.all_reduce_(tensor)
+        return dist.all_reduce(tensor, group=self.gpu_group)
+
     def close(self):
         """Close groups."""
         if self.communicator is not None:

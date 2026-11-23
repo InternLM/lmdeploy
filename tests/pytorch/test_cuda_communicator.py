@@ -7,6 +7,13 @@ import torch
 
 from lmdeploy.pytorch.backends import communicator as base_communicator_module
 from lmdeploy.pytorch.backends.cuda.comm import communicator as communicator_module
+from tests.pytorch.distributed_test_utils import spawn_with_timeout
+
+
+@pytest.fixture(autouse=True)
+def communication_environment(monkeypatch):
+    for name in ('enable_flashinfer_allreduce', 'enable_symm_mem_allreduce', 'enable_symm_mem_lmhead'):
+        monkeypatch.setattr(communicator_module._envs, name, False)
 
 
 def _run_auto_all_gather(rank, rendezvous):
@@ -31,12 +38,29 @@ def _run_auto_all_gather(rank, rendezvous):
         assert workspace.is_available()
 
         rows = (2, 16, 96, 384)
-        inputs = [torch.empty(row, 128, device='cuda', dtype=torch.bfloat16) for row in rows]
+        inputs = [torch.full((row, 128), rank, device='cuda', dtype=torch.bfloat16) for row in rows]
+        optimized_gather = Mock(wraps=workspace._kernels.all_gather_inner)
+        workspace._kernels.all_gather_inner = optimized_gather
+        # Admission is per shape. Warm outside capture on a side stream so the
+        # graph records the optimized path, not a cold-shape NCCL fallback.
+        stream = torch.cuda.Stream()
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(stream):
+            for input in inputs:
+                output = communicator.all_gather(input, workspace=workspace, copy_output=False).clone()
+                expected = torch.cat((torch.zeros_like(input), torch.ones_like(input)), dim=-1)
+                torch.testing.assert_close(output, expected, rtol=0, atol=0)
+        torch.cuda.current_stream().wait_stream(stream)
+        torch.cuda.synchronize()
+        assert optimized_gather.call_count == len(rows)
+        optimized_gather.reset_mock()
         graph = torch.cuda.CUDAGraph()
         outputs = []
         with torch.cuda.graph(graph):
             for input in inputs:
-                outputs.append(communicator.all_gather(input, workspace=workspace, copy_output=False))
+                # The next gather reuses the arena, even for a different shape.
+                outputs.append(communicator.all_gather(input, workspace=workspace, copy_output=False).clone())
+        assert optimized_gather.call_count == len(rows)
 
         for step in range(3):
             for input in inputs:
@@ -44,9 +68,16 @@ def _run_auto_all_gather(rank, rendezvous):
             graph.replay()
             torch.cuda.synchronize()
             for input, output in zip(inputs, outputs):
-                expected = torch.cat((input, input + 1), dim=-1)
+                expected = torch.cat((torch.full_like(input, step), torch.full_like(input, step + 1)), dim=-1)
                 torch.testing.assert_close(output, expected, rtol=0, atol=0)
         graph.reset()
+        # The single-token policy intentionally uses native gathering.
+        optimized_gather.reset_mock()
+        input = torch.full((1, 128), rank, device='cuda', dtype=torch.bfloat16)
+        output = communicator.all_gather(input, workspace=workspace)
+        expected = torch.cat((torch.zeros_like(input), torch.ones_like(input)), dim=-1)
+        torch.testing.assert_close(output, expected, rtol=0, atol=0)
+        optimized_gather.assert_not_called()
         workspace.close()
     finally:
         communicator.close()
@@ -102,8 +133,7 @@ def test_auto_all_reduce_eager_and_graph(tmp_path):
     if any(torch.cuda.get_device_capability(i) != (9, 0)
            or not _SymmetricMemory.has_multicast_support(DeviceType.CUDA, i) for i in range(2)):
         pytest.skip('requires SM90 with multicast support')
-    torch.multiprocessing.spawn(_run_auto_all_reduce,
-                                args=(f'file://{tmp_path}/auto_all_reduce',), nprocs=2, join=True)
+    spawn_with_timeout(_run_auto_all_reduce, args=(f'file://{tmp_path}/auto_all_reduce',))
 
 
 @pytest.mark.skipif(torch.cuda.device_count() < 2, reason='requires two CUDA GPUs')
@@ -115,8 +145,7 @@ def test_auto_all_gather_reuses_workspace(tmp_path):
         pytest.skip('requires SM90 or newer with multicast support')
     if not torch.cuda.can_device_access_peer(0, 1):
         pytest.skip('requires peer access')
-    torch.multiprocessing.spawn(_run_auto_all_gather,
-                                args=(f'file://{tmp_path}/auto_all_gather',), nprocs=2, join=True)
+    spawn_with_timeout(_run_auto_all_gather, args=(f'file://{tmp_path}/auto_all_gather',))
 
 
 @pytest.fixture
@@ -378,3 +407,142 @@ def test_symm_mem_allreduce_peer_allocation_failure(monkeypatch):
     assert not provider.is_available()
     assert provider._buffer is None
     rendezvous.assert_not_called()
+
+
+@pytest.mark.parametrize('backend,group,flashinfer,symm,lmhead,expected', [
+    ('nccl', 'tp', False, False, False, None),
+    ('nccl', 'tp', True, False, False, ('flashinfer', False)),
+    ('nccl', 'tp', False, True, False, ('symm_mem', False)),
+    ('nccl', 'tp', False, False, True, (None, True)),
+    ('auto', 'tp', False, False, False, ('symm_mem', True)),
+    ('auto', 'tp', True, False, False, ('flashinfer', True)),
+    ('nccl', 'dcp', True, False, True, None),
+    ('auto', 'dcp', True, False, False, ('symm_mem', True)),
+])
+def test_communication_policy_preserves_legacy_options(monkeypatch, comm_env, backend, group,
+                                                        flashinfer, symm, lmhead, expected):
+    from lmdeploy.pytorch.config import DistConfig
+
+    module = communicator_module
+    monkeypatch.setattr(module._envs, 'enable_flashinfer_allreduce', flashinfer)
+    monkeypatch.setattr(module._envs, 'enable_symm_mem_allreduce', symm)
+    monkeypatch.setattr(module._envs, 'enable_symm_mem_lmhead', lmhead)
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda *args: (9, 0))
+    monkeypatch.setattr(torch.cuda, 'can_device_access_peer', lambda *args: True)
+
+    def peers(output, local, group):
+        other = (local[0], local[1], 1, *local[3:]) if isinstance(local, tuple) else local
+        output[:] = [local, other]
+
+    monkeypatch.setattr(module.dist, 'all_gather_object', peers)
+    factory = Mock()
+    monkeypatch.setattr(module, 'CudaCommunicator', factory)
+    result = module.build_cuda_communicator('cpu', 'gpu', DistConfig(tp=2, communication_backend=backend),
+                                            group_name=group)
+    if expected is None:
+        assert result is None
+        factory.assert_not_called()
+    else:
+        factory.assert_called_once_with(cpu_group='cpu', device_group='gpu', group_name=group,
+                                         all_reduce_backend=expected[0], enable_all_gather=expected[1])
+
+
+@pytest.mark.parametrize('mismatch', [False, True])
+def test_communication_policy_rejects_conflicting_providers(monkeypatch, comm_env, mismatch):
+    from lmdeploy.pytorch.config import DistConfig
+
+    module = communicator_module
+    monkeypatch.setattr(module._envs, 'enable_flashinfer_allreduce', True)
+    monkeypatch.setattr(module._envs, 'enable_symm_mem_allreduce', not mismatch)
+    monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda *args: (9, 0))
+    if mismatch:
+        def peers(output, local, group):
+            policy = ('nccl', 'tp', False, False, False)
+            output[:] = [local, (policy, *local[1:])]
+        monkeypatch.setattr(module.dist, 'all_gather_object', peers)
+    error = 'must agree across ranks' if mismatch else 'cannot be enabled together'
+    with pytest.raises(ValueError, match=error):
+        module.build_cuda_communicator('cpu', 'gpu', DistConfig(tp=2))
+    # No provider or symmetric workspace may be created before consensus.
+    communicator_module.SymmetricMemoryAllReduce.assert_not_called()
+
+
+@pytest.mark.parametrize('fused', [False, True])
+def test_flashinfer_norm_dispatch_and_fallback(monkeypatch, comm_env, fused):
+    from lmdeploy.pytorch.distributed import DistContext, DistGroup, get_dist_manager
+    from lmdeploy.pytorch.nn import norm as norm_module
+
+    provider = Mock()
+    provider.is_available.return_value = True
+    monkeypatch.setattr(communicator_module, 'FlashInferAllReduce', Mock(return_value=provider))
+    communicator = communicator_module.CudaCommunicator('cpu', 'gpu', group_name='tp',
+                                                        all_reduce_backend='flashinfer', enable_all_gather=False)
+    communicator_module.SymmetricMemoryAllReduce.assert_not_called()
+    assert communicator.create_all_gather_workspace(16, torch.device('cpu'), torch.bfloat16) is None
+    group = DistGroup(gpu_group='gpu', communicator=communicator)
+    context = DistContext(attn_tp_group=group)
+    x, residual = torch.ones(2, 8), torch.ones(2, 8)
+    expected = (x * 3, residual * 4)
+    provider.fused_all_reduce_residual_rms_norm.return_value = expected if fused else None
+    provider.all_reduce_.return_value = False
+    native = Mock(side_effect=lambda tensor, group: tensor.mul_(2))
+    monkeypatch.setattr(communicator_module.dist, 'all_reduce', native)
+    impl = Mock()
+    impl.forward.return_value = expected
+    monkeypatch.setattr(norm_module, 'get_backend', lambda: SimpleNamespace(build_op=lambda *a, **k: impl))
+    monkeypatch.setattr(norm_module, 'get_build_model_context', lambda: SimpleNamespace(enable_deterministic=False))
+    with get_dist_manager().context(context):
+        norm = norm_module.RMSNorm(8, device='cpu', dtype=torch.float32, all_reduce_group='attn')
+        result = norm(x, residual)
+    assert result is expected
+    provider.fused_all_reduce_residual_rms_norm.assert_called_once_with(
+        input=x, residual=residual, weight=norm.weight, eps=norm.eps)
+    if fused:
+        native.assert_not_called()
+        provider.all_reduce_.assert_not_called()
+        impl.forward.assert_not_called()
+    else:
+        native.assert_called_once()
+        provider.all_reduce_.assert_called_once_with(x)
+        impl.forward.assert_called_once_with(x, norm.weight, residual)
+        torch.testing.assert_close(x, torch.full_like(x, 2))
+    communicator.close()
+    provider.close.assert_called_once()
+
+
+@pytest.mark.parametrize('budget_mb', [8, 64])
+def test_lmhead_preserves_gather_budget(monkeypatch, budget_mb):
+    from lmdeploy.pytorch.config import DistConfig
+    from lmdeploy.pytorch.distributed import DistContext, DistGroup, get_dist_manager
+    from lmdeploy.pytorch.nn import embedding as module
+
+    communicator = Mock()
+    group = DistGroup(gpu_group='gpu', communicator=communicator)
+    context = DistContext(dist_config=DistConfig(tp=2), attn_tp_group=group)
+    monkeypatch.setattr(module._envs, 'symm_mem_lmhead_max_mb', budget_mb)
+    monkeypatch.setattr(module, 'get_backend', lambda: SimpleNamespace(build_op=Mock()))
+    monkeypatch.setattr(module, 'get_build_model_context',
+                        lambda: SimpleNamespace(fp32_lm_head=False, tie_word_embeddings=False,
+                                                enable_deterministic=False))
+    with get_dist_manager().context(context):
+        head = module.ParallelLMHead(128, 16, dtype=torch.bfloat16, device='cpu')
+    communicator.create_all_gather_workspace.assert_called_once_with(
+        128, device=head.weight.device, dtype=torch.bfloat16, capacity_bytes=budget_mb * 1024 * 1024)
+
+
+@pytest.mark.parametrize('layer_idx', [0, 1, 2])
+@pytest.mark.parametrize('optimized', [False, True])
+def test_deepseek_defers_only_nonterminal_reductions(monkeypatch, layer_idx, optimized):
+    from lmdeploy.pytorch.models import deepseek_v32 as module
+
+    norm = Mock()
+    norm.can_handle_all_reduce.return_value = optimized
+    attn, mlp = Mock(), Mock()
+    monkeypatch.setattr(module, 'RMSNorm', norm)
+    monkeypatch.setattr(module.DeepseekV32DecoderLayer, 'attention_cls', attn)
+    monkeypatch.setattr(module, 'DeepseekV2MLP', mlp)
+    config = SimpleNamespace(num_hidden_layers=3, hidden_size=8, rms_norm_eps=1e-6, n_routed_experts=None)
+    module.DeepseekV32DecoderLayer(config, layer_idx, device='cpu')
+    assert attn.call_args.kwargs['all_reduce'] is not optimized
+    assert mlp.call_args.kwargs['all_reduce'] is not (optimized and layer_idx < 2)
+    assert [call.kwargs['all_reduce_group'] for call in norm.call_args_list] == ['mlp', 'attn']

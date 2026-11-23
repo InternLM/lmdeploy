@@ -2,6 +2,7 @@
 import torch
 from torch import nn
 
+from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.embedding import EmbeddingBuildSpec
 from lmdeploy.pytorch.backends.linear import LinearBuildSpec
@@ -166,7 +167,8 @@ class ParallelLMHead(ParallelEmbedding):
                 from lmdeploy.pytorch.backends.communicator import DeviceCommunicator
                 communicator = DeviceCommunicator(self.tp_group)
             self._logits_gather_workspace = communicator.create_all_gather_workspace(
-                self.tp * self.vocab_size_padded, device=self.weight.device, dtype=self.weight.dtype)
+                self.tp * self.vocab_size_padded, device=self.weight.device, dtype=self.weight.dtype,
+                capacity_bytes=_envs.symm_mem_lmhead_max_mb * 1024 * 1024)
 
         self._communicator = communicator
 

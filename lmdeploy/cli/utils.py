@@ -934,7 +934,8 @@ class ArgumentHelper:
         """Select native or automatic PyTorch communication."""
         return parser.add_argument(
             '--communication-backend', choices=['nccl', 'auto'], default='nccl',
-            help='PyTorch communication backend. nccl uses native process-group collectives; '
+            help='PyTorch communication backend. nccl uses native process-group collectives '
+            'unless a legacy optimization is explicitly enabled; '
             'auto opts into eligible optimizations. Default: nccl.')
 
     @staticmethod

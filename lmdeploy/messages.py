@@ -583,7 +583,8 @@ class PytorchEngineConfig:
         dllm_denoising_steps: Dllm denoising steps.
         dllm_confidence_threshold: dllm unmasking threshold for
             dynamic unmasking.
-        communication_backend: ``nccl`` (default) uses native process-group collectives.
+        communication_backend: ``nccl`` (default) uses native process-group collectives
+            unless a legacy communication optimization is explicitly enabled.
             ``auto`` opts into eligible communication optimizations.
         kv_transfer_config: External KV-cache connector configuration. This is
             supported only by the PyTorch engine. ``None`` disables external
