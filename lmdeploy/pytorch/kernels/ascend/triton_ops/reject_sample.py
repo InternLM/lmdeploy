@@ -124,10 +124,11 @@ if _TRITON_AVAILABLE:
             is_greedy = tl.load(is_greedy_ptr + offset, mask=mask, other=0)
             is_greedy_mask = mask & (is_greedy != 0)
 
-        start_idx = tl.where(
-            offset == 0,
-            0,
-            tl.load(cu_num_draft_tokens_ptr + offset - 1, mask=is_greedy_mask, other=0),
+        # The first request starts at zero and has no preceding prefix sum.
+        start_idx = tl.load(
+            cu_num_draft_tokens_ptr + offset - 1,
+            mask=is_greedy_mask & (offset > 0),
+            other=0,
         )
         end_idx = tl.load(cu_num_draft_tokens_ptr + offset, mask=is_greedy_mask, other=0)
         num_draft_tokens = end_idx - start_idx
@@ -182,12 +183,12 @@ if _TRITON_AVAILABLE:
         is_greedy = tl.load(is_greedy_ptr + offsets, mask, other=1)
         not_greedy_mask = is_greedy == 0
 
-        start_idxs = tl.where(
-            offsets == 0,
-            0,
-            tl.load(cu_num_draft_tokens_ptr + offsets - 1, not_greedy_mask),
+        start_idxs = tl.load(
+            cu_num_draft_tokens_ptr + offsets - 1,
+            mask=not_greedy_mask & (offsets > 0),
+            other=0,
         )
-        end_idxs = tl.load(cu_num_draft_tokens_ptr + offsets, not_greedy_mask)
+        end_idxs = tl.load(cu_num_draft_tokens_ptr + offsets, mask=not_greedy_mask, other=0)
         n_draft_tokens = end_idxs - start_idxs
 
         for req_i in range(BLOCK_SIZE):
