@@ -29,9 +29,11 @@ class Qwen3NextModelConfigBuilder(AutoModelConfigBuilder):
         cfg = DefaultModelConfigBuilder.build(hf_config, model_path, tp=tp, **kwargs)
 
         # update num layers
-        num_layers = cfg.num_layers
-        num_full_layers = num_layers // hf_config.full_attention_interval
-        num_delta_layers = num_full_layers * (hf_config.full_attention_interval - 1)
+        layer_types = hf_config.layer_types
+        num_full_layers = layer_types.count('full_attention')
+        num_delta_layers = layer_types.count('linear_attention')
+        if len(layer_types) != cfg.num_layers or num_full_layers + num_delta_layers != cfg.num_layers:
+            raise ValueError('Unexpected Qwen3-Next layer layout')
         cfg.num_layers = num_full_layers
 
         # set state shapes
