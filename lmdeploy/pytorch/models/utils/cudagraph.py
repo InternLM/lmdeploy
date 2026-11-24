@@ -1,11 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from typing import TYPE_CHECKING, Any
 
 import torch
 from torch import Tensor
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayState
 from lmdeploy.pytorch.compact_state import SSMStateMetadata
 from lmdeploy.pytorch.devices import is_ascend
 from lmdeploy.pytorch.distributed import get_dcp_world_rank
@@ -15,6 +17,16 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.backends.cuda.step_metadata import CudaStepMetaGraphBuffers, CudaStepMetaPlan
 
 BuffType = dict[str, Tensor]
+
+
+def _bind_replayssm_force_flush(past_key_values: list,
+                                force_flush: torch.Tensor) -> list:
+    """Bind graph-stable flush storage into standard ReplaySSM states."""
+    return [
+        dataclass_replace(state, force_flush=force_flush)
+        if isinstance(state, GatedDeltaReplayState) and state.cursor.Tmax == 1
+        else state for state in past_key_values
+    ]
 
 
 def next_power_of_2(n: int):
@@ -48,6 +60,8 @@ class CudaGraphMeta:
     use_fa3_decoding: bool = False
     is_ssm: bool = False
     use_mrope: bool = False
+    # Capture a mutable, fixed-address force-flush input for Standard ReplaySSM.
+    needs_replayssm_force_flush: bool = False
     block_size: int = 64
     step_meta_plan: 'CudaStepMetaPlan | None' = None
     step_meta_buffers: 'CudaStepMetaGraphBuffers | None' = None
@@ -190,6 +204,12 @@ class CudaGraphMixin:
         if graph_meta.is_ssm:
             state_ids = torch.full((max_batches, ), -1, dtype=torch.int64, device=device)
             input_buffers['state_ids'] = state_ids
+            if graph_meta.needs_replayssm_force_flush:
+                # This buffer must exist even when dummy capture has no save
+                # plan. Its presence captures the force-flush kernel branch;
+                # replay only changes the values, never the address.
+                input_buffers['replayssm_force_flush'] = torch.zeros(
+                    max_batches, dtype=torch.bool, device=device)
 
         return input_buffers
 
@@ -323,6 +343,13 @@ class CudaGraphMixin:
             attn_metadata=attn_metadata,
         )
         new_inputs.update(kwargs)
+        if graph_meta.needs_replayssm_force_flush:
+            # prepare_inputs_for_generation builds these immutable state views
+            # before CUDASingleGraphRunner installs graph buffers on context.
+            # Rebind the graph copy so captured layer kernels see the stable
+            # force-flush pointer even when dummy capture requested no flush.
+            new_inputs['past_key_values'] = _bind_replayssm_force_flush(
+                past_key_values, input_buffers['replayssm_force_flush'])
 
         new_inputs['input_ids'] = input_buffers['input_ids']
         new_inputs['position_ids'] = input_buffers['position_ids']
@@ -373,6 +400,13 @@ class CudaGraphMixin:
         # ssm
         if graph_meta.is_ssm:
             context.state_offsets = input_buffers['state_ids']
+            if graph_meta.needs_replayssm_force_flush:
+                runtime_force_flush = context.replayssm_force_flush
+                force_flush = input_buffers['replayssm_force_flush']
+                force_flush.fill_(False)
+                if runtime_force_flush is not None:
+                    force_flush[:runtime_force_flush.size(0)].copy_(runtime_force_flush)
+                context.replayssm_force_flush = force_flush
         if graph_meta.ssm_state_id_buffers is not None:
             context.ssm_state_meta = graph_meta.ssm_state_id_buffers
 

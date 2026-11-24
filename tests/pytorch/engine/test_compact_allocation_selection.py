@@ -45,6 +45,32 @@ def _executor(model, cache, spec=None, **kwargs):
                          specdecode_config=spec, **kwargs)
 
 
+@pytest.mark.parametrize('family', ['qwen3_5', 'glm5_next'])
+@pytest.mark.parametrize('width', [1, 6])
+@pytest.mark.parametrize('replay', [False, True])
+@pytest.mark.parametrize('first', [False, True])
+@pytest.mark.parametrize('interval', [0, 64])
+@pytest.mark.parametrize('store', [False, True])
+def test_decode_snapshot_policy_validates_replay_representation(family, width, replay, first, interval, store):
+    from lmdeploy.messages import KVTransferConfig
+
+    model, cache, spec = _configs(width, family)
+    model.enable_replayssm = replay
+    cache.enable_prefix_caching = True
+    cache.prefix_cache_state_budget = 1
+    cache.prefix_cache_decode_save_first = first
+    cache.prefix_cache_decode_state_interval = interval
+    if store:
+        cache.kv_transfer_config = KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_both')
+    cache.compact_state_capacity = SSMStateCapacity.from_cache_config(cache, width, runtime_is_auxiliary=replay)
+    unsupported = replay and (first or interval > 0) and (first or store or width > 1)
+    if unsupported:
+        with pytest.raises(NotImplementedError, match='ReplaySSM decode checkpoints currently require AR interval'):
+            _executor(model, cache, spec)
+    else:
+        _executor(model, cache, spec)
+
+
 @pytest.mark.parametrize('width', [1, 4, 6])
 @pytest.mark.parametrize('family', ['qwen3_5', 'glm5_next'])
 @pytest.mark.parametrize('from_factory', [False, True])

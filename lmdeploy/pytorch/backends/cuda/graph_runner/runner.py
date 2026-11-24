@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +19,7 @@ from lmdeploy.pytorch.config import (
 )
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 from lmdeploy.pytorch.strategies.base import StrategyFactoryBase
+from lmdeploy.utils import get_logger
 
 from ...graph_runner import GraphRunner, is_preparing_prefill
 from .full_graph import CUDASingleGraphRunner, build_decode_model_forward
@@ -242,6 +244,10 @@ class CUDAGraphRunner(GraphRunner):
 
     def _capture_full_graph(self, graph_key: tuple, kwargs: dict[str, Any]):
         """Capture and publish a full graph for one cache miss."""
+        logger = get_logger('lmdeploy')
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        started = time.perf_counter()
+        logger.info('CUDA graph capture begin: model=%s rank=%d key=%s', type(self.model).__name__, rank, graph_key)
         runner = CUDASingleGraphRunner(
             self.model,
             model_forward=self._get_decode_model_forward(),
@@ -256,6 +262,8 @@ class CUDAGraphRunner(GraphRunner):
         )
         output = runner.capture(**kwargs)
         self._full_graph_runners[graph_key] = runner
+        logger.info('CUDA graph capture end: model=%s rank=%d key=%s elapsed_ms=%.3f',
+                    type(self.model).__name__, rank, graph_key, (time.perf_counter() - started) * 1000)
         # SSM capture warmup updates state, so the first call returns that
         # warmup output instead of replaying and applying the update twice.
         return output
