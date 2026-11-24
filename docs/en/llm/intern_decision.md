@@ -1,7 +1,7 @@
 # Intern-Decision
 
 The Intern-Decision family (0.8B, 2B and 4B) answers structured questions by
-**scoring** instead of generating. A Systemone request holds a `state`, up to 16 `questions` and optional image `assets`. The model
+**scoring** instead of generating. A Systemone request holds a `state`, up to 32 `questions` and optional image `assets`. The model
 reads one prompt that ends in a JSON skeleton with a `<decision>` marker per question, and the logits right before
 each marker, restricted to that question's answer symbols (`A`, `B`, ...), give the answer distribution.
 
@@ -224,6 +224,21 @@ the maximum of eight image occurrences. Images are static PNG/JPEG files, at mos
 dimensions between 280 and 1568 pixels. Base64 must be canonical padded standard Base64 without a data URL prefix.
 The HTTP body is limited to 32 MiB. URLs and local paths are not accepted by this endpoint.
 
+For a `score` question, `criteria` must be an ordered array; objects, including numeric-keyed maps, return 422.
+The score is the probability-weighted mean of the zero-based array positions. Labels such as `"1"` through `"10"`
+do not change those positions to a one-based scale. Choice and noul questions retain their object criteria.
+
+Unknown top-level request fields are accepted and then ignored. They are not forwarded to the engine:
+`seed` does not control randomness, and `x_trace_id` does not enable tracing. Known fields remain strictly validated;
+the removed `images` field still returns 422, with guidance to use `assets`.
+
+Numbers in the JSON body must be finite, including nested state, instructions and criteria. Non-finite literals
+(`NaN`, `Infinity`, `-Infinity`) and overflow such as `1e400` return 400 before engine work. The same rule applies
+to the JSON `request` part of multipart uploads. Quoted strings such as `"NaN"` remain valid content.
+
+For both decision endpoints, unexpected tokenizer, preprocessing or scoring failures return 500, with details
+kept in the server log. Explicit input errors retain their 4xx status, and engine unavailability returns 503.
+
 For multipart uploads, send the JSON `request` part first, with `Content-Type: application/json`, and reference
 each image part exactly once through `assets.<ref>.part`. File format can be omitted and is inferred from its bytes:
 
@@ -240,6 +255,13 @@ to `/v1/systemone`; the `/v1/decisions` image contract is preserved.
 
 Responses contain `model`, `answers` and `usage`. A `noul` answer contains `type` and `noul`; choice and score
 answers include probabilities and confidence. Score legends preserve the original JSON values and image references.
+Systemone confidence is computed from the calibrated probabilities using the fixed
+[TypeSafe formulas](https://docs.typesafe.ai/confidence#how-confidence-is-calculated): choice measures the top
+probability above a uniform distribution; score measures probability-weighted distance from the most likely level.
+Uniform distributions have confidence 0 and single-outcome distributions have confidence 1. A single-option or
+single-level question also returns 1 as a local boundary convention. Noul has no confidence field.
+This response conversion does not change probabilities, scores, or the confidence returned by `/v1/decisions`.
+
 `usage.input_tokens` includes expanded visual tokens; `usage.output_tokens` counts the tokenized assistant skeleton,
 including its decision markers, rather than generated tokens. Images are input evidence and are not returned.
 
@@ -320,7 +342,7 @@ For example, a question can carry its own image and structured evidence:
 These content blocks extend the a8fe089 deployment adapter; existing checkpoint limits and `detail=auto` policy
 remain in effect. They do not add tool records, prompt-cache controls or other image detail profiles.
 
-Requests contain 1–16 questions. Each `instructions` accepts a string or a nonempty array of
+Requests contain 1–32 questions. Each `instructions` accepts a string or a nonempty array of
 `input_text`, `input_image` and `input_json` blocks. Choice questions have 2–62 unique string or boolean
 values; `true` and `"true"` are distinct. String choice values must not be blank.
 Score questions have 2–62 ordered levels with a label and optional description. The 62-level limit is a local extension
@@ -432,7 +454,7 @@ preprocessing consumes PIL-backed blocks and expands visual tokens without downl
 - After image expansion, input must be shorter than the engine's session length,
   which is the model's own context window unless overridden by `--session-len`.
   Longer inputs are rejected, never truncated.
-- Native requests contain 1–16 questions. Each `choice` or `score` question has 1–62 options, assigned
+- Native requests contain 1–32 questions. Each `choice` or `score` question has 1–62 options, assigned
   answer symbols in request order. The original option labels are restored in the response.
 - Systemone `model` may be omitted or empty, or match the served model name (`--model-name`, default: the model path),
   `InternLM/<served-name>`, or `internlm/<lowercase-served-name>`. Set `--model-name` explicitly for a short name.

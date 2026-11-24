@@ -39,6 +39,40 @@ sum by (model_name) (rate(lmdeploy:external_prefix_cache_queries_total[5m]))
 前缀缓存命中指标统计请求首次被调度时实际跳过的 prompt token。Turbomind 目前仅在 DP 1 时报告调度指标，
 尚不支持 DP 大于 1 时的逐 rank Turbomind 指标。
 
+## 独立监控端口
+
+使用 `--monitoring-port`，可在每个 API 进程内通过独立线程提供 `/health` 和
+`/metrics`，减少同步预处理阻塞推理 API 事件循环时对监控请求的影响：
+
+```bash
+lmdeploy serve api_server /path/to/model --server-port 9200 --monitoring-port 9300
+```
+
+PyTorch DP 部署会为本机各 API 进程分配连续监控端口。例如
+`--dp 8 --monitoring-port 9300` 在单机上使用 `9300～9307`；多机时按每台机器的本地
+DP 数量分配。请预留与 API 端口不重叠的监控端口；监控端口被占用时，服务启动失败。
+不传此参数时，不启动额外监听器。
+
+需要将 Prometheus 抓取地址和健康检查地址改为监控端口。原 API 端口上的接口仍然保留，
+也仍然受推理事件循环阻塞影响；router 不会自动切换到新的健康检查地址。
+监控服务沿用 API 服务的监听主机、API key 和 TLS 配置。`/health` 无需认证，
+配置 API key 后，访问 `/metrics` 需要携带该 key。设置 `--disable-metrics` 后，
+监控端口仅提供 `/health`。
+
+指标读取同一进程内的 Prometheus Registry。指标更新仍在 API 事件循环执行，
+因此抓取响应快不代表数据立即更新。`lmdeploy:scheduler_last_update_timestamp_seconds`
+表示最近一次调度指标更新的 Unix 时间戳，首次更新前为 0；它不表示所有 token 级指标的更新时间。
+调度指标正常情况下约每 10 秒更新一次。
+
+监控端口的 `/health` 直接读取后台探测快照，不等待 API 事件循环。
+响应中的 `snapshot_age_seconds` 表示距最近一次快照更新经过的秒数，
+首次探测完成前为 `null`。健康和休眠快照超过 `LMDEPLOY_HEALTH_UNHEALTHY_AFTER`
+（默认 90 秒）后返回 HTTP 503，直到后台探测刷新，避免 API 事件循环停止推进时一直报告健康。
+API 监听器开始停止接收新请求时，监控端口的 `/health` 立即返回 HTTP 503，
+即使后台快照仍然健康。
+监控线程仍共享进程的 Python GIL，因此无法隔离长时间持有 GIL 的代码；
+该选项也不会加速推理或 abort 请求。
+
 ## 配置指南
 
 本节介绍如何设置 `lmdeploy/monitoring` 目录中提供的监控套件（Prometheus + Grafana）

@@ -177,6 +177,13 @@ class GenerationConfig:
                     }
                 }
 
+        return_routed_experts: Whether to return MoE routed expert indices.
+            Requires routed-expert collection in the PyTorch backend.
+        routed_experts_start_len: Absolute, zero-based start position of returned
+            routing rows in the current processed prompt. Defaults to 0 (full
+            history). Must be a non-negative integer no greater than the prompt
+            length. Only slices returned rows; does not limit prefix-cache
+            matching or internal routed-expert storage.
         logits_processors: Custom logit processors.
         repetition_ngram_size: The size of n-grams to consider for repetition early stop.
             Must be non-negative; values below 0 are treated as 0.
@@ -221,6 +228,9 @@ class GenerationConfig:
 
     # router replay
     return_routed_experts: bool = False
+    # Returned routing rows cover [start_len, prompt_tokens + output_tokens - 1).
+    # This does not limit prefix-cache matching or routed-expert storage.
+    routed_experts_start_len: int = 0
 
     # ngram, generation would stop if latest [size] tokens are repeated for [threshold] times
     repetition_ngram_size: int = 0
@@ -276,6 +286,8 @@ class GenerationConfig:
         assert self.temperature >= 0 and self.temperature <= 2  # [0,2]
         assert 0 <= self.min_p <= 1, \
             f'min_p should be in range [0, 1], but found {self.min_p}'
+        if type(self.routed_experts_start_len) is not int or self.routed_experts_start_len < 0:
+            raise ValueError('routed_experts_start_len must be a non-negative integer')
         if self.logprob_start_len < -1:
             raise ValueError('logprob_start_len must be greater than or equal to -1')
         if self.logprob_start_len >= 0 and (self.logprobs is None or self.logprobs < 0):
@@ -815,6 +827,13 @@ class EventType(enum.IntEnum):
     QUEUED = 1
     SCHEDULED = 2
     PREEMPTED = 3  # FIXME, currently ignored for simplicity
+    KV_LOAD_STARTED = 4
+    KV_LOAD_FINISHED = 5
+    KV_LOAD_FAILED = 6
+    KV_LOOKUP_STARTED = 7
+    KV_LOOKUP_FINISHED = 8
+    KV_LOAD_CANCELLED = 9
+    KV_LOOKUP_CANCELLED = 10
 
 
 # modified from https://github.com/vllm-project/vllm/blob/main/vllm/v1/engine/__init__.py
@@ -828,13 +847,15 @@ class EngineEvent:
     """
     type: EventType
     timestamp: float
+    value: int | None = None
 
     @classmethod
-    def new_event(cls, event_type: EventType, timestamp: float | None = None) -> 'EngineEvent':
+    def new_event(cls, event_type: EventType, timestamp: float | None = None,
+                  value: int | None = None) -> 'EngineEvent':
         # Timestamps MUST use wall-clock time (time.time()) to maintain consistency
         # between csrc(std::chrono::system_clock) and python
         timestamp = time.time() if timestamp is None else timestamp
-        return cls(event_type, timestamp)
+        return cls(event_type, timestamp, value)
 
 
 @dataclass
@@ -858,11 +879,13 @@ class RequestMetrics:
     Attributes:
         token_timestamp: A wall-clock time when a token is generated.
         engine_events: list of engine events during inference.
+        first_token_timestamp: First native output time, preserved across output coalescing.
     """
     token_timestamp: float = 0.0
     engine_events: list[EngineEvent] = field(default_factory=list)
     spec_info: dict[str, Any] | None = None
     cached_tokens: int = 0
+    first_token_timestamp: float = 0.0
 
 
 @dataclass
@@ -904,9 +927,21 @@ class VisionConfig:
         thread_safe: Specifies whether the engine instance is
             thread-safe. Please set it to True when using the pipeline
             in a multi-threaded environment.
+        image_cache_max_bytes: Per-frontend-process budget for supported image
+            preprocessing caches. Zero disables reuse. Currently used by GLM-5.
+            None uses ``LMDEPLOY_IMAGE_CACHE_MAX_BYTES`` set before startup,
+            which defaults to 4 GiB. Explicit values override the environment.
+            This limits retained cache entries, not in-flight request memory.
+            Cached images are also limited to 256 entries or one quarter of
+            the process FD soft limit, whichever is smaller.
     """
     max_batch_size: int = 1
     thread_safe: bool = False
+    image_cache_max_bytes: int | None = None
+
+    def __post_init__(self):
+        if self.image_cache_max_bytes is not None and self.image_cache_max_bytes < 0:
+            raise ValueError('image_cache_max_bytes must be non-negative')
 
 
 @dataclass

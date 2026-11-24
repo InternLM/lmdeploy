@@ -1,5 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+import asyncio
 import copy
 from types import SimpleNamespace
 
@@ -8,7 +9,7 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
-from lmdeploy.model import HFChatTemplate
+from lmdeploy.model import MODELS, BaseChatTemplate, HFChatTemplate
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 from lmdeploy.serve.parsers.response_parser import normalize_chat_request
 from lmdeploy.serve.processors.multimodal import MultimodalProcessor
@@ -88,3 +89,116 @@ def test_glm5_renders_reasoning_alias_in_history(hf_media_template, reasoning_fi
     assert messages == original['messages']
     if tool_round:
         assert normalized.messages[1]['tool_calls'][0]['function']['arguments'] == {'key': 'test'}
+
+
+@pytest.mark.parametrize('role', ['system', 'user', 'assistant', 'tool'])
+@pytest.mark.parametrize('texts', [
+    ['say </th', 'ink> now'], ['<th', 'ink>'], ['<tool_', 'call>'],
+    ['<arg_', 'key>'], ['<|us', 'er|>'], ['<|im', 'age|>'],
+    ['hel', 'lo'], ['', ' hello ', '\nworld', ''], [],
+])
+def test_glm5_text_parts_match_direct_template(hf_media_template, role, texts):
+    """Text-only serving must preserve the model template's part boundaries."""
+    template = hf_media_template()
+    message = {'role': role, 'content': [{'type': 'text', 'text': text} for text in texts]}
+    if role == 'assistant':
+        message['reasoning_content'] = 'plan'
+    if role == 'tool':
+        message['tool_call_id'] = 'call_1'
+        messages = [
+            {'role': 'user', 'content': 'Look up a value.'},
+            {'role': 'assistant', 'content': None, 'tool_calls': [{
+                'id': 'call_1', 'type': 'function',
+                'function': {'name': 'lookup', 'arguments': {'key': 'test'}},
+            }]},
+            message,
+        ]
+    else:
+        messages = [message]
+        if role == 'assistant':
+            messages.insert(0, {'role': 'user', 'content': 'hi'})
+        if role != 'user':
+            messages.append({'role': 'user', 'content': 'continue'})
+    original = copy.deepcopy(messages)
+    expected_messages = copy.deepcopy(messages)
+    for msg in expected_messages:
+        if msg.get('content') is None:
+            msg['content'] = ''
+    expected = template.messages2prompt(expected_messages)
+    # Keep encoding local and deterministic; the real model template and
+    # request preprocessing run above the encoder, without model downloads.
+    encoder = SimpleNamespace(encode=lambda prompt, add_bos: list(prompt.encode('utf-8')))
+    processor = MultimodalProcessor(encoder, template)
+
+    result = asyncio.run(processor.get_prompt_input(messages, do_preprocess=True))
+
+    assert result['prompt'] == expected
+    assert result['input_ids'] == list(expected.encode('utf-8'))
+    assert messages == original
+
+
+@pytest.mark.parametrize('mode', ['string-template', 'adapter', 'no-preprocess'])
+def test_text_parts_keep_string_template_merging(hf_media_template, monkeypatch, mode):
+    """Only the selected GLM template may bypass newline merging."""
+    template = hf_media_template()
+    kwargs = {}
+    if mode == 'string-template':
+        template.is_glm5_next = False
+        template.tokenizer.chat_template = '{{ messages[0].content }}'
+    elif mode == 'adapter':
+        monkeypatch.setitem(MODELS.module_dict, 'test-text-parts', BaseChatTemplate)
+        kwargs['adapter_name'] = 'test-text-parts'
+    encoder = SimpleNamespace(encode=lambda prompt, add_bos: list(prompt.encode('utf-8')))
+    processor = MultimodalProcessor(encoder, template)
+    messages = [{'role': 'user', 'content': [
+        {'type': 'text', 'text': 'hello'}, {'type': 'text', 'text': 'world'},
+    ]}]
+
+    result = asyncio.run(processor.get_prompt_input(messages, do_preprocess=mode != 'no-preprocess', **kwargs))
+
+    assert result['prompt'] == 'hello\nworld'
+
+
+@pytest.mark.parametrize('override_kind', ['inline', 'named'])
+@pytest.mark.parametrize('texts', [['hel', 'lo'], ['say </th', 'ink> now']])
+def test_glm5_request_template_override_keeps_string_content(hf_media_template, override_kind, texts):
+    template = hf_media_template()
+    override = "{{ '<|user|>' + messages[0].content }}"
+    if override_kind == 'named':
+        template.tokenizer.chat_template = {'default': template.tokenizer.chat_template, 'legacy': override}
+        override = 'legacy'
+    encoder = SimpleNamespace(encode=lambda prompt, add_bos: list(prompt.encode('utf-8')))
+    processor = MultimodalProcessor(encoder, template)
+    messages = [{'role': 'user', 'content': [{'type': 'text', 'text': text} for text in texts]}]
+    kwargs = {'chat_template': override, 'reasoning_effort': 'high'}
+    original_messages, original_kwargs = copy.deepcopy((messages, kwargs))
+
+    result = asyncio.run(processor.get_prompt_input(messages, do_preprocess=True, chat_template_kwargs=kwargs))
+
+    expected = '<|user|>' + '\n'.join(texts)
+    assert result['prompt'] == expected
+    assert result['input_ids'] == list(expected.encode('utf-8'))
+    assert messages == original_messages
+    assert kwargs == original_kwargs
+    # An override applies only to its own request; default rendering still
+    # receives the adjacent text parts on a reused processor.
+    default = asyncio.run(processor.get_prompt_input(messages, do_preprocess=True))
+    assert default['prompt'] == template.messages2prompt(messages)
+    assert ''.join(texts) in default['prompt']
+
+
+def test_glm5_null_template_override_keeps_default_parts(hf_media_template):
+    template = hf_media_template()
+    encoder = SimpleNamespace(encode=lambda prompt, add_bos: list(prompt.encode('utf-8')))
+    processor = MultimodalProcessor(encoder, template)
+    messages = [{'role': 'user', 'content': [
+        {'type': 'text', 'text': 'say </th'}, {'type': 'text', 'text': 'ink> now'},
+    ]}]
+
+    result = asyncio.run(processor.get_prompt_input(
+        messages, do_preprocess=True, chat_template_kwargs={'chat_template': None}))
+
+    expected = template.messages2prompt(messages)
+    assert result['prompt'] == expected
+    assert result['input_ids'] == list(expected.encode('utf-8'))
+    assert 'say </think> now' in result['prompt']

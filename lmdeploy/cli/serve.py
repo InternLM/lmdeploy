@@ -50,6 +50,11 @@ class SubCliServe:
                             help='Server port. Effective default is 23333 when unset. '
                             'In DP mode with --proxy-url, ports are auto-selected unless '
                             'this flag is explicitly set.')
+        parser.add_argument('--monitoring-port',
+                            type=int,
+                            default=None,
+                            help='Optional dedicated port for /health and /metrics on a separate thread. '
+                            'In PyTorch DP mode, each local rank uses this port plus its local rank index.')
         parser.add_argument('--allow-origins',
                             nargs='+',
                             type=str,
@@ -354,6 +359,7 @@ class SubCliServe:
                 vision_config=vision_config,
                 server_name=args.server_name,
                 server_port=args.server_port if args.server_port is not None else 23333,
+                monitoring_port=args.monitoring_port,
                 allow_origins=args.allow_origins,
                 allow_credentials=args.allow_credentials,
                 allow_methods=args.allow_methods,
@@ -390,6 +396,7 @@ class SubCliServe:
                 vision_config=vision_config,
                 server_name=args.server_name,
                 server_port=args.server_port,
+                monitoring_port=args.monitoring_port,
                 allow_origins=args.allow_origins,
                 allow_credentials=args.allow_credentials,
                 allow_methods=args.allow_methods,

@@ -158,6 +158,10 @@ class PrometheusStatLogger(StatLoggerBase):
         #
         # Scheduler stats
         #
+        self.gauge_scheduler_last_update = prometheus_client.Gauge(
+            name='lmdeploy:scheduler_last_update_timestamp_seconds',
+            documentation='Unix timestamp of the last scheduler metrics update; zero until the first update.',
+            labelnames=labelnames).labels(*labelvalues)
         self.gauge_scheduler_succeeded = prometheus_client.Gauge(name='lmdeploy:num_requests_succeeded',
                                                                  documentation='Number of current succeeded requests.',
                                                                  labelnames=labelnames).labels(*labelvalues)
@@ -414,6 +418,7 @@ class PrometheusStatLogger(StatLoggerBase):
             self.counter_external_prefix_cache_queries.inc(queries - last_queries)
             self.counter_external_prefix_cache_hits.inc(hits - last_hits)
             self._last_external_prefix_cache_counts = (queries, hits)
+        self.gauge_scheduler_last_update.set(time.time())
 
     def record_iteration(self, stats: IterationStats) -> None:
         """Report token-related metrics to prometheus."""

@@ -42,6 +42,10 @@ class DecisionOutputError(RuntimeError):
     """Candidate scores cannot be decoded into a consistent decision result."""
 
 
+class ReservedDecisionMarkerError(ValueError):
+    """User evidence contains the checkpoint's reserved scoring marker."""
+
+
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=False)
 
@@ -116,7 +120,7 @@ def compile_row(row: Mapping[str, Any]) -> CompiledExample:
                  f"{state}\n"
                  '## Decision schema\n' + '\n'.join(schema_lines))
     if DECISION_TOKEN in user_text or any(DECISION_TOKEN in field for field in fields):
-        raise ValueError('Reserved decision marker appears in input evidence')
+        raise ReservedDecisionMarkerError('Reserved decision marker appears in input evidence')
     skeleton = json.dumps(dict.fromkeys(fields, DECISION_TOKEN), ensure_ascii=False, indent=4)
     images = row.get('images', [])
     images = images if isinstance(images, list) else [images]

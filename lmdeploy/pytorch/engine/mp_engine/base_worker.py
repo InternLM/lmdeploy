@@ -243,6 +243,10 @@ class EngineWorkerBase:
         """Close engine worker."""
         self.engine.close()
 
+    async def trim_routed_experts(self, key: str, num_rows: int) -> str:
+        from ..engine_instance import EngineInstance
+        return await EngineInstance.trim_routed_experts(key, num_rows)
+
     async def instance_async_end(self, session_id: int):
         """End the given session."""
         return await self.instance_pool.async_end(session_id)

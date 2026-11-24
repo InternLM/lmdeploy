@@ -85,6 +85,8 @@ class _ResponseParser:
 
 class _Session:
 
+    session_id = 0
+
     async def async_abort(self):
         pass
 
@@ -123,7 +125,8 @@ class _AsyncEngine:
                                   cache_block_ids=[],
                                   pd_handoff=None,
                                   input_token_len=input_token_len,
-                                  generate_token_len=len(token_ids))
+                                  generate_token_len=len(token_ids),
+                                  cached_tokens=0)
 
         return _generator()
 

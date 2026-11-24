@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from lmdeploy.messages import PytorchEngineConfig
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.serve.core.exceptions import RequestError
+from lmdeploy.serve.observability.request_trace import trace_frame
 from lmdeploy.serve.openai.endpoints.common import build_serving_generation_config, validate_request
 from lmdeploy.serve.openai.errors import (
     create_error_response,
@@ -168,7 +169,7 @@ def register(router: APIRouter, server_context) -> None:
             return create_request_error_response(e)
         result_generator = server_context.async_engine.generate(prepared_request, stream_response=True)
 
-        def create_generate_response_json(res,
+        def create_generate_response(res,
                                           text,
                                           output_ids,
                                           logprobs,
@@ -193,7 +194,7 @@ def register(router: APIRouter, server_context) -> None:
             response = GenerateReqOutput(text=text,
                                          output_ids=output_ids,
                                          meta_info=meta)
-            return response.model_dump_json()
+            return response
 
         async def generate_stream_generator():
             try:
@@ -215,7 +216,7 @@ def register(router: APIRouter, server_context) -> None:
                                         if request.top_logprobs_num else None)
                         input_logprobs = None
                         input_top_logprobs = None
-                    response_json = create_generate_response_json(
+                    response_json = create_generate_response(
                         res,
                         text,
                         output_ids,
@@ -225,10 +226,11 @@ def register(router: APIRouter, server_context) -> None:
                         input_top_logprobs,
                         res.finish_reason,
                         routed_experts=routed_experts)
-                    yield f'data: {response_json}\n\n'
+                    yield trace_frame(f'data: {response_json.model_dump_json()}\n\n', response_json)
             except RequestError as e:
-                yield f'data: {json.dumps({"error": request_error_payload(e)})}\n\n'
-            yield 'data: [DONE]\n\n'
+                error_payload = {'error': request_error_payload(e)}
+                yield trace_frame(f'data: {json.dumps(error_payload, ensure_ascii=False)}\n\n', error_payload)
+            yield trace_frame('data: [DONE]\n\n', terminal=True)
 
         if request.stream:
             stream_generator = with_request_cleanup(

@@ -17,6 +17,7 @@ from lmdeploy.pytorch.disagg.conn.protocol import PDControlRequest
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch, PDTransferResult
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
 from lmdeploy.pytorch.utils import cancel_async_tasks, wait_for_async_tasks
+from lmdeploy.trace import ENABLED as TRACE_ENABLED
 from lmdeploy.utils import get_logger
 
 from .engine import InferOutput, ResponseType, response_reqs
@@ -483,13 +484,16 @@ class EngineLoop:
             if num_draft_tokens is not None and model_inputs is None and self.config.enable_metrics:
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens.item())
+            if TRACE_ENABLED and len(token_ids) and not msg.resp.first_token_timestamp:
+                msg.resp.first_token_timestamp = new_token_timestamp
             cached_tokens = msg.cached_tokens
             if msg.remote_prefill_cached_tokens is not None:
                 cached_tokens = msg.remote_prefill_cached_tokens
             req_metrics = RequestMetrics(new_token_timestamp,
                                          msg.engine_events,
                                          spec_info=spec_info,
-                                         cached_tokens=cached_tokens)
+                                         cached_tokens=cached_tokens,
+                                         first_token_timestamp=msg.resp.first_token_timestamp)
             if PROFILE_PHASES and (model_inputs is not None or finish):
                 trace_phase('engine_output', role=self.config.role.name, session_id=session_id, seq_id=msg.seq_id,
                             first=model_inputs is not None, finished=finish, token_timestamp=new_token_timestamp,

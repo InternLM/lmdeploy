@@ -20,7 +20,7 @@ SYMBOLS = {'A': 32, 'B': 33, 'C': 34}
 
 def config(**kwargs):
     values = dict(marker_id=MARKER, symbol_ids=SYMBOLS, image_token_id=IMAGE_PAD,
-                  temperature=2.0)
+                  temperature=2.0, image_token='<|image_pad|>')
     return DecisionContext(**{**values, **kwargs})
 
 

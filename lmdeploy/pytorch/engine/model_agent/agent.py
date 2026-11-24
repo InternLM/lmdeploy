@@ -718,11 +718,16 @@ class BaseModelAgent:
             output_token_ids = extra_inputs.output_token_ids if self.spec_agent.is_enabled() else next_token_ids
             return next_token_ids, None, output_token_ids, extra_inputs
         if self.spec_agent.is_enabled():
+            target_logits = getattr(extra_inputs, 'target_logits', None)
+            if target_logits is not None and target_logits.device.type == 'npu':
+                extra_inputs.target_logits = target_logits.to(torch.float32)
             extra_inputs = await self.spec_agent.async_sampling_logits(inputs, extra_inputs, sampling_inputs)
             return extra_inputs.next_token_ids, extra_inputs.logprobs, extra_inputs.output_token_ids, extra_inputs
         # record function does not support async function
         # so we can not decorate it on async_sampling_logits
         with record_function('sampling_logits'):
+            if logits.device.type == 'npu':
+                logits = logits.to(torch.float32)
             logits_processor = FusedLogitsProcessor(
                 sampling_inputs,
                 logprobs_mode=self.misc_config.logprobs_mode,

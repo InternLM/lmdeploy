@@ -52,7 +52,9 @@ class VLAsyncEngine(AsyncEngine):
                                                     self.chat_template,
                                                     vl_encoder=self.vl_encoder,
                                                     backend=backend,
-                                                    allowed_media_domains=allowed_media_domains)
+                                                    allowed_media_domains=allowed_media_domains,
+                                                    defer_image_decode=(backend == 'pytorch'
+                                                                        and self.vl_encoder.model.supports_image_cache))
         if self.model_name == 'base':
             raise RuntimeError(
                 'please specify chat template as guided in https://lmdeploy.readthedocs.io/en/latest/inference/vl_pipeline.html#set-chat-template'  # noqa: E501

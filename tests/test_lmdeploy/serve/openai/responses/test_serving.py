@@ -12,6 +12,58 @@ from fastapi.testclient import TestClient
 from lmdeploy.serve.openai.responses import ResponsesRequest, create_responses_router
 
 
+@pytest.mark.parametrize('structured', [False, True])
+def test_trace_keeps_oversized_terminal_response_success(responses_endpoint, monkeypatch, structured):
+    from types import SimpleNamespace
+
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.trace import StatusCode
+
+    from lmdeploy.serve.observability import otel_trace, request_trace
+    from lmdeploy.serve.openai.responses import streaming
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(otel_trace, '_tracer', provider.get_tracer('large-responses'))
+    monkeypatch.setattr(request_trace, 'ENABLED', True)
+    monkeypatch.setattr(request_trace, 'LOG_ENABLED', True)
+    monkeypatch.setattr(request_trace, 'get_writer', lambda: None)
+    records = []
+    monkeypatch.setattr(request_trace, 'emit', lambda event, rid, **kw: records.append(kw))
+    if not structured:
+        monkeypatch.setattr(streaming, 'trace_frame', lambda frame, payload: frame)
+    else:
+        def reject_reparse(*args):
+            raise AssertionError('Structured Responses output must not be decoded again')
+        monkeypatch.setattr(request_trace, '_decode_json', reject_reparse)
+    _, context = responses_endpoint
+
+    def generate(request, **kwargs):
+        async def outputs():
+            yield SimpleNamespace(response='x' * (1150 * 1024), token_ids=[1], input_token_len=1,
+                                  generate_token_len=1, finish_reason='stop', cached_tokens=0,
+                                  logprobs=None, routed_experts=None, cache_block_ids=None)
+        return outputs()
+
+    context.async_engine.generate = generate
+    app = FastAPI()
+    app.include_router(create_responses_router(context))
+    try:
+        with TestClient(request_trace.RequestTraceMiddleware(app)) as client:
+            response = client.post('/v1/responses', json=dict(model='fake-model', input='Hi', stream=True))
+        assert response.status_code == 200
+        assert 'event: response.completed\n' in response.text
+        assert len(response.content) > 1024 * 1024
+        span, = exporter.get_finished_spans()
+        assert span.status.status_code == StatusCode.OK
+        assert records[-1]['status'] == 'success'
+    finally:
+        provider.shutdown()
+
+
 @pytest.mark.parametrize('stream', [False, True])
 def test_http_unknown_content_is_rejected_with_its_location(responses_endpoint, stream):
     _, context = responses_endpoint

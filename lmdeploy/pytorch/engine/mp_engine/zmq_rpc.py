@@ -3,8 +3,13 @@ import asyncio
 import inspect
 import pickle
 from collections.abc import Callable
+from io import BytesIO
+from multiprocessing import resource_sharer
+from multiprocessing.reduction import ForkingPickler
 from uuid import uuid4
 
+import torch
+import torch.multiprocessing  # Registers PyTorch's shared-storage reducers.
 import zmq
 import zmq.asyncio
 from zmq.asyncio import Context
@@ -14,6 +19,54 @@ from lmdeploy.utils import get_logger
 from .base_worker import EngineOutputGather, StreamMailbox, StreamPollResult, iter_stream_poll_outputs
 
 logger = get_logger('lmdeploy')
+
+
+class _SharedTensorPickler(ForkingPickler):
+    """Record the FD handoffs created by PyTorch's tensor reducers."""
+
+    def __init__(self, buffer, shared_fds):
+        super().__init__(buffer)
+        self.shared_fds = shared_fds
+
+    def reducer_override(self, obj):
+        if isinstance(obj, resource_sharer.DupFd):
+            self.shared_fds.append(obj._id[1])
+        return NotImplemented
+
+
+def _release_shared_fds(shared_fds):
+    # Multiprocessing has no unregister API. Only remove this request's
+    # unclaimed entries; the sharer thread owns entries it has already popped.
+    for key in shared_fds:
+        entry = resource_sharer._resource_sharer._cache.pop(key, None)
+        if entry is not None:
+            entry[1]()
+    shared_fds.clear()
+
+
+class _RequestPickler(pickle.Pickler):
+    """Pass shared CPU tensors by FD, with handoffs owned by the pending RPC.
+
+    Ordinary tensors and the file_system sharing strategy use byte serialization.
+    """
+
+    def __init__(self, buffer, shared_fds):
+        super().__init__(buffer)
+        self.shared_fds = shared_fds
+
+    def reducer_override(self, obj):
+        if (isinstance(obj, torch.Tensor) and obj.device.type == 'cpu' and obj.is_shared()
+                and torch.multiprocessing.get_sharing_strategy() == 'file_descriptor'):
+            buffer = BytesIO()
+            _SharedTensorPickler(buffer, self.shared_fds).dump(obj)
+            return pickle.loads, (buffer.getvalue(),)
+        return NotImplemented
+
+    @classmethod
+    def dumps(cls, obj, shared_fds) -> bytes:
+        buffer = BytesIO()
+        cls(buffer, shared_fds).dump(obj)
+        return buffer.getvalue()
 
 
 class RPCServerDeadError(RuntimeError):
@@ -463,30 +516,49 @@ class AsyncRPCClient:
         request_id = str(uuid4())
         future = asyncio.Future()
         self.pending[request_id] = future
+        shared_fds = []
+
+        def finish_request(done):
+            _release_shared_fds(shared_fds)
+            # A cancelled caller may leave its RPC awaiting handoff or death.
+            if not done.cancelled():
+                done.exception()
+
+        def finish_send(sent):
+            if sent.cancelled():
+                self.pending.pop(request_id, None)
+                future.cancel()
+            elif (error := sent.exception()) is not None:
+                self.pending.pop(request_id, None)
+                if not future.done():
+                    future.set_exception(error)
+
+        future.add_done_callback(finish_request)
 
         logger.debug(f'call method: {method}, request_id: {request_id}')
-        data = pickle.dumps(
-            dict(
-                request_id=request_id,
-                method=method,
-                args=args,
-                kwargs=kwargs,
-                streaming=streaming,
-                streaming_startup_notify_kwarg=_streaming_startup_notify_kwarg,
-            ))
-        # The socket payload has been built; do not also keep original tensor refs in kwargs.
-        kwargs.pop('multimodal', None)
-
         try:
-            await self.async_socket.send(data)
+            data = _RequestPickler.dumps(
+                dict(
+                    request_id=request_id,
+                    method=method,
+                    args=args,
+                    kwargs=kwargs,
+                    streaming=streaming,
+                    streaming_startup_notify_kwarg=_streaming_startup_notify_kwarg,
+                ), shared_fds)
+            # The socket payload has been built; do not also keep original tensor refs in kwargs.
+            kwargs.pop('multimodal', None)
+            send = self.async_socket.send(data)
+            send.add_done_callback(finish_send)
+            # Cancellation must not invalidate handles queued for the server.
+            await asyncio.shield(send)
+            del data
             self._check_server_alive()
-            return await future
-        except asyncio.CancelledError:
-            self.pending.pop(request_id, None)
-            future.cancel()
-            raise
+            return await asyncio.shield(future)
         except Exception:
             self.pending.pop(request_id, None)
+            future.cancel()
+            _release_shared_fds(shared_fds)
             raise
 
     async def async_call(self, method, *args, **kwargs):
@@ -575,6 +647,7 @@ class AsyncRPCClient:
             logger.exception('AsyncRPCClient listen error')
         finally:
             self.running = False
+            self._mark_server_dead('ZMQ RPC connection closed.', log=False)
             self.close_sockets()
 
     def stop(self):

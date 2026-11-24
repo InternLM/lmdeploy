@@ -9,7 +9,7 @@ from .xml_tool_parser import XmlToolParser
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
-    from lmdeploy.serve.openai.protocol import Tool
+    from lmdeploy.serve.openai.protocol import Tool, ToolChoice
 
 
 @ToolParserManager.register_module(['glm47'])
@@ -42,6 +42,16 @@ class Glm47ToolParser(XmlToolParser):
         from .glm47_tool_constraints import build_auto_tool_format
 
         return build_auto_tool_format(tools, tokenizer)
+
+    @classmethod
+    def build_named_response_format(cls, tools: list[Tool], tool_choice: ToolChoice,
+                                    *, reasoning: bool,
+                                    tokenizer: PreTrainedTokenizerBase | None = None) -> dict[str, Any]:
+        if tokenizer is None:
+            return super().build_named_response_format(tools, tool_choice, reasoning=reasoning)
+        from .glm47_named_constraints import build_named_tool_format
+
+        return build_named_tool_format(tools, tool_choice, reasoning=reasoning, tokenizer=tokenizer)
 
     @classmethod
     def get_tool_open_tag(cls) -> str | None:

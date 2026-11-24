@@ -7,6 +7,7 @@ remain in the endpoint suites.
 """
 import asyncio
 import base64
+import threading
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -15,7 +16,7 @@ import pytest
 import requests
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from lmdeploy.model import BaseChatTemplate
 from lmdeploy.serve.anthropic.adapter import to_openai_messages
@@ -28,6 +29,66 @@ from lmdeploy.serve.openai.responses.request import messages_from_input
 from lmdeploy.serve.processors.multimodal import MultimodalProcessor
 
 PATHS = {'chat': '/v1/chat/completions', 'messages': '/v1/messages', 'responses': '/v1/responses'}
+
+
+@pytest.mark.parametrize('item_type', ['image', 'image_url', 'image_data'])
+def test_direct_pil_exif_orientation(item_type):
+    image = Image.new('RGBA', (56, 112), (120, 30, 200, 128))
+    image.getexif()[274] = 6
+    expected = ImageOps.exif_transpose(image)
+    messages = [dict(role='user', content=[dict(type=item_type, **{item_type: dict(data=image)})])]
+    result = asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))
+    actual = result[0]['content'][0]['data']
+    assert actual.size == expected.size
+    assert actual.mode == 'RGBA'  # Direct PIL inputs retain their existing mode policy.
+    assert actual.tobytes() == expected.tobytes()
+    assert actual.getexif().get(274, 1) == 1
+    assert image.size == (56, 112) and image.getexif()[274] == 6
+    if item_type == 'image_data':
+        # Already prepared, non-PIL data is not reinterpreted as an encoded image.
+        marker = object()
+        messages[0]['content'][0][item_type]['data'] = marker
+        assert asyncio.run(MultimodalProcessor.async_parse_multimodal_item(messages))[0]['content'][0]['data'] is marker
+
+
+@pytest.mark.parametrize('cross_request', [False, True])
+def test_shared_lazy_pil_decodes_once_before_orientation(monkeypatch, cross_request):
+    import numpy as np
+
+    from lmdeploy.serve.processors import multimodal
+
+    x, y = np.arange(1536)[None, :], np.arange(1024)[:, None]
+    pixels = np.stack(np.broadcast_arrays((x * 13 + y * 3) % 256, (x * 3 + y * 17) % 256,
+                                          ((x // 16) ^ (y // 16)) % 256), axis=-1).astype(np.uint8)
+    buffer = BytesIO()
+    exif = Image.Exif()
+    exif[274] = 6
+    Image.fromarray(pixels).save(buffer, format='JPEG', quality=95, exif=exif)
+    data = buffer.getvalue()
+    expected = ImageOps.exif_transpose(Image.open(BytesIO(data)))
+    shared = Image.open(BytesIO(data))
+    assert shared.fp is not None
+    gate = threading.Barrier(2)
+    normalize = multimodal.apply_exif_orientation
+
+    def concurrent_entry(image):
+        gate.wait(timeout=5)
+        return normalize(image)
+
+    monkeypatch.setattr(multimodal, 'apply_exif_orientation', concurrent_entry)
+    messages = [dict(role='user', content=[dict(type='image', image=dict(data=shared))])]
+
+    async def parse():
+        if cross_request:
+            batches = await asyncio.gather(*[
+                MultimodalProcessor.async_parse_multimodal_item(messages) for _ in range(2)])
+            return batches[0] + batches[1]
+        return await MultimodalProcessor.async_parse_multimodal_item(messages * 2)
+
+    for message in asyncio.run(parse()):
+        actual = message['content'][0]['data']
+        assert actual.size == expected.size and actual.tobytes() == expected.tobytes()
+    assert shared.size == (1536, 1024) and shared.getexif()[274] == 6
 
 
 class _Parser:

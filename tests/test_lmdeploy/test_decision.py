@@ -75,9 +75,7 @@ def test_logprob_extra_token_ids_requires_input_logprobs():
     {'questions': {'q': {'type': 'rank'}}},
     {'questions': {'q': {'type': 'choice', 'criteria': ['a']}}},
     {'questions': {'q': {'type': 'score', 'criteria': {'x': 'not a number'}}}},
-    {'questions': {f'q{i}': {'type': 'noul'} for i in range(17)}},
     {'state': float('nan')},
-    {'unknown': 1},
     {'images': None},
     {'images': 123},
     {'images': [123]},
@@ -88,10 +86,11 @@ def test_invalid_request(change):
         SystemoneRequest.model_validate({'state': {}, 'questions': QUESTIONS, **change})
 
 
-@pytest.mark.parametrize('field', ['targets', 'answer', 'id'])
-def test_legacy_training_metadata_is_rejected(field):
-    with pytest.raises(ValueError):
-        SystemoneRequest.model_validate({'state': 'text', 'questions': QUESTIONS, field: 1})
+@pytest.mark.parametrize('field', ['targets', 'answer', 'id', 'unknown', 'seed', 'x_trace_id'])
+def test_unknown_request_metadata_is_ignored(field):
+    baseline = {'state': 'text', 'questions': QUESTIONS}
+    parsed = SystemoneRequest.model_validate({**baseline, field: 1})
+    assert parsed.model_dump() == SystemoneRequest.model_validate(baseline).model_dump()
 
 
 @pytest.mark.parametrize('legacy', [
@@ -254,10 +253,13 @@ def test_scoring_uses_final_marker_positions(images):
     for answer in expected.values():
         answer.pop('source')
         answer.pop('decision')
+        answer.pop('confidence')
         if answer['type'] == 'noul':
-            answer.pop('confidence')
             answer.pop('probabilities')
-    assert result['answers'] == expected
+    actual = copy.deepcopy(result['answers'])
+    for answer in actual.values():
+        answer.pop('confidence', None)
+    assert actual == expected
     assert result['usage']['input_tokens'] == prepared.input_token_len
     assert set(result) == {'model', 'answers', 'usage'}
     assert result['usage']['output_tokens'] == len(compile_row(

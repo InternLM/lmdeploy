@@ -1,13 +1,54 @@
 import asyncio
 from contextlib import suppress
 
+import pytest
+import ray
+
 from lmdeploy.messages import EngineOutput, ResponseType
+from lmdeploy.pytorch.engine.engine_instance import SharedStore
 from lmdeploy.pytorch.engine.mp_engine.base_worker import (
     EngineOutputGather,
     StreamMailbox,
     StreamPollResult,
 )
 from lmdeploy.pytorch.engine.mp_engine.ray_engine import RayEngineWorker, RayMPEngine
+
+
+def test_shared_store_returns_a_consumable_ref_for_the_accepted_prefix(monkeypatch):
+    objects = {}
+
+    def put(data):
+        ref = ray.ObjectRef.from_random()
+        objects[ref] = data
+        return ref
+
+    monkeypatch.setattr(ray, 'put', put)
+    monkeypatch.setattr(ray, 'get', objects.__getitem__)
+    store = SharedStore()
+    key = store.put([10, 20, 30])
+    assert store.truncate(key, 3) == key
+    prefix = store.truncate(key, 2)
+    assert objects[ray.ObjectRef(bytes.fromhex(prefix))] == [10, 20]
+    assert store.get(prefix) == [10, 20]
+    with pytest.raises(KeyError):
+        store.get(key)
+
+
+def test_trimming_a_legacy_store_does_not_lease_an_engine_instance(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from lmdeploy.pytorch.engine import engine_instance
+    from lmdeploy.pytorch.engine.mp_engine.base_worker import EngineWorkerBase
+
+    get = AsyncMock(return_value=[10, 20, 30])
+    put = AsyncMock(return_value='prefix')
+    store = SimpleNamespace(get=SimpleNamespace(remote=get), put=SimpleNamespace(remote=put))
+    monkeypatch.setattr(engine_instance, '_SHARED_STORE', store)
+    worker = EngineWorkerBase.__new__(EngineWorkerBase)
+    assert asyncio.run(worker.trim_routed_experts('full', 2)) == 'prefix'
+    get.assert_awaited_once_with('full')
+    put.assert_awaited_once_with([10, 20])
 
 
 def _make_worker(stream=None):

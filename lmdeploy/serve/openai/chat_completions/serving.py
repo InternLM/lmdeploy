@@ -17,6 +17,7 @@ from lmdeploy.serve.core.chat_runner import (
     ChatRunnerOptions,
 )
 from lmdeploy.serve.core.exceptions import RequestError
+from lmdeploy.serve.observability.request_trace import trace_frame
 from lmdeploy.serve.openai.endpoints.common import validate_request
 from lmdeploy.serve.openai.errors import (
     create_error_response,
@@ -74,8 +75,8 @@ def register(router: APIRouter, server_context) -> None:
           Deprecated: Use max_completion_tokens instead.
         - **repetition_penalty** (float): The parameter for repetition penalty.
           1.0 means no penalty
-        - **stop** (str | list[str] | None): To stop generating further
-          tokens. Only accept stop words that's encoded to one token idex.
+        - **stop** (str | list[str] | None): Single-token strings stop at the
+          engine. On the GLM token-ID parser path, multi-token strings stop in assistant content.
         - **response_format** (dict | None): To generate response according to given
           schema. Examples:
 
@@ -217,9 +218,11 @@ def register(router: APIRouter, server_context) -> None:
                 server_context,
                 request,
                 ChatRunnerOptions(
+                    match_glm_content_stop=True,
                     input_ids=resolved_input_ids,
                     do_preprocess=resolved_input_ids is None,
                     adapter_name=adapter_name,
+                    preprocess_kwargs=dict(trace_choice_index=getattr(raw_request, '_trace_choice_index', None)),
                     gen_config_kwargs=dict(
                         logits_processors=logits_processors,
                         random_seed=request.seed,
@@ -334,13 +337,14 @@ def register(router: APIRouter, server_context) -> None:
                         response_json['prompt_token_ids'] = chat_runner.prompt_token_ids
                         prompt_token_ids_sent = True
                     if chunk.cache_block_ids is not None and chunk.is_last_delta:
+                        response_json['cache_session_id'] = chat_runner.session.session_id
                         response_json['cache_block_ids'] = chunk.cache_block_ids
                         response_json['remote_token_ids'] = chunk.token_ids
                         response_json['pd_handoff'] = chunk.pd_handoff
-                    yield f'data: {json.dumps(response_json)}\n\n'
+                    yield trace_frame(f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n', response_json)
                 if final_usage is not None:
-                    yield f'data: {create_stream_usage_response_json(final_usage)}\n\n'
-                yield 'data: [DONE]\n\n'
+                    yield trace_frame(f'data: {create_stream_usage_response_json(final_usage)}\n\n')
+                yield trace_frame('data: [DONE]\n\n', terminal=True)
             finally:
                 await chat_runner.close()
 
@@ -349,8 +353,9 @@ def register(router: APIRouter, server_context) -> None:
                 async for chunk in _completion_stream_generator():
                     yield chunk
             except RequestError as error:
-                yield f'data: {json.dumps({"error": request_error_payload(error)})}\n\n'
-                yield 'data: [DONE]\n\n'
+                error_payload = {'error': request_error_payload(error)}
+                yield trace_frame(f'data: {json.dumps(error_payload, ensure_ascii=False)}\n\n', error_payload)
+                yield trace_frame('data: [DONE]\n\n', terminal=True)
 
         # Streaming response
         if request.stream:
@@ -423,6 +428,8 @@ def register(router: APIRouter, server_context) -> None:
             response['prompt_text'] = chat_runner.prompt_text
 
         if with_cache:
+            # Keep the OpenAI response ID independent of the engine's cache owner.
+            response['cache_session_id'] = chat_runner.session.session_id
             response['cache_block_ids'] = cache_block_ids
             response['remote_token_ids'] = remote_token_ids
             response['pd_handoff'] = res.pd_handoff

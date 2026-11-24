@@ -1556,8 +1556,9 @@ class InputsMakerAsync:
             self.long_context_chunker.update_step(inputs)
             return
 
+        # Prefill workers must advance chunk history above, but must not add
+        # completed prefills to the decode-running list.
         if self.config.role == EngineRole.Prefill:
-            # P still advances chunk history, but never enters the decode list.
             return
 
         if is_decoding:

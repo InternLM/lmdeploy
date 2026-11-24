@@ -60,6 +60,11 @@ class EngineInstanceBase:
         """Stop current streaming inference."""
         raise NotImplementedError('This method is not implemented.')
 
+    async def trim_routed_experts(self, key: str, num_rows: int) -> str:
+        """Return the Ray key for the accepted prefix of a generated expert
+        trace."""
+        raise NotImplementedError('This method is not implemented.')
+
     async def async_stream_infer(self, *args, **kwargs):
         """Send stream inference request."""
         raise NotImplementedError('This method is not implemented.')
