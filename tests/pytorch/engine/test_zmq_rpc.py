@@ -27,9 +27,9 @@ def test_engine_worker_health_status_is_synchronous():
     assert worker.get_health_status() is status
 
 
-def _sleep_then_exit():
-    import time
-    time.sleep(0.2)
+def _wait_then_exit(ready, exit_requested):
+    ready.set()
+    exit_requested.wait(timeout=60)
 
 
 class TestZMQRPC:
@@ -304,7 +304,9 @@ async def _async_test_zmq_process_sentinel_marks_backend_dead():
     from lmdeploy.pytorch.engine.mp_engine.zmq_rpc import AsyncRPCClient
 
     ctx = mp.get_context('spawn')
-    proc = ctx.Process(target=_sleep_then_exit)
+    ready = ctx.Event()
+    exit_requested = ctx.Event()
+    proc = ctx.Process(target=_wait_then_exit, args=(ready, exit_requested))
     proc.start()
     assert proc.is_alive()
 
@@ -314,7 +316,10 @@ async def _async_test_zmq_process_sentinel_marks_backend_dead():
                             server_sentinel=proc.sentinel,
                             server_dead_callback=marked.set)
     try:
+        # Spawn imports this test module; do not count startup against exit detection.
+        assert await asyncio.to_thread(ready.wait, 60), 'Child process did not become ready'
         client._register_server_sentinel()
+        exit_requested.set()
         await asyncio.wait_for(marked.wait(), timeout=5)
     finally:
         client.stop()
