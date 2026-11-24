@@ -1825,6 +1825,7 @@ def test_non_spec_follower_postprocess_has_no_rejection_counts():
     agent.dist_ctx = None
     agent.agent_strategy = _AgentStrategy()
     agent.spec_agent = _SpecAgent()
+    agent.model_config = SimpleNamespace(enable_replayssm=False)
     agent._v4_speculative_state_transaction = None
     agent._broadcast_next_token = lambda *args, **kwargs: nullcontext()
     inputs = SimpleNamespace(is_dummy=False)
