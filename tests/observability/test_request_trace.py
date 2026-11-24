@@ -584,7 +584,7 @@ class AdditionalIntegrationTests(RecordTestCase):
         path = SOURCE / 'lmdeploy/pytorch/paging/kv_load_coordinator.py'
         tree = ast.parse(path.read_text())
         coordinator = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'KVLoadCoordinator')
-        methods = ('start_load', 'apply_load_results')
+        methods = ('_allocate_and_start_load', 'start_load', 'apply_load_results')
         coordinator.body = [n for n in coordinator.body if getattr(n, 'name', '') in methods]
         helper_names = ('_LoadPhase', '_DeferredLoadCleanup', '_LoadRecord')
         helpers = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name in helper_names]
@@ -597,22 +597,27 @@ class AdditionalIntegrationTests(RecordTestCase):
         for success, cleanup in ((True, 'NONE'), (False, 'NONE'), (True, 'STOP'),
                                  (False, 'STOP'), (True, 'END'), (False, 'END')):
             calls = []
-            seq = NS(seq_id=1, state=NS(begin_remote_load=lambda: None),
+            seq = NS(seq_id=1, block_size=8, num_blocks=0, logical_state=-1, status='waiting',
+                     state=NS(begin_remote_load=lambda: None),
                      prefix_cache=NS(match_start_step=-1), num_history_ids=0,
                      record_event=lambda event_type, **kw: calls.append(event_type))
             c = names['KVLoadCoordinator']()
             c._loads = {}
+            c._prefill_targets = {}
+            c.block_manager = NS(allocate=lambda seq: None, get_block_table=lambda seq: [0])
+            c.connector = NS(update_state_after_alloc=lambda *args: calls.append('bind'))
             c.state_manager = None
             c.record_cache_query = lambda *a: None
             c.track_prefill = lambda *a, **kw: None
             c._publish = lambda record: None
             c._rollback = lambda record: None
             c._finish_cancelled_or_failed = lambda record: None
-            c.start_load(seq, load_start_step=0, remote_step=8, target_blocks=1)
+            plan = NS(load_start_step=0, remote_step=8, target_blocks=1, original_kv_token_limit=None)
+            c._allocate_and_start_load(seq, plan)
             c._loads[1].deferred_cleanup = names['_DeferredLoadCleanup'][cleanup]
             c.apply_load_results((NS(request_id=1, success=success),))
             terminal = 'cancel' if cleanup != 'NONE' else 'end' if success else 'fail'
-            self.assertEqual(calls, ['start', terminal])
+            self.assertEqual(calls, ['bind', 'start', terminal])
 
     def test_anthropic_and_responses_visible_stages(self):
         for parts in (
