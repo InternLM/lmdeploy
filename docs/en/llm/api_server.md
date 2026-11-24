@@ -342,6 +342,59 @@ if __name__ == '__main__':
     fire.Fire(main)
 ```
 
+## Returning incremental routed experts (PyTorch)
+
+For MoE router replay, enable `PytorchEngineConfig.enable_return_routed_experts`
+(or `--enable-return-routed-experts` when serving) and set
+`return_routed_experts=True` on each request. The optional
+`routed_experts_start_len` selects the first routing row to return:
+
+- Available in Python `GenerationConfig`, `/generate`, `/v1/chat/completions`,
+  and [`/v1/messages`](./api_server_anthropic.md).
+  The chat endpoint accepts the field at the top level or inside `extra_body`.
+  This is an LMDeploy extension, not a standard OpenAI or Anthropic field.
+  It is not supported by the TurboMind backend.
+- Defaults to `0`, preserving full-history responses. It must be a non-negative
+  integer (not a boolean, float, or string), no greater than the processed input
+  length after tokenization/template application and multimodal expansion.
+- For processed prompt length `P` and generated length `G`, normal routing rows
+  cover `[routed_experts_start_len, P + G - 1)`. The last generated token has not
+  been forwarded through the model yet. A slice with no remaining rows is empty;
+  missing routing data remains absent. The option does not enable collection.
+- Slicing occurs on final finish/cancel output, before the Ray shared-store put
+  when enabled; local array output is sliced as well. The response representation
+  is unchanged. Prefix-cache matching, cached routing history, GPU collection,
+  and target/MTP accepted-route selection are unchanged. Prefix reuse can extend
+  beyond this offset; the offset is not a cache boundary.
+
+For example, the following OpenAI client options request only routing rows
+starting at position 4 (the processed prompt must contain at least 4 tokens):
+
+```python
+extra_body = {
+    'return_routed_experts': True,
+    'routed_experts_start_len': 4,
+}
+# Pass extra_body=extra_body to client.chat.completions.create(...).
+```
+
+For `/generate`, put both fields directly in the JSON request body. In Python,
+use `GenerationConfig(return_routed_experts=True, routed_experts_start_len=4)`.
+
+For partial continuation, suppose input `A B C` generates `D E` before pausing.
+The client retains routing rows for `A B C D` (4 rows). Resume with input
+`A B C D E` and offset **4**, not 5: if the next output is `F G`, the returned
+rows are `E F`. Appending them to the retained rows restores the full 6-row
+history. In general, use `len(resumed_prompt_ids) - 1` only when the retained
+routing history covers exactly that unchanged token prefix. The client must
+verify lengths and concatenate the slices; this PR does not implement client
+continuation logic. Edited history or inserted tool tokens need separate
+continuity checks. Old servers may ignore the new field, so clients must check
+returned lengths rather than silently appending a full-history response.
+
+This reduces repeated returned routing rows, not GPU-to-CPU collection,
+internal cache storage, or the final full history required by training.
+
 ## FAQ
 
 1. When user got `"finish_reason":"length"`, it means the session is too long to be continued. The session length can be
@@ -349,6 +402,10 @@ if __name__ == '__main__':
 
 2. When OOM appeared at the server side, please reduce the `cache_max_entry_count` of `backend_config` when launching the service.
 
-3. Regarding the stop words, we only support characters that encode into a single index. Furthermore, there may be multiple indexes that decode into results containing the stop word. In such cases, if the number of these indexes is too large, we will only use the index encoded by the tokenizer. If you want use a stop symbol that encodes into multiple indexes, you may consider performing string matching on the streaming client side. Once a successful match is found, you can then break out of the streaming loop.
+3. How does the API server handle the strings in a request's `stop` field?
+
+   - **Single-token stop strings.** If the model's tokenizer encodes the string on its own as one token, the engine stops when it generates any matching token ID. Several vocabulary entries can contain the same string. If there are more than five candidates, LMDeploy keeps up to five whose decoded text exactly equals the stop string. If no candidates remain, it uses the ID produced by encoding the string itself. Generating the same text over several tokens does not trigger this ID check.
+   - **Multi-token stop strings in GLM chat.** On `/v1/chat/completions`, when the GLM token-ID parser is active and `ignore_eos` is false (the default), the server matches these strings in the assistant's `content`, including across output chunks. For example, with `stop=["STOP_HERE"]`, the model can mention `STOP_HERE` in its reasoning or in a tool call and continue. If the assistant's content is `answerSTOP_HEREtail`, the default response contains only `answer`. This works for both streaming and non-streaming requests. Single-token strings in the same request still use the engine's ID check.
+   - **Client-side matching.** On `/v1/completions`, or on `/v1/chat/completions` with a parser configuration that does not support GLM content matching, the server skips multi-token stop strings. To stop at one of these strings, use a streaming client, check the accumulated text after each chunk, and exit the loop when it matches. A stop string can start in one chunk and end in the next.
 
 4. To customize a chat template, please refer to [chat_template.md](../advance/chat_template.md).

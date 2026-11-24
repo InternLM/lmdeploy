@@ -123,6 +123,10 @@ class MessagesRequest(BaseModel):
     service_tier: Literal['auto', 'standard_only'] | None = None
     # LMDeploy-compatible generation extensions.
     repetition_penalty: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    media_io_kwargs: dict[str, Any] | None = Field(
+        default=None, description='Media loading options, keyed by modality.')
+    mm_processor_kwargs: dict[str, Any] | None = Field(
+        default=None, description='HF processor options, keyed by modality.')
     # Extended input fields from /generate endpoint.
     # input_ids and image_data are fallback inputs — they are only used when
     # messages is empty. When messages is non-empty, it takes priority.
@@ -141,6 +145,10 @@ class MessagesRequest(BaseModel):
     return_routed_experts: bool | None = Field(
         default=False,
         description=('Whether to return MoE routed expert indices in the response.'),
+    )
+    routed_experts_start_len: int = Field(
+        default=0, ge=0, strict=True,
+        description='Absolute start position of returned routing rows; does not limit prefix caching.',
     )
     return_token_ids: bool | None = Field(
         default=False,

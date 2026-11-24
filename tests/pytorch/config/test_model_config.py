@@ -127,6 +127,19 @@ def test_get_num_qkv_head_by_tp_requires_divisible_heads():
         model_config.get_num_qkv_head_by_tp()
 
 
+def test_qwen3_next_cache_counts_follow_layer_types():
+    from transformers import Qwen3NextConfig
+
+    layer_types = ['full_attention', 'linear_attention', 'linear_attention', 'full_attention', 'linear_attention']
+    hf_config = Qwen3NextConfig(architectures=['Qwen3NextForCausalLM'],
+                                num_hidden_layers=len(layer_types),
+                                layer_types=layer_types)
+    model_config = ModelConfig.from_hf_config(hf_config)
+
+    assert model_config.num_layers == 2
+    assert [shape[0] for shape, _ in model_config.states_shapes] == [3, 3]
+
+
 def test_kimi_k2_standalone_eagle_config(tmp_path):
     hf_config = KimiK2Config(
         architectures=['Eagle3DeepseekV2ForCausalLM'],
@@ -302,3 +315,33 @@ def test_glm5_next_tail_checkpoint_policy_requires_closed_pool_boundary(monkeypa
     hf_config.text_config.index_kpool = 3
     with pytest.raises(ValueError, match='index_kpool=4'):
         Glm5NextModelConfigBuilder.build(hf_config, num_spec_tokens=num_spec_tokens)
+
+
+@pytest.mark.parametrize('full_type', ['deepseek_sparse_attention', 'indexed_attention', 'full_attention'])
+def test_glm5_next_full_attention_aliases_preserve_geometry(monkeypatch, full_type):
+    from transformers import Glm5NextConfig
+
+    from lmdeploy.pytorch.configurations.glm5_next import Glm5NextModelConfigBuilder, is_glm5_kda_layer
+
+    monkeypatch.setattr('lmdeploy.pytorch.configurations.deepseek_v2.flash_mla_available', lambda: True)
+    config = Glm5NextConfig(text_config={'num_hidden_layers': 4, 'index_kpool': 4})
+    # Assign after HF normalization to exercise every accepted spelling directly.
+    config.text_config.layer_types = ['linear_attention'] * 3 + [full_type]
+    model = Glm5NextModelConfigBuilder.build(config)
+    assert model.num_layers == 1
+    assert config.text_config.linear_layer_ids == [0, 1, 2]
+    assert config.text_config.full_attention_layer_ids == [3]
+    assert [is_glm5_kda_layer(config.text_config, i) for i in range(4)] == [True, True, True, False]
+    assert model.state_cache_specs[0].shape == (3, 3 * 64 * 128, 3)
+    assert model.state_cache_specs[1].shape == (3, 64, 128, 128)
+
+
+def test_glm5_next_rejects_unknown_attention_type():
+    from transformers import Glm5NextConfig
+
+    from lmdeploy.pytorch.configurations.glm5_next import _resolve_glm5_linear_config
+
+    config = Glm5NextConfig(text_config={'num_hidden_layers': 4})
+    config.text_config.layer_types[-1] = 'unknown_attention'
+    with pytest.raises(ValueError, match='unknown_attention'):
+        _resolve_glm5_linear_config(config.text_config)

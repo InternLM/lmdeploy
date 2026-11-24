@@ -5,6 +5,7 @@ import torch
 from torch import nn
 
 from lmdeploy.pytorch.backends import get_backend
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayState
 from lmdeploy.pytorch.backends.kda import KdaBuildSpec
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
@@ -28,8 +29,8 @@ class Kda(nn.Module):
         conv_bias: torch.Tensor | None,
         a_log: torch.Tensor,
         dt_bias: torch.Tensor,
-        conv_state: torch.Tensor,
-        recurrent_state: torch.Tensor,
+        conv_state: torch.Tensor | None,
+        recurrent_state: torch.Tensor | GatedDeltaReplayState,
         metadata: Any,
         num_heads: int,
         head_dim: int,

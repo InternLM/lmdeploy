@@ -138,6 +138,7 @@ class InputsMakerConfig:
     enable_chunked_prefill: bool = False
     use_mrope: bool = False
     prefill_interval: int = 16
+    enable_replayssm: bool = False
 
     @staticmethod
     def from_engine(engine: 'Engine'):
@@ -165,6 +166,7 @@ class InputsMakerConfig:
             dp=engine.dist_config.dp,
             enable_chunked_prefill=engine.misc_config.enable_chunked_prefill,
             use_mrope=model_config.use_mrope,
+            enable_replayssm=model_config.enable_replayssm,
             **kwargs,
         )
 
@@ -616,6 +618,8 @@ class _ForwardInputsTask:
                 chunk_size, multimodals = maker.long_context_chunker.next_chunk_size()
                 (result.inputs, result.extra_inputs,
                  result.cache_inputs) = self._build_chunk_inputs(running, chunk_size, multimodals)
+                # Drop the previous turn's decode row before this chunk reactivates it.
+                result.delta, maker.running_seqs, _ = maker.create_model_inputs_delta_valid_only()
                 result.inputs.is_first_chunk = True
                 result.inputs.is_chunk_multimodal = maker.long_context_chunker.has_multimodal
                 maker._short_prefill_turns_since_long_chunk = 0
@@ -1548,14 +1552,15 @@ class InputsMakerAsync:
 
     def update_running_seqs(self, running: 'SeqList', inputs: 'ModelInputs|None'):
         """Update running seqs."""
-        if self.config.role == EngineRole.Prefill:
-            # p node will not update running seqs
-            return
-
         is_decoding = inputs is None
         if self.long_context_chunker.enabled() and not is_decoding and inputs.is_chunk:
             # long context chunk does not need to update running seqs
             self.long_context_chunker.update_step(inputs)
+            return
+
+        # Prefill workers must advance chunk history above, but must not add
+        # completed prefills to the decode-running list.
+        if self.config.role == EngineRole.Prefill:
             return
 
         if is_decoding:

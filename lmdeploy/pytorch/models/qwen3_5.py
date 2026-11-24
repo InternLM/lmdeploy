@@ -1,5 +1,4 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-
 from collections.abc import Iterable
 from functools import lru_cache
 from typing import Any
@@ -9,6 +8,9 @@ import torch
 from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayState, build_gated_delta_replay_state
+from lmdeploy.pytorch.consts import GDN_REPLAY_CURSOR_CACHE_NAME
+from lmdeploy.pytorch.devices import is_ascend
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.engine.input_process import BaseModelInputProcessor
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
@@ -25,7 +27,6 @@ from lmdeploy.pytorch.nn.gated_delta import (
     GatedDelta,
     GatedDeltaMeta,
     GatedDeltaMetaBuilder,
-    build_rmsnorm_gated,
 )
 from lmdeploy.pytorch.nn.linear import (
     build_colwise_linear,
@@ -34,6 +35,7 @@ from lmdeploy.pytorch.nn.linear import (
     build_qkv_proj,
     build_rowwise_linear,
 )
+from lmdeploy.pytorch.nn.norm import RMSNormGated
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 from lmdeploy.vl.constants import Modality
 
@@ -455,11 +457,11 @@ class Qwen3_5GatedDeltaNet(nn.Module):
         self.make_params(self.num_v_heads, device=device)
         self.A_log_exp = None
 
-        self.norm = build_rmsnorm_gated(self.head_v_dim,
-                                        eps=self.layer_norm_epsilon,
-                                        activation=self.activation,
-                                        dtype=dtype,
-                                        device=device)
+        self.norm = RMSNormGated(self.head_v_dim,
+                                 eps=self.layer_norm_epsilon,
+                                 activation=self.activation,
+                                 dtype=dtype,
+                                 device=device)
         self.out_proj = build_o_proj(self.value_dim,
                                      self.hidden_size,
                                      bias=False,
@@ -537,13 +539,17 @@ class Qwen3_5GatedDeltaNet(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        past_key_value: tuple[torch.Tensor, torch.Tensor],
+        past_key_value: tuple[torch.Tensor, torch.Tensor] | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
     ) -> torch.Tensor:
         """forward."""
 
         # load states
-        conv_state, recurrent_state = past_key_value[:2]
+        if isinstance(past_key_value, GatedDeltaReplayState):
+            conv_state = past_key_value if past_key_value.shared_conv_state is not None else past_key_value.conv_state
+            recurrent_state = past_key_value
+        else:
+            conv_state, recurrent_state = past_key_value[:2]
 
         # inputs proj
         projected_states_qkv = self.in_proj_qkv(hidden_states)
@@ -674,7 +680,7 @@ class Qwen3_5Attention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         rotary_pos_emb: tuple[torch.FloatTensor, torch.FloatTensor],
-        past_key_value: tuple[torch.Tensor, torch.Tensor],
+        past_key_value: tuple[torch.Tensor, torch.Tensor] | GatedDeltaReplayState,
         attn_metadata: Any,
     ):
         """Rewrite of LlamaAttention.forward."""
@@ -1129,13 +1135,29 @@ class Qwen3_5ForConditionalGeneration(nn.Module, DeployModelMixinV1, PiecewiseCu
         attn_metadata = context.attn_metadata
 
         # make past_key_values
-        state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
-        state_caches = list(zip(state_caches[0], state_caches[1]))
+        replay_enabled = (context.named_state_caches is not None
+                          and GDN_REPLAY_CURSOR_CACHE_NAME in context.named_state_caches)
+        if replay_enabled:
+            buffer_len = self.ctx_mgr.build_ctx.replayssm_buffer_len
+            tmax = self.ctx_mgr.build_ctx.num_spec_tokens + 1
+        elif is_ascend():
+            n = len(context.state_caches) // 2
+            state_caches = list(zip(context.state_caches[:n], context.state_caches[n:]))
+        else:
+            state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
+            state_caches = list(zip(state_caches[0], state_caches[1]))
         past_key_values = list(past_key_values)
         new_past_key_values = []
         for layer_type in self.config.text_config.layer_types:
             if layer_type == 'linear_attention':
-                new_past_key_values.append(state_caches.pop(0))
+                if replay_enabled:
+                    new_past_key_values.append(
+                        build_gated_delta_replay_state(context.named_state_caches,
+                                                       len(new_past_key_values),
+                                                       buffer_len, tmax,
+                                                       getattr(context, 'replayssm_force_flush', None)))
+                else:
+                    new_past_key_values.append(state_caches.pop(0))
             elif layer_type == 'full_attention':
                 new_past_key_values.append(past_key_values.pop(0))
 

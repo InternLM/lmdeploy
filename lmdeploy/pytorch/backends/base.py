@@ -117,3 +117,8 @@ class OpsBackend(ABC):
     def support_ray():
         """Support ray."""
         return False
+
+    @staticmethod
+    def build_moe_forward_dptp(gemm_func):
+        from lmdeploy.pytorch.nn.moe.base import MoEForwardDPTP
+        return MoEForwardDPTP(gemm_func)

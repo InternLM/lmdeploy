@@ -3,7 +3,12 @@ import torch
 
 from lmdeploy.pytorch.kernels.cuda import rms_norm
 
+from ..default.norm import DefaultRMSNormGatedImpl
 from ..norm import RMSNormImpl
+
+
+class CudaRMSNormGatedImpl(DefaultRMSNormGatedImpl):
+    """Use FLA's original CUDA calculation with externally owned weights."""
 
 
 class TritonRMSNormImpl(RMSNormImpl):

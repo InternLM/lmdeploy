@@ -19,6 +19,7 @@ class MakeDummyMeta:
     use_ssm: bool = False
     use_mrope: bool = False
     compact_bank_width: int = 0
+    compact_auxiliary_runtime: bool = False
 
 
 @record_function('make_dummy_input')
@@ -49,7 +50,7 @@ def make_dummy_inputs(batch_size: int,
         state_offsets = torch.full((batch_size, ), -1, dtype=torch.long, device=device)
 
     compact = None
-    if meta.compact_bank_width:
+    if meta.compact_bank_width or meta.compact_auxiliary_runtime:
         if not meta.use_ssm:
             raise ValueError('Compact dummy metadata requires a stateful model.')
         width = max_q_seqlen if is_decoding else 1

@@ -66,7 +66,8 @@ class _FakeEngine:
     async def preprocess(self, messages, session, **kwargs):
         self.preprocess_messages = messages
         self.preprocess_kwargs = kwargs
-        return SimpleNamespace(messages=messages, session=session, inputs={'input_ids': [1, 2, 3]})
+        return SimpleNamespace(messages=messages, session=session, inputs={'input_ids': [1, 2, 3]},
+                               gen_config=kwargs['gen_config'])
 
     def generate(self, request, **kwargs):
         async def _generator():
@@ -166,12 +167,45 @@ def test_runner_prepare_failure_releases_owned_session(error):
     assert context.session_manager.removed == [context.session_manager.session]
 
 
-def test_runner_normalizes_string_stop_word_for_engine():
-    context = _FakeServerContext(_Parser)
+@pytest.mark.parametrize('chat_endpoint, glm_parser, stop, engine_words, content_words', [
+    (True, True, 'END', ['END'], None),
+    (True, True, 'STOP_HERE', None, ['STOP_HERE']),
+    (True, True, ['END', 'STOP_HERE'], ['END'], ['STOP_HERE']),
+    (True, False, ['END', 'STOP_HERE'], ['END', 'STOP_HERE'], None),
+    (False, True, ['END', 'STOP_HERE'], ['END', 'STOP_HERE'], None),
+])
+def test_runner_routes_stop_strings(chat_endpoint, glm_parser, stop, engine_words, content_words):
+    class Parser(_Parser):
+        supports_glm_content_stop = glm_parser
 
-    asyncio.run(ChatRunner.prepare(context, _request(stop='END')))
+        def preview_stop_text(self, ids):
+            return None
 
-    assert context.async_engine.preprocess_kwargs['gen_config'].stop_words == ['END']
+    context = _FakeServerContext(Parser)
+    encodings = {'END': [8], 'STOP_HERE': [2, 3]}
+    if chat_endpoint and glm_parser:
+        context.async_engine.tokenizer = SimpleNamespace(encode=lambda word, add_bos: encodings[word])
+    runner = asyncio.run(ChatRunner.prepare(context, _request(stop=stop),
+                                            ChatRunnerOptions(match_glm_content_stop=chat_endpoint)))
+
+    assert context.async_engine.preprocess_kwargs['gen_config'].stop_words == engine_words
+    assert (runner.content_stop.words if runner.content_stop else None) == content_words
+
+
+@pytest.mark.parametrize('backend, expected', [('pytorch', 0), ('turbomind', 8)])
+def test_glm_text_stop_uses_backend_minimum(backend, expected):
+    class Parser(_Parser):
+        supports_glm_content_stop = True
+        preview_stop_text = None
+
+    context = _FakeServerContext(Parser)
+    context.async_engine.backend = backend
+    context.async_engine.tokenizer = SimpleNamespace(encode=lambda word, add_bos: [2, 3])
+    request = _request(stop='STOP_HERE', min_new_tokens=8, max_completion_tokens=5)
+    runner = asyncio.run(ChatRunner.prepare(context, request, ChatRunnerOptions(match_glm_content_stop=True)))
+
+    assert runner.gen_config.min_new_tokens == expected
+    assert context.async_engine.preprocess_kwargs['gen_config'].min_new_tokens == 8
 
 
 def test_runner_maps_return_logprob_to_engine_logprobs():

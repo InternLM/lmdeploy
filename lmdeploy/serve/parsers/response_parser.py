@@ -15,6 +15,8 @@ from .token_id_buffer import ControlSpan, LocatedText, ParseBuffer
 from .token_id_scanner import TokenIDProfile, TokenIDScanner, build_token_profile
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from transformers import PreTrainedTokenizerBase
 
     from lmdeploy.messages import GenerationConfig
@@ -510,6 +512,49 @@ class BaseResponseParser(ResponseParser):
         """
         if self._scanner is not None:
             self._scanner.skip_special_tokens = gen_config.skip_special_tokens
+
+    @property
+    def supports_glm_content_stop(self) -> bool:
+        """Only opt in for GLM chat boundaries verified by the token-ID
+        parser."""
+        from .reasoning_parser import ReasoningParser
+        from .tool_parser.glm47_tool_parser import Glm47ToolParser
+
+        # A non-streaming content stop collects stream deltas instead of calling parse_complete().
+        if not self.request.stream and type(self).parse_complete is not BaseResponseParser.parse_complete:
+            return False
+        return (self._scanner is not None and type(self).stream_chunk is BaseResponseParser.stream_chunk
+                and self.reasoning_parser_cls in (None, ReasoningParser)
+                and self.tool_parser_cls in (None, Glm47ToolParser)
+                and not self._plain_text_tags and not self._reasoning_text_tags)
+
+    async def resolve_content_separator(self, following_ids: AsyncIterator[int | None]) -> None:
+        """Release post-tool newlines at their original tokens once the next
+        channel is known."""
+        if (not self._after_tool_block or self._pending
+                or (self._mode == self.MODE_REASONING and self.enable_thinking is not False)):
+            return
+        scanner = self._scanner
+        assert scanner is not None
+        async for token_id in following_ids:
+            if token_id is None or scanner.profile.controls.get(token_id) == self._tool_open_tag:
+                return
+            text = scanner.tokenizer.decode([token_id], skip_special_tokens=scanner.skip_special_tokens,
+                                            clean_up_tokenization_spaces=False)
+            if text.strip('\n'):
+                break
+        self._after_tool_block = False
+
+    def preview_stop_text(self, ids: list[int]) -> str | None:
+        """Return unmodified text for stop lookahead in a single plain or
+        reasoning channel."""
+        if self._scanner is None or self._pending or self._mode == self.MODE_TOOL or self._after_tool_block:
+            return None
+        text = self._scanner.preview_ordinary_text(ids)
+        if (text is not None and self._mode == self.MODE_REASONING and self.enable_thinking is not False
+                and not self._literal_output):
+            return ''
+        return text
 
     def _consume_located(
         self,

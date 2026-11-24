@@ -87,6 +87,9 @@ class WeightOnlyQLinear(nn.Module):
             WeightOnlyQLinear: A WeightOnlyQLinear object.
         """
         device = linear.weight.device
+        if device.type == 'npu':
+            from lmdeploy.pytorch.backends.ascend.quantization import weight_only_qlinear_from_linear
+            return weight_only_qlinear_from_linear(cls, linear, quantizer, awq_layout, qparams)
 
         w_bit = quantizer.bits
         pack_num = 32 // w_bit

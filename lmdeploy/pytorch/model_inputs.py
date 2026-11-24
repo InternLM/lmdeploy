@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
+from math import gcd
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -391,6 +392,9 @@ class StepContext:
     # named views for operator-owned block caches and configured state caches
     block_caches: Mapping[str, torch.Tensor] | None = None
     named_state_caches: Mapping[str, torch.Tensor] | None = None
+    # Per-row standard ReplaySSM checkpoint publication request. CUDA graphs
+    # replace this runtime tensor with a fixed-address padded input buffer.
+    replayssm_force_flush: torch.BoolTensor | None = None
 
     # mrope
     mrope_position_ids: torch.Tensor | None = None
@@ -581,13 +585,19 @@ class BuildModelContext:
     num_spec_tokens: int = 0
     max_batch_size: int = 0
     spec_model_ctx: SpecModelBuildContext = field(default_factory=SpecModelBuildContext)
+    replayssm_buffer_len: int = 16
 
     @property
     def deep_ep_max_tokens_per_rank(self) -> int:
         """Infer DeepEP low-latency max dispatch tokens per rank."""
         if self.max_batch_size <= 0:
             return 128
-        return self.max_batch_size * (1 + self.num_spec_tokens)
+        num_tokens = self.max_batch_size * (1 + self.num_spec_tokens)
+        ep_size, _ = dist.get_ep_world_rank()
+        # DeepGEMM masked TMA tiles must not cross expert M partitions.
+        # Smallest per-rank alignment making capacity * ep_size a multiple of 128.
+        alignment = 128 // gcd(ep_size, 128)
+        return (num_tokens + alignment - 1) // alignment * alignment
 
 
 class StepContextManager(CtxMgrBase[StepContext]):
