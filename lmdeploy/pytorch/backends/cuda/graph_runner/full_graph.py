@@ -9,6 +9,7 @@ import torch
 from packaging import version
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.envs import enable_decode_torch_compile, fake_capture
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
@@ -188,12 +189,13 @@ class CUDASingleGraphRunner:
     def _bind_inputs(self, **kwargs) -> dict[str, Any]:
         """Fill stable buffers and bind the current step context to them."""
         context = self._ctx_mgr.current_context()
-        # DP1 can still use EP: never capture a Python dummy flag as a fixed route mask.
-        if self._moe_valid_token_count is None:
-            self._moe_valid_token_count = torch.empty((), dtype=torch.int32, device=self.meta.device)
-        valid_tokens = 0 if context.is_dummy else kwargs['input_ids'].numel()
-        self._moe_valid_token_count.fill_(valid_tokens)
-        context.moe_valid_token_count = self._moe_valid_token_count
+        # DP1 can still use DeepEP; keep dummy route masking dynamic during replay.
+        if context.dp_meta is not None or get_deepep_state().enabled():
+            if self._moe_valid_token_count is None:
+                self._moe_valid_token_count = torch.empty((), dtype=torch.int32, device=self.meta.device)
+            valid_tokens = 0 if context.is_dummy else kwargs['input_ids'].numel()
+            self._moe_valid_token_count.fill_(valid_tokens)
+            context.moe_valid_token_count = self._moe_valid_token_count
         padded_kwargs = self.model.fill_buffers_cudagraph(self.meta, **kwargs)
         self.model.update_context_cudagraph(self.meta, context)
         return padded_kwargs
