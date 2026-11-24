@@ -198,3 +198,59 @@ def test_topk_buffer_does_not_reuse_stale_indices_for_dense_prefill():
     buffer.write(None)
 
     assert buffer.read(num_tokens=1, device=rows.device) is None
+
+
+def test_topk_capacity_is_updated_before_graph_key_and_never_shrinks(monkeypatch):
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.models.deepseek_mtp import DeepseekMTPModel
+    from lmdeploy.pytorch.models.glm_moe_dsa_mtp import GlmMoeDsaMTPModel
+
+    model = object.__new__(GlmMoeDsaMTPModel)
+    nn.Module.__init__(model)
+    model.topk_indices_buffer = DSATopKIndicesBuffer(2)
+    model.uses_dsa_topk_buffer = True
+    # Simulate startup reservation, an oversized prefill, then normal decode.
+    model.topk_indices_buffer.ensure(8, torch.device('cpu'))
+    old = model.topk_indices_buffer.indices
+    monkeypatch.setattr(DeepseekMTPModel, 'prepare_inputs_for_generation',
+                        lambda self, **kwargs: dict(input_ids=kwargs['context'].input_ids))
+    context = SimpleNamespace(input_ids=torch.zeros(1, 9, dtype=torch.long), model_metas=None)
+    inputs = model.prepare_inputs_for_generation([], context=context)
+    assert model.get_cudagraph_extra_key(**inputs) == (9, False)
+    assert model.topk_indices_buffer.indices.data_ptr() != old.data_ptr()
+    new = model.topk_indices_buffer.indices
+    context.input_ids = torch.zeros(1, 1, dtype=torch.long)
+    context.model_metas = [dict(skip_topk=True)]
+    inputs = model.prepare_inputs_for_generation([], context=context)
+    assert model.get_cudagraph_extra_key(**inputs) == (9, True)
+    assert model.topk_indices_buffer.indices is new
+    # An invalid oversized reuse must not allocate uninitialized indices and
+    # bypass the buffer's existing "seed before reuse" check.
+    context.input_ids = torch.zeros(1, 10, dtype=torch.long)
+    model.prepare_inputs_for_generation([], context=context)
+    assert model.topk_indices_buffer.indices is new
+    with pytest.raises(RuntimeError, match='before the shared buffer is populated'):
+        model.topk_indices_buffer.read(10, torch.device('cpu'))
+
+
+@pytest.mark.parametrize('model_metas', [None, [dict(skip_topk=True)]])
+def test_disabled_topk_buffer_does_not_allocate_or_change_graph_key(monkeypatch, model_metas):
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.models.deepseek_mtp import DeepseekMTPModel
+    from lmdeploy.pytorch.models.glm_moe_dsa_mtp import GlmMoeDsaMTPModel
+
+    model = object.__new__(GlmMoeDsaMTPModel)
+    nn.Module.__init__(model)
+    model.topk_indices_buffer = DSATopKIndicesBuffer(2)
+    model.uses_dsa_topk_buffer = False
+    monkeypatch.setattr(DeepseekMTPModel, 'prepare_inputs_for_generation',
+                        lambda self, **kwargs: dict(input_ids=kwargs['context'].input_ids))
+    for num_tokens in [1, 9, 1]:
+        context = SimpleNamespace(input_ids=torch.zeros(1, num_tokens, dtype=torch.long),
+                                  model_metas=model_metas)
+        inputs = model.prepare_inputs_for_generation([], context=context)
+        assert inputs['skip_topk'] is False
+        assert model.topk_indices_buffer.indices is None
+        assert model.get_cudagraph_extra_key(**inputs) == (0, False)

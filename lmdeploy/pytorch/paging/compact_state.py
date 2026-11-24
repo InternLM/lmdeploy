@@ -35,7 +35,8 @@ class StateBank:
 
     ``unit_ids`` is a snapshot, replaced rather than modified during promotion.
     Decode uses the device token boundary to select among these IDs; this owner
-    never reads per-token acceptance back to the host.
+    never reads per-token acceptance back to the host. Replay owns only the
+    auxiliary slot: empty unit_ids still requires whole-forward access holds.
     """
     auxiliary_id: int
     unit_ids: tuple[int, ...]
@@ -189,7 +190,7 @@ class SSMStateManager:
     def get_num_free_runtime(self) -> int:
         """Admit only requests whose eventual complete ring still fits."""
         if not self.capacity.bank_width:
-            return 0
+            return self.get_num_free_runtime_slots()
         return min(self.get_num_free_runtime_slots(),
                    self.get_num_free_optional() // self.capacity.bank_width)
 
@@ -209,7 +210,7 @@ class SSMStateManager:
         Serving starts with one prefill destination and reserves capacity for later promotion. Padding in its ID table
         is not allocated payload; decode submission requires the complete ring.
         """
-        width = 1 if prefill else self.capacity.bank_width
+        width = min(1, self.capacity.bank_width) if prefill else self.capacity.bank_width
         if self.get_num_free_runtime() == 0:
             raise RuntimeError('No capacity for a complete state bank.')
         slot = next(i for i in range(1, self.capacity.request_slots) if i not in self._banks)
@@ -427,8 +428,9 @@ class SSMStateManager:
         nothing."""
         for bank in banks:
             self._check_bank(bank)
-            if not 1 <= len(bank.unit_ids) <= self.capacity.bank_width:
-                raise ValueError('Prefill requires an admitted nonempty state bank.')
+            minimum = min(1, self.capacity.bank_width)
+            if not minimum <= len(bank.unit_ids) <= self.capacity.bank_width:
+                raise ValueError('Prefill requires an admitted state bank.')
         return self._submit_banks(banks, stream, wait_for, checkpoints=checkpoints)
 
     def _submit_banks(self, banks: tuple[StateBank, ...], stream: int,
@@ -496,8 +498,9 @@ class SSMStateManager:
         """Lease one private destination until actual all-rank Store
         completion.
 
-        Admission already owns the load destination and auxiliary slot. No staging, freeze/replacement, Store-save
-        credit or extra unit is allocated. A pending load excludes all model plans, even on the same stream: Store
+        Native admission already owns its destination. Auxiliary Replay leases a shared exact-boundary unit,
+        retaining it as the request input until prefill completes. A pending load excludes all model plans, even
+        on the same stream: Store
         writes are asynchronous and cannot use model stream ordering as proof.
         """
         self._check_bank(bank)
@@ -506,12 +509,21 @@ class SSMStateManager:
         if (bank.accesses or bank.input_ref is not None or bank.pending_checkpoint is not None
                 or bank.loaded_input is not None):
             raise ValueError('A compact load requires an idle, unbound request bank.')
-        unit = self._units[bank.unit_ids[0]]
+        if self.capacity.runtime_is_auxiliary:
+            if not self.get_num_free_optional():
+                raise RuntimeError('No unit available for a shared Store load destination.')
+            unit = self._allocate_unit()
+            unit.boundary, unit.phase = boundary, 'submitted'
+            bank.input_ref = self._reference(unit, 'request')
+        else:
+            unit = self._units[bank.unit_ids[0]]
         access = StateAccess((unit,), (unit,), (bank,), bank.stream, (), _load_boundary=boundary)
         unit.accesses.add(access)
         unit.writers.add(access)
         bank.accesses.add(access)
         bank.pending_load = access
+        if self.capacity.runtime_is_auxiliary:
+            unit.producer, unit.producer_bank = access, bank
         return self._register_access(access)
 
     def consume_loaded_inputs(self, access: StateAccess) -> None:

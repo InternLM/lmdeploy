@@ -160,6 +160,19 @@ def test_dllm_strategy_rejects_default_block_sparse_length_with_dcp():
         DLLMStrategyFactory(model_config, DLLMConfig(block_length=None))
 
 
+def test_qwen3_next_cache_counts_follow_layer_types():
+    from transformers import Qwen3NextConfig
+
+    layer_types = ['full_attention', 'linear_attention', 'linear_attention', 'full_attention', 'linear_attention']
+    hf_config = Qwen3NextConfig(architectures=['Qwen3NextForCausalLM'],
+                                num_hidden_layers=len(layer_types),
+                                layer_types=layer_types)
+    model_config = ModelConfig.from_hf_config(hf_config)
+
+    assert model_config.num_layers == 2
+    assert [shape[0] for shape, _ in model_config.states_shapes] == [3, 3]
+
+
 def test_kimi_k2_standalone_eagle_config(tmp_path):
     hf_config = KimiK2Config(
         architectures=['Eagle3DeepseekV2ForCausalLM'],
