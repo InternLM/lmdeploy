@@ -5,6 +5,7 @@ from torch import nn
 
 from lmdeploy.pytorch.distributed import get_dist_group, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
+from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 from ..backends import get_backend
 from ..backends.norm import LayerNormBuildSpec, RMSNormBuildSpec, RMSNormGatedBuildSpec
@@ -144,7 +145,7 @@ class RMSNorm(nn.Module):
         if self.tp:
             world_size, rank = get_tp_world_rank('attn')
             loaded_weight = chunk_aligned(loaded_weight, world_size, 0, self.align)[rank]
-        param.copy_(loaded_weight)
+        default_weight_loader(param, loaded_weight)
 
     @staticmethod
     def create_weight(hidden_size: int, dtype: torch.dtype | None = None, device: torch.device | None = None):

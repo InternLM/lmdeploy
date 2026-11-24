@@ -26,6 +26,18 @@ def test_offset_weight_scale_is_folded_in_fp32(dtype, checkpoint_dtype):
         assert norm.weight[0] != (offset + 1)[0]
 
 
+def test_offset_weight_rejects_broadcast():
+    norm = RMSNorm(4, device='cpu', offset_weight=True)
+    with pytest.raises(AssertionError, match='Attempted to load weight'):
+        load_weight(norm.weight, torch.tensor([0.25]))
+
+
+def test_offset_weight_accepts_scalar_for_single_element():
+    norm = RMSNorm(1, device='cpu', offset_weight=True)
+    load_weight(norm.weight, torch.tensor(0.25))
+    torch.testing.assert_close(norm.weight, torch.tensor([1.25]))
+
+
 @pytest.mark.parametrize('dtype', DTYPES)
 def test_direct_scale_keeps_dtype_and_value(dtype):
     norm = RMSNorm(len(OFFSETS), dtype=dtype, device='cpu')
