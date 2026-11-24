@@ -3,18 +3,18 @@ import torch
 
 from lmdeploy.pytorch.kernels.ascend.rms_norm import rms_norm
 
-from ..norm import RMSNormGatedImpl, RMSNormImpl
+from ..default.norm import DefaultRMSNormImpl
+from ..norm import RMSNormGatedImpl
 
 
-class AscendRMSNormImpl(RMSNormImpl):
+class AscendRMSNormImpl(DefaultRMSNormImpl):
     """Ascend RMS norm implementation."""
-
-    def __init__(self, hidden_size: int, eps: float = 1e-6):
-        self.hidden_size = hidden_size
-        self.eps = eps
 
     def forward(self, x: torch.Tensor, weight: torch.Tensor, residual: torch.Tensor = None):
         """forward."""
+        # Preserve the FP32 scale when activations use a lower precision.
+        if weight.dtype == torch.float32 and x.dtype in (torch.float16, torch.bfloat16):
+            return super().forward(x, weight, residual)
         if residual is None:
             x = rms_norm(x, weight, self.eps)
             return x

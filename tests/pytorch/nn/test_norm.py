@@ -1,7 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import sys
+from types import ModuleType
+from unittest.mock import Mock
+
 import pytest
 import torch
 
+from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.nn import norm as norm_module
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -63,3 +68,48 @@ def test_tp_shard_composes_with_offset_weight(rank, offset_weight, monkeypatch):
     expected = shard.float() + 1.0 if offset_weight else shard
     assert norm.weight.dtype == expected.dtype
     torch.testing.assert_close(norm.weight, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize('with_residual', [False, True])
+@pytest.mark.parametrize('offset_weight', [False, True])
+def test_ascend_rms_norm_weight_dtype(dtype, with_residual, offset_weight, monkeypatch):
+    # Stub the vendor extension while exercising the real backend and operator wrappers.
+    if 'torch_npu' not in sys.modules:
+        monkeypatch.setitem(sys.modules, 'torch_npu', ModuleType('torch_npu'))
+    x = torch.tensor([[1, 1, 1, 3]], dtype=dtype)
+    residual = torch.tensor([[0, 2, 0, -2]], dtype=dtype) if with_residual else None
+    summed = x if residual is None else x + residual
+    plain_op = Mock(return_value=(x, None))
+    residual_op = Mock(return_value=(x, None, summed))
+    monkeypatch.setattr(torch.ops.npu, 'npu_rms_norm', plain_op, raising=False)
+    monkeypatch.setattr(torch.ops.npu, 'npu_add_rms_norm', residual_op, raising=False)
+
+    eps = 1e-5
+    offset = torch.full((x.size(-1), ), torch.finfo(dtype).eps / 2, dtype=dtype)
+    scale = 1 + offset.float()
+    with get_device_manager().context(DeviceContext('ascend')):
+        norm = RMSNorm(x.size(-1), eps=eps, dtype=dtype, device='cpu', offset_weight=offset_weight)
+    assert type(norm.impl).__module__ == 'lmdeploy.pytorch.backends.ascend.norm'
+    load_weight(norm.weight, offset if offset_weight else scale.to(dtype))
+    result = norm(x, residual)
+
+    if offset_weight:
+        plain_op.assert_not_called()
+        residual_op.assert_not_called()
+        torch.testing.assert_close(norm.weight, scale, rtol=0, atol=0)
+        normalized = summed.float() * torch.rsqrt(summed.float().square().mean(-1, keepdim=True) + eps)
+        expected = (normalized * scale).to(dtype)
+        assert not torch.equal(expected, (normalized * scale.to(dtype)).to(dtype))
+    else:
+        expected = x
+        if with_residual:
+            plain_op.assert_not_called()
+            residual_op.assert_called_once_with(x, residual, norm.weight, eps)
+        else:
+            residual_op.assert_not_called()
+            plain_op.assert_called_once_with(x, norm.weight, eps)
+    if with_residual:
+        result, result_residual = result
+        torch.testing.assert_close(result_residual, summed, rtol=0, atol=0)
+    torch.testing.assert_close(result, expected, rtol=0, atol=0)
