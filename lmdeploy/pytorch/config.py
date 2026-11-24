@@ -1154,6 +1154,7 @@ class QuantizationConfig:
         bits = None
         group_size = None
         ignored_layers = None
+        ct_format = None
 
         if quant_method == 'awq':
             bits = quant_config.get('bits', 4)
