@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from bisect import bisect_left
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
@@ -63,12 +63,14 @@ class StandardDecoderPiecewiseGraphRuntime:
         model: PiecewiseCudaGraphMixin,
         max_capture_tokens: int,
         token_stride: int = _DEFAULT_TOKEN_STRIDE,
+        decode_token_sizes: Sequence[int] = (),
     ) -> None:
         if token_stride < 1:
             raise ValueError('token_stride must be positive')
         self.model = model
         self.max_capture_tokens = max_capture_tokens
         self.token_stride = token_stride
+        self.decode_token_sizes = tuple(decode_token_sizes)
 
     def get_capture_token_sizes(self) -> list[int]:
         """Cover short prefix-hit/PD tails before the regular prefill
@@ -84,7 +86,11 @@ class StandardDecoderPiecewiseGraphRuntime:
             size *= 2
         sizes.extend(range(self.token_stride, self.max_capture_tokens, self.token_stride))
         sizes.append(self.max_capture_tokens)
-        return sizes
+        # A local MTP decode rank can join a global prefill step. Models that
+        # forbid padding need every admitted verification shape, not just the
+        # full-graph batch buckets, to reuse a piecewise plan in that step.
+        sizes.extend(size for size in self.decode_token_sizes if 0 < size <= self.max_capture_tokens)
+        return sorted(set(sizes))
 
     def get_piecewise_graph_descriptor(
         self,

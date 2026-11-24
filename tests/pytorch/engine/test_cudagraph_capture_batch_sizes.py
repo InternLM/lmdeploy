@@ -106,3 +106,18 @@ def test_prefill_graph_covers_short_pd_tail_without_padding_glm():
         assert descriptor.token_bucket == tokens
     for tokens in (65, 513, 1025):
         assert runtime.get_piecewise_graph_descriptor(context, {'input_ids': torch.zeros(1, tokens)}) is None
+
+
+def test_mixed_mtp_graph_covers_all_admitted_batches_within_capture_limit():
+    from lmdeploy.pytorch.backends.cuda.graph_runner.standard import StandardDecoderPiecewiseGraphRuntime
+
+    runtime = StandardDecoderPiecewiseGraphRuntime(
+        SimpleNamespace(piecewise_cuda_graph_token_padding=False), max_capture_tokens=96,
+        decode_token_sizes=range(6, 193, 6))
+    context = SimpleNamespace(enable_microbatch=False, local_adapter_ids=None)
+    assert runtime.get_capture_token_sizes() == list(range(1, 65)) + [66, 72, 78, 84, 90, 96]
+    for tokens in range(6, 97, 6):
+        descriptor = runtime.get_piecewise_graph_descriptor(context, {'input_ids': torch.zeros(1, tokens)})
+        assert descriptor.token_bucket == tokens
+    for tokens in (65, 67, 97, 102):
+        assert runtime.get_piecewise_graph_descriptor(context, {'input_ids': torch.zeros(1, tokens)}) is None

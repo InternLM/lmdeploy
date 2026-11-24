@@ -80,9 +80,13 @@ def _make_piecewise_graph_manager(model: torch.nn.Module, model_config: ModelCon
     from .piecewise import PiecewiseGraphManager
     from .standard import StandardDecoderPiecewiseGraphRuntime
 
+    decode_query_length = model.ctx_mgr.build_ctx.num_spec_tokens + 1
+    exact_decode_shapes = dist_config.dp > 1 and not getattr(model, 'piecewise_cuda_graph_token_padding', True)
     runtime = StandardDecoderPiecewiseGraphRuntime(
         model,
         min(max_capture_tokens, cache_config.max_prefill_token_num),
+        decode_token_sizes=range(decode_query_length, cache_config.max_batches * decode_query_length + 1,
+                                 decode_query_length) if exact_decode_shapes else (),
     )
     if not runtime.get_capture_token_sizes():
         return None
