@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import ctypes
+import gc
 import json
 import sys
 import threading
+import weakref
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -1107,6 +1109,66 @@ def test_shutdown_is_idempotent_and_propagates_close_error(tmp_path):
 
     assert store.close_calls == 1
     assert worker.store is None
+
+
+class FakeFabricBackend:
+    """Ascend fabric backend: parks the store instead of closing it."""
+    device_type = 'npu'
+    use_fabric_mem = True
+
+    def __init__(self):
+        self.close_store_calls = []
+        self.close_calls = 0
+
+    def setup_store(self, store, config, local_hostname):
+        store.setup(local_hostname, config.protocol)
+        return 0
+
+    def close_store(self, store):
+        self.close_store_calls.append(store)
+        ctypes.pythonapi.Py_IncRef(ctypes.py_object(store))
+        return None
+
+    def close(self):
+        self.close_calls += 1
+
+
+def test_fabric_shutdown_parks_store_without_freezing_gc(tmp_path, monkeypatch, patch_worker_runtime):
+    finalized = []
+
+    class Cyclic:
+
+        def __init__(self):
+            self.self_ref = self
+
+        def __del__(self):
+            finalized.append('cyclic')
+
+    # Created before shutdown: gc.freeze() used to make it uncollectable forever.
+    cycle = Cyclic()
+    del cycle
+
+    backend = FakeFabricBackend()
+    monkeypatch.setattr(worker_module, 'build_transfer_backend', lambda *_: backend)
+    path = write_store_config(tmp_path, protocol='ascend')
+    store = FakeStore()
+    worker = MooncakeStoreWorker(make_cache_config(path), store_factory=lambda: store)
+    store_ref = weakref.ref(store)
+
+    worker.shutdown()
+
+    assert store.close_calls == 0
+    assert len(backend.close_store_calls) == 1
+    assert backend.close_calls == 1
+    assert worker.store is None
+    messages = [message for _, message in patch_worker_runtime.messages]
+    assert any('interaction after: operation=close' in message for message in messages)
+
+    backend.close_store_calls.clear()
+    worker = backend = store = None
+    gc.collect()
+    assert store_ref() is not None, 'store must survive finalization/pybind destruction'
+    assert finalized == ['cyclic'], 'unrelated cycles must stay collectable'
 
 
 class BytesStore(FakeStore):
