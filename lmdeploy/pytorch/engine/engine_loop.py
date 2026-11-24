@@ -15,6 +15,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
 from lmdeploy.pytorch.utils import cancel_async_tasks, wait_for_async_tasks
+from lmdeploy.trace import ENABLED as TRACE_ENABLED
 from lmdeploy.utils import get_logger
 
 from .engine import InferOutput, ResponseType, response_reqs
@@ -436,10 +437,13 @@ class EngineLoop:
             if num_draft_tokens is not None and model_inputs is None and self.config.enable_metrics:
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens.item())
+            if TRACE_ENABLED and len(token_ids) and not msg.resp.first_token_timestamp:
+                msg.resp.first_token_timestamp = new_token_timestamp
             req_metrics = RequestMetrics(new_token_timestamp,
                                          msg.engine_events,
                                          spec_info=spec_info,
-                                         cached_tokens=msg.cached_tokens)
+                                         cached_tokens=msg.cached_tokens,
+                                         first_token_timestamp=msg.resp.first_token_timestamp)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,

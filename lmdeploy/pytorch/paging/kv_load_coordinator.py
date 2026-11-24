@@ -29,8 +29,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from lmdeploy.messages import EventType
 from lmdeploy.pytorch.kv_connector import KVLoadResult
 from lmdeploy.pytorch.messages import MessageStatus, SchedulerSequence, SchedulerSession
+from lmdeploy.trace import ENABLED as TRACE_ENABLED
 
 from .block_trie import PrefixCacheStats
 
@@ -406,6 +408,8 @@ class KVLoadCoordinator:
             seq.prefix_cache.restore.clear()
         # Match vLLM's admission-time counters: the reloaded partial FA block
         # belongs to the external prefix, and transfer outcomes do not undo a hit.
+        if TRACE_ENABLED:
+            seq.record_event(EventType.KV_LOAD_STARTED, value=plan.remote_step - plan.load_start_step)
         self.record_cache_query(seq, plan.load_start_step, plan.remote_step - plan.load_start_step)
 
     def start_load(
@@ -455,10 +459,16 @@ class KVLoadCoordinator:
                 continue
             if (record.deferred_cleanup is not _DeferredLoadCleanup.NONE
                     or not result.success):
+                if TRACE_ENABLED:
+                    event = (EventType.KV_LOAD_CANCELLED
+                             if record.deferred_cleanup is not _DeferredLoadCleanup.NONE else EventType.KV_LOAD_FAILED)
+                    record.seq.record_event(event)
                 self._rollback(record)
                 self._finish_cancelled_or_failed(record)
             else:
                 self._publish(record)
+                if TRACE_ENABLED:
+                    record.seq.record_event(EventType.KV_LOAD_FINISHED)
 
     def _publish(self, record: _LoadRecord) -> None:
         """Publish fully written blocks and return the sequence to waiting.
