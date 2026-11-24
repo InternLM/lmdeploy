@@ -262,11 +262,9 @@ class AscendTransferBackend(TransferBackend):
     def close_store(self, store: Any) -> None:
         """Retain the Store on this backend instead of destroying it.
 
-        Worker shutdown has already stopped and joined the transfer threads.
-        The backend-owned strong reference keeps the pybind Store/RealClient
-        alive so Mooncake's native atexit handler can tear it down at process
-        exit. Unlike Py_IncRef, this reference is visible to Python and is
-        released if this backend instance is destroyed.
+        Worker shutdown has already stopped and joined the transfer threads. The backend-owned strong reference keeps
+        the pybind Store/RealClient alive so Mooncake's native atexit handler can tear it down at process exit. Unlike
+        Py_IncRef, this reference is visible to Python and is released if this backend instance is destroyed.
         """
         if self._retained_store is not None and self._retained_store is not store:
             raise RuntimeError('Ascend backend already retains a different Mooncake Store')
