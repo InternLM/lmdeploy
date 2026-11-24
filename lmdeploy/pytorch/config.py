@@ -494,6 +494,10 @@ class SSMStateCapacity:
     def from_cache_config(cls, cache: CacheConfig, max_update_tokens: int) -> 'SSMStateCapacity':
         """Normalize default state slots and derive capacity for a stateful
         target."""
+        # Prefill publishes one final state per chunk and never verifies draft
+        # tokens. Its MTP model still runs the prefix, but needs no candidate bank.
+        if cache.role == EngineRole.Prefill:
+            max_update_tokens = 1
         # CacheConfig.states_shapes is populated later than executor selection.
         store_budget = (cache.mooncake_state_save_slots
                         if cache.use_mooncake_store and cache.kv_transfer_config.is_kv_producer else 0)

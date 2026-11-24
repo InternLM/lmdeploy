@@ -47,12 +47,15 @@ def _executor(model, cache, spec=None, **kwargs):
 
 @pytest.mark.parametrize('role', [EngineRole.Prefill, EngineRole.Decode])
 @pytest.mark.parametrize('width', [1, 6])
-def test_compact_mooncake_pd_keeps_prefix_caching(role, width):
+def test_compact_mooncake_pd_keeps_prefix_caching(monkeypatch, role, width):
     model, cache, spec = _configs(width, 'glm5_next')
     cache.role, cache.migration_backend = role, MigrationBackend.Mooncake
     cache.enable_prefix_caching = True
-    _executor(model, cache, spec)
+    cache.compact_state_capacity = None
+    _build_from_factory(monkeypatch, model, cache, spec)
     assert cache.enable_prefix_caching
+    assert cache.compact_state_capacity.bank_width == (1 if role == EngineRole.Prefill else width)
+    assert cache.compact_state_capacity.request_capacity == 3
 
 
 @pytest.mark.parametrize('width', [1, 4, 6])
