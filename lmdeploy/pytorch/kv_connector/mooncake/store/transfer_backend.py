@@ -30,6 +30,7 @@ backend, which transfers directly to/from NPU HBM.
 
 from __future__ import annotations
 
+import ctypes
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -87,6 +88,11 @@ class TransferBackend:
     def make_ready_event(self) -> Any:
         """Return a fence event recorded on the compute stream."""
         raise NotImplementedError
+
+    def close_store(self, store: Any) -> Any:
+        """Release the store after all transfers have stopped; return close()'s
+        status."""
+        return store.close()
 
     def close(self) -> None:
         """Release backend-owned resources (e.g. the Ascend TransferEngine)."""
@@ -208,8 +214,15 @@ class AscendTransferBackend(TransferBackend):
         * no external engine is injected (``setup`` without ``engine=``);
         * the segment name is the bare hostname, no ``:rpc_port`` suffix;
         * ``local_buffer_size`` is unused in fabric mode and passed as 0;
-        * fabric segments must be integer multiples of 1GB.
+        * fabric segments must be integer multiples of 1GB;
+        * ``protocol`` must be ``'ascend'``: registration is skipped, so an rdma/tcp store would receive
+          unregistered NPU addresses.
         """
+        if config.protocol != 'ascend':
+            raise ValueError(
+                f'{ASCEND_FABRIC_MEM_ENV}=1 requires protocol="ascend" in the Mooncake config '
+                f'(got {config.protocol!r}): fabric mode skips buffer registration, so an rdma/tcp '
+                'store would never see the NPU buffers')
         if config.global_segment_size % FABRIC_SEGMENT_GRANULARITY:
             raise ValueError(
                 f'{ASCEND_FABRIC_MEM_ENV}=1 requires global_segment_size to be '
@@ -242,6 +255,20 @@ class AscendTransferBackend(TransferBackend):
 
     def make_ready_event(self) -> Any:
         return torch.npu.Event()
+
+    def close_store(self, store: Any) -> None:
+        """Leave the store to process exit, as vllm-ascend does (its mooncake
+        backend overrides neither ``Backend.close`` nor closes the store).
+
+        Both ``close()`` and pybind destruction deadlock in the driver's giant-page unmap for fabric segments
+        (verified at 16GB; the threshold is in (8GB, 16GB]), and Mooncake's C++ ``atexit`` handler tears the store
+        down safely at exit anyway -- so only the Python object must survive finalization. One raw reference the
+        GC cannot see keeps it alive without freezing every other object, unlike ``gc.freeze()``.
+        """
+        incref = ctypes.pythonapi.Py_IncRef
+        incref.argtypes = (ctypes.py_object,)
+        incref.restype = None
+        incref(store)
 
     def close(self) -> None:
         # The TransferEngine has no explicit teardown in the mooncake API; dropping
