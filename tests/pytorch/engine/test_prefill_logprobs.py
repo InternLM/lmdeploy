@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,6 +9,7 @@ import torch
 from lmdeploy.messages import ResponseType
 from lmdeploy.pytorch.engine.engine_loop import EngineLoop
 from lmdeploy.pytorch.engine.model_agent.agent import BatchedLogProbs
+from lmdeploy.pytorch.engine.request import Response
 from lmdeploy.pytorch.messages import (
     MessageStatus,
     SamplingParam,
@@ -138,12 +140,13 @@ def test_engine_loop_keeps_only_own_requested_token_columns():
                                           [plain, scorer], inputs)
 
 
+@pytest.mark.parametrize('trace_enabled', [False, True])
 @pytest.mark.parametrize(('actual_ids', 'expected'), [
     ([], None),
     ([2, 3], [([-2.0], [2]), ([-3.0], [3])]),
 ])
-def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids,
-                                                             expected):
+def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids, expected, trace_enabled, monkeypatch):
+    monkeypatch.setattr('lmdeploy.pytorch.engine.engine_loop.TRACE_ENABLED', trace_enabled)
     loop = EngineLoop.__new__(EngineLoop)
 
     def finish_running(**kwargs):
@@ -153,10 +156,7 @@ def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids,
     loop.scheduler = SimpleNamespace(cache_routed_experts=lambda running: None)
     loop.config = SimpleNamespace(num_speculative_tokens=None,
                                   enable_metrics=False)
-    response = SimpleNamespace(data=None,
-                               _input_logprobs=None,
-                               is_done=False,
-                               type=ResponseType.SUCCESS)
+    response = Response(type=ResponseType.SUCCESS, sender_id=7, event=asyncio.Event())
     msg = SimpleNamespace(
         session_id=7,
         status=MessageStatus.RUNNING,
@@ -186,7 +186,7 @@ def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids,
         logits=None,
         all_routed_experts=None,
         ce_loss=None,
-        new_token_timestamp=0,
+        new_token_timestamp=10.0,
         stop_pos=torch.tensor([-1]),
         next_token_ids=torch.tensor([0]),
     )
@@ -196,6 +196,7 @@ def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids,
     assert result.finish
     assert result.token_ids.tolist() == []
     assert result.logprobs == expected
+    assert result.req_metrics.first_token_timestamp == response.first_token_timestamp == 0.0
 
     sent = []
     loop._send_resp = sent.append

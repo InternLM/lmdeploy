@@ -7,13 +7,14 @@ import torch
 
 from lmdeploy.pytorch.backends import communicator as base_communicator_module
 from lmdeploy.pytorch.backends.cuda.comm import communicator as communicator_module
+from lmdeploy.pytorch.backends.cuda.comm import policy as policy_module
 from tests.pytorch.distributed_test_utils import spawn_with_timeout
 
 
 @pytest.fixture(autouse=True)
 def communication_environment(monkeypatch):
     for name in ('enable_flashinfer_allreduce', 'enable_symm_mem_allreduce', 'enable_symm_mem_lmhead'):
-        monkeypatch.setattr(communicator_module._envs, name, False)
+        monkeypatch.setattr(policy_module.envs, name, False)
 
 
 def _run_auto_all_gather(rank, rendezvous):
@@ -424,9 +425,9 @@ def test_communication_policy_preserves_legacy_options(monkeypatch, comm_env, ba
     from lmdeploy.pytorch.config import DistConfig
 
     module = communicator_module
-    monkeypatch.setattr(module._envs, 'enable_flashinfer_allreduce', flashinfer)
-    monkeypatch.setattr(module._envs, 'enable_symm_mem_allreduce', symm)
-    monkeypatch.setattr(module._envs, 'enable_symm_mem_lmhead', lmhead)
+    monkeypatch.setattr(policy_module.envs, 'enable_flashinfer_allreduce', flashinfer)
+    monkeypatch.setattr(policy_module.envs, 'enable_symm_mem_allreduce', symm)
+    monkeypatch.setattr(policy_module.envs, 'enable_symm_mem_lmhead', lmhead)
     monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda *args: (9, 0))
     monkeypatch.setattr(torch.cuda, 'can_device_access_peer', lambda *args: True)
 
@@ -452,8 +453,8 @@ def test_communication_policy_rejects_conflicting_providers(monkeypatch, comm_en
     from lmdeploy.pytorch.config import DistConfig
 
     module = communicator_module
-    monkeypatch.setattr(module._envs, 'enable_flashinfer_allreduce', True)
-    monkeypatch.setattr(module._envs, 'enable_symm_mem_allreduce', not mismatch)
+    monkeypatch.setattr(policy_module.envs, 'enable_flashinfer_allreduce', True)
+    monkeypatch.setattr(policy_module.envs, 'enable_symm_mem_allreduce', not mismatch)
     monkeypatch.setattr(torch.cuda, 'get_device_capability', lambda *args: (9, 0))
     if mismatch:
         def peers(output, local, group):

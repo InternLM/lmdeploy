@@ -13,6 +13,7 @@ import shortuuid
 from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
+from lmdeploy.serve.observability.request_trace import trace_frame
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, UsageInfo
 from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
@@ -30,9 +31,10 @@ class _FanoutResponseError(Exception):
 class _FanoutRequest:
     """Give each recursive endpoint call an isolated JSON payload."""
 
-    def __init__(self, request: Request, payload: dict):
+    def __init__(self, request: Request, payload: dict, choice_index: int):
         self._request = request
         self._payload = payload
+        self._trace_choice_index = choice_index
 
     def __getattr__(self, name):
         """Delegate request attributes not overridden by this wrapper."""
@@ -125,7 +127,7 @@ async def _invoke_choices(
         choice_payload.update(n=1, session_id=-1, seed=choice_request.seed)
         response = await endpoint(
             choice_request,
-            _FanoutRequest(raw_request, choice_payload),
+            _FanoutRequest(raw_request, choice_payload, index),
         )
         if isinstance(response, Response) and not isinstance(
                 response, StreamingResponse):
@@ -328,10 +330,10 @@ async def _collate_streams(
                     break
 
             for payload in _batch_stream_payloads(payloads):
-                yield f'data: {json.dumps(payload, ensure_ascii=False)}\n\n'
+                yield trace_frame(f'data: {json.dumps(payload, ensure_ascii=False)}\n\n', payload)
             if error_event is not None:
-                yield f'data: {json.dumps(error_event, ensure_ascii=False)}\n\n'
-                yield 'data: [DONE]\n\n'
+                yield trace_frame(f'data: {json.dumps(error_event, ensure_ascii=False)}\n\n', error_event)
+                yield trace_frame('data: [DONE]\n\n', terminal=True)
                 return
             if stream_error is not None:
                 raise stream_error
@@ -345,8 +347,8 @@ async def _collate_streams(
                 'choices': [],
                 'usage': _aggregate_usage(ordered_usages).model_dump(),
             }
-            yield f'data: {json.dumps(usage_response, ensure_ascii=False)}\n\n'
-        yield 'data: [DONE]\n\n'
+            yield trace_frame(f'data: {json.dumps(usage_response, ensure_ascii=False)}\n\n', usage_response)
+        yield trace_frame('data: [DONE]\n\n', terminal=True)
     finally:
         stopping.set()
         await _shield_cleanup(_cancel_tasks(tasks),

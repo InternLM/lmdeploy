@@ -1,0 +1,761 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+import itertools
+import math
+import os
+import re
+from dataclasses import dataclass
+from functools import cache, lru_cache
+from pathlib import Path
+from typing import cast
+
+import torch
+import torch.distributed as dist
+
+from lmdeploy.pytorch import envs as _envs
+from lmdeploy.pytorch.config import BackendConfig, CacheConfig, ModelConfig
+from lmdeploy.pytorch.distributed import get_dist_manager
+from lmdeploy.pytorch.kernels.ascend.types import MoECommType as AscendMoECommType
+from lmdeploy.pytorch.kernels.ascend.types import MoeMetadata as AscendMoeMetadata
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
+from lmdeploy.utils import get_logger
+
+from ..base import ImplT
+from ..default import DefaultOpsBackend
+
+logger = get_logger('lmdeploy')
+
+
+def _get_cpu_attention_metadata(cu_seqlens_q: torch.Tensor, kv_seqlens: torch.Tensor):
+    kv_seqlens_cpu = kv_seqlens.cpu()
+    cu_seqlens_q_cpu = cu_seqlens_q.cpu()
+    return cu_seqlens_q_cpu, kv_seqlens_cpu
+
+
+def _is_sparse_attention(model_config: ModelConfig) -> bool:
+    """Whether all model attention layers use the NSA/DSA sparse path."""
+    return getattr(model_config, 'mla_index_topk', None) is not None
+
+
+def _get_device_kv_start_indices(
+    q_seqlens: torch.Tensor,
+    kv_seqlens: torch.Tensor,
+    cu_seqlens_q: torch.Tensor,
+    block_offsets: torch.Tensor,
+    block_size: int,
+    num_tokens: int,
+) -> torch.Tensor:
+    """Map flattened query tokens to paged-cache slots on device."""
+    num_reqs = q_seqlens.numel()
+    request_ids = torch.repeat_interleave(
+        torch.arange(num_reqs, device=q_seqlens.device),
+        q_seqlens,
+        output_size=num_tokens,
+    )
+    query_offsets = torch.arange(num_tokens, device=q_seqlens.device, dtype=torch.int32) - cu_seqlens_q[request_ids]
+    logical_positions = kv_seqlens[request_ids] - q_seqlens[request_ids] + query_offsets
+    logical_blocks = torch.div(logical_positions, block_size, rounding_mode='floor').long()
+    physical_blocks = block_offsets[request_ids, logical_blocks]
+    return physical_blocks * block_size + logical_positions.remainder(block_size)
+
+
+class SocVersion:
+    Ascend310P: str = 'Ascend310P'
+    Ascend910: str = 'Ascend910'
+
+    @classmethod
+    @cache
+    def device_name(cls) -> str:
+        return torch.npu.get_device_name()
+
+    @classmethod
+    def is_Ascend310P(cls) -> bool:
+        return cls.device_name().startswith(cls.Ascend310P)
+
+    @classmethod
+    def is_Ascend910(cls) -> bool:
+        return cls.device_name().startswith(cls.Ascend910)
+
+    @classmethod
+    @lru_cache(maxsize=1)
+    def soc_version(cls) -> int:
+        return torch.npu.get_soc_version()
+
+    @classmethod
+    def is_A2(cls) -> bool:
+        return 220 <= cls.soc_version() <= 225
+
+    @classmethod
+    def is_A3(cls) -> bool:
+        return 250 <= cls.soc_version() <= 255
+
+
+@dataclass
+class DistMeta:
+    dp_size: int
+    tp_size: int
+    ep_size: int
+    tp_rank: int
+    ep_rank: int
+    tp_group: torch.distributed.ProcessGroup
+    ep_group: torch.distributed.ProcessGroup
+
+
+class AscendKVQuantMeta:
+    has_set_value: bool = False
+    quant_meta: dict = {}
+
+    @classmethod
+    def set_value(cls, device: str, dtype: torch.dtype, record_file: str, total_layers: int):
+        with open(record_file) as file:
+            data = file.read()
+        scale_offset_pairs = re.findall(r'scale:\s*([\d\.\-]+)\s*offset:\s*(-?\d+)', data)
+        scale_offset_pairs = [(float(scale), float(offset)) for scale, offset in scale_offset_pairs]
+        k_scales, v_scales, kv_scales = [], [], []
+        k_zeros, v_zeros, kv_zeros = [], [], []
+        if len(scale_offset_pairs) == total_layers:
+            for scale, offset in scale_offset_pairs:
+                k_scales.append(torch.tensor([scale], device=device, dtype=dtype))
+                v_scales.append(torch.tensor([scale], device=device, dtype=dtype))
+                kv_scales.append(torch.tensor([scale, scale], device=device, dtype=dtype))
+                k_zeros.append(torch.tensor([offset], device=device, dtype=dtype))
+                v_zeros.append(torch.tensor([offset], device=device, dtype=dtype))
+                kv_zeros.append(torch.tensor([offset, offset], device=device, dtype=dtype))
+        elif len(scale_offset_pairs) == total_layers * 2:
+            for i in range(total_layers):
+                scale_k, offset_k = scale_offset_pairs[2 * i]
+                scale_v, offset_v = scale_offset_pairs[2 * i + 1]
+                k_scales.append(torch.tensor([scale_k], device=device, dtype=dtype))
+                v_scales.append(torch.tensor([scale_v], device=device, dtype=dtype))
+                kv_scales.append(torch.tensor([scale_k, scale_v], device=device, dtype=dtype))
+                k_zeros.append(torch.tensor([offset_k], device=device, dtype=dtype))
+                v_zeros.append(torch.tensor([offset_v], device=device, dtype=dtype))
+                kv_zeros.append(torch.tensor([offset_k, offset_v], device=device, dtype=dtype))
+        else:
+            raise ValueError(
+                f'num of scale_offset_pairs({len(scale_offset_pairs)}) must match num of total_layers({total_layers})'
+            )
+
+        cls.quant_meta.update(
+            {
+                'k_scales': itertools.cycle(k_scales),
+                'k_zeros': itertools.cycle(k_zeros),
+                'v_scales': itertools.cycle(v_scales),
+                'v_zeros': itertools.cycle(v_zeros),
+                'kv_scales': itertools.cycle(kv_scales),
+                'kv_zeros': itertools.cycle(kv_zeros),
+            }
+        )
+        cls.has_set_value = True
+
+
+class AscendOpsBackend(DefaultOpsBackend):
+    """Ascend layer backend."""
+
+    enable_graph: bool = False
+    total_slots = None
+    max_batches = None
+    dist_meta: DistMeta = None
+    fia_causal_masks: dict[torch.device, torch.Tensor] = {}
+
+    @staticmethod
+    def get_name() -> str:
+        """Backend name."""
+        return 'ascend'
+
+    @classmethod
+    def build_op(cls, spec, *, enable_deterministic: bool = False):
+        from ..causal_conv1d import CausalConv1dBuildSpec
+        from ..gated_delta_rule import (
+            GatedDeltaMetaBuildSpec,
+            GatedDeltaRuleBuildSpec,
+        )
+        from ..rejection_sampling import RejectionSamplingBuildSpec
+
+        if isinstance(spec, RejectionSamplingBuildSpec):
+            from .rejection_sampling import AscendRejectionSamplingImpl
+
+            return AscendRejectionSamplingImpl()
+        if isinstance(spec, CausalConv1dBuildSpec):
+            from .causal_conv1d import AscendCausalConv1dImpl
+
+            return AscendCausalConv1dImpl()
+        if isinstance(spec, GatedDeltaMetaBuildSpec):
+            from .gated_delta_rule import AscendGatedDeltaMetaImpl
+
+            return AscendGatedDeltaMetaImpl()
+        if isinstance(spec, GatedDeltaRuleBuildSpec):
+            from .gated_delta_rule import AscendGatedDeltaRuleImpl
+
+            return AscendGatedDeltaRuleImpl()
+        from ..activation import SiluAndMulBuildSpec
+        from ..apply_rotary_emb import ApplyRotaryEmbBuildSpec
+        from ..attention import PagedAttentionBuildSpec
+        from ..awq_modules import LinearW4A16BuildSpec
+        from ..flash_attention import FlashAttentionBuildSpec
+        from ..linear import LinearBuildSpec
+        from ..moe import (
+            FusedMoEBuildSpec,
+            FusedMoEW8A8BuildSpec,
+            SoftmaxTopKBuildSpec,
+        )
+        from ..norm import RMSNormBuildSpec, RMSNormGatedBuildSpec
+        from ..nsa import NSAIndexFP8BuildSpec
+        from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
+        from ..rotary_embedding import RotaryEmbeddingBuildSpec
+
+        if isinstance(spec, SiluAndMulBuildSpec):
+            from .activation import AscendSiluAndMulImpl
+
+            return cast(ImplT, AscendSiluAndMulImpl())
+        if isinstance(spec, ApplyRotaryEmbBuildSpec):
+            if spec.enable_fp32_compute:
+                raise NotImplementedError('Ascend ApplyRotaryEmb does not support enable_fp32_compute=True.')
+            from .apply_rotary_emb import AscendApplyRotaryEmbImpl
+
+            return cast(ImplT, AscendApplyRotaryEmbImpl())
+        if isinstance(spec, RMSNormBuildSpec):
+            from .norm import AscendRMSNormImpl
+
+            return cast(ImplT, AscendRMSNormImpl(spec.hidden_size, spec.eps))
+        if isinstance(spec, RMSNormGatedBuildSpec):
+            from .norm import AscendRMSNormGatedImpl
+
+            return cast(ImplT, AscendRMSNormGatedImpl(spec.hidden_size, spec.eps, spec.activation))
+        if isinstance(spec, RMSNormW8A8BuildSpec):
+            from .qmodules import AscendRMSNormW8A8Impl
+
+            return cast(ImplT, AscendRMSNormW8A8Impl(spec.hidden_size, spec.eps, spec.quant_dtype))
+        if isinstance(spec, SoftmaxTopKBuildSpec):
+            from .moe import AscendSoftmaxTopKImpl
+
+            return cast(ImplT, AscendSoftmaxTopKImpl(spec.top_k, spec.dim, spec.n_groups))
+        if isinstance(spec, RotaryEmbeddingBuildSpec):
+            from .rotary_embedding import _build_rotary_embedding
+
+            return cast(ImplT, _build_rotary_embedding(spec))
+        if isinstance(spec, LinearW4A16BuildSpec):
+            from .awq_modules import AwqLinearW4A16Impl
+
+            return cast(
+                ImplT,
+                AwqLinearW4A16Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    spec.w_bit,
+                    spec.group_size,
+                ),
+            )
+        if isinstance(spec, LinearW8A8BuildSpec):
+            from .qmodules import AscendLinearW8A8Impl
+
+            return cast(
+                ImplT,
+                AscendLinearW8A8Impl(
+                    spec.in_features,
+                    spec.out_features,
+                    spec.output_dtype,
+                    spec.quant_dtype,
+                ),
+            )
+        if isinstance(spec, PagedAttentionBuildSpec):
+            from .attention import AscendAttentionImpl
+
+            return cast(
+                ImplT,
+                AscendAttentionImpl(
+                    num_heads=spec.num_heads,
+                    head_size=spec.head_dim,
+                    scale=spec.scale,
+                    num_kv_heads=spec.num_kv_heads,
+                    v_head_size=spec.v_head_dim,
+                    alibi=spec.alibi,
+                    sliding_window=spec.sliding_window,
+                    logit_softcapping=spec.logit_softcapping,
+                    causal=spec.causal,
+                    use_flash_mla=spec.use_flash_mla,
+                ),
+            )
+        if isinstance(spec, FlashAttentionBuildSpec):
+            from .flash_attention import AscendFlashAttentionImpl
+
+            return cast(
+                ImplT,
+                AscendFlashAttentionImpl(
+                    num_heads=spec.num_heads,
+                    head_dim=spec.head_dim,
+                    scale=spec.scale,
+                    num_kv_heads=spec.num_kv_heads,
+                    v_head_dim=spec.v_head_dim,
+                    causal=spec.causal,
+                    sliding_window=spec.sliding_window,
+                    logit_softcapping=spec.logit_softcapping,
+                ),
+            )
+        if isinstance(spec, LinearBuildSpec):
+            from .linear import AscendLinearImpl
+
+            return cast(ImplT, AscendLinearImpl())
+        if isinstance(spec, FusedMoEBuildSpec):
+            from .moe import _build_fused_moe
+
+            return cast(ImplT, _build_fused_moe(spec))
+        if isinstance(spec, FusedMoEW8A8BuildSpec):
+            from .moe import _build_fused_moe_w8a8
+
+            return cast(ImplT, _build_fused_moe_w8a8(spec))
+        if isinstance(spec, NSAIndexFP8BuildSpec):
+            from .nsa import _build_nsa_index_fp8
+
+            return cast(ImplT, _build_nsa_index_fp8(spec))
+        return super().build_op(spec, enable_deterministic=enable_deterministic)
+
+    @classmethod
+    def get_cache_backend(cls):
+        """Get the Ascend cache backend provider."""
+        from .cache import AscendCacheBackend
+
+        return AscendCacheBackend
+
+    @staticmethod
+    def get_k_block_shape(
+        block_size: int,
+        num_heads: int,
+        head_size: int,
+        dtype: torch.dtype,
+    ) -> tuple[int, ...]:
+        if SocVersion.is_Ascend910():
+            return (block_size, num_heads, head_size)
+        else:
+            raise ValueError(f'LMDeploy Ascend does not support {SocVersion.device_name()} device currently.')
+
+    @staticmethod
+    def get_v_block_shape(
+        block_size: int,
+        num_heads: int,
+        head_size: int,
+        dtype: torch.dtype,
+    ) -> tuple[int, ...]:
+        if SocVersion.is_Ascend910():
+            return (block_size, num_heads, head_size)
+        else:
+            raise ValueError(f'LMDeploy Ascend does not support {SocVersion.device_name()} device currently.')
+
+    @classmethod
+    def update_step_context(cls, step_context):
+        """Update step context."""
+
+        block_num, block_size, *_ = step_context.kv_caches[0][0].shape
+        num_spec_tokens = get_step_ctx_manager().build_ctx.num_spec_tokens
+
+        # MoE EP dispatch/combine and graph capture are collective ops shared by all
+        # DP ranks, so they must agree on decode-vs-prefill. Use the DP-global state
+        # (if any rank is prefill, all ranks are prefill) for those paths; the local
+        # is_decoding / is_multi_token_decoding above stay rank-local for attention.
+        global_is_decoding = step_context.global_is_decoding()
+
+        if step_context.block_offsets.dtype != torch.int32:
+            step_context.block_offsets = step_context.block_offsets.to(torch.int32)
+        if step_context.kv_seqlens.dtype != torch.int32:
+            step_context.kv_seqlens = step_context.kv_seqlens.to(torch.int32)
+        if step_context.q_seqlens.dtype != torch.int32:
+            step_context.q_seqlens = step_context.q_seqlens.to(torch.int32)
+
+        kv_seqlens = step_context.kv_seqlens
+        cu_seqlens_q = torch.nn.functional.pad(
+            torch.cumsum(step_context.q_seqlens, dim=0, dtype=torch.int32),
+            (1, 0),
+        )
+        is_sparse_attention = _is_sparse_attention(step_context.model_config)
+        if is_sparse_attention:
+            cu_seqlens_q_cpu, kv_seqlens_cpu = None, None
+        else:
+            cu_seqlens_q_cpu, kv_seqlens_cpu = _get_cpu_attention_metadata(cu_seqlens_q, kv_seqlens)
+
+        if not step_context.is_decoding:
+            is_prefill_no_cache = (
+                False if is_sparse_attention else torch.equal(step_context.q_seqlens, step_context.kv_seqlens)
+            )
+            is_multi_token_decoding = False
+            is_decoding = False
+        else:
+            is_prefill_no_cache = False
+            is_multi_token_decoding = step_context.max_q_seqlen > 1
+            # is_decoding: True only for regular single-token decode (original semantics)
+            is_decoding = not is_multi_token_decoding
+
+        def get_total_slots():
+            if cls.total_slots is None:
+                cls.total_slots = torch.arange(
+                    block_num * block_size, dtype=torch.int32, device=step_context.block_offsets.device
+                )
+                cls.total_slots = cls.total_slots.view(block_num, block_size)
+            return cls.total_slots
+
+        def get_fia_causal_mask():
+            device = step_context.block_offsets.device
+            mask = cls.fia_causal_masks.get(device)
+            if mask is None:
+                mask = torch.triu(torch.ones(2048, 2048, dtype=torch.int8, device=device), diagonal=1)
+                cls.fia_causal_masks[device] = mask
+            return mask
+
+        def get_list_seqlens(is_decoding, is_prefill_no_cache, cu_seqlens_q_cpu=None, kv_seqlens_cpu=None):
+            if is_decoding:
+                q_seqlens_list, kv_seqlens_list = None, None
+            else:
+                cu_seqlens_q_list = cu_seqlens_q_cpu.tolist()
+                q_seqlens_list = [end - start for start, end in zip(cu_seqlens_q_list, cu_seqlens_q_list[1:])]
+                if is_prefill_no_cache:
+                    kv_seqlens_list = q_seqlens_list
+                else:
+                    kv_seqlens_list = kv_seqlens_cpu.tolist()
+            return q_seqlens_list, kv_seqlens_list
+
+        def get_kv_start_indices_and_attention_mask(is_decoding, q_seqlens_list, kv_seqlens_list):
+            kv_start_indices, attention_mask = [], []
+            if is_decoding:
+                idx = (step_context.kv_seqlens - 1) % block_size
+                block_num = (step_context.kv_seqlens - 1) // block_size
+                last_block = step_context.block_offsets.gather(1, block_num.view(-1, 1)).view(-1)
+                kv_start_indices = last_block * block_size + idx
+            else:
+                for i in range(len(q_seqlens_list)):
+                    q_seq_len = q_seqlens_list[i]
+                    kv_seq_len = kv_seqlens_list[i]
+
+                    history_length = kv_seq_len - q_seq_len
+                    total_slots = get_total_slots()
+                    slot_tables = total_slots[step_context.block_offsets[i]].view(-1)
+                    slots = slot_tables[history_length:kv_seq_len]
+                    kv_start_indices.append(slots)
+
+                # Standard GQA/MHA, MLA and paged prefill all use FIA sparse
+                # mode 3. Reuse the fixed split-fuse causal-mask template
+                # across all steps, following vllm-ascend.
+                attention_mask.append(get_fia_causal_mask())
+
+                kv_start_indices = torch.cat(kv_start_indices)
+
+            return kv_start_indices, attention_mask
+
+        def get_dist_meta():
+            if cls.dist_meta is not None:
+                return cls.dist_meta
+            dist_ctx = get_dist_manager().current_context()
+            dp_size, tp_size, ep_size = dist_ctx.dist_config.dp, dist_ctx.dist_config.tp, dist_ctx.dist_config.ep
+            tp_rank, ep_rank = dist_ctx.attn_tp_group.rank, dist_ctx.ep_rank
+            tp_group = dist_ctx.attn_tp_group.gpu_group
+            ep_group = dist_ctx.ep_gpu_group
+            cls.dist_meta = DistMeta(
+                dp_size=dp_size,
+                tp_size=tp_size,
+                ep_size=ep_size,
+                tp_rank=tp_rank,
+                ep_rank=ep_rank,
+                tp_group=tp_group,
+                ep_group=ep_group,
+            )
+            return cls.dist_meta
+
+        def get_tokens_info(dp_size, tp_size, ep_size, ep_group):
+            if ep_size <= 1:
+                return 0, 0, 0
+            # get padded_tokens_current_rank
+            is_graph = cls.enable_graph and global_is_decoding and (is_decoding or is_multi_token_decoding)
+            if is_graph:
+                from lmdeploy.pytorch.backends.ascend.graph_runner import get_ascend_compatible_size
+
+                # The cudagraph is keyed/captured on the GLOBAL padded batch
+                # (max over all DP ranks), so every DP rank executes the MoE with
+                # the same global token count. padded_tokens_current_rank must
+                # therefore mirror that global captured size; deriving it from this
+                # rank's local batch makes DP ranks disagree on the MC2
+                # dispatch/combine token count and corrupts the collective
+                # (MoeDistributeCombineV2 AICORE out-of-bounds). dp_meta.dp_batches
+                # holds the per-rank sequence counts; its max is the global batch
+                # the graph capture uses.
+                dp_meta = step_context.dp_meta
+                if dp_meta is not None and dp_meta.dp_batches:
+                    global_batch = max(dp_meta.dp_batches)
+                else:
+                    global_batch = step_context.q_seqlens.shape[0]
+                query_len = (num_spec_tokens + 1) if is_multi_token_decoding else 1
+                # actual tokens: this rank's real (non-padded) token count, used to
+                # build x_active_mask so MC2 ignores the graph padding region.
+                actual_tokens_current_rank = step_context.input_ids.numel()
+                padded_tokens_current_rank = min(get_ascend_compatible_size(global_batch), cls.max_batches) * query_len
+            else:
+                actual_tokens_current_rank = step_context.input_ids.numel()
+                padded_tokens_current_rank = actual_tokens_current_rank
+            # get max_tokens_across_dp
+            if dp_size > 1:
+                runtime_tokens_tensor = torch.tensor(
+                    [padded_tokens_current_rank], dtype=step_context.q_seqlens.dtype, device=torch.npu.current_device()
+                )
+                world_size = dp_size * tp_size
+                runtime_tokens_buffer = torch.zeros(
+                    [world_size], dtype=step_context.q_seqlens.dtype, device=torch.npu.current_device()
+                )
+                dist.all_gather_into_tensor(runtime_tokens_buffer, runtime_tokens_tensor, ep_group)
+                max_tokens_across_dp = torch.max(runtime_tokens_buffer).item()
+            else:
+                max_tokens_across_dp = padded_tokens_current_rank
+            return actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp
+
+        def init_mc2_token_capacity(tp_size):
+            max_num_tokens = min(cls.max_batches * (num_spec_tokens + 1), 512)
+            num_tokens_per_tp_rank = (max_num_tokens + tp_size - 1) // tp_size
+            return num_tokens_per_tp_rank * tp_size
+
+        def select_moe_comm_type(max_tokens_across_dp, dp_size, tp_size, ep_size):
+            if ep_size <= 1:
+                return AscendMoECommType.ALLGATHER
+            mc2_token_capacity = init_mc2_token_capacity(tp_size)
+            is_graph = cls.enable_graph and global_is_decoding and (is_decoding or is_multi_token_decoding)
+            if is_graph:
+                max_tokens_across_dp = math.ceil(max_tokens_across_dp / tp_size) * tp_size
+            if SocVersion.is_A2():
+                if max_tokens_across_dp <= mc2_token_capacity and dp_size * tp_size >= 16:
+                    return AscendMoECommType.MC2
+                else:
+                    return AscendMoECommType.ALLGATHER
+            elif SocVersion.is_A3():
+                if max_tokens_across_dp <= mc2_token_capacity and global_is_decoding:
+                    return AscendMoECommType.MC2
+                else:
+                    return AscendMoECommType.ALLTOALL
+            else:
+                raise ValueError(f'Unsupported soc_version: {SocVersion.soc_version()}')
+
+        def get_pad_info(
+            actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp, tp_size, moe_comm_type
+        ):
+            x_active_mask = None
+            if moe_comm_type == AscendMoECommType.MC2:
+                padded_size = math.ceil(max_tokens_across_dp / tp_size) * tp_size
+                pad_size = padded_size - padded_tokens_current_rank
+                x_active_mask = torch.ones(
+                    actual_tokens_current_rank, dtype=torch.bool, device=torch.npu.current_device()
+                )
+            elif moe_comm_type == AscendMoECommType.ALLTOALL:
+                pad_size = (-padded_tokens_current_rank) % tp_size
+            elif moe_comm_type == AscendMoECommType.ALLGATHER:
+                pad_size = max_tokens_across_dp - padded_tokens_current_rank
+            else:
+                pad_size = 0
+            return pad_size, x_active_mask
+
+        @lru_cache(maxsize=1)
+        def get_moe_group_name(group):
+            if group is None:
+                return None
+            local_rank = torch.distributed.get_rank(group=group)
+            backend = group._get_backend(torch.device('npu'))
+            group_name = backend.get_hccl_comm_name(local_rank)
+            return group_name
+
+        max_q_seqlen = step_context.max_q_seqlen
+        max_kv_seq_len = step_context.max_kv_seqlen
+        if is_sparse_attention:
+            kv_start_indices = _get_device_kv_start_indices(
+                step_context.q_seqlens,
+                step_context.kv_seqlens,
+                cu_seqlens_q,
+                step_context.block_offsets,
+                block_size,
+                step_context.input_ids.numel(),
+            )
+            attention_mask = []
+        else:
+            q_seqlens_list, kv_seqlens_list = get_list_seqlens(
+                is_decoding, is_prefill_no_cache, cu_seqlens_q_cpu, kv_seqlens_cpu
+            )
+            kv_start_indices, attention_mask = get_kv_start_indices_and_attention_mask(
+                is_decoding,
+                q_seqlens_list,
+                kv_seqlens_list,
+            )
+        kv_flatten_size = step_context.sum_kv_seqlen
+
+        if not cls.enable_graph and step_context.kv_quant_policy == 8:
+            record_file = os.getenv('ASCEND_QUANT_RECORD_FILE')
+            assert record_file, 'please specify valid ASCEND_QUANT_RECORD_FILE'
+            path = Path(record_file)
+            is_path = path.is_absolute() or path.is_relative_to('/')
+            exists = path.exists()
+            if not (is_path and exists):
+                raise ValueError('please specify valid ASCEND_QUANT_RECORD_FILE')
+            if not AscendKVQuantMeta.has_set_value:
+                total_layers = len(step_context.kv_caches)
+                AscendKVQuantMeta.set_value(
+                    step_context.block_offsets.device, step_context.model_config.dtype, record_file, total_layers
+                )
+
+        has_initial_state = None
+        spec_conv_offsets = None
+        spec_state_offsets = None
+        cache_seqlens = None
+        is_gated_delta = step_context.model_config.is_gated_delta
+        if is_gated_delta:
+            q_seqlens = step_context.q_seqlens
+            kv_seqlens = step_context.kv_seqlens
+            cache_seqlens = (kv_seqlens - q_seqlens).contiguous()
+
+            states_shapes = step_context.model_config.states_shapes
+            if not is_decoding and not is_multi_token_decoding and len(states_shapes) > 0:
+                has_initial_state = ~(q_seqlens == kv_seqlens)
+                # # Conv ring buffer: conv_state_len = conv_kernel_size + num_spec_tokens.
+                conv_state_len = states_shapes[0][0][0]
+                conv_kernel_size = conv_state_len - num_spec_tokens
+
+                if num_spec_tokens > 0:
+                    state_slots = 1 + num_spec_tokens
+                    spec_state_offsets = (
+                        torch.remainder(cache_seqlens, state_slots),
+                        torch.remainder(kv_seqlens, state_slots),
+                    )
+
+                    range_idx = torch.arange(
+                        -conv_kernel_size,
+                        0,
+                        device=cache_seqlens.device,
+                        dtype=torch.int32,
+                    )
+                    # Read the (conv_kernel_size - 1) tokens preceding the current write
+                    # window from the circular buffer.
+                    read_conv_offsets = torch.remainder(
+                        cache_seqlens[:, None] + range_idx[1:][None],
+                        conv_state_len,
+                    ).to(torch.int64)
+                    # Write the last conv_kernel_size tokens of this prefill batch into
+                    # circular-buffer slots so the next decode read aligns naturally.
+                    write_conv_offsets = torch.remainder(
+                        kv_seqlens[:, None] + range_idx[None],
+                        conv_state_len,
+                    ).to(torch.int64)
+                    spec_conv_offsets = (read_conv_offsets, write_conv_offsets)
+
+        attn_meta_cls = cls.get_attention_metadata_cls()
+        attn_metadata = attn_meta_cls(
+            is_decoding,
+            step_context.block_offsets,
+            q_start_loc=cu_seqlens_q[:-1],
+            q_seqlens=step_context.q_seqlens,
+            kv_seqlens=step_context.kv_seqlens,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_q_cpu=cu_seqlens_q_cpu,
+            kv_seqlens_cpu=kv_seqlens_cpu,
+            kv_start_indices=kv_start_indices,
+            block_size=block_size,
+            attention_mask=attention_mask,
+            is_prefill_no_cache=is_prefill_no_cache,
+            max_q_seqlen=max_q_seqlen,
+            max_kv_seq_len=max_kv_seq_len,
+            kv_flatten_size=kv_flatten_size,
+            quant_policy=step_context.kv_quant_policy,
+            quant_meta=AscendKVQuantMeta.quant_meta,
+            has_initial_state=has_initial_state,
+            is_multi_token_decoding=is_multi_token_decoding,
+            spec_conv_offsets=spec_conv_offsets,
+            spec_state_offsets=spec_state_offsets,
+            cache_seqlens=cache_seqlens,
+        )
+        step_context.attn_metadata = attn_metadata
+
+        cls.dist_meta = get_dist_meta()
+        actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp = get_tokens_info(
+            cls.dist_meta.dp_size, cls.dist_meta.tp_size, cls.dist_meta.ep_size, cls.dist_meta.ep_group
+        )
+        moe_comm_type = select_moe_comm_type(
+            max_tokens_across_dp, cls.dist_meta.dp_size, cls.dist_meta.tp_size, cls.dist_meta.ep_size
+        )
+        pad_size, x_active_mask = get_pad_info(
+            actual_tokens_current_rank,
+            padded_tokens_current_rank,
+            max_tokens_across_dp,
+            cls.dist_meta.tp_size,
+            moe_comm_type,
+        )
+        moe_group_name = get_moe_group_name(cls.dist_meta.ep_group)
+
+        moe_metadata = AscendMoeMetadata(
+            max_tokens_across_dp=max_tokens_across_dp,
+            pad_size=pad_size,
+            dp_size=cls.dist_meta.dp_size,
+            tp_size=cls.dist_meta.tp_size,
+            ep_size=cls.dist_meta.ep_size,
+            tp_rank=cls.dist_meta.tp_rank,
+            ep_rank=cls.dist_meta.ep_rank,
+            tp_group=cls.dist_meta.tp_group,
+            ep_group=cls.dist_meta.ep_group,
+            moe_comm_type=moe_comm_type,
+            x_active_mask=x_active_mask,
+            moe_group_name=moe_group_name,
+        )
+        step_context.moe_metadata = moe_metadata
+        return step_context
+
+    @staticmethod
+    def build_graph_runner(
+        model: torch.nn.Module,
+        model_config: ModelConfig,
+        cache_config: CacheConfig,
+        backend_config: BackendConfig,
+        device: torch.device,
+    ):
+        """Build graph runner."""
+        AscendOpsBackend.enable_graph = not backend_config.eager_mode
+        AscendOpsBackend.max_batches = cache_config.max_batches
+        from lmdeploy.pytorch.backends.ascend.graph_runner import AscendGraphRunner
+
+        is_mla = model_config.k_head_dim != model_config.v_head_dim
+        return AscendGraphRunner(model, model_config, cache_config, backend_config, device, is_mla=is_mla)
+
+    @staticmethod
+    def init():
+        """Initialize the native Ascend runtime explicitly."""
+        from .runtime import initialize
+
+        initialize()
+
+    @staticmethod
+    def ccl_backend():
+        return 'hccl'
+
+    @staticmethod
+    def device_count():
+        """Get num available devices."""
+        return torch.npu.device_count()
+
+    @staticmethod
+    def support_ray():
+        """Support ray."""
+        if not _envs.ascend_set_rt_visable_devices_by_ray:
+            os.environ['RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES'] = '1'
+        return True
+
+    @classmethod
+    def build_communicator(cls, cpu_group, device_group, dist_config, *, group_name='tp'):
+        """Build a Ascend communicator."""
+        from lmdeploy.pytorch import envs
+
+        cuda_communicator_enabled = envs.enable_flashinfer_allreduce or envs.enable_symm_mem_allreduce
+        assert not cuda_communicator_enabled, 'CUDA communicators are not supported by Ascend.'
+        return super().build_communicator(
+            cpu_group=cpu_group,
+            device_group=device_group,
+            dist_config=dist_config,
+            group_name=group_name,
+        )
+
+    @staticmethod
+    def get_attention_metadata_cls():
+        from .attention import AscendAttentionMetadata
+
+        return AscendAttentionMetadata
+
+    @staticmethod
+    def build_moe_forward_dptp(gemm_func):
+        from .moe_communication import AscendMoEForwardDPTP
+
+        return AscendMoEForwardDPTP(gemm_func)

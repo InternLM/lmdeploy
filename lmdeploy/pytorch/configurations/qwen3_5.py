@@ -87,12 +87,17 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
         if cfg.state_cache_is_indexed:
             cfg.state_cache_specs = [StateCacheSpec('state_0', conv_state_shape, dtype),
                                      StateCacheSpec('state_1', recurrent_state_shape, ssm_dtype)]
+        if device_type == 'ascend':
+            from lmdeploy.pytorch.backends.ascend.model_config import configure_qwen3_5_states
+            configure_qwen3_5_states(cfg, text_config, tp, num_spec_tokens, dtype)
         cfg.is_gated_delta = True
         cfg.check_env_func = _check_env_qwen3_next
 
         cfg.use_mrope = True
 
         # for spec
+        if device_type == 'ascend' and spec_method is not None:
+            assert spec_method == 'qwen3_5_mtp', 'Ascend Qwen3.5 supports qwen3_5_mtp.'
         if spec_method is not None:
             assert spec_method in ['qwen3_5_mtp', 'dflash']
             cfg.model_paradigm = 'ar_spec'

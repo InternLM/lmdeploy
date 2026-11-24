@@ -7,7 +7,7 @@ from lmdeploy.pytorch.distributed import get_dist_group, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 
 from ..backends import get_backend
-from ..backends.norm import LayerNormBuildSpec, RMSNormBuildSpec
+from ..backends.norm import LayerNormBuildSpec, RMSNormBuildSpec, RMSNormGatedBuildSpec
 from ..backends.qmodules import RMSNormW8A8BuildSpec
 from .utils import chunk_aligned, get_distribute_size
 
@@ -25,6 +25,50 @@ def rms_scale(a: torch.Tensor, b: torch.Tensor, dim: int = -1, eps: float = 1e-6
         b = b.float()
     out = a * torch.rsqrt(b.square().mean(dim, keepdim=True) + eps)
     return out.to(result_dtype)
+
+
+class RMSNormGated(nn.Module):
+    """RMS normalization followed by a SiLU or sigmoid gate.
+
+    Own the scale at ``weight`` so existing ``norm.weight`` and
+    ``o_norm.weight`` checkpoint names remain unchanged. Backend
+    implementations only perform computation and never register weights.
+    """
+
+    def __init__(self,
+                 hidden_size: int,
+                 eps: float = 1e-6,
+                 activation: str = 'silu',
+                 dtype: torch.dtype | None = None,
+                 device: torch.device | None = None,
+                 elementwise_affine: bool = True):
+        super().__init__()
+        spec = RMSNormGatedBuildSpec(hidden_size, eps, activation)
+        self.hidden_size = hidden_size
+        self.eps = eps
+        self.activation = activation
+        self.elementwise_affine = elementwise_affine
+        weight = torch.ones(hidden_size, dtype=dtype, device=device) if elementwise_affine else None
+        self.register_parameter('weight', nn.Parameter(weight, requires_grad=False) if weight is not None else None)
+        self.register_parameter('bias', None)
+        self.impl = get_backend().build_op(
+            spec,
+            enable_deterministic=get_build_model_context().enable_deterministic,
+        )
+
+    def reset_parameters(self):
+        """Initialize the direct multiplicative scale to one."""
+        if self.weight is not None:
+            nn.init.ones_(self.weight)
+
+    def forward(self,
+                x: torch.Tensor,
+                z: torch.Tensor,
+                residual: torch.Tensor | None = None,
+                prenorm: bool = False,
+                residual_in_fp32: bool = False):
+        """Apply normalization and gating with the selected backend."""
+        return self.impl.forward(x, self.weight, z, residual, prenorm, residual_in_fp32)
 
 
 class RMSNorm(nn.Module):

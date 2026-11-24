@@ -5,11 +5,11 @@ from typing import Literal
 import torch
 from torch import distributed as dist
 
-from lmdeploy.pytorch import envs as _envs
 from lmdeploy.utils import get_logger
 
 from ...communicator import DeviceCommunicator
 from .flashinfer_allreduce import FlashInferAllReduce
+from .policy import get_cuda_communication_policy
 from .symm_mem_allreduce import SymmetricMemoryAllReduce
 
 logger = get_logger('lmdeploy')
@@ -113,16 +113,14 @@ def build_cuda_communicator(cpu_group: dist.ProcessGroup, device_group: dist.Pro
                             dist_config, *, group_name: Literal['tp', 'dcp'] = 'tp'):
     """Agree on configuration and topology before optional collective setup."""
     backend = dist_config.communication_backend
-    compatible = dist_config.dp == 1 and dist_config.ep == 1 and not dist_config.enable_microbatch
-    if not compatible:
+    options = get_cuda_communication_policy(dist_config, group_name)
+    if options is None:
         return None
 
     # Legacy opt-ins keep their operation-specific meaning, including with the
     # default nccl policy. auto selects symmetric TP reduction unless FlashInfer
     # is explicitly requested; only auto enables DCP gather optimization.
-    flashinfer = group_name == 'tp' and _envs.enable_flashinfer_allreduce
-    symm_reduce = group_name == 'tp' and _envs.enable_symm_mem_allreduce
-    gather = backend == 'auto' or (group_name == 'tp' and _envs.enable_symm_mem_lmhead)
+    flashinfer, symm_reduce, gather = options
     policy = (backend, group_name, flashinfer, symm_reduce, gather)
     device = torch.cuda.current_device()
     local = (policy, socket.gethostname(), device,

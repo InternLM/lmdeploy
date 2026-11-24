@@ -80,6 +80,8 @@ def auto_awq(model: str,
             default to the default cache directory of huggingface.
     """
     try_import_deeplink(device)
+    if device == 'ascend':
+        device = 'npu'
     if not osp.exists(model):
         print(f'can\'t find model from local_path {model}, '
               'try to download from remote')

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from lmdeploy.serve.core.exceptions import RequestError
+from lmdeploy.serve.observability.request_trace import trace_frame
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 from .adapter import map_finish_reason
@@ -45,7 +46,7 @@ def _format_sse(data: AnthropicStreamEvent) -> str:
     for key in _OPTIONAL_EXTENSION_FIELDS:
         if payload.get(key) is None:
             payload.pop(key, None)
-    return f'event: {data.type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n'
+    return trace_frame(f'event: {data.type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n', payload)
 
 
 async def _results_or_error(result_generator):

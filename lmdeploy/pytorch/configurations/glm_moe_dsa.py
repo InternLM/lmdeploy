@@ -19,6 +19,10 @@ class GlmMoeDsaModelConfigBuilder(DeepseekV32ModelConfigBuilder):
     def build(cls, hf_config, model_path: str | None = None, **kwargs):
         """build."""
         is_draft_model = kwargs.get('is_draft_model', False)
+        is_ascend = kwargs.get('device_type') == 'ascend'
+        if is_ascend:
+            from lmdeploy.pytorch.backends.ascend.model_config import load_modelslim_config
+            load_modelslim_config(hf_config, model_path)
         quantization_config = getattr(hf_config, 'quantization_config', None)
         is_lmdeploy_patched_fp8 = (quantization_config is not None
                                    and quantization_config.get('quant_method') == 'fp8'
@@ -33,6 +37,10 @@ class GlmMoeDsaModelConfigBuilder(DeepseekV32ModelConfigBuilder):
         hf_config.head_dim = hf_config.qk_rope_head_dim
 
         config = super().build(hf_config, model_path=model_path, **kwargs)
+        if is_ascend:
+            config.k_head_dim = hf_config.qk_rope_head_dim
+            config.v_head_dim = hf_config.kv_lora_rank
+            config.split_mla_kv_cache = True
         if is_draft_model:
             hf_config.architectures[0] = 'GlmMoeDsaMTPModel'
         return config

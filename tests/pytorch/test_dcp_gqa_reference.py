@@ -22,6 +22,34 @@ def _round_cache(value, dtype, scale):
     return (value.float().div(scale).clamp(limits.min, limits.max).to(dtype).float() * scale).to(value.dtype)
 
 
+def _avoid_e5m2_midpoints(value, scale):
+    """Keep exact cache-ownership checks independent of compiler tie rounding.
+
+    Triton's pre-SM89 E5M2 software conversion rounds midpoints away from zero; native conversion and PyTorch use ties-
+    to-even. Move only those inputs one BF16 ULP toward zero, retaining ordinary FP8 rounding elsewhere.
+    """
+    magnitude = value.float().abs() / scale
+    spacing = torch.exp2(torch.floor(torch.log2(magnitude)) - 2).clamp_min(2**-16)
+    midpoint = (magnitude / spacing).frac() == 0.5
+    return torch.where(midpoint, torch.nextafter(value, torch.zeros_like(value)), value)
+
+
+def test_e5m2_fixture_agrees_with_native_and_software_rounding():
+    values = (torch.arange(-128, 129) / 128).to(torch.bfloat16)
+    for scale in (0.25, 0.5):
+        adjusted = _avoid_e5m2_midpoints(values, scale)
+        scaled = adjusted.float() / scale
+        # Independent emulation of Triton's pre-SM89 FP16 -> E5M2 lowering.
+        half_bits = scaled.half().view(torch.int16).int() & 0xffff
+        software = (((half_bits & 0xfffe) + 0x80) >> 8).byte()
+        native = scaled.to(torch.float8_e5m2).view(torch.uint8)
+        torch.testing.assert_close(software, native, rtol=0, atol=0)
+        changed = adjusted != values
+        assert changed.any()
+        torch.testing.assert_close(adjusted[changed],
+                                   torch.nextafter(values[changed], torch.zeros_like(values[changed])), rtol=0, atol=0)
+
+
 def _dense_reference(query, key, value, history):
     """FP32 causal attention with one KV head; no production DCP helpers."""
     positions = torch.arange(key.size(0), device=query.device)
@@ -64,6 +92,9 @@ def _gqa_worker(rank, rendezvous, quant_policy, world_size=2):
                  QuantPolicy.FP8_E5M2: torch.float8_e5m2}[quant_policy]
         k_scale = torch.tensor([0.25], device=device)
         v_scale = torch.tensor([0.5], device=device)
+        if quant_policy == QuantPolicy.FP8_E5M2:
+            key = _avoid_e5m2_midpoints(key, k_scale)
+            value = _avoid_e5m2_midpoints(value, v_scale)
         # Precision tradeoff bounds for this fixed, bounded workload. These are
         # separate from the tighter error against the exact mixed-precision oracle.
         quant_tol = {QuantPolicy.NONE: 0.02, QuantPolicy.FP8: 0.04, QuantPolicy.FP8_E5M2: 0.08}[quant_policy]
@@ -153,6 +184,8 @@ def _gqa_worker(rank, rendezvous, quant_policy, world_size=2):
 @pytest.mark.skipif(torch.cuda.device_count() < 2, reason='requires two idle CUDA GPUs')
 @pytest.mark.parametrize('quant_policy', [QuantPolicy.NONE, QuantPolicy.FP8, QuantPolicy.FP8_E5M2])
 def test_gqa_dcp_cache_and_attention_reference(tmp_path, quant_policy):
+    if quant_policy == QuantPolicy.FP8 and any(torch.cuda.get_device_capability(i)[0] < 9 for i in range(2)):
+        pytest.skip('Triton float8_e4m3fn conversion requires device with cc>=9.0')
     spawn_with_timeout(_gqa_worker, args=(f'file://{tmp_path}/gqa', quant_policy))
 
 

@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from lmdeploy.pytorch import envs as _envs
+from lmdeploy.pytorch.devices import is_ascend
 from lmdeploy.pytorch.distributed import get_dist_manager, get_ep_world_rank
 from lmdeploy.pytorch.model_inputs import StepContextManager
 from lmdeploy.pytorch.nn import (
@@ -261,6 +262,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                  prefix: str = ''):
         nn.Module.__init__(self)
         self.layer_idx = layer_idx
+        self.is_ascend = is_ascend()
         quantization_config = getattr(config, 'quantization_config', None)
         self.q_lora_rank = config.q_lora_rank
         self.hidden_size = config.hidden_size
@@ -286,17 +288,23 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 prefix=add_prefix('q_proj', prefix),
             )
         else:
-            self.fused_qkv_a_proj = build_merged_colwise_linear(
-                self.hidden_size,
-                [config.q_lora_rank, config.kv_lora_rank + config.qk_rope_head_dim],
-                bias=config.attention_bias,
-                dtype=dtype,
-                device=device,
-                is_tp=False,
-                quant_config=quantization_config,
-                out_names=[0, 1],
-                prefix=add_prefix('fused_qkv_a_proj', prefix),
-            )
+            if self.is_ascend:
+                self.q_a_proj = build_colwise_linear(
+                    self.hidden_size, config.q_lora_rank, bias=config.attention_bias,
+                    dtype=dtype, device=device, is_tp=False, quant_config=quantization_config,
+                    prefix=add_prefix('q_a_proj', prefix))
+            else:
+                self.fused_qkv_a_proj = build_merged_colwise_linear(
+                    self.hidden_size,
+                    [config.q_lora_rank, config.kv_lora_rank + config.qk_rope_head_dim],
+                    bias=config.attention_bias,
+                    dtype=dtype,
+                    device=device,
+                    is_tp=False,
+                    quant_config=quantization_config,
+                    out_names=[0, 1],
+                    prefix=add_prefix('fused_qkv_a_proj', prefix),
+                )
             self.q_a_layernorm = RMSNorm(config.q_lora_rank,
                                          1e-6,
                                          quant_config=quantization_config,
@@ -313,7 +321,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
                 prefix=add_prefix('q_b_proj', prefix),
             )
 
-        if self.q_lora_rank is None:
+        if self.q_lora_rank is None or self.is_ascend:
             self.kv_a_proj_with_mqa = build_colwise_linear(
                 self.hidden_size,
                 config.kv_lora_rank + config.qk_rope_head_dim,
@@ -337,6 +345,7 @@ class DeepseekV32Attention(DeepseekV2Attention):
             device=device,
             is_tp=True,
             quant_config=quantization_config,
+            prefix=add_prefix('kv_b_proj', prefix) if self.is_ascend else '',
         )
         self.kc = DeepseekV2BMM(self.num_heads,
                                 config.qk_nope_head_dim,
@@ -425,6 +434,9 @@ class DeepseekV32Attention(DeepseekV2Attention):
         pe_size = self.qk_rope_head_dim
         if self.q_lora_rank is None:
             q_a_states = hidden_states
+            key_states = self.kv_a_proj_with_mqa(hidden_states[0, :, None])
+        elif self.is_ascend:
+            q_a_states = self.q_a_proj(hidden_states)
             key_states = self.kv_a_proj_with_mqa(hidden_states[0, :, None])
         else:
             q_a_states, key_states = self.fused_qkv_a_proj(hidden_states).split(
