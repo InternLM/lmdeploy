@@ -23,7 +23,7 @@ from tests.pytorch.compact_state_reference import checkpoint_ready
 
 
 def _maker(width=4, budget=256, requests=2, *, prefix=False, block_size=16, checkpoint_budget=0, compact=True,
-           store_role=None, store_credits=1, save_alignment=None):
+           store_role=None, store_credits=1, auxiliary=False, save_alignment=None):
     from lmdeploy.messages import KVTransferConfig
     from lmdeploy.pytorch.kv_connector import KVConnectorRole, build_kv_connector
 
@@ -37,8 +37,9 @@ def _maker(width=4, budget=256, requests=2, *, prefix=False, block_size=16, chec
                         prefix_cache_state_budget=checkpoint_budget, enable_prefix_caching=prefix,
                         prefill_save_alignment=block_size if save_alignment is None else save_alignment,
                         max_prefill_token_num=budget)
-    capacity = SSMStateCapacity(requests + 1, width, checkpoint_budget, credits) if compact else None
+    capacity = SSMStateCapacity(requests + 1, width, checkpoint_budget, credits, auxiliary) if compact else None
     cache.compact_state_capacity = capacity
+    cache.enable_replayssm = auxiliary
     connector = build_kv_connector(KVConnectorRole.SCHEDULER, cache)
     scheduler = Scheduler(SchedulerConfig(max_batches=requests, max_session_len=4096), cache,
                           seq_meta=SequenceMeta(block_size, strategy=ARSequenceStrategy()),
@@ -2238,3 +2239,54 @@ def test_transfer_retirement_leaves_trie_invalidation_to_full_reset(monkeypatch)
     owner = maker.compact_state_manager
     assert not owner._units and not owner._banks and not owner._accesses
     assert not scheduler.state_checkpoints._forwards
+
+
+@pytest.mark.parametrize('auxiliary', [False, True])
+@pytest.mark.parametrize('width', [1, 6])
+def test_replay_native_16k_have_same_chunk_and_internal_checkpoint(auxiliary, width):
+    maker = _maker(width, budget=8192, requests=1, prefix=True, block_size=512,
+                   checkpoint_budget=8, auxiliary=auxiliary)
+    seq = maker.scheduler.add_session(0).add_sequence([1] * 16384)
+    for history in (0, 8192):
+        packet = maker._make_forward_inputs(True)
+        inputs, carrier = packet['inputs'], packet['cache_inputs']
+        assert inputs.seq_length.tolist() == [8192]
+        assert inputs.history_lengths.tolist() == [history]
+        assert inputs.ssm_state_meta.runtime_is_auxiliary == auxiliary
+        assert carrier.state_restore_plan is carrier.state_save_plan is None
+        if history == 8192:
+            assert inputs.ssm_prefill_meta.checkpoint_offsets.tolist() == [7680]
+            assert seq.prefix_cache.pending_save.step == 15872
+        maker.scheduler.activate_seqs([seq])
+        maker.update_running_seqs([seq], inputs)
+        ticket = carrier.ssm_state_access_id
+        maker.state_checkpoints.publish_forward(ticket)
+        maker.compact_state_manager.acknowledge(ticket)
+        maker.state_checkpoints.complete_forward(ticket)
+    assert not maker.has_pending_long_context_chunk()
+
+
+@pytest.mark.parametrize('auxiliary', [False, True])
+@pytest.mark.parametrize('width', [1, 6])
+def test_replay_native_8k_hit_finishes_16k_in_one_prefill(auxiliary, width):
+    maker = _maker(width, budget=8192, prefix=True, block_size=512, checkpoint_budget=8,
+                   auxiliary=auxiliary)
+    tokens = list(range(16384))
+    # Include lookahead: an 8192 state boundary must also match the next KV token.
+    source = _seed_real_scheduler(maker, tokens[:8193], 8192)
+    seq = maker.scheduler.add_session(1).add_sequence(tokens)
+    packet = maker._make_forward_inputs(True)
+    inputs, carrier = packet['inputs'], packet['cache_inputs']
+    assert inputs.history_lengths.tolist() == [8192]
+    assert inputs.seq_length.tolist() == [8192]
+    assert inputs.ssm_source_state_ids.tolist() == [source]
+    assert inputs.ssm_prefill_meta.checkpoint_offsets.tolist() == [7680]
+    assert seq.prefix_cache.pending_save.step == 15872
+    assert carrier.state_restore_plan is carrier.state_save_plan is None
+    assert not inputs.is_chunk
+    maker.scheduler.activate_seqs([seq])
+    assert not maker.has_pending_long_context_chunk()
+    ticket = carrier.ssm_state_access_id
+    maker.state_checkpoints.publish_forward(ticket)
+    maker.compact_state_manager.acknowledge(ticket, consumed_inputs=(True,))
+    maker.state_checkpoints.complete_forward(ticket)

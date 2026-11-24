@@ -209,7 +209,8 @@ def causal_conv1d_fn(
     # Create and call the TileLang kernel
     num_warps = 4  # Tunable parameter
     kernel = causal_conv1d_fwd(hidden_size, kernel_size, bias is not None, activation, dtype, x.stride(2),
-                               has_init_states, num_warps)
+                               has_init_states, num_warps, weight_dtype=weight.dtype,
+                               bias_dtype=bias.dtype if bias is not None else x.dtype)
 
     kernel(
         x_2d,

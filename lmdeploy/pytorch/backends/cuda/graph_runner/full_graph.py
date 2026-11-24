@@ -113,6 +113,7 @@ def _make_graph_meta(
         is_ssm=(bool(model_config.states_shapes)
                 or bool(model_config.state_cache_specs)),
         use_mrope=model_config.use_mrope,
+        needs_replayssm_force_flush=(model_config.enable_replayssm and model_config.model_paradigm == 'ar'),
         block_size=model_config.block_size,
         decode_query_len=decode_query_len,
         step_meta_plan=step_meta_plan,
