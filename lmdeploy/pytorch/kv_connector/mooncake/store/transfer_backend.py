@@ -30,7 +30,6 @@ backend, which transfers directly to/from NPU HBM.
 
 from __future__ import annotations
 
-import ctypes
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -164,6 +163,10 @@ class AscendTransferBackend(TransferBackend):
                 f'(got {fabric!r}): cross-process KV transfers need HIXL fabric memory.')
         self._transfer_engine: Any | None = None
         self.use_fabric_mem = True
+        # Keep the Store alive after MooncakeStoreWorker.shutdown() drops its
+        # self.store reference. This is intentionally an ordinary Python
+        # reference, so the backend instance must outlive worker shutdown.
+        self._retained_store: Any | None = None
 
     def _get_transfer_engine(self, local_hostname: str, device_name: str) -> Any:
         if self._transfer_engine is not None:
@@ -257,22 +260,23 @@ class AscendTransferBackend(TransferBackend):
         return torch.npu.Event()
 
     def close_store(self, store: Any) -> None:
-        """Leave the store to process exit, as vllm-ascend does (its mooncake
-        backend overrides neither ``Backend.close`` nor closes the store).
+        """Retain the Store on this backend instead of destroying it.
 
-        Both ``close()`` and pybind destruction deadlock in the driver's giant-page unmap for fabric segments
-        (verified at 16GB; the threshold is in (8GB, 16GB]), and Mooncake's C++ ``atexit`` handler tears the store
-        down safely at exit anyway -- so only the Python object must survive finalization. One raw reference the
-        GC cannot see keeps it alive without freezing every other object, unlike ``gc.freeze()``.
+        Worker shutdown has already stopped and joined the transfer threads.
+        The backend-owned strong reference keeps the pybind Store/RealClient
+        alive so Mooncake's native atexit handler can tear it down at process
+        exit. Unlike Py_IncRef, this reference is visible to Python and is
+        released if this backend instance is destroyed.
         """
-        incref = ctypes.pythonapi.Py_IncRef
-        incref.argtypes = (ctypes.py_object,)
-        incref.restype = None
-        incref(store)
+        if self._retained_store is not None and self._retained_store is not store:
+            raise RuntimeError('Ascend backend already retains a different Mooncake Store')
+        self._retained_store = store
 
     def close(self) -> None:
         # The TransferEngine has no explicit teardown in the mooncake API; dropping
         # the reference lets it be reclaimed when the worker shuts down.
+        # Do not clear _retained_store here: it must remain alive for native
+        # Mooncake atexit cleanup.
         self._transfer_engine = None
 
 
