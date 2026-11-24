@@ -4,6 +4,7 @@ import pytest
 
 pytest.importorskip('openai_harmony')
 
+from lmdeploy._guided_decoding import ensure_response_format_compilable
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, JsonSchema, ResponseFormat
 from lmdeploy.serve.parsers import _openai_harmony as openai_harmony_mod
 from lmdeploy.serve.parsers import gpt_oss_response_parser as gpt_oss_mod
@@ -296,8 +297,7 @@ class TestGptOssResponseParser:
 
 
 class TestGptOssResponseFormatGrammarConversion:
-    """Tests for GptOssResponseParser response_format → structural_tag
-    conversion (replaces the old Harmony-native prompt injection)."""
+    """Tests for response_format to structural_tag conversion."""
 
     @pytest.mark.parametrize('schema_dict', [
         {'type': 'object', 'properties': {'x': {'type': 'integer'}}},
@@ -322,8 +322,8 @@ class TestGptOssResponseFormatGrammarConversion:
         rf = parser.request.response_format
         assert rf is not None
         assert rf['type'] == 'structural_tag'
-        assert rf['structural_tag'] is not None
-        st_json = json.dumps(rf['structural_tag'])
+        ensure_response_format_compilable(rf)
+        st_json = json.dumps(rf)
         # Harmony channel markers must be present
         assert '<|channel|>final<|message|>' in st_json
         assert '<|end|>' in st_json
@@ -352,7 +352,7 @@ class TestGptOssResponseFormatGrammarConversion:
         rf = parser.request.response_format
         assert rf is not None
         assert rf['type'] == 'structural_tag'
-        assert rf['structural_tag'] is not None
+        ensure_response_format_compilable(rf)
 
 
     def test_grammar_failure_falls_back_to_prompt_injection(self, monkeypatch):
@@ -412,8 +412,8 @@ class TestGptOssToolGrammarInjection:
         rf = parser.request.response_format
         assert rf is not None
         assert rf['type'] == 'structural_tag'
-        assert rf['structural_tag'] is not None
-        st_json = json.dumps(rf['structural_tag'])
+        ensure_response_format_compilable(rf)
+        st_json = json.dumps(rf)
         assert 'functions.get_weather' in st_json
         for marker in extra_markers:
             assert marker in st_json
@@ -450,7 +450,8 @@ class TestGptOssToolGrammarInjection:
         rf = parser.request.response_format
         assert rf is not None
         assert rf['type'] == 'structural_tag'
-        st_json = json.dumps(rf['structural_tag'])
+        ensure_response_format_compilable(rf)
+        st_json = json.dumps(rf)
         assert 'functions.get_weather' in st_json
         # The non-selected tool should NOT appear
         assert 'functions.get_time' not in st_json
@@ -523,17 +524,50 @@ class TestGptOssToolGrammarInjection:
         rf = parser.request.response_format
         assert rf is not None
         assert rf['type'] == 'structural_tag'
-        st_json = json.dumps(rf['structural_tag'])
+        st_json = json.dumps(rf)
         # Tool grammar wins — must contain tool call, not plain json_schema
         assert 'functions.get_weather' in st_json
 
-    def test_tool_grammar_failure_clears_response_format(self, monkeypatch):
-        """Tool grammar failure must clear a non-text response_format so it
-        cannot conflict with Harmony tool-call constraints downstream.
+    @pytest.mark.parametrize(('tool_choice', 'requires_call'), [
+        pytest.param('auto', False, id='auto'),
+        pytest.param('required', True, id='required'),
+        pytest.param(
+            {'type': 'function', 'function': {'name': 'get_weather'}},
+            True,
+            id='named-function',
+        ),
+        pytest.param(
+            {
+                'type': 'allowed_tools',
+                'allowed_tools': {
+                    'mode': 'required',
+                    'tools': [{'type': 'function', 'function': {'name': 'get_weather'}}],
+                },
+            },
+            True,
+            id='allowed-required',
+        ),
+        pytest.param(
+            {
+                'type': 'allowed_tools',
+                'allowed_tools': {
+                    'mode': 'auto',
+                    'tools': [{'type': 'function', 'function': {'name': 'get_weather'}}],
+                },
+            },
+            False,
+            id='allowed-auto',
+        ),
+    ])
+    @pytest.mark.parametrize('response_format', [
+        None,
+        ResponseFormat(type='json_schema', json_schema=JsonSchema(name='test', schema={'type': 'object'})),
+    ], ids=['plain', 'structured'])
+    def test_tool_grammar_failure_respects_tool_choice(self, monkeypatch, tool_choice, requires_call, response_format):
+        """Required tool choices reject grammar failure; automatic choices
+        retain prompt-only fallback and clear a structured response format.
 
-        The monkeypatch is required because ``__init__`` filters tools to the
-        selected function before grammar construction, so no real input can
-        keep ``has_tools`` true while making ``_build_tool_grammar`` fail.
+        Simulate unavailable or failing XGrammar with a valid tool request.
         """
         monkeypatch.setattr(
             gpt_oss_mod.GptOssResponseParser,
@@ -551,12 +585,17 @@ class TestGptOssToolGrammarInjection:
                     'parameters': {'type': 'object', 'properties': {}},
                 },
             }],
-            tool_choice='required',
-            response_format=ResponseFormat(
-                type='json_schema',
-                json_schema=JsonSchema(name='test', schema={'type': 'object'}),
-            ),
+            tool_choice=tool_choice,
+            response_format=response_format,
         )
+        if requires_call:
+            with pytest.raises(ValueError, match='required'):
+                gpt_oss_mod.GptOssResponseParser(request=request)
+            return
         parser = gpt_oss_mod.GptOssResponseParser(request=request)
 
         assert parser.request.response_format is None
+        if response_format is not None:
+            assert '# Response Formats' in parser.request.messages[0]['content']
+        else:
+            assert parser.request.messages == request.messages

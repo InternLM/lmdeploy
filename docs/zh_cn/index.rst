@@ -58,6 +58,7 @@ LMDeploy 工具箱提供以下核心功能：
 
    llm/pipeline.md
    llm/api_server.md
+   llm/intern_decision.md
    llm/api_server_tools.md
    llm/api_server_reasoning.md
    llm/api_server_anthropic.md
@@ -111,6 +112,7 @@ LMDeploy 工具箱提供以下核心功能：
    advance/pytorch_profiling.md
    advance/metrics.md
    advance/context_parallel.md
+   advance/prefix_caching.md
    advance/spec_decoding.md
    advance/update_weights.md
    advance/checkpoint_engine.md

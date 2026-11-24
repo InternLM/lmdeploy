@@ -15,24 +15,24 @@ from .api_server import serve
 logger = get_logger('lmdeploy')
 
 
-def is_port_available(port: int) -> bool:
+def is_port_available(port: int, host: str) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(('127.0.0.1', port))
+            s.bind((host, port))
             return True
-        except Exception:
+        except OSError:
             return False
 
 
-def find_available_ports(num: int) -> list[int]:
+def find_available_ports(num: int, host: str, excluded_ports: set[int] | None = None) -> list[int]:
     """Find available port."""
 
     ports = []
     test_port = 3000
     while len(ports) < num:
         test_port += random.randint(10, 500)
-        if is_port_available(test_port):
+        if test_port not in (excluded_ports or ()) and is_port_available(test_port, host):
             ports.append(test_port)
 
     return ports
@@ -73,24 +73,28 @@ def _run_server(gpu_ids: list[int], model_path: str, **kwargs):
 
 
 def terminate_processes(processes: list[mp.Process]):
-    """Terminate child server process groups."""
+    """Let frontends close their engines before terminating leftover groups."""
     for process in processes:
-        logger.info(f'Terminating process group {process.pid}')
+        logger.info(f'Terminating server process {process.pid}')
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            if process.is_alive():
+                # Group SIGTERM also kills Ray before engine drain can finish.
+                process.terminate()
         except ProcessLookupError:
             # Process group may already be terminated
             pass
 
-    # Wait for processes to terminate
+    # Reap leftover helpers only after the frontend has closed its engine.
     for process in processes:
         process.join(timeout=15)
+        signum = signal.SIGTERM
         if process.is_alive():
             logger.warning(f'Process {process.pid} did not terminate gracefully, forcing kill')
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            signum = signal.SIGKILL
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            pass
 
     logger.info('All processes terminated')
 
@@ -107,10 +111,18 @@ def launch_server(num_nodes: int,
                   backend_config: PytorchEngineConfig | TurbomindEngineConfig,
                   proxy_url: str = None,
                   server_port: int | None = None,
+                  monitoring_port: int | None = None,
                   **kwargs):
     """Run multiple server processes in dp mode."""
     log_level = kwargs.get('log_level', 'ERROR')
     logger.setLevel(log_level)
+
+    if kwargs.get('task') == 'intern-decision':
+        from lmdeploy.serve.parsers.decision_parser import validate_decision_config
+        validate_decision_config(backend_config, kwargs.get('speculative_config'))
+        if kwargs.get('decision_temperature') is not None:
+            from lmdeploy.intern_decision_encoding import resolve_temperature
+            resolve_temperature(model_path, temperature=kwargs['decision_temperature'])
 
     mp.set_start_method('spawn', force=True)
     dp = backend_config.dp
@@ -130,15 +142,27 @@ def launch_server(num_nodes: int,
     server_urls = []
     processes = []
 
+    monitoring_ports = set()
+    if monitoring_port is not None:
+        if not 1 <= monitoring_port <= 65535 or monitoring_port + dp_per_node - 1 > 65535:
+            raise ValueError('monitoring_port range must be within 1-65535')
+        monitoring_ports = set(range(monitoring_port, monitoring_port + dp_per_node))
+
     if proxy_url is not None and server_port is None:
-        server_port_li = find_available_ports(dp_per_node)
+        server_port_li = find_available_ports(dp_per_node, server_name, excluded_ports=monitoring_ports)
     else:
         base_port = server_port if server_port is not None else 23333
         _validate_server_port_range(base_port, dp_per_node)
         server_port_li = [base_port + i for i in range(dp_per_node)]
         for port in server_port_li:
-            if not is_port_available(port):
+            if not is_port_available(port, server_name):
                 raise ValueError(f'Port {port} is not available')
+
+    for port in sorted(monitoring_ports):
+        if port in server_port_li:
+            raise ValueError(f'Monitoring port {port} overlaps an API server port')
+        if not is_port_available(port, server_name):
+            raise ValueError(f'Monitoring port {port} is not available')
 
     for idx in range(dp_per_node):
         backend_config_dp = copy.deepcopy(backend_config)
@@ -151,6 +175,8 @@ def launch_server(num_nodes: int,
         cur_server_kwargs.update(kwargs)
         cur_server_kwargs['server_name'] = server_name
         cur_server_kwargs['server_port'] = server_port
+        if monitoring_port is not None:
+            cur_server_kwargs['monitoring_port'] = monitoring_port + idx
         cur_server_kwargs['backend_config'] = backend_config_dp
         cur_server_kwargs['proxy_url'] = proxy_url
         url = f'{http_or_https}://{server_name}:{server_port}'

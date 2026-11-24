@@ -16,6 +16,7 @@ from openai.types.responses import (
 )
 
 from lmdeploy.serve.core.exceptions import RequestError
+from lmdeploy.serve.observability.request_trace import trace_frame
 from lmdeploy.serve.openai.responses.protocol import (
     ResponsesRequest,
     ResponsesResponse,
@@ -25,7 +26,7 @@ from lmdeploy.serve.openai.utils import filter_parallel_tool_call_deltas
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
-    return f'event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
+    return trace_frame(f'event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n', data)
 
 
 async def _results_or_error(result_generator):
@@ -228,6 +229,7 @@ async def stream_response(parsed_stream,
         text=text,
         tool_calls=tool_calls,
         input_tokens=input_tokens,
+        cached_tokens=0 if final_chunk is None else final_chunk.cached_tokens,
         output_tokens=output_tokens,
         reasoning_tokens=0 if final_chunk is None else final_chunk.reasoning_tokens or 0,
         finish_reason=finish_reason,

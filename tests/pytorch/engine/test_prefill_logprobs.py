@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,6 +9,7 @@ import torch
 from lmdeploy.messages import ResponseType
 from lmdeploy.pytorch.engine.engine_loop import EngineLoop
 from lmdeploy.pytorch.engine.model_agent.agent import BatchedLogProbs
+from lmdeploy.pytorch.engine.request import Response
 from lmdeploy.pytorch.messages import (
     MessageStatus,
     SamplingParam,
@@ -108,12 +110,43 @@ def test_engine_loop_rejects_malformed_compact_scoring_segments():
             messages, inputs)
 
 
+def test_engine_loop_keeps_only_own_requested_token_columns():
+    """Rows carry the batch union of logprob_extra_token_ids; each request gets
+    its own."""
+
+    def message(ids):
+        return SimpleNamespace(logprob_start_pos=0,
+                               sampling_param=SimpleNamespace(logprob_extra_token_ids=ids),
+                               resp=SimpleNamespace(_input_logprobs=None))
+
+    plain, scorer = message(None), message((32, 33))
+    # columns: [target, top-1, union of requested ids (32, 33)]
+    indices = torch.tensor([[7, 7, 32, 33], [8, 9, 32, 33]], dtype=torch.int32)
+    vals = -indices.float()
+    inputs = SimpleNamespace(is_decoding=False,
+                             logits_indices=torch.arange(2),
+                             seq_logit_length=torch.tensor([1, 1]))
+    EngineLoop._append_input_logprobs(
+        SimpleNamespace(logprobs=BatchedLogProbs(vals=vals, indices=indices)),
+        [plain, scorer], inputs)
+
+    assert plain.resp._input_logprobs == [([-7.0, -7.0], [7, 7])]
+    assert scorer.resp._input_logprobs == [([-8.0, -9.0, -32.0, -33.0],
+                                             [8, 9, 32, 33])]
+
+    bad = BatchedLogProbs(vals=vals[:, :3], indices=indices[:, :3])
+    with pytest.raises(RuntimeError, match='requested-token columns'):
+        EngineLoop._append_input_logprobs(SimpleNamespace(logprobs=bad),
+                                          [plain, scorer], inputs)
+
+
+@pytest.mark.parametrize('trace_enabled', [False, True])
 @pytest.mark.parametrize(('actual_ids', 'expected'), [
     ([], None),
     ([2, 3], [([-2.0], [2]), ([-3.0], [3])]),
 ])
-def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids,
-                                                             expected):
+def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids, expected, trace_enabled, monkeypatch):
+    monkeypatch.setattr('lmdeploy.pytorch.engine.engine_loop.TRACE_ENABLED', trace_enabled)
     loop = EngineLoop.__new__(EngineLoop)
 
     def finish_running(**kwargs):
@@ -123,10 +156,7 @@ def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids,
     loop.scheduler = SimpleNamespace(cache_routed_experts=lambda running: None)
     loop.config = SimpleNamespace(num_speculative_tokens=None,
                                   enable_metrics=False)
-    response = SimpleNamespace(data=None,
-                               _input_logprobs=None,
-                               is_done=False,
-                               type=ResponseType.SUCCESS)
+    response = Response(type=ResponseType.SUCCESS, sender_id=7, event=asyncio.Event())
     msg = SimpleNamespace(
         session_id=7,
         status=MessageStatus.RUNNING,
@@ -156,7 +186,7 @@ def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids,
         logits=None,
         all_routed_experts=None,
         ce_loss=None,
-        new_token_timestamp=0,
+        new_token_timestamp=10.0,
         stop_pos=torch.tensor([-1]),
         next_token_ids=torch.tensor([0]),
     )
@@ -166,6 +196,7 @@ def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids,
     assert result.finish
     assert result.token_ids.tolist() == []
     assert result.logprobs == expected
+    assert result.req_metrics.first_token_timestamp == response.first_token_timestamp == 0.0
 
     sent = []
     loop._send_resp = sent.append

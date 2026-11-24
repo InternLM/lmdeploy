@@ -13,6 +13,7 @@ import shortuuid
 from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
+from lmdeploy.serve.observability.request_trace import trace_frame
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, UsageInfo
 from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
@@ -30,9 +31,10 @@ class _FanoutResponseError(Exception):
 class _FanoutRequest:
     """Give each recursive endpoint call an isolated JSON payload."""
 
-    def __init__(self, request: Request, payload: dict):
+    def __init__(self, request: Request, payload: dict, choice_index: int):
         self._request = request
         self._payload = payload
+        self._trace_choice_index = choice_index
 
     def __getattr__(self, name):
         """Delegate request attributes not overridden by this wrapper."""
@@ -125,7 +127,7 @@ async def _invoke_choices(
         choice_payload.update(n=1, session_id=-1, seed=choice_request.seed)
         response = await endpoint(
             choice_request,
-            _FanoutRequest(raw_request, choice_payload),
+            _FanoutRequest(raw_request, choice_payload, index),
         )
         if isinstance(response, Response) and not isinstance(
                 response, StreamingResponse):
@@ -211,13 +213,17 @@ async def _stream_choice(
             buffer += chunk.decode() if isinstance(chunk, bytes) else chunk
             while '\n\n' in buffer:
                 event, buffer = buffer.split('\n\n', 1)
-                for line in event.splitlines():
+                # Unicode separators inside JSON strings are not SSE line breaks.
+                for line in event.split('\n'):
                     if not line.startswith('data: '):
                         continue
                     data = line.removeprefix('data: ')
                     if data == '[DONE]':
                         continue
                     payload = json.loads(data)
+                    if 'error' in payload:
+                        await queue.put(('error_event', payload))
+                        return
                     if payload.get(
                             'usage'
                     ) is not None and not payload.get('choices'):
@@ -263,6 +269,11 @@ def _batch_stream_payloads(payloads: list[dict]) -> list[dict]:
             batches.append(payload)
         else:
             batches[target]['choices'].append(choice)
+            # A later choice may be sending its first delta in this batch.
+            if 'prompt_text' in payload:
+                batches[target].setdefault('prompt_text', payload['prompt_text'])
+            if 'prompt_token_ids' in payload:
+                batches[target].setdefault('prompt_token_ids', payload['prompt_token_ids'])
         next_batch_by_index[index] = target + 1
 
     for payload in batches:
@@ -302,6 +313,7 @@ async def _collate_streams(
 
             payloads = []
             stream_error = None
+            error_event = None
             for item in items:
                 if item[0] == 'data':
                     payloads.append(item[1])
@@ -310,12 +322,19 @@ async def _collate_streams(
                     usages[item[1]] = item[2]
                 elif item[0] == 'done':
                     completed += 1
+                elif item[0] == 'error_event':
+                    error_event = item[1]
+                    break
                 else:
                     stream_error = item[1]
                     break
 
             for payload in _batch_stream_payloads(payloads):
-                yield f'data: {json.dumps(payload)}\n\n'
+                yield trace_frame(f'data: {json.dumps(payload, ensure_ascii=False)}\n\n', payload)
+            if error_event is not None:
+                yield trace_frame(f'data: {json.dumps(error_event, ensure_ascii=False)}\n\n', error_event)
+                yield trace_frame('data: [DONE]\n\n', terminal=True)
+                return
             if stream_error is not None:
                 raise stream_error
         if include_usage and len(usages) == len(tasks):
@@ -328,8 +347,8 @@ async def _collate_streams(
                 'choices': [],
                 'usage': _aggregate_usage(ordered_usages).model_dump(),
             }
-            yield f'data: {json.dumps(usage_response)}\n\n'
-        yield 'data: [DONE]\n\n'
+            yield trace_frame(f'data: {json.dumps(usage_response, ensure_ascii=False)}\n\n', usage_response)
+        yield trace_frame('data: [DONE]\n\n', terminal=True)
     finally:
         stopping.set()
         await _shield_cleanup(_cancel_tasks(tasks),

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import replace
+from threading import Event
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -17,7 +18,6 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.routing import Mount
 
 from lmdeploy.archs import get_task
 from lmdeploy.messages import (
@@ -33,15 +33,17 @@ from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.core.generation_config import (
     resolve_default_gen_config,
 )
+from lmdeploy.serve.monitoring import monitoring_server, mount_metrics
 from lmdeploy.serve.openai.endpoints import create_openai_router
 from lmdeploy.serve.openai.responses import create_responses_router
 from lmdeploy.serve.openai.utils import get_model_list
 from lmdeploy.serve.utils.server_utils import (
     AuthenticationMiddleware,
+    DecisionOnlyMiddleware,
     EngineSleepingMiddleware,
     protocol_error_response,
 )
-from lmdeploy.utils import get_logger
+from lmdeploy.utils import get_logger, get_model
 
 if TYPE_CHECKING:
     from lmdeploy.serve.managers import Session
@@ -51,18 +53,31 @@ if TYPE_CHECKING:
 logger = get_logger('lmdeploy')
 
 
+class _TracingFastAPI(FastAPI):
+    """Keep the FastAPI interface while tracing the complete ASGI stack."""
+
+    def build_middleware_stack(self):
+        """Observe framework error responses outside ServerErrorMiddleware."""
+        from lmdeploy.serve.observability.request_trace import RequestTraceMiddleware
+
+        return RequestTraceMiddleware(super().build_middleware_stack())
+
+
 class ServerContext:
     """Runtime dependencies and state shared by serving endpoints."""
 
     def __init__(self):
         self.async_engine: AsyncEngine | None = None
         self.health_monitor: EngineHealthMonitor | None = None
+        self.draining = Event()
         self.proxy_url: str | None = None
         self.api_server_url: str | None = None
         self.allow_terminate_by_client = False
         self.enable_abort_handling = False
         self.response_parser_cls: type[ResponseParser] | None = None
         self.default_gen_config: dict = {}
+        # A successfully initialized context enables decision scoring; otherwise the endpoint returns 503.
+        self.decision_context = None
 
     @property
     def engine_config(self):
@@ -96,6 +111,19 @@ class ServerContext:
         if session_id is None:
             return None
         return session_mgr.get(session_id, create_if_not_exists=False)
+
+
+class APIServer(uvicorn.Server):
+    """Publish frontend shutdown before Uvicorn stops accepting connections."""
+
+    def __init__(self, config: uvicorn.Config, draining: Event):
+        super().__init__(config)
+        self.draining = draining
+
+    async def shutdown(self, sockets=None):
+        self.draining.set()
+        await super().shutdown(sockets=sockets)
+
 
 def handle_torchrun():
     """To disable mmengine logging logic when using torchrun."""
@@ -192,27 +220,13 @@ def set_parsers(context: ServerContext,
     context.response_parser_cls = cls
 
 
-def mount_metrics(app: FastAPI,
-                  backend_config: PytorchEngineConfig | TurbomindEngineConfig):
-    if not getattr(backend_config, 'enable_metrics', False):
-        return
-
-    from prometheus_client import REGISTRY, make_asgi_app
-    registry = REGISTRY
-
-    # Add prometheus asgi middleware to route /metrics requests
-    metrics_route = Mount('/metrics', make_asgi_app(registry=registry))
-
-    # Workaround for 307 Redirect for /metrics
-    metrics_route.path_regex = re.compile('^/metrics(?P<path>.*)$')
-    app.routes.append(metrics_route)
-
-
 def create_lifespan_handler(backend_config: PytorchEngineConfig
-                            | TurbomindEngineConfig,
+                            | TurbomindEngineConfig | None,
                             async_engine: AsyncEngine,
-                            context: ServerContext):
+                            context: ServerContext,
+                            monitoring_config: dict | None = None):
     """Factory function to create a lifespan handler."""
+    enable_metrics = backend_config is not None and backend_config.enable_metrics
 
     @asynccontextmanager
     async def lifespan_handler(app: FastAPI):
@@ -221,9 +235,7 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig
         context.health_monitor = health_monitor
         try:
             async_engine.start_loop(asyncio.get_running_loop(), use_async_api=True)
-            register_to_proxy(context)
-            health_monitor.start()
-            if getattr(backend_config, 'enable_metrics', False):
+            if enable_metrics:
                 metrics_processor.start_metrics_handler(enable_metrics=True)
                 log_interval = 10.
 
@@ -241,7 +253,16 @@ def create_lifespan_handler(backend_config: PytorchEngineConfig
 
                 task = asyncio.create_task(_force_log())
 
-            yield
+            async with AsyncExitStack() as stack:
+                if monitoring_config is not None:
+                    await stack.enter_async_context(monitoring_server(
+                        health_monitor,
+                        draining=context.draining,
+                        enable_metrics=enable_metrics,
+                        **monitoring_config))
+                health_monitor.start()
+                register_to_proxy(context)
+                yield
         finally:
             await health_monitor.stop()
             if context.health_monitor is health_monitor:
@@ -281,6 +302,9 @@ def serve(model_path: str,
           speculative_config: SpeculativeConfig | None = None,
           allowed_media_domains: list[str] | None = None,
           generation_config: str = 'auto',
+          task: str | None = None,
+          decision_temperature: float | None = None,
+          monitoring_port: int | None = None,
           **kwargs):
     """An example to perform model inference through the command line
     interface.
@@ -309,6 +333,8 @@ def serve(model_path: str,
             Default to None.
         server_name (str): host ip for serving
         server_port (int): server port
+        monitoring_port (int | None): Optional port for a monitoring thread serving
+            /health and /metrics independently of the inference API event loop.
         tp (int): tensor parallel
         allow_origins (list[str]): a list of allowed origins for CORS
         allow_credentials (bool): whether to allow credentials for CORS
@@ -334,10 +360,50 @@ def serve(model_path: str,
         allow_terminate_by_client (bool): Allow request from client to terminate server.
         allowed_media_domains (list[str] | None): Optional exact hostname
             allowlist for HTTP(S) media URLs.
+        task (str | None): Set to ``'intern-decision'`` to enable decision scoring
+            on the PyTorch backend.
+        decision_temperature (float | None): Explicit decision calibration,
+            overriding checkpoint metadata and known model-path temperatures.
+            Must be finite and positive. Unknown models without calibration fail startup.
     """
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
+
+    if monitoring_port is not None:
+        if not 1 <= monitoring_port <= 65535:
+            raise ValueError('monitoring_port must be between 1 and 65535')
+        if monitoring_port == server_port:
+            raise ValueError('monitoring_port must differ from server_port')
+    if isinstance(api_keys, str):
+        api_keys = [api_keys]
+
+    if task not in (None, 'intern-decision'):
+        raise ValueError(f'Unknown task: {task!r}. Use task="intern-decision".')
+    if decision_temperature is not None:
+        if task != 'intern-decision':
+            raise ValueError('decision_temperature requires task="intern-decision".')
+        from lmdeploy.intern_decision_encoding import resolve_temperature
+        decision_temperature = resolve_temperature(model_path, temperature=decision_temperature)
+    original_model_path = model_path
+
+    if task is not None:
+        from lmdeploy.intern_decision_encoding import resolve_temperature
+        from lmdeploy.serve.parsers.decision_parser import validate_decision_config
+        if backend_config is None:
+            backend_config = PytorchEngineConfig()
+        validate_decision_config(backend_config, speculative_config)
+        backend_config = replace(backend_config, hf_overrides={
+            **(backend_config.hf_overrides or {}), '_lmdeploy_task': 'intern-decision',
+        })
+        # Input scoring is PyTorch-only; like the CLI, the task selects that backend.
+        backend = 'pytorch'
+        if not os.path.exists(model_path):
+            # Load weights and calibration metadata from the same resolved checkpoint.
+            model_name = model_name if model_name is not None else model_path
+            model_path = get_model(model_path, backend_config.download_dir, backend_config.revision)
+        decision_temperature = resolve_temperature(
+            model_path, temperature=decision_temperature, original_model_path=original_model_path)
 
     server_context = ServerContext()
     server_context.allow_terminate_by_client = allow_terminate_by_client
@@ -368,6 +434,11 @@ def serve(model_path: str,
         # router replay
         if backend_config.enable_return_routed_experts:
             backend_config.enable_transfer_obj_ref = True
+    from lmdeploy.serve.observability.request_trace import supported_engine
+    from lmdeploy.trace import ENABLED as TRACE_ENABLED
+
+    trace_enabled = TRACE_ENABLED and supported_engine(backend, backend_config)
+
     server_context.async_engine = pipeline_class(
         model_path=model_path,
         model_name=model_name,
@@ -378,21 +449,40 @@ def serve(model_path: str,
         trust_remote_code=trust_remote_code,
         speculative_config=speculative_config,
         allowed_media_domains=allowed_media_domains,
+        enable_request_trace=trace_enabled,
         **kwargs)
     set_parsers(server_context, reasoning_parser, tool_call_parser)
+    if task is not None:
+        from lmdeploy.serve.parsers.decision_parser import create_decision_context
+        try:
+            server_context.decision_context = create_decision_context(
+                server_context.async_engine, model_path, temperature=decision_temperature,
+                original_model_path=original_model_path)
+        except BaseException:
+            server_context.async_engine.close()
+            raise
 
     # create FastAPI lifespan events
     lifespan = create_lifespan_handler(backend_config,
                                        server_context.async_engine,
-                                       server_context)
+                                       server_context,
+                                       monitoring_config=(dict(host=server_name,
+                                                               port=monitoring_port,
+                                                               api_keys=api_keys,
+                                                               ssl_keyfile=ssl_keyfile,
+                                                               ssl_certfile=ssl_certfile)
+                                                          if monitoring_port is not None else None))
 
+    app_class = _TracingFastAPI if trace_enabled else FastAPI
     if disable_fastapi_docs:
-        app = FastAPI(docs_url=None,
-                      redoc_url=None,
-                      openapi_url=None,
-                      lifespan=lifespan)
+        app = app_class(docs_url=None,
+                        redoc_url=None,
+                        openapi_url=None,
+                        lifespan=lifespan)
     else:
-        app = FastAPI(docs_url='/', lifespan=lifespan)
+        app = app_class(docs_url='/', lifespan=lifespan)
+
+    from lmdeploy.serve.observability.request_trace import HEADER
 
     router = create_openai_router(server_context)
     app.include_router(router)
@@ -400,16 +490,20 @@ def serve(model_path: str,
     app.include_router(create_responses_router(server_context))
     app.add_exception_handler(RequestValidationError,
                               validation_exception_handler)
-    mount_metrics(app, backend_config)
+    mount_metrics(app, backend_config is not None and backend_config.enable_metrics)
 
     if allow_origins:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=allow_origins,
+            expose_headers=[HEADER] if trace_enabled else [],
             allow_credentials=allow_credentials,
             allow_methods=allow_methods,
             allow_headers=allow_headers,
         )
+
+    if server_context.decision_context is not None:
+        app.add_middleware(DecisionOnlyMiddleware)
 
     if api_keys is not None and (tokens := [key for key in api_keys if key]):
         app.add_middleware(AuthenticationMiddleware, tokens=tokens)
@@ -434,14 +528,26 @@ def serve(model_path: str,
             f'HINT:    Please open \033[93m\033[1m{http_or_https}://'
             f'{server_name}:{server_port}\033[0m in a browser for detailed api'
             ' usage!!!')
-    uvicorn.run(app=app,
-                host=server_name,
-                port=server_port,
-                log_level=os.getenv('UVICORN_LOG_LEVEL', 'info').lower(),
-                ssl_keyfile=ssl_keyfile,
-                ssl_certfile=ssl_certfile,
-                timeout_keep_alive=int(
-                    os.environ.get('UVICORN_TIMEOUT_KEEP_ALIVE', 5)))
+    config = uvicorn.Config(app=app,
+                            host=server_name,
+                            port=server_port,
+                            log_level=os.getenv('UVICORN_LOG_LEVEL', 'info').lower(),
+                            ssl_keyfile=ssl_keyfile,
+                            ssl_certfile=ssl_certfile,
+                            timeout_keep_alive=int(
+                                os.environ.get('UVICORN_TIMEOUT_KEEP_ALIVE', 5)))
+    if config.workers > 1:
+        logger.error('Multiple Uvicorn workers are not supported. Set WEB_CONCURRENCY=1 and use --dp for replicas.')
+        server_context.async_engine.close()
+        raise SystemExit(3)
+    server = APIServer(config, draining=server_context.draining)
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        pass
+    # Preserve uvicorn.run's non-zero exit status on failed startup.
+    if not server.started:
+        raise SystemExit(3)
 
 
 if __name__ == '__main__':

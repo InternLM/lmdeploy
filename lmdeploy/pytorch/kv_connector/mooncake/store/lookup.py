@@ -9,6 +9,7 @@ import socket
 import threading
 from collections.abc import Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
@@ -153,17 +154,19 @@ class LookupKeyServer:
             os.close(lock_fd)
 
     def _handle_lookup(self, frames: list[zmq.Frame]) -> bytes:
-        if len(frames) != 4:
-            raise ValueError(f'lookup request must have 4 frames, got {len(frames)}')
+        if len(frames) != 5:
+            raise ValueError(f'lookup request must have 5 frames, got {len(frames)}')
         token_frame = bytes(frames[1])
         hash_len_frame = bytes(frames[2])
-        if len(token_frame) != 4 or len(hash_len_frame) != 2:
+        recompute_frame = bytes(frames[4])
+        if len(token_frame) != 4 or len(hash_len_frame) != 2 or len(recompute_frame) != 4:
             raise ValueError('lookup request has an invalid integer frame width')
 
         token_len = int.from_bytes(token_frame, byteorder='big')
         hash_len = int.from_bytes(hash_len_frame, byteorder='big')
         block_hashes = BlobBlockHashes(frames[3].buffer, hash_len)
-        result = self.store_worker.lookup(token_len, block_hashes)
+        recompute_blocks = int.from_bytes(recompute_frame, byteorder='big')
+        result = self.store_worker.lookup(token_len, block_hashes, recompute_blocks=recompute_blocks)
         if (isinstance(result, bool) or not isinstance(result, int) or result < 0 or result > token_len
                 or result >= 2**32):
             raise ValueError(f'lookup result must be a u32 integer, got {result!r}')
@@ -229,6 +232,14 @@ class LookupKeyServer:
         self.thread.join()
 
 
+@dataclass
+class _LookupQuery:
+    """One RPC retained until admission consumes or cancels its result."""
+
+    future: Future[int]
+    admission_started: bool = False
+
+
 class LookupKeyClient:
     """Scheduler-side ZMQ client with non-blocking Future polling."""
 
@@ -238,7 +249,7 @@ class LookupKeyClient:
         self.context: zmq.Context | None = None
         self.socket: zmq.Socket | None = None
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='MooncakeLookupClient')
-        self.futures: dict[RequestId, Future[int]] = {}
+        self.queries: dict[RequestId, _LookupQuery] = {}
         self._closed = False
 
     def _make_socket(self) -> zmq.Socket:
@@ -274,7 +285,8 @@ class LookupKeyClient:
             self.context = None
 
     @staticmethod
-    def _encode_lookup(token_len: int, block_hashes: Sequence[bytes]) -> tuple[bytes, bytes, bytes, bytes]:
+    def _encode_lookup(token_len: int, block_hashes: Sequence[bytes],
+                       recompute_blocks: int) -> tuple[bytes, bytes, bytes, bytes, bytes]:
         if isinstance(token_len, bool) or not isinstance(token_len, int) or token_len < 0 or token_len >= 2**32:
             raise ValueError('token_len must be a u32 integer')
 
@@ -296,10 +308,11 @@ class LookupKeyClient:
             token_len.to_bytes(4, byteorder='big'),
             hash_len.to_bytes(2, byteorder='big'),
             b''.join(hashes),
+            recompute_blocks.to_bytes(4, byteorder='big'),
         )
 
-    def _lookup(self, token_len: int, block_hashes: Sequence[bytes]) -> int:
-        frames = self._encode_lookup(token_len, block_hashes)
+    def _lookup(self, token_len: int, block_hashes: Sequence[bytes], recompute_blocks: int) -> int:
+        frames = self._encode_lookup(token_len, block_hashes, recompute_blocks)
         rpc_socket = self._ensure_socket()
         try:
             rpc_socket.send_multipart(frames, copy=False)
@@ -314,20 +327,36 @@ class LookupKeyClient:
             raise RuntimeError(f'lookup response {result} exceeds token_len {token_len}')
         return result
 
+    def submit(
+        self,
+        req_id: RequestId,
+        token_len: int,
+        block_hashes: Sequence[bytes],
+        *,
+        recompute_blocks: int = 0,
+    ) -> None:
+        """Start a query once, retaining even a completed result for
+        admission."""
+        if self._closed:
+            raise RuntimeError('LookupKeyClient is closed')
+        if req_id not in self.queries:
+            self.queries[req_id] = _LookupQuery(self.executor.submit(
+                self._lookup, token_len, tuple(block_hashes), recompute_blocks))
+
     def lookup(
         self,
         req_id: RequestId,
         token_len: int,
         block_hashes: Sequence[bytes],
         non_block: bool = True,
+        *,
+        recompute_blocks: int = 0,
     ) -> int | None:
         """Submit once per request and poll without blocking by default."""
-        if self._closed:
-            raise RuntimeError('LookupKeyClient is closed')
-        future = self.futures.get(req_id)
-        if future is None:
-            future = self.executor.submit(self._lookup, token_len, tuple(block_hashes))
-            self.futures[req_id] = future
+        self.submit(req_id, token_len, block_hashes, recompute_blocks=recompute_blocks)
+        query = self.queries[req_id]
+        query.admission_started = True
+        future = query.future
         if non_block and not future.done():
             return None
         try:
@@ -336,28 +365,32 @@ class LookupKeyClient:
             logger.error('Asynchronous Mooncake lookup failed for %s: %s', req_id, e, exc_info=True)
             return 0
         finally:
-            self.futures.pop(req_id, None)
+            self.queries.pop(req_id, None)
 
     def discard(self, req_id: RequestId) -> None:
         """Drop an in-flight or completed lookup for an aborted request."""
-        future = self.futures.pop(req_id, None)
-        if future is not None:
-            future.cancel()
+        query = self.queries.pop(req_id, None)
+        if query is not None:
+            query.future.cancel()
 
     def is_pending(self, req_id: RequestId) -> bool:
-        """Return whether a request's lookup Future is still running."""
-        future = self.futures.get(req_id)
-        return future is not None and not future.done()
+        """Whether admission already needs an unfinished query.
+
+        Speculation alone must not skip local prefix matching: a full local
+        hit can cancel the query without ever waiting for its result.
+        """
+        query = self.queries.get(req_id)
+        return query is not None and query.admission_started and not query.future.done()
 
     def close(self) -> None:
         """Cancel queued lookups and release the client socket exactly once."""
         if self._closed:
             return
         self._closed = True
-        futures = list(self.futures.values())
-        self.futures.clear()
-        for future in futures:
-            future.cancel()
+        queries = list(self.queries.values())
+        self.queries.clear()
+        for query in queries:
+            query.future.cancel()
         close_future = self.executor.submit(self._close_transport)
         close_future.result()
         self.executor.shutdown(wait=True, cancel_futures=True)

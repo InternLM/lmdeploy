@@ -63,21 +63,20 @@ class DPForwardInputsMaker:
         self._ready_event = torch.cuda.Event()
         self._ready_event.record()
 
-        # other
-        self.make_dummy_meta = model_agent.make_dummy_meta
-
     def _make_dummy_forward_inputs(self):
         """Make dummy forward inputs."""
         is_decoding = self.cache_config.role != EngineRole.Prefill
         dist_config = self.dist_ctx.dist_config
         batch_size = 2 if dist_config.enable_microbatch else 1
         batch_size = min(self.cache_config.max_batches, batch_size)
+        # KV wakeup can replace the agent metadata after empty initialization.
+        meta = self.model_agent.make_dummy_meta
         model_inputs = self.inputs_strategy.make_dummy(batch_size,
                                                        is_decoding,
                                                        device=self.device,
                                                        vocab_size=self.model_config.vocab_size,
-                                                       meta=self.make_dummy_meta)
-        extra_inputs = self.inputs_strategy.make_dummy_extra_inputs(model_inputs, meta=self.make_dummy_meta)
+                                                       meta=meta)
+        extra_inputs = self.inputs_strategy.make_dummy_extra_inputs(model_inputs, meta=meta)
         return_logits = self.model_agent.spec_agent.is_enabled()
         forward_inputs = dict(inputs=model_inputs, extra_inputs=extra_inputs, return_logits=return_logits)
         return forward_inputs
@@ -122,36 +121,42 @@ class DPForwardInputsMaker:
                 return
             await asyncio.sleep(0)
 
-    async def _gather_has_inputs(self, has_inputs: bool = False):
-        """Broadcast has inputs."""
+    async def _gather_input_state(self, has_inputs: bool, is_sleeping: bool):
+        """Agree on real work and sleep before leaving the attention-TP phase.
+
+        Sleep RPCs reach TP workers independently. Even a sleeping rank must enter this collective, or its peer can wait
+        here while it enters the world-wide DP metadata collective. A local sleep transition makes the whole attention-
+        TP group use dummy inputs until DP sleep rendezvous.
+        """
         attn_tp_group = self.dist_ctx.attn_tp_group
         attn_tp = self.dist_ctx.dist_config.attn_tp
         if attn_tp == 1:
-            return has_inputs
+            return has_inputs, is_sleeping
 
         group = attn_tp_group.cpu_group
-        has_inputs = torch.tensor((int(has_inputs), ))
-        handle = dist.all_reduce(has_inputs, op=dist.ReduceOp.SUM, group=group, async_op=True)
+        state = torch.tensor((int(has_inputs), int(is_sleeping)))
+        handle = dist.all_reduce(state, op=dist.ReduceOp.SUM, group=group, async_op=True)
         future = handle.get_future()
         while not future.done():
             await asyncio.sleep(0)
         future.wait()
-        return (has_inputs > 0).item()
+        return bool(state[0]), bool(state[1])
 
     async def _get_inputs(self):
-        if self._is_sleeping():
-            return None
-
         await self._wait_preprocessed_real_inputs()
 
-        # get local forward inputs
-        try:
-            forward_inputs = self._in_que.get_nowait()
-        except asyncio.QueueEmpty:
-            forward_inputs = None
+        # Do not consume stale queued data once this worker starts sleeping.
+        is_sleeping = self._is_sleeping()
+        forward_inputs = None
+        if not is_sleeping:
+            try:
+                forward_inputs = self._in_que.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
 
-        # async inputs around tp group
-        has_inputs = await self._gather_has_inputs(forward_inputs is not None)
+        has_inputs, any_sleeping = await self._gather_input_state(forward_inputs is not None, is_sleeping)
+        if any_sleeping:
+            return None
         if has_inputs and forward_inputs is None:
             forward_inputs = await self._in_que.get()
 

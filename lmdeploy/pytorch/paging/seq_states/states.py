@@ -47,6 +47,9 @@ class SequenceLifecycle:
         self.release_paging_resources(seq)
         seq.session.sequences.pop(seq.seq_id)
         self._seq_manager.unregister_sequence(seq)
+        # State/sequence cycles can outlive a request until cyclic GC runs.
+        # Drop large inputs here, after terminal paging ownership is released.
+        seq.history_multimodals.multimodals.clear()
 
     def end_sequence(self, seq: SchedulerSequence) -> None:
         """Notify the connector that the request ended, then remove it."""
@@ -73,7 +76,10 @@ class SequenceLifecycle:
             seq.prefix_cache.trie_cursor = None
             seq.prefix_cache.match_start_step = -1
             seq.prefix_cache.recompute_overlap.clear_tracking()
-        seq.cached_tokens = 0
+        # Recompute releases local ownership, not the current request's
+        # already accepted prompt-cache usage.
+        if not seq.prefix_cache.suppress_match_stats:
+            seq.cached_tokens = 0
         seq.kv_token_limit = None
         if seq.num_blocks > 0:
             self._block_manager.free(seq)

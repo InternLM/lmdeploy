@@ -80,34 +80,6 @@ response = client.chat.completions.create(
 print(response)
 ```
 
-### 使用 lmdeploy `APIClient` 接口
-
-如果你想用 `/v1/chat/completions` 接口，你可以尝试下面代码：
-
-```python
-from lmdeploy.serve.openai.api_client import APIClient
-
-api_client = APIClient(f'http://0.0.0.0:23333')
-model_name = api_client.available_models[0]
-messages = [{
-    'role':
-    'user',
-    'content': [{
-        'type': 'text',
-        'text': 'Describe the image please',
-    }, {
-        'type': 'image_url',
-        'image_url': {
-            'url':
-            'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
-        },
-    }]
-}]
-for item in api_client.chat_completions_v1(model=model_name,
-                                           messages=messages):
-    print(item)
-```
-
 ### 使用 Java/Golang/Rust
 
 可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。

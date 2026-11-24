@@ -60,6 +60,9 @@ env:
   OFFLINE_CODE_PATH: /nvme/qa_test_models/offline_pkg/lmdeploy
   OFFLINE_REQUIREMENTS: /nvme/qa_test_models/offline_pkg/requirements.txt
   RUN_ID: ${{ inputs.repo_ref || 'main' }}_${{ github.run_id }}
+  GIT_CONFIG_COUNT: 1
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: '*'
 
 jobs:
   linux-build:
@@ -286,7 +289,7 @@ jobs:
         continue-on-error: true
         if: (matrix.backend == 'pytorch' || matrix.backend == 'turbomind') && matrix.model == 'llm' && matrix.function == 'chat'
         run: |
-          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/chat/test_command_chat_hf_${{matrix.backend}}.py -m 'tp1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
@@ -295,7 +298,7 @@ jobs:
         continue-on-error: true
         if: matrix.function == 'pipeline'
         run: |
-          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/pipeline/test_pipeline_chat_${{matrix.backend}}_${{matrix.model}}.py -m 'tp1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true
@@ -304,7 +307,7 @@ jobs:
         continue-on-error: true
         if: matrix.function == 'restful'
         run: |
-          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'gpu_num_1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
+          pytest autotest/tools/restful/test_restful_chat_hf_${{matrix.backend}}_${{matrix.model}}.py -m 'tp1 and not pr_test and test_3090' --alluredir=${{env.REPORT_DIR}} ${{env.COV_PARAM}} || true
           for f in .coverage .coverage.*; do
             [ -e "$f" ] || continue
             mv "$f" "${{env.REPORT_DIR}}/.coverage.$(date +%Y%m%d%H%M%S).$RANDOM" || true

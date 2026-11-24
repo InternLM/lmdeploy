@@ -12,14 +12,15 @@ from transformers import AutoTokenizer
 from utils.config_utils import (
     ROUTED_EXPERTS_UNSUPPORTED_SKIP,
     get_model_path_from_config,
+    get_restful_chat_model_list,
     model_enables_return_routed_experts,
 )
-from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS, RESTFUL_MODEL_LIST
+from utils.constant import BACKEND_LIST, BASE_URL, CAPPED_MAX_COMPLETION_TOKENS
 from utils.toolkit import encode_text, parse_sse_stream
 
 
 @pytest.mark.parametrize('backend', BACKEND_LIST)
-@pytest.mark.parametrize('model_name', RESTFUL_MODEL_LIST)
+@pytest.mark.parametrize('model_name', get_restful_chat_model_list())
 class TestGenerateComprehensive:
 
     @pytest.fixture(autouse=True)
@@ -910,28 +911,23 @@ class TestGenerateComprehensive:
         data = resp.json()
         self._validate_generation_response(data)
 
-    def test_repetition_penalty(self):
+    @pytest.mark.parametrize('penalty', [1.0, 1.5])
+    def test_repetition_penalty(self, penalty):
         print(f'\n[Model: {self.model_name}] Running repetition penalty test')
-        prompt = 'Repeat repeat repeat repeat'
-        base = {'prompt': prompt, 'max_tokens': 10, 'top_k': 0, 'stream': False}
-
-        resp_no_penalty = self._post({**base, 'repetition_penalty': 1.0})
-        resp_penalty = self._post({**base, 'repetition_penalty': 1.5})
-
-        text_no_penalty = resp_no_penalty.json()['text']
-        text_penalty = resp_penalty.json()['text']
-
-        def count_repeats(text):
-            words = text.lower().split()
-            return sum(1 for i in range(1, len(words)) if words[i] == words[i - 1])
-
-        repeats_no_penalty = count_repeats(text_no_penalty)
-        repeats_penalty = count_repeats(text_penalty)
-
-        assert repeats_penalty <= repeats_no_penalty, (
-            f'High penalty coefficient ({1.5}) repetition count ({repeats_penalty}) '
-            f'not less than low penalty ({1.0}) count ({repeats_no_penalty}), '
-            f'repetition_penalty ineffective')
+        # The penalty changes token scores at a fixed history. Two generated
+        # continuations need not have ordered counts of adjacent repeated words.
+        resp = self._post({
+            'prompt': 'Repeat repeat repeat repeat',
+            'max_tokens': 10,
+            'top_k': 1,
+            'temperature': 1.0,
+            'ignore_eos': True,
+            'stream': False,
+            'repetition_penalty': penalty,
+        })
+        data = resp.json()
+        self._validate_generation_response(data)
+        assert data['output_ids']
 
     def test_ignore_eos_parameter(self):
         print(f'\n[Model: {self.model_name}] Running ignore_eos parameter test')

@@ -273,6 +273,7 @@ def test_host_plan_query_readiness_and_mtp_chunk_counts(
         inputs.logits_indices = torch.tensor([0])
         inputs.seq_logit_length = torch.tensor([1])
     agent = module.BaseModelAgent.__new__(module.BaseModelAgent)
+    agent.ssm_state_cursor = None
     agent.dist_config = SimpleNamespace(world_size=2)
     agent.dist_ctx = SimpleNamespace(cpu_group=None)
     agent.state = SimpleNamespace(is_sleeping=False)
@@ -286,8 +287,8 @@ def test_host_plan_query_readiness_and_mtp_chunk_counts(
     values = captured[0]
     if method == 'qwen3_5_mtp':
         assert len(values) == 6
-        assert values[5] == (7 if kind == 'nonlast' else
-                             9 if kind == 'last' else 8)
+        # Main now shifts each prefill chunk within its existing token rows.
+        assert values[5] == 8
     else:
         assert len(values) == 7
         assert values[5] == 8
@@ -339,6 +340,7 @@ def test_scoring_only_rank_participates_with_aux_hidden(
         calls.append('query')
 
     agent = module.BaseModelAgent.__new__(module.BaseModelAgent)
+    agent.ssm_state_cursor = None
     agent.rank = 0
     agent.kv_connector = None
     agent.cache_engine = None
@@ -351,12 +353,12 @@ def test_scoring_only_rank_participates_with_aux_hidden(
     agent.spec_agent.method = 'dflash'
     agent.spec_agent.proposer = None
     agent.spec_agent.async_model_forward = draft
-    agent._get_outputs_with_logprobs = lambda *args: SimpleNamespace(
+    agent._get_outputs_with_logprobs = lambda *args, **kwargs: SimpleNamespace(
         kv_connector_output=None)
     agent._push_output = lambda *args: calls.append('output')
     asyncio.run(
         agent._async_step(inputs=inputs,
-                          sampling_inputs=SimpleNamespace(max_num_logprobs=0),
+                          sampling_inputs=SimpleNamespace(max_num_logprobs=0, logprob_extra_token_ids=None),
                           stopping_criteria=None,
                           swap_in_map={},
                           swap_out_map={}))
@@ -530,3 +532,17 @@ def test_block_producer_consumer_participation_and_output_ownership(monkeypatch,
         assert meta.tp_sizes == [3, 9]
         traces.append(trace)
     assert traces[0] == traces[1] == ([('query', 3 * width), ('head', 6)] if any(ready) else [])
+
+
+def test_block_draft_drops_target_compact_state_metadata():
+    inputs = ModelInputs(input_ids=torch.zeros(1, 3, dtype=torch.long),
+                         seq_length=torch.tensor([3]), history_lengths=torch.tensor([0]),
+                         block_offsets=torch.tensor([[1]]), is_decoding=True,
+                         num_ignored_history=torch.tensor([0]), max_q_seqlen=3,
+                         max_kv_seqlen=3, sum_kv_seqlen=3)
+    marker = object()
+    inputs.ssm_state_meta = inputs.ssm_prefill_meta = inputs.ssm_source_state_ids = marker
+    for output in (context_inputs(inputs), prepare_query(None, inputs, None)):
+        assert output.ssm_state_meta is None and output.ssm_prefill_meta is None
+        assert output.ssm_source_state_ids is None
+    assert inputs.ssm_state_meta is marker

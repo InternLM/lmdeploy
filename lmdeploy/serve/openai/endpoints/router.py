@@ -4,7 +4,7 @@
 from fastapi import APIRouter
 
 from .. import chat_completions
-from . import auxiliary, completions, distserve, generate, management, models
+from . import auxiliary, completions, decisions, distserve, generate, management, models
 
 
 def create_openai_router(server_context) -> APIRouter:
@@ -16,5 +16,6 @@ def create_openai_router(server_context) -> APIRouter:
     completions.register(router, server_context)
     generate.register(router, server_context)
     auxiliary.register(router, server_context)
+    decisions.register(router, server_context)
     distserve.register(router, server_context)
     return router

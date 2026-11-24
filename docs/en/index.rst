@@ -58,6 +58,8 @@ Documentation
 
    llm/pipeline.md
    llm/api_server.md
+   serving/request_trace.md
+   llm/intern_decision.md
    llm/api_server_tools.md
    llm/api_server_reasoning.md
    llm/api_server_anthropic.md
@@ -117,6 +119,7 @@ Documentation
    advance/pytorch_profiling.md
    advance/metrics.md
    advance/context_parallel.md
+   advance/prefix_caching.md
    advance/spec_decoding.md
    advance/update_weights.md
    advance/checkpoint_engine.md

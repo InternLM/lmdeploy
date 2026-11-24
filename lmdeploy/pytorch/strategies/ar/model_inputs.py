@@ -1,5 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import torch
 
@@ -7,9 +9,12 @@ from lmdeploy.pytorch.model_inputs import ModelInputs
 
 from ..base.model_inputs import MakeDummyMeta, ModelInputsStrategy, make_dummy_inputs
 
+if TYPE_CHECKING:
+    from lmdeploy.pytorch.compact_state import SSMStateCursor
+
 
 def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor, max_q_seqlen: int,
-                                   model_metas) -> ModelInputs:
+                                   model_metas, *, ssm_state_cursor: 'SSMStateCursor | None' = None) -> ModelInputs:
     """Next decoding step."""
     if input_ids.dim() == 1:
         input_ids = input_ids[None, :]
@@ -22,6 +27,12 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
     if mrope_pos_ids is not None:
         index = inputs.seq_length.cumsum(0) - 1
         mrope_pos_ids = mrope_pos_ids[:, index] + 1
+    ssm_state_meta = inputs.ssm_state_meta
+    if ssm_state_meta is not None:
+        consumed = (inputs.seq_length > 0).long()
+        if ssm_state_cursor is None:
+            raise ValueError('Compact state advancement requires the worker cursor.')
+        ssm_state_meta = ssm_state_cursor.advance(ssm_state_meta, inputs.state_offsets, consumed, width=max_q_seqlen)
     return ModelInputs(
         input_ids=input_ids,
         seq_length=torch.full_like(inputs.seq_length, max_q_seqlen),
@@ -36,6 +47,7 @@ def get_model_inputs_next_decoding(inputs: ModelInputs, input_ids: torch.Tensor,
         model_metas=model_metas,
         state_offsets=state_offsets,
         mrope_pos_ids=mrope_pos_ids,
+        ssm_state_meta=ssm_state_meta,
     )
 
 
@@ -86,6 +98,11 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         assert other.mrope_pos_ids is not None
         mrope_pos_ids = torch.cat([inputs.mrope_pos_ids, other.mrope_pos_ids], dim=1)
 
+    if (inputs.ssm_state_meta is None) != (other.ssm_state_meta is None):
+        raise ValueError('Cannot merge compact and legacy state batches.')
+    ssm_state_meta = (inputs.ssm_state_meta.merge(other.ssm_state_meta)
+                     if inputs.ssm_state_meta is not None else None)
+
     return ModelInputs(
         input_ids=input_ids,
         seq_length=seq_length,
@@ -99,6 +116,7 @@ def merge_model_inputs(inputs: ModelInputs, other: ModelInputs) -> ModelInputs:
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
         state_offsets=state_offsets,
+        ssm_state_meta=ssm_state_meta,
         mrope_pos_ids=mrope_pos_ids,
     )
 
@@ -193,6 +211,7 @@ def index_select_model_inputs(inputs: ModelInputs,
         local_adapter_ids=local_adapter_ids,
         model_metas=model_metas,
         state_offsets=state_offsets,
+        ssm_state_meta=(inputs.ssm_state_meta.index_select(indices) if inputs.ssm_state_meta is not None else None),
         target_hidden_states=target_hidden_states,
         target_position_ids=target_position_ids,
         mrope_pos_ids=mrope_pos_ids,

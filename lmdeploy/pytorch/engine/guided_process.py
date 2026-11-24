@@ -6,14 +6,15 @@ import torch
 import xgrammar as xgr
 from transformers import PreTrainedTokenizerBase
 
-from lmdeploy._guided_decoding import compile_response_format
+from lmdeploy._guided_decoding import compile_response_format, get_interns1_encoded_vocab
 
 logger = logging.getLogger('lmdeploy')
 
 
 class GuidedDecodingManager:
 
-    def __init__(self, tokenizer: PreTrainedTokenizerBase, vocab_size: int | None):
+    def __init__(self, tokenizer: PreTrainedTokenizerBase, vocab_size: int | None,
+                 stop_token_ids: list[int] | None = None):
         if vocab_size is None:
             vocab_size = tokenizer.vocab_size
 
@@ -25,8 +26,22 @@ class GuidedDecodingManager:
                         f'to {tokenizer_vocab_len}')
             vocab_size = tokenizer_vocab_len
 
-        # XGrammar will automatically detect stop tokens from the tokenizer
-        tokenizer_info = xgr.TokenizerInfo.from_huggingface(tokenizer, vocab_size=vocab_size)
+        # Model EOS tokens can include tool-turn ends but omit the tokenizer EOS.
+        # Explicit stop IDs override XGrammar's tokenizer detection, so keep both.
+        if stop_token_ids is not None and tokenizer.eos_token_id is not None:
+            stop_token_ids = list(dict.fromkeys([*stop_token_ids, tokenizer.eos_token_id]))
+        if type(tokenizer).__name__ == 'InternS1Tokenizer':
+            tokenizer_info = xgr.TokenizerInfo(
+                get_interns1_encoded_vocab(tokenizer, vocab_size),
+                vocab_type=xgr.VocabType.RAW,
+                vocab_size=vocab_size,
+                stop_token_ids=stop_token_ids if stop_token_ids is not None else [tokenizer.eos_token_id],
+            )
+        else:
+            tokenizer_info = xgr.TokenizerInfo.from_huggingface(
+                tokenizer, vocab_size=vocab_size, stop_token_ids=stop_token_ids)
+        self.tokenizer_info = tokenizer_info
+        self.tokenizer = tokenizer
         self.compiler = xgr.GrammarCompiler(tokenizer_info)
         self.vocab_size = vocab_size
         self.processors: dict[int, dict[int, xgr.GrammarMatcher]] = {}
@@ -50,7 +65,8 @@ class GuidedDecodingManager:
                 processor = session_dict[seq_id]
                 return processor
 
-        compiled = compile_response_format(self.compiler, response_format)
+        compiled = compile_response_format(
+            self.compiler, response_format, tokenizer_info=self.tokenizer_info, tokenizer=self.tokenizer)
 
         processor = xgr.GrammarMatcher(compiled)
         self.processors.setdefault(session_id, {})[seq_id] = processor

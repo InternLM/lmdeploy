@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Shared planning helpers for long-context prefill chunks."""
+"""Shared planning helpers for prefill chunks and state checkpoints."""
 
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import chain
+from math import gcd
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,10 +31,11 @@ class LongContextChunkPlan:
             accepted prefix-cache hit has advanced the sequence.
         chunk_end: Exclusive absolute prompt position where the planned chunk
             ends.  If a multimodal span would cross the budget boundary, this
-            is clamped back to the span start.
+            is clamped back to the span start, including the preceding token
+            when the draft consumes shifted inputs.
         chunk_size: Number of tokens to send in the next forward,
             ``chunk_end - chunk_start``.
-        is_last_chunk: Whether the remaining suffix fits in ``chunk_limit``.
+        is_last_chunk: Whether this chunk reaches the end of the prefill.
             Last chunks are handled as normal prefill so they can merge into
             persistent decode state.
         multimodals: Remaining multimodal payloads wholly contained in this
@@ -46,6 +49,9 @@ class LongContextChunkPlan:
     chunk_size: int
     is_last_chunk: bool
     multimodals: 'MultiModalInputs|None'
+    # Exact compact-state boundary c, independent of the model-forward end e.
+    # Zero means no compact checkpoint candidate; legacy uses chunk_end.
+    checkpoint_step: int = 0
 
 
 def sort_long_context_multimodals(multimodals: 'MultiModalInputs') -> 'MultiModalInputs':
@@ -71,54 +77,177 @@ def _iter_sorted_multimodals(multimodals: 'MultiModalInputs'):
     yield from sorted(multimodal_data, key=lambda item: item[1].start)
 
 
-def _max_multimodal_span(multimodals: 'MultiModalInputs') -> int:
-    return max([data.end - data.start for modal_datas in multimodals.values() for data in modal_datas], default=0)
+def _iter_multimodal_chunk_spans(sorted_multimodals, input_shift: int):
+    """Merge spans that share a shifted draft-input dependency."""
+    group_start = group_end = 0
+    for _, data in sorted_multimodals:
+        span_start = max(0, data.start - input_shift)
+        if span_start >= group_end:
+            if group_end > group_start:
+                yield group_start, group_end
+            group_start = span_start
+        group_end = max(group_end, data.end)
+    if group_end > group_start:
+        yield group_start, group_end
+
+
+def get_long_context_chunk_capacity(seq: 'SchedulerSequence', max_prefill_token_num: int) -> int:
+    """Return the static token capacity, including indivisible multimodal
+    spans."""
+    mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
+    spans = _iter_multimodal_chunk_spans(_iter_sorted_multimodals(mm_for_chunk_limit), seq.prefill_input_shift)
+    max_span = max((end - start for start, end in spans), default=0)
+    return max(max_prefill_token_num, max_span)
+
+
+def get_last_prefill_save_step(seq: 'SchedulerSequence') -> int | None:
+    """Return the last reusable aligned state boundary for the whole input
+    turn.
+
+    Use the fixed input end and full multimodal history so chunk progress and cache hits cannot move the boundary. The
+    shifted draft input must stay with its multimodal span, even when local prefix caching is disabled.
+    """
+    alignment = seq._seq_meta.prefill_save_alignment
+    if not alignment:
+        return None
+    input_shift = max(seq.prefill_input_shift, seq._seq_meta.prefix_cache_token_lookahead)
+    step = (seq.input_end_pos - max(1, input_shift)) // alignment * alignment
+    if step <= 0:
+        return None
+
+    spans = [(max(0, span.start - input_shift), span.end)
+             for span in chain(seq.prefix_cache.multimodal_spans, seq.history_embeddings.embeddings)]
+    # Descending starts let each rewind visit any earlier overlapping span next.
+    for start, end in sorted(spans, reverse=True):
+        if start < step < end:
+            step = start // alignment * alignment
+    return step or None
+
+
+def get_decode_save_step(seq: 'SchedulerSequence', min_step: int, max_step: int) -> int | None:
+    """Choose a checkpoint within the state history retained by one forward.
+
+    The inclusive bounds describe retained states, not accepted tokens. The caller must verify acceptance and lookahead
+    before saving. Planning never advances the last successful save position.
+
+    A missed first save retries on prefill alignment. Later retries use the same gcd alignment as Store lookups so every
+    saved boundary remains discoverable. An overwritten state cannot be saved retroactively.
+    """
+    meta = seq._seq_meta
+    if not meta.prefill_save_alignment or seq.logprob_start_pos >= 0:
+        return None
+    if not meta.enable_prefix_caching and seq.prefix_cache.decode_store_save_pending:
+        return None
+    interval = meta.prefix_cache_decode_state_interval
+    last_step = seq.prefix_cache.last_decode_save_step
+    if meta.prefix_cache_decode_save_first:
+        if last_step < 0:
+            alignment = meta.prefill_save_alignment
+            step = (seq.input_end_pos + alignment - 1) // alignment * alignment
+        elif interval:
+            alignment = gcd(meta.prefill_save_alignment, interval)
+            step = last_step + interval
+        else:
+            return None
+    elif interval:
+        alignment = interval
+        step = (seq.input_end_pos // interval + 1) * interval
+    else:
+        return None
+    if step < min_step:
+        step = (min_step + alignment - 1) // alignment * alignment
+    if 0 < step <= max_step and seq.is_prefix_cache_boundary_safe(step):
+        return step
+    return None
+
+
+def limit_long_context_checkpoint(seq: 'SchedulerSequence', limit: int) -> int:
+    """Cut only when an internal checkpoint cannot be exported directly."""
+    alignment = seq._seq_meta.prefill_save_alignment
+    if alignment and seq._seq_meta.enable_prefix_caching and not seq._seq_meta.prefill_save_last_only:
+        # Matching leaves at least one input for logits, so an identical prompt
+        # can reuse the preceding aligned state instead of its final state.
+        step = ((seq.input_end_pos - 1) // alignment) * alignment
+        if seq.num_history_ids < step and seq.is_prefix_cache_boundary_safe(step):
+            stride = seq._seq_meta.compact_prefill_checkpoint_stride
+            if not stride or (step - seq.num_history_ids) % stride:
+                limit = min(limit, step - seq.num_history_ids)
+    return limit
 
 
 def get_long_context_chunk_limit(seq: 'SchedulerSequence', max_prefill_token_num: int) -> int:
-    """Return the token budget for one long-context chunk."""
-    mm_for_chunk_limit = seq.get_chunk_limit_multimodals()
-    return max(max_prefill_token_num, _max_multimodal_span(mm_for_chunk_limit))
+    """Apply the current checkpoint boundary to the static chunk capacity."""
+    return limit_long_context_checkpoint(seq, get_long_context_chunk_capacity(seq, max_prefill_token_num))
 
 
 def plan_long_context_chunk(seq: 'SchedulerSequence',
                             chunk_limit: int,
                             multimodals: 'MultiModalInputs|None' = None,
                             include_multimodals: bool = True) -> LongContextChunkPlan:
-    """Plan the next chunk without splitting multimodal spans."""
+    """Plan a model-safe chunk, optionally stopping at its last save boundary.
+
+    With last-only saving, ordinary chunks need no alignment; only the turn's final checkpoint cuts a chunk. Otherwise,
+    alignment is a constraint, not a sampling interval: earlier aligned positions in this chunk are skipped.
+    """
     chunk_size = min(seq.num_token_ids, chunk_limit)
     start = seq.num_history_ids
     end = start + chunk_size
 
     if multimodals is None:
         multimodals = seq.get_input_multimodals()
-    if len(multimodals) == 0:
-        return LongContextChunkPlan(chunk_limit=chunk_limit,
-                                    chunk_start=start,
-                                    chunk_end=end,
-                                    chunk_size=chunk_size,
-                                    is_last_chunk=seq.num_token_ids <= chunk_limit,
-                                    multimodals=None)
+    spans = list(_iter_sorted_multimodals(multimodals))
+    chunk_spans = []
+    # The preceding MTP row needs the first multimodal embedding. Compute
+    # them in the same chunk, after the target has encoded the whole span.
+    for span_start, span_end in _iter_multimodal_chunk_spans(spans, seq.prefill_input_shift):
+        if span_start >= end:
+            break
+        chunk_spans.append((span_start, span_end))
+        if span_end > end:
+            end = span_start
+            break
 
-    out_multimodals = defaultdict(list)
-    for modal_type, data in _iter_sorted_multimodals(multimodals):
-        assert data.start >= start, 'multimodal data should be sorted by start'
-        if data.start >= end:
-            break
-        if data.end > end:
-            # Do not split a multimodal span; recompute from its start in the
-            # next chunk instead.
-            end = data.start
-            break
-        if include_multimodals:
-            out_multimodals[modal_type].append(data)
+    checkpoint_step = 0
+    stride = seq._seq_meta.compact_prefill_checkpoint_stride
+    save_alignment = seq._seq_meta.prefill_save_alignment
+    save_end = None
+    if seq._seq_meta.prefill_save_last_only:
+        save_end = get_last_prefill_save_step(seq)
+    # Embedding-only inputs do not yet have a Store content identity.
+    elif save_alignment and len(seq.history_embeddings) == 0:
+        # An identical prompt still needs a logits token. Compact mode can
+        # keep the normal final interval while exporting its preceding prefix.
+        candidate_end = end
+        if stride and seq._seq_meta.enable_prefix_caching and end == seq.input_end_pos:
+            candidate_end -= 1
+        save_end = candidate_end // save_alignment * save_alignment
+        for span_start, span_end in reversed(chunk_spans):
+            if span_start < save_end < span_end:
+                save_end = span_start // save_alignment * save_alignment
+    if save_end is not None and start < save_end <= end:
+        if stride and (save_end == end or (save_end - start) % stride == 0):
+            checkpoint_step = save_end
+        else:
+            # Unsupported internal offsets keep the legacy cut. Last-only
+            # policy still selects the same turn-wide checkpoint in both modes.
+            end = save_end
+            if stride:
+                checkpoint_step = end
+    if (stride and not checkpoint_step and end > start and not seq._seq_meta.prefill_save_last_only
+            and (not save_alignment or end % save_alignment == 0)):
+        checkpoint_step = end
 
     chunk_size = end - start
-    if not include_multimodals:
-        out_multimodals = None
+    out_multimodals = None
+    if include_multimodals and spans:
+        out_multimodals = defaultdict(list)
+        for modal_type, data in spans:
+            if data.end <= end:
+                out_multimodals[modal_type].append(data)
     return LongContextChunkPlan(chunk_limit=chunk_limit,
                                 chunk_start=start,
                                 chunk_end=end,
                                 chunk_size=chunk_size,
-                                is_last_chunk=seq.num_token_ids <= chunk_limit,
-                                multimodals=out_multimodals)
+                                is_last_chunk=chunk_size == seq.num_token_ids,
+                                multimodals=out_multimodals,
+                                checkpoint_step=checkpoint_step)

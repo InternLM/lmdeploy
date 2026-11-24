@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from lmdeploy.serve.openai.chat_completions.fanout import _batch_stream_payloads
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 
 
 class _PreprocessingEngine:
@@ -537,3 +538,80 @@ def test_stream_usage_is_omitted_when_a_choice_has_no_usage(
         payload for payload in payloads if payload.get('usage') is not None
     ]
     assert context.session_manager.sessions == {}
+
+
+@pytest.mark.parametrize('n', [1, 2, 3])
+@pytest.mark.parametrize('include_usage', [False, True])
+def test_named_call_error_is_forwarded_and_siblings_close(chat_endpoint, fake_raw_request, n, include_usage):
+    endpoint, context = chat_endpoint
+
+    class Parser(BaseResponseParser):
+        pass
+
+    Parser.set_parsers(None, 'glm47')
+    context.response_parser_cls = Parser
+    engine = context.async_engine
+    original_generate = engine.generate
+    started, closed = set(), set()
+    siblings_ready = asyncio.Event()
+
+    def generate(*args, **kwargs):
+        output = original_generate(*args, **kwargs)
+        index = engine.call_count
+
+        async def stream():
+            try:
+                if index == n:
+                    if n > 1:
+                        await siblings_ready.wait()
+                    async for result in output:
+                        yield result  # Plain text violates the named choice.
+                else:
+                    started.add(index)
+                    if len(started) == n - 1:
+                        siblings_ready.set()
+                    await asyncio.Event().wait()
+            finally:
+                closed.add(index)
+                await output.aclose()
+
+        return stream()
+
+    engine.generate = generate
+    request = _request(n=n, stream=True, stream_options=dict(include_usage=include_usage),
+                       tools=[dict(type='function', function=dict(name='查询'))],
+                       tool_choice=dict(type='function', function=dict(name='查询')))
+
+    async def collect():
+        response = await endpoint(request, fake_raw_request)
+        return await asyncio.wait_for(_collect_stream(response), 5)
+
+    text = asyncio.run(collect())
+    errors = [payload['error'] for payload in _sse_payloads(text) if 'error' in payload]
+    assert len(errors) == 1
+    assert errors[0]['type'] == 'server_error'
+    assert 'exactly one call' in errors[0]['message']
+    assert '查询' in text
+    assert text.count('data: [DONE]') == 1
+    assert text.endswith('data: [DONE]\n\n')
+    assert closed == set(range(1, n + 1))
+    assert context.session_manager.sessions == {}
+
+
+@pytest.mark.parametrize('count', [1, 2, 3])
+def test_handler_forwards_choice_identity_to_preprocess(count, chat_endpoint,
+                                                        fake_raw_request, monkeypatch):
+    endpoint, context = chat_endpoint
+    engine = context.async_engine
+    original = engine.preprocess
+    indices = []
+
+    async def preprocess(*args, **kwargs):
+        indices.append(kwargs.get('trace_choice_index'))
+        assert kwargs['trace_model'] == 'fake-model'
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(engine, 'preprocess', preprocess)
+    response = asyncio.run(endpoint(_request(n=count), fake_raw_request))
+    assert len(response['choices']) == count
+    assert indices == ([None] if count == 1 else list(range(count)))

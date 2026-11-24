@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from torch import Tensor, nn
 
+from lmdeploy.pytorch import envs
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.attention import AttentionMetadata
 from lmdeploy.pytorch.backends.nsa import NSAIndexFP8BuildSpec
@@ -22,7 +23,9 @@ class IndexerTopKFP8(nn.Module):
                 softmax_scale=softmax_scale,
                 block_size=block_size,
                 fill=fill,
-                allow_short_prefill_scoring_skip=allow_short_prefill_scoring_skip,
+                # Sparse prefill needs indices even when top-k covers every key.
+                allow_short_prefill_scoring_skip=(
+                    allow_short_prefill_scoring_skip and not envs.mla_disable_dense_prefill),
             ),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )

@@ -43,6 +43,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         from ..gated_delta_rule import GatedDeltaMetaBuildSpec, GatedDeltaRuleBuildSpec
         from ..hc_prepost import HCPrePostBuildSpec
         from ..indexer import V4IndexerBuildSpec
+        from ..kda import KdaBuildSpec
         from ..lora import LoRABuildSpec
         from ..moe import (
             FusedMoEBlockedF8BuildSpec,
@@ -54,7 +55,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
         from ..moe_router import RouterGemmBuildSpec, RouterNoauxTCBuildSpec
         from ..multinomial_sampling import MultinomialSamplingBuildSpec
-        from ..norm import RMSNormBuildSpec
+        from ..norm import RMSNormBuildSpec, RMSNormGatedBuildSpec
         from ..nsa import NSAIndexFP8BuildSpec
         from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
         from ..rejection_sampling import RejectionSamplingBuildSpec
@@ -62,12 +63,18 @@ class CudaOpsBackend(DefaultOpsBackend):
         if isinstance(spec, SiluAndMulBuildSpec):
             from .activation import TritonSiluAndMulImpl
             return cast(ImplT, TritonSiluAndMulImpl(spec.inplace))
+        if isinstance(spec, KdaBuildSpec):
+            from .kda import CudaKdaImpl
+            return cast(ImplT, CudaKdaImpl(indexed_state=spec.indexed_state))
         if isinstance(spec, ApplyRotaryEmbBuildSpec):
             from .apply_rotary_emb import TritonApplyRotaryEmbImpl
-            return cast(ImplT, TritonApplyRotaryEmbImpl())
+            return cast(ImplT, TritonApplyRotaryEmbImpl(enable_fp32_compute=spec.enable_fp32_compute))
         if isinstance(spec, RMSNormBuildSpec):
             from .norm import TritonRMSNormImpl
             return cast(ImplT, TritonRMSNormImpl(spec.hidden_size, spec.eps))
+        if isinstance(spec, RMSNormGatedBuildSpec):
+            from .norm import CudaRMSNormGatedImpl
+            return cast(ImplT, CudaRMSNormGatedImpl(spec.hidden_size, spec.eps, spec.activation))
         if isinstance(spec, RMSNormW8A8BuildSpec):
             from .qmodules import TritonRMSNormW8A8Impl
             return cast(ImplT, TritonRMSNormW8A8Impl(spec.hidden_size, spec.eps, spec.quant_dtype))
@@ -143,13 +150,13 @@ class CudaOpsBackend(DefaultOpsBackend):
             )
         if isinstance(spec, CausalConv1dBuildSpec):
             from .causal_conv1d import _build_causal_conv1d
-            return cast(ImplT, _build_causal_conv1d())
+            return cast(ImplT, _build_causal_conv1d(indexed_state=spec.indexed_state))
         if isinstance(spec, GatedDeltaMetaBuildSpec):
             from .gated_delta_rule import CudaGatedDeltaMetaImpl
-            return cast(ImplT, CudaGatedDeltaMetaImpl())
+            return cast(ImplT, CudaGatedDeltaMetaImpl(indexed_state=spec.indexed_state))
         if isinstance(spec, GatedDeltaRuleBuildSpec):
             from .gated_delta_rule import CudaGatedDeltaRuleImpl
-            return cast(ImplT, CudaGatedDeltaRuleImpl())
+            return cast(ImplT, CudaGatedDeltaRuleImpl(indexed_state=spec.indexed_state))
         if isinstance(spec, LinearW4A16BuildSpec):
             from .awq_modules import _build_linear_w4a16
             return cast(ImplT, _build_linear_w4a16(spec))
@@ -335,7 +342,8 @@ class CudaOpsBackend(DefaultOpsBackend):
                 require_fa3_for_speculative_decoding()
                 cls.update_meta_flashattn(attn_metadata, step_context)
 
-        if step_context.model_config.is_gated_delta and not step_context.is_decoding:
+        if (step_context.model_config.is_gated_delta and not step_context.is_decoding
+                and step_context.ssm_state_meta is None):
             cls.update_chunked_gated_delta_rule_meta(attn_metadata)
 
         return attn_metadata

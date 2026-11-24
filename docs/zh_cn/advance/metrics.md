@@ -7,9 +7,71 @@ LMDeploy 通过 Prometheus 暴露监控指标，并通过 Grafana 提供可视�
 启动服务前设置 `LMDEPLOY_ENABLE_REQUEST_CACHE_USAGE_METRIC=0` 后，同一指标将改为 GPU 逻辑块总占用率，
 其中包括为前缀复用保留的逻辑块。
 
+PyTorch 后端分别统计本地前缀缓存和 Mooncake Store，均沿用当前引擎的累计统计方式：
+
+- `Prefix cache hit rate` / `lmdeploy:prefix_cache_hit_rate` 统计本地命中 token 数与本地查询 token 数之比。
+- 开启 Mooncake Store 后，日志额外打印 `External prefix cache hit rate`，包括命中率为 `0.0%` 的情况。
+  外部查询 token 数为扣除本地已采用前缀后的剩余 token 数，外部命中 token 数为 connector 新增的命中 token 数。
+  例如输入 21 个 token，本地采用 4 个，远端前缀到第 16 个，则本地命中率为 `4/21 = 19.0%`，
+  外部命中率为 `(16-4)/(21-4) = 70.6%`。远端加载覆盖的本地不完整块归入外部命中。
+
+外部查询在请求获准调度时计数，包括命中和未命中；等待异步查询或资源分配被拒绝时不计数，
+重计算驱逐也不重复计数。它衡量查询命中率：后续加载失败或取消不会撤销已计入的查询和命中。
+关闭本地前缀缓存时仍统计外部缓存。日志中的两项命中率不能直接相加。
+
+新增 Prometheus 指标均带有 `model_name` 和 `engine` 标签：
+
+| 指标                                           | 类型    | 含义                                      |
+| ---------------------------------------------- | ------- | ----------------------------------------- |
+| `lmdeploy:external_prefix_cache_hit_rate`      | Gauge   | 当前引擎累计外部命中率，范围为 0–1        |
+| `lmdeploy:external_prefix_cache_queries_total` | Counter | 累计外部查询 token 数，排除本地采用的前缀 |
+| `lmdeploy:external_prefix_cache_hits_total`    | Counter | 累计外部命中 token 数                     |
+
+例如，下列 PromQL 按模型汇总各 DP 引擎最近 5 分钟的外部 token 命中率：
+
+```promql
+sum by (model_name) (rate(lmdeploy:external_prefix_cache_hits_total[5m]))
+/
+sum by (model_name) (rate(lmdeploy:external_prefix_cache_queries_total[5m]))
+```
+
 对于 Turbomind 后端，`lmdeploy:gpu_cache_usage_perc` 表示存活的前缀缓存和检查点对象所占字节数与已配置缓存区域大小的比值。
 前缀缓存命中指标统计请求首次被调度时实际跳过的 prompt token。Turbomind 目前仅在 DP 1 时报告调度指标，
 尚不支持 DP 大于 1 时的逐 rank Turbomind 指标。
+
+## 独立监控端口
+
+使用 `--monitoring-port`，可在每个 API 进程内通过独立线程提供 `/health` 和
+`/metrics`，减少同步预处理阻塞推理 API 事件循环时对监控请求的影响：
+
+```bash
+lmdeploy serve api_server /path/to/model --server-port 9200 --monitoring-port 9300
+```
+
+PyTorch DP 部署会为本机各 API 进程分配连续监控端口。例如
+`--dp 8 --monitoring-port 9300` 在单机上使用 `9300～9307`；多机时按每台机器的本地
+DP 数量分配。请预留与 API 端口不重叠的监控端口；监控端口被占用时，服务启动失败。
+不传此参数时，不启动额外监听器。
+
+需要将 Prometheus 抓取地址和健康检查地址改为监控端口。原 API 端口上的接口仍然保留，
+也仍然受推理事件循环阻塞影响；router 不会自动切换到新的健康检查地址。
+监控服务沿用 API 服务的监听主机、API key 和 TLS 配置。`/health` 无需认证，
+配置 API key 后，访问 `/metrics` 需要携带该 key。设置 `--disable-metrics` 后，
+监控端口仅提供 `/health`。
+
+指标读取同一进程内的 Prometheus Registry。指标更新仍在 API 事件循环执行，
+因此抓取响应快不代表数据立即更新。`lmdeploy:scheduler_last_update_timestamp_seconds`
+表示最近一次调度指标更新的 Unix 时间戳，首次更新前为 0；它不表示所有 token 级指标的更新时间。
+调度指标正常情况下约每 10 秒更新一次。
+
+监控端口的 `/health` 直接读取后台探测快照，不等待 API 事件循环。
+响应中的 `snapshot_age_seconds` 表示距最近一次快照更新经过的秒数，
+首次探测完成前为 `null`。健康和休眠快照超过 `LMDEPLOY_HEALTH_UNHEALTHY_AFTER`
+（默认 90 秒）后返回 HTTP 503，直到后台探测刷新，避免 API 事件循环停止推进时一直报告健康。
+API 监听器开始停止接收新请求时，监控端口的 `/health` 立即返回 HTTP 503，
+即使后台快照仍然健康。
+监控线程仍共享进程的 Python GIL，因此无法隔离长时间持有 GIL 的代码；
+该选项也不会加速推理或 abort 请求。
 
 ## 配置指南
 

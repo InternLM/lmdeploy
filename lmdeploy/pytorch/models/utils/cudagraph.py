@@ -6,6 +6,9 @@ import torch
 from torch import Tensor
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.compact_state import SSMStateMetadata
+from lmdeploy.pytorch.devices import is_ascend
+from lmdeploy.pytorch.distributed import get_dcp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, get_step_ctx_manager
 
 if TYPE_CHECKING:
@@ -48,6 +51,7 @@ class CudaGraphMeta:
     block_size: int = 64
     step_meta_plan: 'CudaStepMetaPlan | None' = None
     step_meta_buffers: 'CudaStepMetaGraphBuffers | None' = None
+    ssm_state_id_buffers: SSMStateMetadata | None = None
 
 
 class CudaGraphMixin:
@@ -67,6 +71,10 @@ class CudaGraphMixin:
         **kwargs,
     ):
         """Return True is model support cudagraph."""
+        if is_ascend():
+            from lmdeploy.pytorch.backends.ascend.graph_runner import support_cuda_graph
+            return support_cuda_graph(
+                self, input_ids, position_ids, past_key_values, attn_metadata, inputs_embeds, **kwargs)
         context = get_step_ctx_manager().current_context()
         return context.global_is_decoding()
 
@@ -99,6 +107,10 @@ class CudaGraphMixin:
                                past_key_values: list[list[torch.Tensor]], attn_metadata: Any,
                                inputs_embeds: Tensor = None, **kwargs) -> BuffType:
         """Make cudagraph buffers from forward inputs."""
+        if is_ascend():
+            from lmdeploy.pytorch.backends.ascend.graph_runner import make_buffers_cudagraph
+            return make_buffers_cudagraph(
+                self, graph_meta, input_ids, position_ids, past_key_values, attn_metadata, inputs_embeds, **kwargs)
         max_batches = graph_meta.max_batchs
         max_tokens = graph_meta.max_tokens
         num_blocks = graph_meta.num_blocks
@@ -125,6 +137,11 @@ class CudaGraphMixin:
         input_buffers['cu_seqlens'] = torch.zeros(2, max_batches + 1, dtype=torch.int32, device=device)
         input_buffers['cu_seqlens_q'] = input_buffers['cu_seqlens'][0]
         input_buffers['cu_seqlens_k'] = input_buffers['cu_seqlens'][1]
+
+        dcp_world_size, _ = get_dcp_world_rank()
+        if dcp_world_size > 1:
+            input_buffers['dcp_local_kv_seqlens'] = torch.zeros(
+                max_batches, dtype=torch.int32, device=device)
 
         if graph_meta.step_meta_plan is not None:
             step_ctx = get_step_ctx_manager().current_context()
@@ -159,6 +176,16 @@ class CudaGraphMixin:
         if graph_meta.use_mrope:
             input_buffers['mrope_position_ids'] = torch.zeros(3, max_tokens, dtype=torch.int64, device=device)
 
+        context = get_step_ctx_manager().current_context()
+        compact = None if context is None else context.ssm_state_meta
+        if compact is not None:
+            if not graph_meta.is_ssm or not context.is_decoding:
+                raise ValueError('Compact full-graph buffers require stateful decode.')
+            graph_meta.ssm_state_id_buffers = SSMStateMetadata(
+                torch.full((max_batches, compact.state_ids.shape[1]), -1, dtype=torch.int64, device=device),
+                torch.full((max_batches,), -1, dtype=torch.int64, device=device),
+                torch.full((max_batches, decode_query_len), -1, dtype=torch.int64, device=device))
+
         # ssm
         if graph_meta.is_ssm:
             state_ids = torch.full((max_batches, ), -1, dtype=torch.int64, device=device)
@@ -171,6 +198,18 @@ class CudaGraphMixin:
                                past_key_values: list[list[torch.Tensor]], attn_metadata: Any, inputs_embeds: Tensor,
                                **kwargs) -> dict[str, Tensor]:
         """Fill cudagraph buffers from forward inputs."""
+        if is_ascend():
+            from lmdeploy.pytorch.backends.ascend.graph_runner import fill_buffers_cudagraph
+            return fill_buffers_cudagraph(
+                self, graph_meta, input_ids, position_ids, past_key_values, attn_metadata, inputs_embeds, **kwargs)
+
+        context = get_step_ctx_manager().current_context()
+        compact = None if context is None else context.ssm_state_meta
+        if (compact is None) != (graph_meta.ssm_state_id_buffers is None):
+            raise ValueError('Compact state mode changed without resetting the CUDA graph runner.')
+        if compact is not None:
+            from lmdeploy.pytorch.kernels.cuda.compact_state import stage_compact_state_ids
+            stage_compact_state_ids(compact, graph_meta.ssm_state_id_buffers)
 
         block_offsets: Tensor = attn_metadata.block_offsets
         q_start_loc: Tensor = attn_metadata.q_start_loc
@@ -180,6 +219,7 @@ class CudaGraphMixin:
 
         num_tokens = input_ids.size(-1)
         decode_query_len = graph_meta.decode_query_len
+        dcp_world_size, dcp_rank = get_dcp_world_rank()
         # fill buffer
         # Random padding balances MoE routing; the fused deterministic fill
         # below overwrites only the real token prefix.
@@ -200,6 +240,9 @@ class CudaGraphMixin:
             input_buffers['qkv_lens'],
             input_buffers['cu_seqlens'],
             decode_query_len,
+            dcp_local_kv_seqlens=input_buffers.get('dcp_local_kv_seqlens'),
+            dcp_size=dcp_world_size,
+            dcp_rank=dcp_rank,
         )
         if inputs_embeds is not None:
             emb_size = inputs_embeds.size(-1)
@@ -216,6 +259,11 @@ class CudaGraphMixin:
         attn_metadata.kv_seqlens = input_buffers['kv_seqlens']
         attn_metadata.cu_seqlens_q = input_buffers['cu_seqlens_q']
         attn_metadata.cu_seqlens_k = input_buffers['cu_seqlens_k']
+
+        if dcp_world_size > 1:
+            attn_metadata.dcp_local_kv_seqlens = input_buffers['dcp_local_kv_seqlens']
+        else:
+            attn_metadata.dcp_local_kv_seqlens = input_buffers['kv_seqlens']
 
         if graph_meta.step_meta_plan is not None:
             step_ctx = get_step_ctx_manager().current_context()
@@ -247,8 +295,7 @@ class CudaGraphMixin:
                 )
                 # Keep graph input addresses stable for the old FlashMLA metadata API.
                 scheduler_buffer.copy_(metadata.tile_scheduler_metadata)
-                input_buffers['num_splits'][:new_batch_size + 1].copy_(
-                    metadata.num_splits[:new_batch_size + 1])
+                input_buffers['num_splits'].copy_(metadata.num_splits)
             attn_metadata.tile_scheduler_metadata = scheduler_buffer
             attn_metadata.num_splits = input_buffers['num_splits']
 
@@ -303,6 +350,9 @@ class CudaGraphMixin:
 
     def update_context_cudagraph(self, graph_meta: CudaGraphMeta, context: StepContext):
         """Update step context with input buffers."""
+        if is_ascend():
+            from lmdeploy.pytorch.backends.ascend.graph_runner import update_context_cudagraph
+            return update_context_cudagraph(self, graph_meta, context)
         input_buffers = graph_meta.input_buffers
         local_adapter_ids = context.local_adapter_ids
         if local_adapter_ids is not None:
@@ -323,6 +373,8 @@ class CudaGraphMixin:
         # ssm
         if graph_meta.is_ssm:
             context.state_offsets = input_buffers['state_ids']
+        if graph_meta.ssm_state_id_buffers is not None:
+            context.ssm_state_meta = graph_meta.ssm_state_id_buffers
 
     def get_outputs_cudagraph(self, output_buffers: dict[str, torch.Tensor], input_ids: Tensor, **kwargs):
         """Get outputs from buffers."""

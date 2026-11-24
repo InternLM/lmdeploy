@@ -1,0 +1,34 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+
+import torch
+
+import lmdeploy.pytorch.distributed as dist
+from lmdeploy.pytorch.kernels.ascend.awq_kernels import awq_linear
+
+from ..awq_modules import LinearW4A16Impl
+
+
+class AwqLinearW4A16Impl(LinearW4A16Impl):
+    """Awq kernel linear."""
+
+    def __init__(self, in_features: int, out_features: int, w_bit: int, group_size: int):
+        self.in_features = in_features
+        self.out_features = out_features
+        self.w_bit = w_bit
+        self.group_size = group_size
+
+    def forward(
+        self,
+        x,
+        qweight: torch.Tensor,
+        scales: torch.Tensor,
+        qzeros: torch.Tensor,
+        bias: torch.Tensor | None = None,
+        all_reduce: bool = False,
+        group: torch.distributed.ProcessGroup | None = None,
+    ):
+        """forward."""
+        out = awq_linear(x, qweight, scales, qzeros, bias, self.group_size)
+        if all_reduce:
+            dist.all_reduce(out, group=group)
+        return out

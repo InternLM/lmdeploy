@@ -17,23 +17,6 @@ from lmdeploy.pytorch.backends.gated_delta_rule import (
 from lmdeploy.pytorch.distributed import get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
-from lmdeploy.utils import get_logger
-
-logger = get_logger('lmdeploy')
-
-
-def build_rmsnorm_gated(hidden_size: int, eps=1e-6, **kwargs):
-    # TODO: used custom kernel
-    from fla.modules import FusedRMSNormGated
-    try:
-        # avoid unwanted specialize
-        from fla.modules.fused_norm_gate import layer_norm_gated_fwd_kernel
-        keys = layer_norm_gated_fwd_kernel.fn.keys
-        if 'NB' in keys:
-            keys.remove('NB')
-    except Exception:
-        logger.debug('patch layer_norm_gated_fwd_kernel autotuning failed.')
-    return FusedRMSNormGated(hidden_size, eps=eps, **kwargs)
 
 
 class GatedDeltaMetaBuilder:
@@ -41,7 +24,7 @@ class GatedDeltaMetaBuilder:
 
     def __init__(self) -> None:
         self.impl = get_backend().build_op(
-            GatedDeltaMetaBuildSpec(),
+            GatedDeltaMetaBuildSpec(indexed_state=get_build_model_context().state_cache_is_indexed),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
@@ -59,7 +42,7 @@ class CausalConv1dFunc:
 
     def __init__(self, activation: str = 'silu'):
         self.impl = get_backend().build_op(
-            CausalConv1dBuildSpec(),
+            CausalConv1dBuildSpec(indexed_state=get_build_model_context().state_cache_is_indexed),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
         self.activation = activation
@@ -80,7 +63,7 @@ class GatedDelta:
 
     def __init__(self, use_qk_l2norm_in_kernel: bool = True):
         self.impl = get_backend().build_op(
-            GatedDeltaRuleBuildSpec(),
+            GatedDeltaRuleBuildSpec(indexed_state=get_build_model_context().state_cache_is_indexed),
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
         self.use_qk_l2norm_in_kernel = use_qk_l2norm_in_kernel

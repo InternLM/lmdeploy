@@ -84,8 +84,10 @@ def freeze_state_checkpoint_match_data(token_ids: np.ndarray,
 
 
 def make_request_multimodal_identity(seq: SchedulerSequence, step: int):
-    """Get the exact multimodal identity for a request prefix."""
-    return tuple(sorted(span for span in seq.prefix_cache.multimodal_spans if span.start < step and span.end > 0))
+    """Get exact non-token identity, including the shifted draft lookahead."""
+    end = step + seq._seq_meta.prefix_cache_token_lookahead
+    spans = tuple(sorted(span for span in seq.prefix_cache.multimodal_spans if span.start < end and span.end > 0))
+    return spans + seq.get_prefix_cache_token_dependency(step)
 
 
 class StateCheckpointIndex:
@@ -182,6 +184,11 @@ class StateCheckpointIndex:
         if checkpoint is None or checkpoint.slot < 0 or not checkpoint.published:
             return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
                                                reason='checkpoint is not published')
+
+        reference = checkpoint.state_reference
+        if reference is not None and (not reference.active or reference.phase not in ('submitted', 'ready')):
+            return StateCheckpointVerifyResult(StateCheckpointVerifyStatus.STALE_CHECKPOINT,
+                                               reason='compact checkpoint producer is not readable')
 
         step = checkpoint.step
         if step <= 0:

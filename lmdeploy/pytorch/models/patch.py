@@ -208,6 +208,14 @@ def build_model_from_hf_config(model_config: PretrainedConfig,
     if device is None:
         device = torch.device('cuda')
     model_cls = _get_model_class(model_config, module_map)
+    if getattr(model_config, '_lmdeploy_task', None) == 'intern-decision':
+        from .intern_decision import InternDecisionForConditionalGeneration
+        from .qwen3_5 import Qwen3_5ForConditionalGeneration
+
+        # Check the resolved class, including auto_map and custom module maps.
+        if model_cls is not Qwen3_5ForConditionalGeneration:
+            raise ValueError('Intern-Decision FP32 norms require the dense Qwen3.5 model implementation.')
+        model_cls = InternDecisionForConditionalGeneration
     # update quant config
     if build_model_ctx is not None and hasattr(model_cls, 'update_quant_config'):
         build_model_ctx.quant_config = model_cls.update_quant_config(build_model_ctx.quant_config)

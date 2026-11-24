@@ -24,7 +24,7 @@ class DefaultOpsBackend(OpsBackend):
         from ..moe import SoftmaxTopKBuildSpec
         from ..moe_router import RouterGemmBuildSpec, RouterNoauxTCBuildSpec
         from ..multinomial_sampling import MultinomialSamplingBuildSpec
-        from ..norm import LayerNormBuildSpec, RMSNormBuildSpec
+        from ..norm import LayerNormBuildSpec, RMSNormBuildSpec, RMSNormGatedBuildSpec
         from ..rejection_sampling import RejectionSamplingBuildSpec
         from ..rotary_embedding import RotaryEmbeddingBuildSpec
         if isinstance(spec, SiluAndMulBuildSpec):
@@ -38,10 +38,13 @@ class DefaultOpsBackend(OpsBackend):
             return cast(ImplT, _build_rotary_embedding(spec))
         if isinstance(spec, ApplyRotaryEmbBuildSpec):
             from .apply_rotary_emb import DefaultApplyRotaryEmbImpl
-            return cast(ImplT, DefaultApplyRotaryEmbImpl())
+            return cast(ImplT, DefaultApplyRotaryEmbImpl(enable_fp32_compute=spec.enable_fp32_compute))
         if isinstance(spec, RMSNormBuildSpec):
             from .norm import DefaultRMSNormImpl
             return cast(ImplT, DefaultRMSNormImpl(spec.hidden_size, spec.eps))
+        if isinstance(spec, RMSNormGatedBuildSpec):
+            from .norm import DefaultRMSNormGatedImpl
+            return cast(ImplT, DefaultRMSNormGatedImpl(spec.hidden_size, spec.eps, spec.activation))
         if isinstance(spec, LayerNormBuildSpec):
             from .norm import DefaultLayerNormImpl
             return cast(ImplT, DefaultLayerNormImpl(spec.normalized_shape, spec.eps))

@@ -15,7 +15,8 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
 
     _supports_strided_update = True
 
-    def __init__(self):
+    def __init__(self, indexed_state: bool = False):
+        self.indexed_state = indexed_state
         from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_fn, causal_conv1d_update
         self.causal_conv1d_fn = causal_conv1d_fn
         self.causal_conv1d_update = causal_conv1d_update
@@ -43,12 +44,20 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
             read_offsets, write_offsets = gated_delta_meta.spec_conv_offsets
             channels = torch.arange(conv_state.size(1), device=conv_state.device)[None, :, None]
             all_inits = conv_state[state_ids[:, None, None], channels, read_offsets[:, None, :]]
-            conv_state[state_ids[:, None, None], channels, write_offsets[:, None, :]] = final_state
         else:
             all_inits = conv_state[state_ids, :, 1:]
-            conv_state.index_copy_(0, state_ids, final_state)
 
         all_inits.masked_fill_(gated_delta_meta.is_init[:, None, None], 0.0)
+        # A short prefill keeps its own history, including when that history
+        # was restored into a speculative ring buffer.
+        history = all_inits.gather(2, gated_delta_meta.conv_history_idx[:, None, :].expand(
+            -1, all_inits.size(1), -1))
+        final_state = torch.where(gated_delta_meta.conv_history_mask[:, None, :], history, final_state)
+        if gated_delta_meta.spec_conv_offsets is not None:
+            conv_state[state_ids[:, None, None], channels, write_offsets[:, None, :]] = final_state
+        else:
+            conv_state.index_copy_(0, state_ids, final_state)
+
         output = self.conv1d_fn(
             x.transpose(-2, -1),
             weight,
@@ -162,10 +171,45 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
         gated_delta_meta: GatedDeltaMeta,
         activation: str,
     ) -> torch.Tensor:
-        """Dispatch causal convolution by inference phase."""
+        """Dispatch causal convolution by state layout and inference phase."""
+        if self.indexed_state:
+            return self.forward_indexed(x, weight, bias, conv_state, gated_delta_meta, activation)
         if gated_delta_meta.is_decoding:
             return self.decode(x, weight, bias, conv_state, gated_delta_meta, activation)
         return self._prefill(x, weight, bias, conv_state, gated_delta_meta, activation)
+
+    @staticmethod
+    def forward_indexed(
+        x: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor | None,
+        conv_state: torch.Tensor,
+        metadata: GatedDeltaMeta,
+        activation: str,
+    ) -> torch.Tensor:
+        """Shared indexed Qwen/KDA convolution; inputs/outputs are unit
+        views."""
+        from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_update, indexed_causal_conv1d_fwd
+        if weight.ndim == 3:
+            if weight.size(1) != 1:
+                raise ValueError('Depthwise convolution weight must have shape [C,1,K].')
+            weight = weight[:, 0]
+        ssm_state_meta = metadata.ssm_state_meta
+        if metadata.is_decoding:
+            batch, width = ssm_state_meta.output_state_ids.shape
+            values = x[0].unflatten(0, (batch, width)).transpose(1, 2)
+            output = causal_conv1d_update(values, conv_state, weight, bias=bias, activation=activation,
+                                         conv_state_indices=ssm_state_meta.input_state_ids,
+                                         output_state_indices=ssm_state_meta.output_state_ids)
+            return output.transpose(1, 2).flatten(0, 1).unsqueeze(0)
+        ssm_prefill_meta = metadata.ssm_prefill_meta
+        output = indexed_causal_conv1d_fwd(
+            x.transpose(1, 2), weight, conv_state,
+            ssm_state_meta.input_state_ids, ssm_state_meta.output_state_ids[:, 0],
+            seq_idx=ssm_prefill_meta.seq_idx, cu_seqlens=ssm_prefill_meta.cu_seqlens,
+            bias=bias, activation=activation,
+            checkpoint_ids=ssm_prefill_meta.checkpoint_ids, checkpoint_offsets=ssm_prefill_meta.checkpoint_offsets)
+        return output.transpose(1, 2)
 
     def supports_piecewise_cuda_graph(self) -> bool:
         """Return whether this selected CUDA implementation supports PCG."""
@@ -215,6 +259,7 @@ class CausalConv1dDaoImpl(CausalConv1dTilelangImpl):
     _supports_strided_update = False
 
     def __init__(self):
+        self.indexed_state = False
         self._piecewise_forward = None
         try:
             import causal_conv1d
@@ -254,11 +299,11 @@ def has_dao():
         return False
 
 
-def _build_causal_conv1d() -> CausalConv1dImpl:
+def _build_causal_conv1d(indexed_state: bool = False) -> CausalConv1dImpl:
     """Build the best available CUDA causal-convolution implementation."""
     if has_tilelang():
-        return CausalConv1dTilelangImpl()
-    if has_dao():
+        return CausalConv1dTilelangImpl(indexed_state=indexed_state)
+    if not indexed_state and has_dao():
         return CausalConv1dDaoImpl()
     raise RuntimeError('No available implementation for CausalConv1d, '
                        'please install https://tilelang.com/ or https://github.com/Dao-AILab/causal-conv1d')

@@ -33,7 +33,10 @@ def context_inputs(inputs: ModelInputs) -> ModelInputs:
     they do not run DP MLP/MoE collectives or the query graph runner. Attention-TP sharding is unchanged. Never inherit
     the verifier's graph-padded counts or mutate its metadata.
     """
-    return inputs.clone(dp_meta=None) if inputs.dp_meta is not None else inputs
+    if inputs.dp_meta is None and inputs.ssm_state_meta is None:
+        return inputs
+    return inputs.clone(dp_meta=None, ssm_state_meta=None, ssm_prefill_meta=None,
+                        ssm_source_state_ids=None)
 
 
 def prepare_query(proposer, inputs: ModelInputs, cache_engine) -> ModelInputs:
@@ -44,6 +47,10 @@ def prepare_query(proposer, inputs: ModelInputs, cache_engine) -> ModelInputs:
     discarded. All participants execute the transformer AND head. Scheduler-visible output slicing is performed only
     after the head has finished.
     """
+    # Compact identities belong to the target's recurrent state, not the
+    # stateless block draft or its differently sized query graph.
+    if inputs.ssm_state_meta is not None:
+        inputs = inputs.clone(ssm_state_meta=None, ssm_prefill_meta=None, ssm_source_state_ids=None)
     if inputs.dp_meta is None:
         return inputs
     source_meta = inputs.dp_meta

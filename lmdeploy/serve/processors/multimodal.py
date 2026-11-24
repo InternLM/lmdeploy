@@ -4,13 +4,13 @@ from typing import Any, Literal
 
 import PIL
 
-from lmdeploy.model import MODELS, BaseChatTemplate
+from lmdeploy.model import MODELS, BaseChatTemplate, HFChatTemplate
 from lmdeploy.tokenizer import Tokenizer
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
 from lmdeploy.vl.media.audio import AudioMediaIO
 from lmdeploy.vl.media.connection import load_from_url
-from lmdeploy.vl.media.image import ImageMediaIO
+from lmdeploy.vl.media.image import ImageMediaIO, apply_exif_orientation
 from lmdeploy.vl.media.time_series import TimeSeriesMediaIO
 from lmdeploy.vl.media.video import VideoMediaIO
 
@@ -29,6 +29,10 @@ MULTIMODAL_TYPES = (
 )
 
 
+class UnsupportedMultimodalInputError(ValueError):
+    """The requested media modality is unavailable on this model."""
+
+
 class MultimodalProcessor:
     """Processor for handling prompt preprocessing, message content merging,
     and multimodal processing."""
@@ -38,7 +42,8 @@ class MultimodalProcessor:
                  chat_template: BaseChatTemplate,
                  vl_encoder=None,
                  backend: str | None = None,
-                 allowed_media_domains: list[str] | None = None):
+                 allowed_media_domains: list[str] | None = None,
+                 defer_image_decode: bool = False):
         """Initialize MultimodalProcessor.
 
         Args:
@@ -53,26 +58,28 @@ class MultimodalProcessor:
         self.vl_encoder = vl_encoder
         self.backend = backend
         self.allowed_media_domains = allowed_media_domains
+        self.defer_image_decode = defer_image_decode
 
     @staticmethod
-    def merge_message_content(msg: dict) -> dict:
+    def merge_message_content(msg: dict, preserve_content_parts: bool = False) -> dict:
         """Merge multimodal content blocks and ensure content field exists.
 
-        This function normalizes message content to match vLLM's behavior:
+        This function normalizes message content for the selected chat template:
         1. Missing content field -> add content='' (empty string)
         2. None content -> convert to content='' (empty string)
         3. String content -> return as-is
-        4. List content (multimodal) -> merge all text blocks with newline separator
+        4. List content -> preserve structured parts when requested, otherwise merge text blocks with newlines
 
         Args:
             msg: A message dict with 'role' and optionally 'content' field
+            preserve_content_parts: Let the template render structured content lists directly.
 
         Returns:
             A message dict with 'content' field guaranteed to exist
 
         Note:
             This implementation is based on vLLM's content processing logic.
-            vLLM uses "\n".join() to merge multiple text blocks from multimodal content.
+            vLLM uses "\n".join() for string-format templates; structured templates receive content parts.
 
         References:
             - vLLM content normalization:
@@ -90,6 +97,9 @@ class MultimodalProcessor:
 
         # If content is already a string, return as-is
         if isinstance(msg['content'], str):
+            return msg
+
+        if preserve_content_parts and isinstance(msg['content'], list):
             return msg
 
         # If content is a list, merge all text blocks into a single string
@@ -110,16 +120,25 @@ class MultimodalProcessor:
                                in_messages: list[dict],
                                out_messages: list[dict],
                                media_io_kwargs: dict[str, Any],
-                               allowed_media_domains: list[str] | None = None):
+                               allowed_media_domains: list[str] | None = None,
+                               defer_image_decode: bool = False):
         """Synchronous helper to parse a single multimodal message item."""
         role = in_messages[i]['role']
-        content = in_messages[i]['content']
+        # OpenAI protocol allows tool_call messages with missing/null content;
+        # the anthropic adapter emits exactly that for pure tool_use turns.
+        # Normalize those to content='' so downstream chat-template asserts
+        # (model.messages2prompt requires the key on every message) hold.
+        content = in_messages[i].get('content')
 
-        if role not in ('user', 'tool') or isinstance(content, str):
+        if role not in ('user', 'tool') or not isinstance(content, list):
+            if content is None:
+                normalized = dict(in_messages[i])
+                normalized['content'] = ''
+                out_messages[i] = normalized
+                return
             out_messages[i] = in_messages[i]
             return
 
-        assert isinstance(content, list)
         out_message = dict(in_messages[i])
         out_message['content'] = []
 
@@ -159,8 +178,9 @@ class MultimodalProcessor:
                 if isinstance(data_src, PIL.Image.Image):
                     data = data_src
                 elif isinstance(data_src, str):
+                    image_kwargs = dict(media_io_kwargs.get('image', {}), defer_decode=defer_image_decode)
                     data = load_from_url(data_src,
-                                         ImageMediaIO(**media_io_kwargs.get('image', {})),
+                                         ImageMediaIO(**image_kwargs),
                                          allowed_media_domains=allowed_media_domains)
                 else:
                     raise ValueError(f'Invalid multimodal image item at index {i}: {item}. '
@@ -185,6 +205,9 @@ class MultimodalProcessor:
             else:
                 raise NotImplementedError(f'unknown type: {item_type}')
 
+            # URL/path images are request-owned and already normalized by ImageMediaIO.
+            if modality == Modality.IMAGE and isinstance(data_src, PIL.Image.Image):
+                data = apply_exif_orientation(data)
             out_message['content'].append({'type': modality.value, 'data': data, **item_params})
 
         out_messages[i] = out_message
@@ -192,7 +215,8 @@ class MultimodalProcessor:
     @staticmethod
     async def async_parse_multimodal_item(messages: list[dict],
                                           media_io_kwargs: dict[str, Any] | None = None,
-                                          allowed_media_domains: list[str] | None = None) -> list[dict]:
+                                          allowed_media_domains: list[str] | None = None,
+                                          defer_image_decode: bool = False) -> list[dict]:
         """Convert user-input multimodal data into GPT4V message format."""
         if isinstance(messages, dict):
             messages = [messages]
@@ -204,7 +228,8 @@ class MultimodalProcessor:
 
         await asyncio.gather(*[
             loop.run_in_executor(None, MultimodalProcessor._parse_multimodal_item, i, messages, out_messages,
-                                 media_io_kwargs, allowed_media_domains) for i in range(len(messages))
+                                 media_io_kwargs, allowed_media_domains, defer_image_decode)
+            for i in range(len(messages))
         ])
         return out_messages
 
@@ -257,7 +282,7 @@ class MultimodalProcessor:
             has_multimodal_input = self._has_multimodal_input(prompt)
 
             if has_multimodal_input and self.vl_encoder is None:
-                raise ValueError('Multimodal input is not supported by this model.')
+                raise UnsupportedMultimodalInputError('Multimodal input is not supported by this model.')
 
             # If no multimodal input, use text-only processing
             if not has_multimodal_input:
@@ -274,6 +299,7 @@ class MultimodalProcessor:
                                                            do_preprocess=do_preprocess,
                                                            adapter_name=adapter_name,
                                                            tools=tools,
+                                                           reasoning_effort=reasoning_effort,
                                                            chat_template_kwargs=chat_template_kwargs,
                                                            media_io_kwargs=media_io_kwargs,
                                                            mm_processor_kwargs=mm_processor_kwargs,
@@ -356,16 +382,26 @@ class MultimodalProcessor:
         return messages
 
     def _has_multimodal_input(self, messages: list[dict]) -> bool:
-        """Check if messages contain multimodal input such as images, videos,
-        audios, or time series."""
-        for message in messages:
+        """Validate block types before choosing text or multimodal
+        processing."""
+        has_multimodal_input = False
+        for message_idx, message in enumerate(messages):
             content = message.get('content')
             if not isinstance(content, list):
                 continue
-            for item in content:
-                if isinstance(item, dict) and item.get('type') in MULTIMODAL_TYPES:
-                    return True
-        return False
+            for item_idx, item in enumerate(content):
+                field = f'messages[{message_idx}].content[{item_idx}]'
+                if not isinstance(item, dict):
+                    raise ValueError(f'Invalid content block at `{field}`. Expected an object.')
+                item_type = item.get('type')
+                if item_type == 'text':
+                    continue
+                if item_type not in MULTIMODAL_TYPES:
+                    raise ValueError(f'Unsupported content block type {item_type!r} at `{field}.type`.')
+                # Scan the entire history: an earlier image must not hide an
+                # invalid block later in this message or a subsequent turn.
+                has_multimodal_input = True
+        return has_multimodal_input
 
     async def _get_text_prompt_input(self,
                                      prompt: str | list[dict],
@@ -376,9 +412,6 @@ class MultimodalProcessor:
                                      chat_template_kwargs: dict | None = None,
                                      **kwargs):
         """Process text-only prompt and return prompt string and input_ids."""
-        # Change multimodal data to openai text messages
-        if isinstance(prompt, list):
-            prompt = [self.merge_message_content(msg) for msg in prompt]
         if do_preprocess:
             # use adapter's chat template if possible
             chat_template = self.chat_template
@@ -387,6 +420,13 @@ class MultimodalProcessor:
         else:
             chat_template = BaseChatTemplate()
         chat_template_kwargs = dict(chat_template_kwargs or {})
+        if isinstance(prompt, list):
+            # GLM-5.3 renders adjacent text parts without a separator. Preserve
+            # them for its default tokenizer/template. Explicit request-level
+            # overrides retain the existing string-content input contract.
+            preserve_parts = (isinstance(chat_template, HFChatTemplate) and chat_template.is_glm5_next
+                              and chat_template_kwargs.get('chat_template') is None)
+            prompt = [self.merge_message_content(msg, preserve_content_parts=preserve_parts) for msg in prompt]
         template_reasoning_effort = reasoning_effort
         if template_reasoning_effort is None:
             template_reasoning_effort = chat_template_kwargs.pop('reasoning_effort', None)
@@ -408,6 +448,7 @@ class MultimodalProcessor:
                                            do_preprocess: bool,
                                            adapter_name: str,
                                            tools: list[object] | None = None,
+                                           reasoning_effort: Literal['low', 'medium', 'high', 'max'] | None = None,
                                            chat_template_kwargs: dict | None = None,
                                            media_io_kwargs: dict[str, Any] | None = None,
                                            mm_processor_kwargs: dict[str, Any] | None = None,
@@ -415,9 +456,21 @@ class MultimodalProcessor:
         """Process multimodal prompt and return processed data for inference
         engines."""
         chat_template = self.chat_template if do_preprocess else BaseChatTemplate()
+        # Match the text path: the top-level effort overrides template kwargs.
+        # Copy the caller's dict so subsequent requests cannot inherit this value.
+        chat_template_kwargs = dict(chat_template_kwargs or {})
+        if reasoning_effort is not None:
+            chat_template_kwargs['reasoning_effort'] = reasoning_effort
+        # Mixed modalities retain the processor's existing eager media path.
+        defer_image_decode = self.defer_image_decode and all(
+            item.get('type') in ('text', 'image', 'image_url', 'image_data')
+            for message in messages if isinstance(message.get('content'), list)
+            for item in message['content'])
         messages = await self.async_parse_multimodal_item(messages,
                                                           media_io_kwargs,
-                                                          allowed_media_domains=self.allowed_media_domains)
+                                                          allowed_media_domains=self.allowed_media_domains,
+                                                          defer_image_decode=defer_image_decode)
+        messages = chat_template.prepare_multimodal_messages(messages)
 
         if self.backend == 'turbomind':
             if self.vl_encoder._uses_new_preprocess:

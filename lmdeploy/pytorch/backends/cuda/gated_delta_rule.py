@@ -8,6 +8,8 @@ import torch
 import triton
 import triton.language as tl
 
+from lmdeploy.pytorch.compact_state import SSMPrefillMetadata, SSMStateMetadata
+from lmdeploy.pytorch.model_inputs import get_step_ctx_manager
 from lmdeploy.utils import get_logger
 
 from ..gated_delta_rule import (
@@ -52,34 +54,70 @@ def prepare_chunked_gated_delta_rule(cu_seqlens_q: torch.Tensor) -> None:
 class GatedDeltaStepMetaUpdater(CudaStepMetaUpdater):
     """Prepare step-local state owned by the selected CUDA gated-delta op."""
 
+    indexed_state: bool = False
     output_key: ClassVar[str] = 'gated_delta'
     priority: ClassVar[int] = 20
 
     @property
     def key(self) -> Hashable:
-        return type(self)
+        return type(self), self.indexed_state
 
     def update(self, step_context, sequence_metadata) -> None:
+        if self.indexed_state:
+            if not step_context.is_decoding and step_context.ssm_prefill_meta is None:
+                raise ValueError('Compact prefill requires prebuilt host-length metadata.')
+            return
         if not step_context.is_decoding:
             prepare_chunked_gated_delta_rule(sequence_metadata.cu_seqlens_q)
+
+
+class CudaCompactGatedDeltaMeta(GatedDeltaMeta):
+    """CUDA indexed metadata: no legacy ring offsets or payload-gather indices."""
+
+    def __init__(
+        self,
+        num_tokens: int,
+        is_decoding: bool,
+        ssm_state_meta: SSMStateMetadata,
+        ssm_prefill_meta: SSMPrefillMetadata | None,
+    ) -> None:
+        self.is_decoding = is_decoding
+        self.ssm_state_meta = ssm_state_meta
+        self.ssm_prefill_meta = ssm_prefill_meta
+        self.is_init_token = None
+        batch, width = ssm_state_meta.output_state_ids.shape
+        if is_decoding:
+            if num_tokens != batch * width or ssm_prefill_meta is not None:
+                raise ValueError('Compact decode requires one destination per input token and no prefill plan.')
+        else:
+            if (width != 1 or ssm_prefill_meta is None or ssm_prefill_meta.cu_seqlens.numel() != batch + 1
+                    or ssm_prefill_meta.seq_idx.numel() != num_tokens
+                    or ssm_prefill_meta.cu_seqlens.device != ssm_state_meta.input_state_ids.device):
+                raise ValueError('Compact prefill requires matching packed metadata and one final destination.')
+            self.is_init_token = ssm_prefill_meta.is_init_token
 
 
 class CudaGatedDeltaMetaImpl(GatedDeltaMetaImpl):
     """Build explicit gated-delta metadata, eagerly during piecewise
     prefill."""
 
-    def __init__(self) -> None:
+    def __init__(self, indexed_state: bool = False) -> None:
+        self.indexed_state = indexed_state
         self._piecewise_forward: Callable[..., GatedDeltaMeta] | None = None
         register_piecewise_graph_impl(self)
 
-    @staticmethod
     def _build(
+        self,
         num_tokens: int,
         conv_kernel_size: int,
         state_ids: torch.Tensor,
         attn_metadata: Any,
     ) -> GatedDeltaMeta:
-        return GatedDeltaMeta(num_tokens, conv_kernel_size, state_ids, attn_metadata)
+        if not self.indexed_state:
+            return GatedDeltaMeta(num_tokens, conv_kernel_size, state_ids, attn_metadata)
+        context = get_step_ctx_manager().current_context()
+        return CudaCompactGatedDeltaMeta(num_tokens, attn_metadata.is_decoding,
+                                         context.ssm_state_meta, context.ssm_prefill_meta)
 
     def forward(
         self,
@@ -150,6 +188,8 @@ def _state_select_kernel(
     stride_o0,
     INNER_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
+    NUM_STATES: tl.constexpr,
+    NUM_SLOTS: tl.constexpr,
 ):
     """Fused state select: out[b] = state[state_indices[b],
     spec_offsets[b]]."""
@@ -165,7 +205,8 @@ def _state_select_kernel(
     src_ptr = state_ptr + state_idx * stride_s0 + spec_off * stride_s1 + offs
     dst_ptr = out_ptr + batch_id * stride_o0 + offs
 
-    data = tl.load(src_ptr, mask=mask)
+    valid = (state_idx >= 0) & (state_idx < NUM_STATES) & (spec_off >= 0) & (spec_off < NUM_SLOTS)
+    data = tl.load(src_ptr, mask=mask & valid, other=0)
     tl.store(dst_ptr, data, mask=mask)
 
 
@@ -180,6 +221,8 @@ def _state_scatter_kernel(
     stride_i0,
     INNER_SIZE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
+    NUM_STATES: tl.constexpr,
+    NUM_SLOTS: tl.constexpr,
 ):
     """Fused state scatter: state[si[b], so[b]] = src[b]."""
     batch_id = tl.program_id(0).to(tl.int64)
@@ -189,7 +232,8 @@ def _state_scatter_kernel(
     spec_off = tl.load(spec_offsets_ptr + batch_id)
 
     offs = block_id * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offs < INNER_SIZE
+    mask = (offs < INNER_SIZE) & (state_idx >= 0) & (state_idx < NUM_STATES)
+    mask = mask & (spec_off >= 0) & (spec_off < NUM_SLOTS)
 
     in_ptr = src_ptr + batch_id * stride_i0 + offs
     dst_ptr = state_ptr + state_idx * stride_s0 + spec_off * stride_s1 + offs
@@ -201,7 +245,8 @@ def _state_scatter_kernel(
 def _state_select(state, state_indices, spec_offsets):
     """Fused state select: out = state[state_indices, spec_offsets].
 
-    Requires inner dims [2:] to be contiguous.
+    Requires inner dims [2:] to be contiguous. Invalid state/slot ids yield
+    zeros, allowing callers to clear initial or padded requests in this load.
     """
     B = state_indices.shape[0]
     inner_shape = state.shape[2:]
@@ -225,6 +270,8 @@ def _state_select(state, state_indices, spec_offsets):
         out.stride(0),
         INNER_SIZE=inner_size,
         BLOCK_SIZE=BLOCK_SIZE,
+        NUM_STATES=state.shape[0],
+        NUM_SLOTS=state.shape[1],
     )
     return out
 
@@ -233,7 +280,8 @@ def _state_scatter(state, state_indices, spec_offsets, src):
     """Fused state scatter: state[state_indices, spec_offsets] =
     src.to(state.dtype).
 
-    Requires inner dims [2:] to be contiguous.
+    Requires inner dims [2:] to be contiguous. Invalid state/slot ids are
+    ignored so padded requests cannot overwrite a live cache row.
     """
     if src.dtype != state.dtype:
         src = src.to(state.dtype)
@@ -257,12 +305,15 @@ def _state_scatter(state, state_indices, spec_offsets, src):
         src.stride(0),
         INNER_SIZE=inner_size,
         BLOCK_SIZE=BLOCK_SIZE,
+        NUM_STATES=state.shape[0],
+        NUM_SLOTS=state.shape[1],
     )
 
 
 class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
 
-    def __init__(self):
+    def __init__(self, indexed_state: bool = False):
+        self.indexed_state = indexed_state
         # intracard_cp implement would force sync cuda stream
         import os
         os.environ['FLA_INTRACARD_CP'] = '0'
@@ -280,7 +331,7 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
 
     def get_step_metadata_provider(self):
         """Describe preparation required by this selected implementation."""
-        return GatedDeltaStepMetaUpdater()
+        return GatedDeltaStepMetaUpdater(indexed_state=self.indexed_state)
 
     def supports_piecewise_cuda_graph(self) -> bool:
         """Return whether this CUDA implementation can run in an eager
@@ -384,6 +435,54 @@ class CudaGatedDeltaRuleImpl(GatedDeltaRuleImpl):
 
         self._piecewise_forward = piecewise_forward
         self.forward = piecewise_forward
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        b: torch.Tensor,
+        a: torch.Tensor,
+        dt_bias: torch.Tensor,
+        a_log_exp: torch.Tensor,
+        recurrent_state: torch.Tensor,
+        gated_delta_meta: GatedDeltaMeta,
+        kv_ratio: int,
+        use_qk_l2norm_in_kernel: bool,
+    ) -> torch.Tensor:
+        if not self.indexed_state:
+            return super().forward(
+                query, key, value, b, a, dt_bias, a_log_exp, recurrent_state,
+                gated_delta_meta, kv_ratio, use_qk_l2norm_in_kernel)
+        meta = gated_delta_meta
+        ids = meta.ssm_state_meta
+        # Indexed requests without history read the immutable zero-state unit.
+        # Keep their real gate: a -1e6 reset loses the smaller decays when FLA
+        # forms FP32 cumulative sums in the first chunk.
+        query, key, g, beta, normalized = self.prepare_inputs(
+            query, key, b, a, dt_bias, a_log_exp, kv_ratio,
+            use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, is_decoding=meta.is_decoding,
+            init_token_mask=None)
+        if meta.is_decoding:
+            batch, width = ids.output_state_ids.shape
+            q, k, v, g, beta = [x[0].unflatten(0, (batch, width)).contiguous()
+                                for x in (query, key, value, g, beta)]
+            output, _ = self.recurrent_func(
+                q, k, v, g=g, beta=beta, initial_state=recurrent_state, output_final_state=True,
+                state_indices=ids.input_state_ids, output_state_indices=ids.output_state_ids,
+
+                use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel and not normalized, transpose_state_layout=True)
+            return output.flatten(0, 1).unsqueeze(0)
+        from lmdeploy.pytorch.kernels.cuda.indexed_chunk_gated_delta import indexed_chunk_gated_delta_rule
+        if use_qk_l2norm_in_kernel and not normalized:
+            query = torch.nn.functional.normalize(query, p=2, dim=-1)
+            key = torch.nn.functional.normalize(key, p=2, dim=-1)
+        prefill = meta.ssm_prefill_meta
+        return indexed_chunk_gated_delta_rule(
+            query, key, value, g, beta, recurrent_state, ids.input_state_ids, ids.output_state_ids[:, 0],
+            state_v_first=True, cu_seqlens=prefill.cu_seqlens, chunk_indices=prefill.chunk_indices,
+            chunk_offsets=prefill.chunk_offsets, checkpoint_ids=prefill.checkpoint_ids,
+            checkpoint_offsets=prefill.checkpoint_offsets)
 
     def prepare_inputs(
         self,

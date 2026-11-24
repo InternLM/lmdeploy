@@ -90,11 +90,12 @@ def test_fp32_lm_head_hf_override_survives_mtp_draft_config(monkeypatch):
 def test_config_builder_qwen35_mtp_reuses_main_dist_config(monkeypatch):
     from types import SimpleNamespace
 
+    from lmdeploy.messages import SpeculativeConfig
     from lmdeploy.pytorch.engine import config_builder as config_builder_mod
 
     dist_config = DistConfig(dp=2, ep=2)
     cache_config = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=0)
-    speculative_config = SimpleNamespace(method='qwen3_5_mtp', model=None, num_speculative_tokens=3)
+    speculative_config = SpeculativeConfig(method='qwen3_5_mtp', num_speculative_tokens=3)
     engine_config = SimpleNamespace(dtype='auto', model_format=None, hf_overrides=None)
     captured = {}
     expected = object()

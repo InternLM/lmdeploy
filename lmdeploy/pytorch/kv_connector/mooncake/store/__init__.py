@@ -1,6 +1,12 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from .connector import MooncakeStoreConnector
-from .data import BlobBlockHashes, MooncakeStoreConfig, MooncakeStoreConnectorMetadata, MooncakeStoreRegistration
+from .data import (
+    BlobBlockHashes,
+    MooncakeStoreConfig,
+    MooncakeStoreConnectorMetadata,
+    MooncakeStoreRegistration,
+    MooncakeStoreStateRegistration,
+)
 from .lookup import LookupKeyClient, LookupKeyServer
 
 __all__ = [
@@ -11,4 +17,5 @@ __all__ = [
     'MooncakeStoreConnector',
     'MooncakeStoreConnectorMetadata',
     'MooncakeStoreRegistration',
+    'MooncakeStoreStateRegistration',
 ]

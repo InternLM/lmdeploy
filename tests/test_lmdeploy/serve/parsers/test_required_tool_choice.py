@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import copy
 import json
 
 import pytest
@@ -101,6 +102,90 @@ def _walk_formats(value):
             yield from _walk_formats(child)
 
 
+def _named_call(tool_parser, name):
+    arguments = {'city': 'Paris'} if name == 'get_weather' else {'timezone': 'UTC'}
+    if tool_parser == 'qwen3':
+        return '<tool_call>\n' + json.dumps({'name': name, 'arguments': arguments}) + '\n</tool_call>'
+    if tool_parser == 'intern-s1':
+        return '<|action_start|><|plugin|>' + json.dumps({'name': name, 'parameters': arguments}) + '<|action_end|>'
+    key, value = next(iter(arguments.items()))
+    if tool_parser == 'qwen3coder':
+        return f'<tool_call>\n<function={name}>\n<parameter={key}>\n{value}\n</parameter>\n</function>\n</tool_call>'
+    return f'<tool_call>{name}<arg_key>{key}</arg_key><arg_value>{value}</arg_value></tool_call>'
+
+
+@pytest.mark.parametrize('tool_parser', ['qwen3', 'qwen3coder', 'glm47', 'intern-s1'])
+@pytest.mark.parametrize('reasoning', [False, True])
+def test_named_choice_requires_exactly_one_selected_call(configured_parser, xgrammar_compiler, tool_parser, reasoning):
+    parser = configured_parser(tool_parser=tool_parser, reasoning=reasoning,
+                               tool_choice={'type': 'function', 'function': {'name': 'get_weather'}})
+    assert parser.request.response_format is not None
+    xgr, compiler = xgrammar_compiler
+    grammar = compile_response_format(compiler, parser.request.response_format)
+    separator = '\n\n' if tool_parser in ('qwen3', 'qwen3coder', 'intern-s1') else ''
+    prefix = 'Need to check.</think>' + separator if reasoning else ''
+    selected = _named_call(tool_parser, 'get_weather')
+    other = _named_call(tool_parser, 'get_time')
+    for suffix, expected in [('', False), ('Hello', False), (selected, True), (other, False),
+                             (selected + '\n' + selected, False)]:
+        matcher = xgr.GrammarMatcher(grammar)
+        accepted = matcher.accept_string(prefix + suffix) and matcher.accept_token(0)
+        assert accepted is expected, (tool_parser, reasoning, suffix)
+
+
+@pytest.mark.parametrize('tool_parser', [
+    'qwen2d5', 'qwen3', 'qwen3coder', 'kimi-k2', 'glm47',
+    'deepseek-v32', 'deepseek-v4', 'interns2-preview', 'intern-s1',
+])
+@pytest.mark.parametrize('reasoning', [False, True])
+def test_builtin_named_formats_compile(configured_parser, xgrammar_compiler, tool_parser, reasoning):
+    parser = configured_parser(tool_parser=tool_parser, reasoning=reasoning,
+                               tool_choice={'type': 'function', 'function': {'name': 'get_weather'}})
+    response_format = parser.request.response_format
+    assert response_format is not None
+    assert 'get_weather' in str(response_format)
+    assert 'get_time' not in str(response_format)
+    xgr, compiler = xgrammar_compiler
+    assert isinstance(compile_response_format(compiler, response_format), xgr.CompiledGrammar)
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('reasoning', [False, True])
+def test_named_choice_overrides_json_without_mutating_request(configured_parser, reasoning, stream):
+    request = _request(tool_choice={'type': 'function', 'function': {'name': 'get_weather'}},
+                       response_format={'type': 'json_object'},
+                       chat_template_kwargs={'enable_thinking': reasoning})
+    original = copy.deepcopy(request.model_dump())
+    parser = configured_parser(request=request, tool_parser='glm47', reasoning=reasoning)
+    text = ('Checking.</think>' if reasoning else '') + _named_call('glm47', 'get_weather')
+    if stream:
+        deltas = parser.stream_chunk(text, [], final=True)
+        calls = parser.tool_parser.build_tool_calls([call for delta, _ in deltas for call in delta.tool_calls or []])
+        reason = ''.join(delta.reasoning_content or '' for delta, _ in deltas)
+    else:
+        _, calls, reason = parser.parse_complete(text)
+    assert len(calls or []) == 1
+    assert calls[0].function.name == 'get_weather'
+    assert json.loads(calls[0].function.arguments) == {'city': 'Paris'}
+    assert (reason or '') == ('Checking.' if reasoning else '')
+    assert parser.request.response_format['type'] == 'structural_tag'
+    assert request.model_dump() == original
+
+
+@pytest.mark.parametrize('tools', [None, [], _tools()[1:], [_tools()[0], _tools()[0]]])
+@pytest.mark.parametrize('tool_parser', ['glm47', 'intern-s1'])
+def test_named_choice_rejects_missing_or_ambiguous_tool(configured_parser, tools, tool_parser):
+    with pytest.raises(ValueError):
+        configured_parser(tools=tools, tool_parser=tool_parser,
+                          tool_choice={'type': 'function', 'function': {'name': 'get_weather'}})
+
+
+def test_named_choice_rejects_unsupported_parser(configured_parser):
+    with pytest.raises(ValueError, match='does not support.*named'):
+        configured_parser(tool_parser='llama3',
+                          tool_choice={'type': 'function', 'function': {'name': 'get_weather'}})
+
+
 @pytest.mark.parametrize(
     'parser_name',
     [
@@ -112,6 +197,7 @@ def _walk_formats(value):
         'deepseek-v32',
         'deepseek-v4',
         'interns2-preview',
+        'intern-s1',
     ],
 )
 @pytest.mark.parametrize('reasoning', [False, True])
@@ -147,15 +233,21 @@ def test_builtin_required_formats_compile(parser_name, reasoning, xgrammar_compi
 
 @pytest.mark.parametrize('reasoning', [False, True])
 @pytest.mark.parametrize('call_count', [0, 1, 2])
-def test_required_grammar_requires_at_least_one_tool_call(configured_parser, xgrammar_compiler, reasoning, call_count):
+@pytest.mark.parametrize('tool_parser', ['qwen3', 'interns2-preview'])
+def test_required_grammar_requires_at_least_one_tool_call(
+    configured_parser, xgrammar_compiler, reasoning, call_count, tool_parser,
+):
     """Require a tool call before EOS, including after reasoning, and allow
     multiple calls."""
-    parser = configured_parser(reasoning=reasoning)
+    parser = configured_parser(reasoning=reasoning, tool_parser=tool_parser)
     xgr, compiler = xgrammar_compiler
     matcher = xgr.GrammarMatcher(compile_response_format(compiler, parser.request.response_format))
-    call = '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Paris"}}\n</tool_call>'
+    if tool_parser == 'interns2-preview':
+        call = '<tool_call>\n<function=get_weather>\n<parameter=city>\nParis\n</parameter>\n</function>\n</tool_call>'
+    else:
+        call = '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Paris"}}\n</tool_call>'
     text = 'Need to check.</think>\n\n' if reasoning else ''
-    text += call * call_count
+    text += '\n'.join([call] * call_count)
 
     assert matcher.accept_string(text)
     assert matcher.accept_token(0) is (call_count > 0)
@@ -172,10 +264,63 @@ def test_required_rejects_tool_parser_without_response_format(monkeypatch):
         parser_cls(_request())
 
 
-@pytest.mark.parametrize('tool_parser', ['internlm', 'intern-s1', 'llama3'])
-def test_required_rejects_unsupported_builtin_tool_parser(configured_parser, tool_parser):
+@pytest.mark.parametrize('reasoning', [False, True])
+@pytest.mark.parametrize('stream', [False, True])
+def test_required_interns1_tool_round_trip(configured_parser, xgrammar_compiler, reasoning, stream):
+    """Require JSON calls and preserve their arguments in both modes."""
+    parser = configured_parser(tool_parser='intern-s1', reasoning=reasoning)
+    xgr, compiler = xgrammar_compiler
+    matcher = xgr.GrammarMatcher(compile_response_format(compiler, parser.request.response_format))
+    prefix = 'Need to search.</think>\n\n' if reasoning else ''
+    assert matcher.accept_string(prefix)
+    assert not matcher.accept_token(0)
+    opener = parser.tool_parser.get_tool_open_tag()
+    closer = parser.tool_parser.get_tool_close_tag()
+    payloads = [
+        '{"name": "get_weather", "parameters": {"city": "Paris"}}',
+        '{"name": "get_time", "parameters": {"timezone": "UTC"}}',
+    ]
+    calls = [opener + payload + closer for payload in payloads]
+    text = prefix + '\n'.join(calls)
+    assert matcher.accept_string('\n'.join(calls))
+    assert matcher.accept_string('\n')
+    assert matcher.accept_token(0)
+    if stream:
+        deltas = []
+        chunks = [prefix]
+        for payload in payloads:
+            chunks.extend([opener, *payload, closer, '\n'])
+        for chunk in chunks:
+            deltas.extend(parser.stream_chunk(chunk, []))
+        deltas.extend(parser.stream_chunk('', [], final=True))
+        names = [call.function.name for delta, _ in deltas for call in delta.tool_calls or []
+                 if call.function and call.function.name]
+        arguments = [''.join(call.function.arguments or '' for delta, _ in deltas for call in delta.tool_calls or []
+                             if call.index == index and call.function) for index in range(2)]
+    else:
+        _, parsed_calls, _ = parser.parse_complete(text)
+        names = [call.function.name for call in parsed_calls]
+        arguments = [call.function.arguments for call in parsed_calls]
+    assert names == ['get_weather', 'get_time']
+    assert [json.loads(value) for value in arguments] == [{'city': 'Paris'}, {'timezone': 'UTC'}]
+
+
+@pytest.mark.parametrize('payload', [
+    '{"name": "unknown", "parameters": {}}',
+    '{"name": "get_weather", "parameters": {"city": 42}}',
+    '{"name": "get_weather", "parameters": {}}',
+])
+def test_required_interns1_tool_rejects_invalid_call(configured_parser, xgrammar_compiler, payload):
+    """Enforce the selected tool's parameter schema, not just JSON syntax."""
+    parser = configured_parser(tool_parser='intern-s1')
+    xgr, compiler = xgrammar_compiler
+    matcher = xgr.GrammarMatcher(compile_response_format(compiler, parser.request.response_format))
+    assert not matcher.accept_string(parser.tool_parser.get_tool_open_tag() + payload)
+
+
+def test_required_rejects_unsupported_builtin_tool_parser(configured_parser):
     with pytest.raises(ValueError, match='does not support `tool_choice="required"`'):
-        configured_parser(tool_parser=tool_parser)
+        configured_parser(tool_parser='llama3')
 
 
 def test_required_overrides_response_format_without_mutating_tools(configured_parser):

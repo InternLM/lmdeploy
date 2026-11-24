@@ -15,6 +15,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
 from lmdeploy.pytorch.utils import cancel_async_tasks, wait_for_async_tasks
+from lmdeploy.trace import ENABLED as TRACE_ENABLED
 from lmdeploy.utils import get_logger
 
 from .engine import InferOutput, ResponseType, response_reqs
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
     from lmdeploy.pytorch.paging import Scheduler
     from lmdeploy.pytorch.paging.block_trie.checkpoint_lifecycle import StateCheckpointLifecycle
+    from lmdeploy.pytorch.paging.compact_state import SSMStateManager
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 
     from .engine import Engine, SeqList
@@ -123,10 +125,12 @@ class EngineLoop:
                  seq_strategy: 'SequenceStrategy',
                  inputs_maker: 'InputsMakerAsync',
                  config: EngineLoopConfig,
-                 engine_conn: Optional['EngineP2PConnection'] = None):
+                 engine_conn: Optional['EngineP2PConnection'] = None,
+                 compact_state_manager: 'SSMStateManager | None' = None):
         self.req_manager = req_manager
         self.scheduler = scheduler
         self.state_checkpoints = state_checkpoints
+        self.compact_state_manager = compact_state_manager
         self.executor = executor
         self.seq_strategy = seq_strategy
         self.inputs_maker = inputs_maker
@@ -163,6 +167,7 @@ class EngineLoop:
         """Preprocess request."""
         while not self.stop_event.is_set():
             await self.req_manager.step()
+            self.scheduler.prefetch_kv_lookups()
             self.has_runable_event.set()
 
     async def drain_for_sleep(self):
@@ -218,16 +223,40 @@ class EngineLoop:
                 or num_rows != compact.vals.shape[0]):
             raise RuntimeError('input-logprob compact output mismatch')
 
+        def _requested_ids(msg):
+            sampling_param = getattr(msg, 'sampling_param', None)
+            return getattr(sampling_param, 'logprob_extra_token_ids', None) or ()
+
+        # Rows end with the batch union of logprob_extra_token_ids (see ARSamplingStrategy);
+        # each request keeps only the columns it asked for.
+        #
+        # This projects a batch-wide column layout back onto per-request ones.
+        # It is needed whenever a request naming extra ids shares a batch with a
+        # request that names none or fewer: the other caller of input logprobs is
+        # /generate, which may run on the same engine as /v1/decisions. Without
+        # the projection those responses would silently carry extra columns whose
+        # token ids mean nothing to them.
+        extra_ids = sorted(set().union(*(_requested_ids(msg) for msg in running)))
+        num_base_cols = compact.vals.shape[1] - len(extra_ids)
+        if extra_ids and num_rows > 0 and (num_base_cols < 1
+                                           or compact.indices[0, num_base_cols:].tolist() != extra_ids):
+            raise RuntimeError('input-logprob requested-token columns mismatch')
+
         offset = 0
         for msg, row_count in zip(running, row_counts, strict=True):
             end = offset + row_count
             if row_count > 0:
                 if msg.resp._input_logprobs is None:
                     msg.resp._input_logprobs = []
-                msg.resp._input_logprobs.extend(
-                    zip(compact.vals[offset:end].tolist(),
-                        compact.indices[offset:end].tolist(),
-                        strict=True))
+                vals = compact.vals[offset:end]
+                indices = compact.indices[offset:end]
+                own = set(_requested_ids(msg))
+                if len(own) < len(extra_ids):
+                    keep = list(range(num_base_cols))
+                    keep += [num_base_cols + k for k, token_id in enumerate(extra_ids) if token_id in own]
+                    keep = torch.tensor(keep, device=vals.device)
+                    vals, indices = vals.index_select(1, keep), indices.index_select(1, keep)
+                msg.resp._input_logprobs.extend(zip(vals.tolist(), indices.tolist(), strict=True))
             offset = end
 
     @staticmethod
@@ -408,10 +437,13 @@ class EngineLoop:
             if num_draft_tokens is not None and model_inputs is None and self.config.enable_metrics:
                 num_accepted_tokens = (batched_outputs.next_token_ids[idx] > -1).sum() - 1
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens.item())
+            if TRACE_ENABLED and len(token_ids) and not msg.resp.first_token_timestamp:
+                msg.resp.first_token_timestamp = new_token_timestamp
             req_metrics = RequestMetrics(new_token_timestamp,
                                          msg.engine_events,
                                          spec_info=spec_info,
-                                         cached_tokens=msg.cached_tokens)
+                                         cached_tokens=msg.cached_tokens,
+                                         first_token_timestamp=msg.resp.first_token_timestamp)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
@@ -446,7 +478,10 @@ class EngineLoop:
         """Prefetch the next batch unless sleep has started."""
         if self._sleep_requested:
             return None, None
-        return await self.inputs_maker.prefetch_next_inputs()
+        result = await self.inputs_maker.prefetch_next_inputs()
+        # Refill after selection, while the already queued forward executes.
+        self.scheduler.prefetch_kv_lookups()
+        return result
 
     async def _wait_for_schedulable_prefill(self):
         """Yield briefly for lookup I/O or back off for cache pressure."""
@@ -467,7 +502,8 @@ class EngineLoop:
                                running: 'SeqList',
                                model_inputs: 'ModelInputs | None',
                                delta: 'ModelInputsDelta | None'):
-        """Apply connector progress and publish model outputs."""
+        """Apply connector progress and return the completed model
+        responses."""
         if out is None:
             return
         # Connector-only polls have no token output; apply completions before
@@ -479,7 +515,7 @@ class EngineLoop:
         # _make_infer_outputs advances history; only then can soft reservations
         # be released.
         self.scheduler.release_completed_prefill_reservations(running)
-        self.resp_queue.put_nowait(step_outputs)
+        return step_outputs
 
     async def _main_loop_get_outputs(
         self,
@@ -490,9 +526,16 @@ class EngineLoop:
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
         cache_inputs = forward_inputs['cache_inputs']
+        ssm_state_access_id = cache_inputs.ssm_state_access_id if cache_inputs is not None else None
+        has_compact_checkpoints = (
+            (delta is not None and delta.ssm_checkpoint_state_ids is not None) or
+            (model_inputs is not None and model_inputs.ssm_prefill_meta is not None
+             and model_inputs.ssm_prefill_meta.checkpoint_ids is not None))
         # Connector-only work shares the executor queue to preserve ordering,
         # but owns neither model sequence state nor checkpoint pin transitions.
         has_model_work = model_inputs is not None or delta is not None
+        if ssm_state_access_id is not None and (not has_model_work or self.compact_state_manager is None):
+            raise ValueError('Compact completion requires model work and its host state owner.')
         if has_model_work:
             self.inputs_maker.update_running_seqs(running, model_inputs)
         has_state_checkpoint_save = (cache_inputs is not None
@@ -502,16 +545,47 @@ class EngineLoop:
         # input is queued, matched checkpoints can be published before waiting
         # for GPU output; save checkpoints keep a producer pin until the output
         # event boundary so prefetch cannot evict/reuse their destination slots.
-        if has_model_work:
+        if has_model_work and ssm_state_access_id is None:
             self.state_checkpoints.finish_forward_dispatch(
                 running,
                 has_save_plan=has_state_checkpoint_save,
             )
+        if has_compact_checkpoints:
+            self.state_checkpoints.publish_forward(ssm_state_access_id)
         forward_inputs, next_running = await self._prefetch_next_inputs()
         out = await self.executor.get_output_async()
-        if has_model_work:
+        completed_access_id = out.ssm_state_access_id if out is not None else None
+        if completed_access_id != ssm_state_access_id:
+            raise RuntimeError('Compact completion does not match the submitted forward access.')
+        if ssm_state_access_id is not None:
+            # Executor has crossed all required rank events. Prefetch retains
+            # its own access; never release through a mutable request/node ID.
+            if (model_inputs is None and delta is not None and out.next_token_ids is not None
+                    and self.compact_state_manager.needs_input_consumption(ssm_state_access_id)):
+                # AR consumes its input token. ARSpec advances by W-rejected,
+                # which is the count of nonnegative returned target tokens,
+                # including the bonus token (NOT accepted drafts alone).
+                # These tokens already crossed the normal D2H/result path.
+                tokens = out.next_token_ids
+                if (not isinstance(tokens, torch.Tensor) or tokens.device.type != 'cpu'
+                        or tokens.dtype not in (torch.int32, torch.int64)
+                        or tokens.ndim not in (1, 2) or not running or tokens.shape[0] != len(running)
+                        or delta.max_q_seqlen <= 0):
+                    raise ValueError('Compact decode consumption requires matching completed host token rows.')
+                consumed = tuple((tokens.reshape(len(running), -1) >= 0).any(dim=1).tolist())
+                self.compact_state_manager.acknowledge(ssm_state_access_id, consumed_inputs=consumed)
+            else:
+                self.compact_state_manager.acknowledge(ssm_state_access_id)
+            if has_compact_checkpoints:
+                self.state_checkpoints.complete_forward(ssm_state_access_id)
+        elif has_model_work:
             self.state_checkpoints.unpin_saves(running)
-        self._finish_forward_output(out, running, model_inputs, delta)
+        step_outputs = self._finish_forward_output(out, running, model_inputs, delta)
+        if cache_inputs is not None and cache_inputs.decode_save_id is not None:
+            self.scheduler.decode_checkpoints.finish(
+                cache_inputs.decode_save_id, out.decode_checkpoint_mask if out is not None else None)
+        if step_outputs is not None:
+            self.resp_queue.put_nowait(step_outputs)
         # out might come from shared memory, need to explicitly delete to release memory in time
         del out
 
@@ -710,6 +784,8 @@ class EngineLoop:
 
 def build_engine_loop(engine: 'Engine'):
     """Build engine loop."""
+    from lmdeploy.pytorch.paging.compact_state import SSMStateManager
+
     from .inputs_maker import build_inputs_maker
 
     config = EngineLoopConfig.from_engine(engine)
@@ -723,4 +799,6 @@ def build_engine_loop(engine: 'Engine'):
         inputs_maker=inputs_maker,
         config=config,
         engine_conn=engine.engine_conn,
+        compact_state_manager=(engine.scheduler.state_manager
+                               if isinstance(engine.scheduler.state_manager, SSMStateManager) else None),
     )

@@ -6,8 +6,85 @@ import asyncio
 import json
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from lmdeploy.serve.openai.responses import ResponsesRequest
+from lmdeploy.serve.openai.responses import ResponsesRequest, create_responses_router
+
+
+@pytest.mark.parametrize('structured', [False, True])
+def test_trace_keeps_oversized_terminal_response_success(responses_endpoint, monkeypatch, structured):
+    from types import SimpleNamespace
+
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from opentelemetry.trace import StatusCode
+
+    from lmdeploy.serve.observability import otel_trace, request_trace
+    from lmdeploy.serve.openai.responses import streaming
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(otel_trace, '_tracer', provider.get_tracer('large-responses'))
+    monkeypatch.setattr(request_trace, 'ENABLED', True)
+    monkeypatch.setattr(request_trace, 'LOG_ENABLED', True)
+    monkeypatch.setattr(request_trace, 'get_writer', lambda: None)
+    records = []
+    monkeypatch.setattr(request_trace, 'emit', lambda event, rid, **kw: records.append(kw))
+    if not structured:
+        monkeypatch.setattr(streaming, 'trace_frame', lambda frame, payload: frame)
+    else:
+        def reject_reparse(*args):
+            raise AssertionError('Structured Responses output must not be decoded again')
+        monkeypatch.setattr(request_trace, '_decode_json', reject_reparse)
+    _, context = responses_endpoint
+
+    def generate(request, **kwargs):
+        async def outputs():
+            yield SimpleNamespace(response='x' * (1150 * 1024), token_ids=[1], input_token_len=1,
+                                  generate_token_len=1, finish_reason='stop', cached_tokens=0,
+                                  logprobs=None, routed_experts=None, cache_block_ids=None)
+        return outputs()
+
+    context.async_engine.generate = generate
+    app = FastAPI()
+    app.include_router(create_responses_router(context))
+    try:
+        with TestClient(request_trace.RequestTraceMiddleware(app)) as client:
+            response = client.post('/v1/responses', json=dict(model='fake-model', input='Hi', stream=True))
+        assert response.status_code == 200
+        assert 'event: response.completed\n' in response.text
+        assert len(response.content) > 1024 * 1024
+        span, = exporter.get_finished_spans()
+        assert span.status.status_code == StatusCode.OK
+        assert records[-1]['status'] == 'success'
+    finally:
+        provider.shutdown()
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_http_unknown_content_is_rejected_with_its_location(responses_endpoint, stream):
+    _, context = responses_endpoint
+    app = FastAPI()
+    app.include_router(create_responses_router(context))
+    payload = dict(model='fake-model', stream=stream, input=[
+        dict(role='assistant', content='History'),
+        dict(role='user', content=[dict(type='input_text', text='Keep this'), dict(type='unsupported_probe')]),
+    ])
+    with TestClient(app) as client:
+        response = client.post('/v1/responses', json=payload)
+
+    assert response.status_code == 400
+    assert response.headers['content-type'].startswith('application/json')
+    error = response.json()['error']
+    assert error['type'] == 'invalid_request_error'
+    assert error['param'] == 'input'
+    assert 'unsupported_probe' in error['message']
+    assert 'input[1].content[1]' in error['message']
+    assert context.async_engine.prompt is None
+    assert context.sessions == []
 
 
 @pytest.mark.parametrize(
@@ -17,7 +94,7 @@ from lmdeploy.serve.openai.responses import ResponsesRequest
         pytest.param('temperature', 2.1, id='temperature-above-range'),
         pytest.param('top_p', -0.1, id='top-p-below-range'),
         pytest.param('top_p', 1.1, id='top-p-above-range'),
-        pytest.param('top_k', -1, id='negative-top-k'),
+        pytest.param('top_k', -2, id='top-k-below-minus-one'),
         pytest.param('min_p', -0.1, id='min-p-below-range'),
         pytest.param('min_p', 1.1, id='min-p-above-range'),
     ],
@@ -33,6 +110,19 @@ def test_responses_rejects_invalid_sampling_parameter(
 
     assert response.status_code == 400
     assert json.loads(response.body)['error']['param'] == field_name
+
+
+@pytest.mark.parametrize('top_k', [-1, 0, 20])
+def test_responses_normalizes_top_k_override(responses_endpoint, fake_raw_request, top_k):
+    endpoint, context = responses_endpoint
+    context.default_gen_config = {'top_k': 10}
+    response = asyncio.run(endpoint(
+        ResponsesRequest(model='fake-model', input='Hi', top_k=top_k), fake_raw_request))
+
+    assert response['output_text'] == 'ok'
+    config = context.async_engine.preprocess_kwargs['gen_config']
+    assert config.top_k == max(0, top_k)
+    assert config.temperature == 1.0
 
 
 def test_responses_rejects_empty_input_list(responses_endpoint,
@@ -347,3 +437,61 @@ def test_responses_engine_error_is_not_returned_as_bad_request(
 
     with pytest.raises(RuntimeError, match='engine exploded'):
         asyncio.run(endpoint(ResponsesRequest(model='fake-model', input='Hi'), fake_raw_request))
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('effort', [None, 'none', 'low', 'medium', 'high'])
+def test_responses_forwards_reasoning_effort(responses_endpoint, fake_raw_request, stream, effort):
+    endpoint, context = responses_endpoint
+    options = {} if effort is None else {'reasoning': {'effort': effort}}
+
+    async def run():
+        response = await endpoint(
+            ResponsesRequest(model='fake-model', input='Hi', stream=stream, **options), fake_raw_request)
+        if stream:
+            return [event async for event in response.body_iterator]
+        return response
+
+    asyncio.run(run())
+    kwargs = context.async_engine.preprocess_kwargs
+    assert kwargs['reasoning_effort'] == (None if effort == 'none' else effort)
+    assert kwargs['chat_template_kwargs'] == (None if effort is None else {'enable_thinking': effort != 'none'})
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_responses_preserves_cached_tokens(responses_endpoint, fake_raw_request, sse_payloads, stream):
+    endpoint, context = responses_endpoint
+    original_generate = context.async_engine.generate
+
+    def generate(request, **kwargs):
+        async def results():
+            async for result in original_generate(request, **kwargs):
+                result.input_token_len = 2580
+                result.cached_tokens = 2048
+                yield result
+        return results()
+
+    context.async_engine.generate = generate
+
+    async def run():
+        response = await endpoint(
+            ResponsesRequest(model='fake-model', input='Hi', stream=stream), fake_raw_request)
+        if stream:
+            events = sse_payloads([event async for event in response.body_iterator])
+            return next(e['response'] for e in events if e['type'] == 'response.completed')
+        return response
+
+    result = asyncio.run(run())
+    assert result['usage']['input_tokens'] == 2580
+    assert result['usage']['input_tokens_details']['cached_tokens'] == 2048
+    assert result['usage']['total_tokens'] == 2581
+
+
+@pytest.mark.parametrize('effort', ['minimal', 'xhigh'])
+def test_responses_rejects_unsupported_reasoning_effort(responses_endpoint, fake_raw_request, effort):
+    endpoint, context = responses_endpoint
+    response = asyncio.run(endpoint(
+        ResponsesRequest(model='fake-model', input='Hi', reasoning={'effort': effort}), fake_raw_request))
+    assert response.status_code == 400
+    assert json.loads(response.body)['error']['param'] == 'reasoning.effort'
+    assert context.async_engine.preprocess_kwargs is None

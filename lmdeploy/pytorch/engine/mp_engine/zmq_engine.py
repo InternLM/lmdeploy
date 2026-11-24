@@ -160,10 +160,14 @@ class ZMQMPEngine(MPEngine):
 
         loop = asyncio.get_running_loop()
         current_task = asyncio.current_task()
+        shutting_down = False
 
         async def shutdown(loop, signame):
+            nonlocal shutting_down
             logger.info(f'MP process received signal {signame}, stopping server.')
-            if current_task is not None:
+            # Signals must not interrupt drain, including after RPC return/failure.
+            if not shutting_down and current_task is not None:
+                shutting_down = True
                 current_task.cancel()
 
         for signame in {'SIGINT', 'SIGTERM'}:
@@ -185,6 +189,7 @@ class ZMQMPEngine(MPEngine):
         except Exception:
             logger.exception('RPC Server stopped with exception.')
         finally:
+            shutting_down = True
             server.stop()
             engine.close()
             try:

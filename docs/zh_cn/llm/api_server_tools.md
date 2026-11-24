@@ -1,11 +1,8 @@
 # Tools
 
-LMDeploy 支持 InternLM2, InternLM2.5, Llama3.1 和 Qwen2.5模型的工具调用。请在启动 api_server 的时候使用 `--tool-call-parser` 指定
-parser 名字。以下是支持的名字:
+LMDeploy 通过兼容 OpenAI 的 Chat Completions API 提供工具调用能力，支持 InternLM、Qwen、Llama、DeepSeek、GLM、Kimi 和 GPT-OSS 等系列中的模型。你可以在请求的 `tools` 字段中定义可用函数及其参数 schema。LMDeploy 将模型输出解析为包含函数名和参数的 `tool_calls`，由应用程序执行相应函数，再通过 `tool` 消息将结果传回模型，继续对话。
 
-1. internlm
-2. qwen
-3. llama3
+启动 `lmdeploy serve api_server` 时，请通过 `--tool-call-parser` 选择与模型工具调用格式匹配的解析器，例如 Intern-S2-Preview 使用 `interns2-preview`，Qwen3.5 使用 `qwen3coder`。可通过 `lmdeploy serve api_server --help` 查看当前可用的解析器名称。GPT-OSS 在安装 `openai_harmony` 后会自动使用 Harmony 响应解析器。
 
 ## 单轮调用
 
@@ -64,7 +61,25 @@ print(response.choices[0].finish_reason)       # tool_calls
 print(response.choices[0].message.tool_calls)  # 一个或多个调用
 ```
 
-此模式要求 `tools` 列表非空，并通过 `--tool-call-parser` 选择兼容的工具解析器；否则服务会返回 HTTP 400。目前 `gpt-oss`、`internlm`、`intern-s1` 和 `llama3` 解析器尚不支持此模式。由于同一时间只能启用一种引导解码约束，强制工具调用约束会覆盖客户端提供的 `response_format`。工具调用之前产生的推理内容仍会通过 `reasoning_content` 返回。如果在工具调用完成前达到 token 上限，`finish_reason` 会保留为 `length`。
+此模式要求 `tools` 列表非空，且使用的解析器支持强制工具调用。任一条件不满足时，服务会返回 HTTP 400。
+
+由于同一时间只能启用一种引导解码约束，强制工具调用约束会覆盖客户端提供的 `response_format`。工具调用之前产生的推理内容仍会通过 `reasoning_content` 返回。流式和非流式响应在工具调用生成完成时返回 `finish_reason="tool_calls"`。如果在工具调用完成前达到 token 上限，`finish_reason` 会保留为 `length`。
+
+如果要求恰好调用一次指定函数，请使用具名工具选择：
+
+```python
+tool_choice = {'type': 'function', 'function': {'name': 'get_current_weather'}}
+```
+
+将此值作为上面请求的 `tool_choice` 参数。函数必须在 `tools` 中恰好匹配一项，且配置的解析器必须支持具名工具语法，否则服务返回 HTTP 400。语法约束不允许只输出普通回答或调用其他函数。与 `required` 一样，此约束优先于 `response_format`，会保留已开启的调用前思考；若在调用完成前耗尽 token 预算，仍返回 `finish_reason="length"`。
+
+对于 GLM，工具调用和参数边界必须使用专用控制 token ID。参数值中以普通 token 编码的同名标签仍保留为字面量文本。
+
+如果生成结果无法解析为指定调用，正常结束时会报告服务端错误，不会将普通文本作为成功回答返回。调用方指定的停止串或耗尽的 token 预算仍可中断调用。
+
+设置 `tool_choice="auto"` 时，由模型自行决定是否调用工具。例如，即使提供了工具，问候语也可能得到普通文本回复，并返回 `finish_reason="stop"`。
+
+设置 `tool_choice="none"` 时，默认响应解析器关闭工具调用解析，但请求中的 `tools` 仍会传给对话模板。模型可能继续生成工具调用格式的文本，这些文本不会被提取为结构化的 `tool_calls`。GPT-OSS 的 Harmony 解析器在此模式下会先移除 `tools`，再渲染对话模板。
 
 ## 多轮调用
 
@@ -173,7 +188,7 @@ ChatCompletion(id='2', choices=[Choice(finish_reason='tool_calls', index=0, logp
 
 ### Llama3.1
 
-Meta 在 [Llama3 的官方用户指南](https://llama.meta.com/docs/model-cards-and-prompt-formats/llama3_1)中宣布（注：下文为原文的中文翻译）：
+Meta 在 [Llama3 的官方用户指南](https://github.com/meta-llama/llama-models/blob/main/models/llama3_1/prompt_format.md)中宣布（注：下文为原文的中文翻译）：
 
 > 有三个内置工具（brave_search、wolfram_alpha 和 code interpreter）可以使用系统提示词打开：
 >

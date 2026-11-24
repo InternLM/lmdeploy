@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from lmdeploy.serve.core.exceptions import RequestError
+from lmdeploy.serve.observability.request_trace import trace_frame
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest
 
 from .adapter import map_finish_reason
@@ -24,6 +25,7 @@ from .protocol import (
     MessageDelta,
     MessageDeltaEvent,
     MessageDeltaUsage,
+    MessageOutputTokensDetails,
     MessageStartEvent,
     MessageStartMessage,
     MessageStopEvent,
@@ -44,7 +46,7 @@ def _format_sse(data: AnthropicStreamEvent) -> str:
     for key in _OPTIONAL_EXTENSION_FIELDS:
         if payload.get(key) is None:
             payload.pop(key, None)
-    return f'event: {data.type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n'
+    return trace_frame(f'event: {data.type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n', payload)
 
 
 async def _results_or_error(result_generator):
@@ -205,9 +207,11 @@ async def stream_messages_response(parsed_stream,
             ErrorEvent(error=anthropic_error_from_request(first_chunk)))
         return
 
-    start_usage = MessageUsage(
+    start_usage = MessageUsage.build(
         input_tokens=0 if first_chunk is None else first_chunk.input_token_len,
         output_tokens=0 if first_chunk is None else first_chunk.generate_token_len,
+        cached_tokens=0 if first_chunk is None else first_chunk.cached_tokens,
+        thinking_tokens=None if first_chunk is None else first_chunk.reasoning_tokens,
     )
     yield _format_sse(
         MessageStartEvent(
@@ -318,11 +322,18 @@ async def stream_messages_response(parsed_stream,
 
     output_tokens = 0 if final_chunk is None else final_chunk.generate_token_len
     stop_reason = map_finish_reason(None if final_chunk is None else final_chunk.finish_reason)
+    stop_sequence = None if final_chunk is None else final_chunk.stop_sequence
+    if stop_sequence is not None:
+        stop_reason = 'stop_sequence'
     routed_experts = final_chunk.routed_experts if return_routed_experts and final_chunk is not None else None
     yield _format_sse(
         MessageDeltaEvent(
-            delta=MessageDelta(stop_reason=stop_reason, stop_sequence=None),
-            usage=MessageDeltaUsage(output_tokens=output_tokens),
+            delta=MessageDelta(stop_reason=stop_reason, stop_sequence=stop_sequence),
+            usage=MessageDeltaUsage(
+                output_tokens=output_tokens,
+                output_tokens_details=MessageOutputTokensDetails(
+                    thinking_tokens=0 if final_chunk is None else final_chunk.reasoning_tokens or 0),
+            ),
             routed_experts=routed_experts,
         ))
     yield _format_sse(MessageStopEvent())

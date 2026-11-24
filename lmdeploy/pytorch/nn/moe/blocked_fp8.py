@@ -144,6 +144,8 @@ class LinearWeightsBlockedF8(LinearWeights):
 class FusedMoEBlockedF8(FusedMoEBase):
     """Fused moe blocked f8."""
 
+    output_scale = 1.0
+
     def __init__(self,
                  hidden_dim: int,
                  ffn_dim: int,
@@ -157,7 +159,9 @@ class FusedMoEBlockedF8(FusedMoEBase):
                  device: torch.device | None = None,
                  all_reduce: bool = True,
                  layer_idx: int = 0,
-                 act_func: Callable = None):
+                 act_func: Callable = None,
+                 output_scale: float = 1.0,
+                 fp32_acc: bool = False):
 
         device = device or torch.device('cpu')
         dtype = dtype or torch.float16
@@ -188,8 +192,10 @@ class FusedMoEBlockedF8(FusedMoEBase):
                 fp8_dtype=fp8_dtype,
                 num_max_dispatch_tokens_per_rank=build_ctx.deep_ep_max_tokens_per_rank,
                 layer_idx=layer_idx,
-                custom_gateup_act=act_func is not None,
+                act_func=act_func,
                 scale_fmt=scale_fmt,
+                output_scale=output_scale,
+                fp32_acc=fp32_acc,
             ),
             enable_deterministic=build_ctx.enable_deterministic,
         )
@@ -230,6 +236,7 @@ class FusedMoEBlockedF8(FusedMoEBase):
         self.dtype = dtype
         self.device = device
         self.act_func = act_func
+        self.output_scale = output_scale
 
     @staticmethod
     def _update_args(hidden_dim: int, ffn_dim: int, align: int):
@@ -334,7 +341,8 @@ class FusedMoEBlockedF8(FusedMoEBase):
                 state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
                                                                                  self.gate_up.weight_scale_inv,
                                                                                  self.down.weight,
-                                                                                 self.down.weight_scale_inv)
+                                                                                 self.down.weight_scale_inv,
+                                                                                 act_func=self.act_func)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
                 'hidden_states': state['recv_hidden_states'],
@@ -345,7 +353,8 @@ class FusedMoEBlockedF8(FusedMoEBase):
             state['recv_hidden_states'] = state['fusedmoe'].fusedmoe_forward(state, self.gate_up.weight,
                                                                              self.gate_up.weight_scale_inv,
                                                                              self.down.weight,
-                                                                             self.down.weight_scale_inv)
+                                                                             self.down.weight_scale_inv,
+                                                                             act_func=self.act_func)
             gemm_state = {
                 'fusedmoe': state['fusedmoe'],
                 'hidden_states': state['recv_hidden_states'],

@@ -22,8 +22,10 @@ FAST_HADAMARD_TRANSFORM_VERSION=v1.1.0.post2
 if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
     export CPLUS_INCLUDE_PATH="/usr/local/cuda/include/cccl":${CPLUS_INCLUDE_PATH}
     pip install nvidia-nvshmem-cu13==3.4.5
+    pip install mooncake-transfer-engine-cuda13==0.3.12.post1
 else
     pip install nvidia-nvshmem-cu12==3.4.5
+    pip install mooncake-transfer-engine==0.3.12.post1
 fi
 pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepEP.git@${DEEP_EP_VERSION}"
 
@@ -48,6 +50,14 @@ fi
 pip download --no-deps --only-binary=:all: -d /wheels \
     "flash-attn-3==3.0.0" \
     --index-url "https://download.pytorch.org/whl/${FA3_CUDA_VERSION}"
+
+# Pin the stable router wheel so builds can download it without a release API lookup.
+ROUTER_VERSION=0.0.9
+ROUTER_WHEEL="lmdeploy_router-${ROUTER_VERSION}-py3-none-linux_x86_64.whl"
+curl -fsSL --retry 3 -o "/wheels/${ROUTER_WHEEL}" \
+    "https://github.com/DeepLink-org/router/releases/download/v${ROUTER_VERSION}/${ROUTER_WHEEL}" || exit 1
+echo "e51426a546e655e26651537fe1c0ac77955f5a7bfad27cb6b2256d37c846fd56  /wheels/${ROUTER_WHEEL}" \
+    | sha256sum --check - || exit 1
 
 # GDRCopy debs
 apt-get update -y \
