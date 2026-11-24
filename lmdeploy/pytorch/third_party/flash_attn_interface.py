@@ -1,9 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import functools
+import inspect
 
 import torch
 from flash_attn_interface import flash_attn_varlen_func as _flash_attn_varlen_func
 from flash_attn_interface import flash_attn_with_kvcache as _flash_attn_with_kvcache
+
+# Older FA3 returns (output, LSE) unconditionally and rejects this keyword.
+_VARLEN_HAS_RETURN_ATTN_PROBS = 'return_attn_probs' in inspect.signature(_flash_attn_varlen_func).parameters
 
 
 @functools.wraps(_flash_attn_varlen_func)
@@ -13,10 +17,12 @@ def flash_attn_varlen_func(*args, return_lse: bool = False, **kwargs):
     LSE is FP32 [tokens, heads]. Callers requesting LSE provide cu_seqlens_q and cu_seqlens_k as keyword arguments.
     Empty request partitions have -inf LSE.
     """
-    if return_lse:
+    if return_lse and _VARLEN_HAS_RETURN_ATTN_PROBS:
         kwargs['return_attn_probs'] = True
     output = _flash_attn_varlen_func(*args, **kwargs)
     if return_lse:
+        if not isinstance(output, tuple) or len(output) != 2:
+            raise RuntimeError('FA3 must return (output, LSE) when return_lse=True')
         from lmdeploy.pytorch.kernels.cuda.dcp import sanitize_dcp_lse
 
         output, lse = output

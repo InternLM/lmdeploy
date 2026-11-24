@@ -6,6 +6,7 @@ all-quantized, non-DCP comparison.
 """
 from dataclasses import replace
 from datetime import timedelta
+from unittest.mock import Mock
 
 import pytest
 import torch
@@ -60,7 +61,7 @@ def _dense_reference(query, key, value, history):
     return torch.einsum('hqk,khd->qhd', scores.softmax(-1), value.expand(-1, query.size(1), -1).float())
 
 
-def _gqa_worker(rank, rendezvous, quant_policy, world_size=2):
+def _gqa_worker(rank, rendezvous, quant_policy, world_size=2, use_fa3=False):
     from lmdeploy.pytorch.backends.cp_utils import build_dcp_prefix_chunks, get_dcp_local_seq_lens
     from lmdeploy.pytorch.backends.cuda.attention.cp import DCPAttentionImpl
     from lmdeploy.pytorch.backends.cuda.attention.default import TritonAttentionImpl, TritonAttentionMetadata
@@ -78,7 +79,9 @@ def _gqa_worker(rank, rendezvous, quant_policy, world_size=2):
         kwargs = dict(num_heads=2, head_size=64, num_kv_heads=1, v_head_size=64,
                       sliding_window=(-1, -1), causal=True)
         with manager.context(context):
-            dcp_impl = DCPAttentionImpl(**kwargs)
+            dcp_impl = DCPAttentionImpl(**kwargs, use_fa3=use_fa3)
+            if use_fa3:
+                dcp_impl._fa3_prefill = Mock(wraps=dcp_impl._fa3_prefill)
         with manager.context(DistContext(dist_config=DistConfig(tp=2), dcp_group=DistGroup())):
             reference_impl = TritonAttentionImpl(**kwargs)
         device = torch.device('cuda', rank)
@@ -102,7 +105,7 @@ def _gqa_worker(rank, rendezvous, quant_policy, world_size=2):
         # Non-contiguous physical page indices exercise the page table itself.
         blocks = torch.arange(1, 17, device=device).flip(0).reshape(2, 8).contiguous()
         full_outputs = None
-        for mode in ('full', 'chunked', 'prefix_reuse', 'decode_one', 'decode_many'):
+        for mode in ('full', 'chunked', 'prefix_reuse', 'mixed_prefix', 'decode_one', 'decode_many'):
             cache_shape = (17, block_size, 1, 64)
             dcp_k, dcp_v = [torch.zeros(cache_shape, device=device, dtype=dtype) for _ in range(2)]
             ref_k, ref_v = [torch.zeros(cache_shape, device=device, dtype=dtype) for _ in range(2)]
@@ -111,6 +114,9 @@ def _gqa_worker(rank, rendezvous, quant_policy, world_size=2):
             elif mode == 'prefix_reuse':
                 # Both prefixes end on reusable DCP logical-page boundaries.
                 steps = [(32, 64), (71, 97)]
+            elif mode == 'mixed_prefix':
+                # One request has no history while the other reuses its prefix.
+                steps = [(32, 32), (71, 97)]
             elif mode.startswith('decode'):
                 steps = [(71, 97), (72, 98) if mode == 'decode_one' else (74, 100)]
             else:
@@ -175,7 +181,13 @@ def _gqa_worker(rank, rendezvous, quant_policy, world_size=2):
                 elif not decoding and step == 1:
                     full_slice = torch.cat([full_outputs[i][start:end] for i, start, end in slices])
                     torch.testing.assert_close(output, full_slice, rtol=quant_tol, atol=quant_tol)
-                history = ends
+                # Reuse the first request slot for a fresh request. Every
+                # scheduled request still has at least one query token.
+                history = (0, ends[1]) if mode == 'mixed_prefix' and step == 0 else ends
+        if use_fa3:
+            calls = dcp_impl._fa3_prefill.call_args_list
+            assert any(call.kwargs['return_lse'] for call in calls), 'FA3 prefix merge was not exercised'
+            assert any(not call.kwargs['return_lse'] for call in calls), 'FA3 full prefill was not exercised'
     finally:
         context.close()
         dist.destroy_process_group()
@@ -183,10 +195,15 @@ def _gqa_worker(rank, rendezvous, quant_policy, world_size=2):
 
 @pytest.mark.skipif(torch.cuda.device_count() < 2, reason='requires two idle CUDA GPUs')
 @pytest.mark.parametrize('quant_policy', [QuantPolicy.NONE, QuantPolicy.FP8, QuantPolicy.FP8_E5M2])
-def test_gqa_dcp_cache_and_attention_reference(tmp_path, quant_policy):
+@pytest.mark.parametrize('use_fa3', [False, True], ids=['triton', 'fa3'])
+def test_gqa_dcp_cache_and_attention_reference(tmp_path, quant_policy, use_fa3):
     if quant_policy == QuantPolicy.FP8 and any(torch.cuda.get_device_capability(i)[0] < 9 for i in range(2)):
         pytest.skip('Triton float8_e4m3fn conversion requires device with cc>=9.0')
-    spawn_with_timeout(_gqa_worker, args=(f'file://{tmp_path}/gqa', quant_policy))
+    if use_fa3:
+        if any(torch.cuda.get_device_capability(i)[0] < 9 for i in range(2)):
+            pytest.skip('FA3 requires device with cc>=9.0')
+        pytest.importorskip('flash_attn_interface')
+    spawn_with_timeout(_gqa_worker, args=(f'file://{tmp_path}/gqa', quant_policy, 2, use_fa3))
 
 
 @pytest.mark.skipif(torch.cuda.device_count() < 8, reason='requires eight CUDA GPUs')
