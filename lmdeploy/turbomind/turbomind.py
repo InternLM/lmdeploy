@@ -311,6 +311,12 @@ class TurboMind:
             ec.spec_conv_kernel_size = int(dc.get('conv_kernel_size', 2))
             ec.spec_conv_group_size = int(dc.get('conv_group_size', 16))
             ec.spec_sliding_window = int(getattr(draft_model.cfg, 'sliding_window', 0) or 0)
+            rp = getattr(draft_model.cfg, 'rope_parameters', {}) or {}
+            rp = rp if isinstance(rp, dict) else vars(rp)
+            rope_type = rp.get('rope_type', 'default')
+            if rope_type not in (None, 'default'):
+                raise ValueError(f'DFlash2 supports only default NeoX RoPE, got rope_type={rope_type!r}')
+            ec.spec_rope_theta = float(rp.get('rope_theta', 0) or 0)
             if speculative_config.dflash_ctx_kv_int4 is not None:
                 ec.spec_ctx_kv_int4 = int(speculative_config.dflash_ctx_kv_int4)
             else:

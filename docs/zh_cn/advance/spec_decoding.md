@@ -142,6 +142,34 @@ Qwen/Qwen3.5-35B-A3B \
 设置 DFlash block size 后，它会覆盖 `--speculative-num-draft-tokens`，
 并将新提出的 token 数设置为 `block_size - 1`。
 
+#### DFlash2（TurboMind）
+
+DFlash2 是 TurboMind 后端的 block-diffusion 草稿模型。它使用 checkpoint 中
+声明的 block size（当前为 8，即 7 个草稿 token），并要求目标模型的 LM head
+使用 BF16；4-bit 目标 head 会破坏候选选择器。
+
+```shell
+lmdeploy serve api_server <target-model> \
+--backend turbomind \
+--tp 2 \
+--language-model-only \
+--session-len 8192 \
+--max-batch-size 1 \
+--speculative-algorithm dflash2 \
+--speculative-num-draft-tokens 7 \
+--speculative-draft-model <dflash2-draft>
+```
+
+可选的 `--speculative-draft-ctx-kv-int4` 会将草稿 context KV 以 int4 存储，
+以节省显存；默认关闭并保留 BF16 路径。
+
+约束：
+
+- `--max-batch-size 1`（单请求路径）；
+- `--speculative-num-draft-tokens` 必须等于 `block_size - 1`；
+- 不支持 prefix caching（草稿 context KV 不在主 cache manager 中）；
+- 草稿模型必须满足 `head_dim == 128`，并使用默认 NeoX RoPE。
+
 ## 投机解码与结构化输出
 
 投机解码（MTP）可以与[结构化输出](./structed_output.md)结合使用，使草稿模型提出的 token 也遵循语法约束（如 JSON Schema、正则表达式），从而显著提高接受率。

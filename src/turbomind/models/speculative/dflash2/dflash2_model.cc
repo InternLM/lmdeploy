@@ -8,8 +8,8 @@
 #include "src/turbomind/core/check.h"
 #include "src/turbomind/core/copy.h"
 #include "src/turbomind/core/logger.h"
-#include "src/turbomind/kernels/copy/copy.h"
 #include "src/turbomind/kernels/activation.h"
+#include "src/turbomind/kernels/copy/copy.h"
 #include "src/turbomind/kernels/dflash2/dflash2_kernels.h"
 #include "src/turbomind/kernels/norm/rms_norm.h"
 #include "src/turbomind/models/attention_weight.h"
@@ -62,12 +62,12 @@ Dflash2Model::Dflash2Model(const SpeculativeModelArgs& args):
     target_{args.target}
 {
     const auto& dw = draft_.weights();
-    hidden_      = dw.hidden_units;
+    hidden_        = dw.hidden_units;
     const auto* a0 = dw.layer(0)->attention.get();
-    hd_          = a0->head_dim;
-    local_nh_    = a0->head_num / a0->tp_size;
-    local_nkv_   = a0->kv_head_num / a0->tp_size;
-    total_heads_ = local_nh_ + 2 * local_nkv_;
+    hd_            = a0->head_dim;
+    local_nh_      = a0->head_num / a0->tp_size;
+    local_nkv_     = a0->kv_head_num / a0->tp_size;
+    total_heads_   = local_nh_ + 2 * local_nkv_;
     const auto* f0 = dw.layer(0)->feed_forward.get();
     if (f0->w1 && f0->w1->output_dim) {
         inter_local_ = f0->w1->output_dim;
@@ -78,20 +78,26 @@ Dflash2Model::Dflash2Model(const SpeculativeModelArgs& args):
     else {
         inter_local_ = f0->inter_size / (f0->tp_size ? f0->tp_size : 1);
     }
-    top_k_       = param_.spec_selector_top_k ? param_.spec_selector_top_k : 16;
-    sel_rank_    = param_.spec_selector_rank ? param_.spec_selector_rank : 256;
-    block_       = param_.spec_block_size ? param_.spec_block_size : 8;
+    top_k_         = param_.spec_selector_top_k ? param_.spec_selector_top_k : 16;
+    sel_rank_      = param_.spec_selector_rank ? param_.spec_selector_rank : 256;
+    block_         = param_.spec_block_size ? param_.spec_block_size : 8;
     mask_token_id_ = param_.spec_mask_token_id;
-    window_      = param_.spec_sliding_window ? param_.spec_sliding_window : 2048;
-    rope_base_   = 1e7f;
-    max_ctx_     = param_.session_len;
+    window_        = param_.spec_sliding_window ? param_.spec_sliding_window : 2048;
+    rope_base_     = param_.spec_rope_theta > 0 ? param_.spec_rope_theta : 1e7f;
+    max_ctx_       = param_.session_len;
+
+    TM_CHECK_EQ(param_.max_batch_size, 1) << "DFlash2 is a single-request path; set --max-batch-size 1";
+    TM_CHECK_EQ(param_.spec_num_draft_tokens, block_ - 1)
+        << "DFlash2 requires num_speculative_tokens == block_size - 1 (got " << param_.spec_num_draft_tokens
+        << " vs block_size " << block_ << ")";
+    TM_CHECK_EQ(hd_, 128) << "DFlash2 requires head_dim 128";
+    TM_CHECK_EQ(top_k_, 16) << "DFlash2 requires selector_top_k 16";
+    TM_CHECK_GT(mask_token_id_, 0) << "DFlash2 requires dflash_config.mask_token_id";
+    TM_CHECK(!param_.enable_prefix_caching)
+        << "DFlash2 does not support prefix caching (its draft context KV is outside the cache manager)";
 
     const DataType dtype = dw.data_type;
-    ctx_kv_int4_ = param_.spec_ctx_kv_int4 != 0;
-    if (ctx_kv_int4_ && hd_ != 128) {
-        TM_LOG_WARN("DFlash2 int4 draft context KV requires head_dim 128; falling back to BF16");
-        ctx_kv_int4_ = false;
-    }
+    ctx_kv_int4_         = param_.spec_ctx_kv_int4 != 0;
     if (ctx_kv_int4_) {
         ctx_k_data_.resize(dw.num_layer);
         ctx_k_param_.resize(dw.num_layer);
@@ -140,13 +146,17 @@ HiddenStateTap* Dflash2Model::Tap(int)
     return projection_.get();
 }
 
-void Dflash2Model::MaterializeContext(const Tensor& context_hidden, const Buffer_<int>& base_dev,
-                                      const Buffer_<int>& committed_dev, int rows, cudaStream_t stream)
+void Dflash2Model::MaterializeContext(const Tensor&       context_hidden,
+                                      const Buffer_<int>& base_dev,
+                                      const Buffer_<int>& committed_dev,
+                                      int                 rows,
+                                      cudaStream_t        stream)
 {
-    const auto& dw  = draft_.weights();
-    auto&       lin = *ctx_.linear;
-    const float eps = spec_weights_.hidden_norm->norm_eps_;
-    const bool  zc  = spec_weights_.hidden_norm->zero_centered_;
+    const auto&    dw    = draft_.weights();
+    auto&          lin   = *ctx_.linear;
+    const float    eps   = spec_weights_.hidden_norm->norm_eps_;
+    const bool     zc    = spec_weights_.hidden_norm->zero_centered_;
+    const DataType dtype = dw.data_type;
 
     // Positions (base + i) are generated on device; rows past the newly
     // committed delta are skipped inside the scatter kernel.
@@ -157,37 +167,71 @@ void Dflash2Model::MaterializeContext(const Tensor& context_hidden, const Buffer
     invokeRMSNorm(x, context_hidden, spec_weights_.hidden_norm->weight, eps, zc, stream);
 
     const int per_row = local_nkv_ * hd_;
-    Tensor qkv2{{rows, total_heads_ * hd_}, dw.data_type, kDEVICE};
+    Tensor    qkv2{{rows, total_heads_ * hd_}, dw.data_type, kDEVICE};
     for (int l = 0; l < dw.num_layer; ++l) {
         const auto* a = dw.layer(l)->attention.get();
         lin.Forward(x, *a->w_qkv, qkv2);
         Tensor qkv = qkv2.view({rows, total_heads_, hd_});
-        invokeQkRMSNorm(qkv, a->q_norm->weight, a->k_norm->weight, local_nh_, local_nkv_,
-                        a->q_norm->norm_eps_, a->q_norm->zero_centered_, stream);
+        invokeQkRMSNorm(qkv,
+                        a->q_norm->weight,
+                        a->k_norm->weight,
+                        local_nh_,
+                        local_nkv_,
+                        a->q_norm->norm_eps_,
+                        a->q_norm->zero_centered_,
+                        stream);
         Tensor krow = qkv.slice({0, local_nh_, 0}, {rows, local_nkv_, hd_});
         Tensor vrow = qkv.slice({0, local_nh_ + local_nkv_, 0}, {rows, local_nkv_, hd_});
         Tensor kc{{rows, local_nkv_, hd_}, dw.data_type, kDEVICE};
         Tensor vc{{rows, local_nkv_, hd_}, dw.data_type, kDEVICE};
         GenericCopy(krow, kc, stream);
         GenericCopy(vrow, vc, stream);
-        invokeDflash2Rope(kc.raw_data(), pos_dev.data(), rows, local_nkv_, hd_, rope_base_, 16, stream);
+        invokeDflash2Rope(kc.raw_data(), pos_dev.data(), rows, local_nkv_, hd_, rope_base_, dtype, stream);
         if (ctx_kv_int4_) {
-            invokeDflash2KvScatterInt4(ctx_k_data_[l].raw_data(), ctx_k_param_[l].raw_data(), kc.raw_data(),
-                                       base_dev.data(), committed_dev.data(), rows, local_nkv_, hd_, 16, stream);
-            invokeDflash2KvScatterInt4(ctx_v_data_[l].raw_data(), ctx_v_param_[l].raw_data(), vc.raw_data(),
-                                       base_dev.data(), committed_dev.data(), rows, local_nkv_, hd_, 16, stream);
+            invokeDflash2KvScatterInt4(ctx_k_data_[l].raw_data(),
+                                       ctx_k_param_[l].raw_data(),
+                                       kc.raw_data(),
+                                       base_dev.data(),
+                                       committed_dev.data(),
+                                       rows,
+                                       local_nkv_,
+                                       hd_,
+                                       dtype,
+                                       stream);
+            invokeDflash2KvScatterInt4(ctx_v_data_[l].raw_data(),
+                                       ctx_v_param_[l].raw_data(),
+                                       vc.raw_data(),
+                                       base_dev.data(),
+                                       committed_dev.data(),
+                                       rows,
+                                       local_nkv_,
+                                       hd_,
+                                       dtype,
+                                       stream);
         }
         else {
-            invokeDflash2KvScatter(ctx_k_[l].raw_data(), kc.raw_data(), base_dev.data(), committed_dev.data(), rows,
-                                   per_row, 16, stream);
-            invokeDflash2KvScatter(ctx_v_[l].raw_data(), vc.raw_data(), base_dev.data(), committed_dev.data(), rows,
-                                   per_row, 16, stream);
+            invokeDflash2KvScatter(ctx_k_[l].raw_data(),
+                                   kc.raw_data(),
+                                   base_dev.data(),
+                                   committed_dev.data(),
+                                   rows,
+                                   per_row,
+                                   dtype,
+                                   stream);
+            invokeDflash2KvScatter(ctx_v_[l].raw_data(),
+                                   vc.raw_data(),
+                                   base_dev.data(),
+                                   committed_dev.data(),
+                                   rows,
+                                   per_row,
+                                   dtype,
+                                   stream);
         }
     }
 }
 
-Tensor Dflash2Model::RunBlock(const Tensor& block_embeddings, const Tensor& positions, int rows, int ctx_rows,
-                              cudaStream_t stream, TensorMap& env)
+Tensor Dflash2Model::RunBlock(
+    const Tensor& block_embeddings, const Tensor& positions, int rows, int ctx_rows, cudaStream_t stream)
 {
     const auto&    dw     = draft_.weights();
     auto&          lin    = *ctx_.linear;
@@ -233,13 +277,33 @@ Tensor Dflash2Model::RunBlock(const Tensor& block_embeddings, const Tensor& posi
             GenericCopy(convd.slice({0, 0}, {rows, taps * G}), conv_side0, stream);
             GenericCopy(convd.slice({0, taps * G}, {rows, taps * G}), conv_side1, stream);
             base = c->base_kernel.slice({0, 0, 0}, {1, taps, hidden_}).raw_data();
-            invokeGroupedConv(convout.raw_data(), y.raw_data(), conv_side0.raw_data(), base, rows, hidden_, G, gs, taps,
-                              block_, 16, stream);
+            invokeGroupedConv(convout.raw_data(),
+                              y.raw_data(),
+                              conv_side0.raw_data(),
+                              base,
+                              rows,
+                              hidden_,
+                              G,
+                              gs,
+                              taps,
+                              block_,
+                              dtype,
+                              stream);
         }
         else {
             base = c->base_kernel.slice({1, 0, 0}, {1, taps, hidden_}).raw_data();
-            invokeGroupedConv(convout.raw_data(), y.raw_data(), conv_side1.raw_data(), base, rows, hidden_, G, gs,
-                              taps, block_, 16, stream);
+            invokeGroupedConv(convout.raw_data(),
+                              y.raw_data(),
+                              conv_side1.raw_data(),
+                              base,
+                              rows,
+                              hidden_,
+                              G,
+                              gs,
+                              taps,
+                              block_,
+                              dtype,
+                              stream);
         }
         Copy(convout, y);
     };
@@ -253,7 +317,7 @@ Tensor Dflash2Model::RunBlock(const Tensor& block_embeddings, const Tensor& posi
                                      norm->norm_eps_,
                                      1,
                                      x_scale,
-                                     16,
+                                     dtype,
                                      stream);
     };
     // Range-preserving: sub-layer outputs are stored scaled-down (fp16) and the
@@ -268,8 +332,14 @@ Tensor Dflash2Model::RunBlock(const Tensor& block_embeddings, const Tensor& posi
         conv(layer->attention_conv.get(), h, true);
         lin.Forward(h, *a->w_qkv, qkv2);
         Tensor qkv = qkv2.view({rows, total_heads_, hd_});
-        invokeQkRMSNorm(qkv, a->q_norm->weight, a->k_norm->weight, local_nh_, local_nkv_, a->q_norm->norm_eps_,
-                        a->q_norm->zero_centered_, stream);
+        invokeQkRMSNorm(qkv,
+                        a->q_norm->weight,
+                        a->k_norm->weight,
+                        local_nh_,
+                        local_nkv_,
+                        a->q_norm->norm_eps_,
+                        a->q_norm->zero_centered_,
+                        stream);
         Tensor qv = qkv.slice({0, 0, 0}, {rows, local_nh_, hd_});
         Tensor kv = qkv.slice({0, local_nh_, 0}, {rows, local_nkv_, hd_});
         Tensor vv = qkv.slice({0, local_nh_ + local_nkv_, 0}, {rows, local_nkv_, hd_});
@@ -279,34 +349,60 @@ Tensor Dflash2Model::RunBlock(const Tensor& block_embeddings, const Tensor& posi
         GenericCopy(qv, q2, stream);
         GenericCopy(kv, k2, stream);
         GenericCopy(vv, v2, stream);
-        invokeDflash2Rope(q2.raw_data(), positions.data<int>(), rows, local_nh_, hd_, rope_base_, 16, stream);
-        invokeDflash2Rope(k2.raw_data(), positions.data<int>(), rows, local_nkv_, hd_, rope_base_, 16, stream);
+        invokeDflash2Rope(q2.raw_data(), positions.data<int>(), rows, local_nh_, hd_, rope_base_, dtype, stream);
+        invokeDflash2Rope(k2.raw_data(), positions.data<int>(), rows, local_nkv_, hd_, rope_base_, dtype, stream);
         if (ctx_kv_int4_) {
             Tensor kctx_data  = ctx_k_data_[l].slice({0, 0, 0}, {ctx_rows, local_nkv_, hd_ / 2});
             Tensor kctx_param = ctx_k_param_[l].slice({0, 0, 0}, {ctx_rows, local_nkv_, 2});
             Tensor vctx_data  = ctx_v_data_[l].slice({0, 0, 0}, {ctx_rows, local_nkv_, hd_ / 2});
             Tensor vctx_param = ctx_v_param_[l].slice({0, 0, 0}, {ctx_rows, local_nkv_, 2});
-            invokeDflash2AttentionInt4(attn.raw_data(), q2.raw_data(), kctx_data.raw_data(), kctx_param.raw_data(),
-                                       vctx_data.raw_data(), vctx_param.raw_data(), k2.raw_data(), v2.raw_data(),
-                                       rows, ctx_rows, local_nh_, local_nkv_, hd_, qscale, window_, 16, stream);
+            invokeDflash2AttentionInt4(attn.raw_data(),
+                                       q2.raw_data(),
+                                       kctx_data.raw_data(),
+                                       kctx_param.raw_data(),
+                                       vctx_data.raw_data(),
+                                       vctx_param.raw_data(),
+                                       k2.raw_data(),
+                                       v2.raw_data(),
+                                       rows,
+                                       ctx_rows,
+                                       local_nh_,
+                                       local_nkv_,
+                                       hd_,
+                                       qscale,
+                                       window_,
+                                       dtype,
+                                       stream);
         }
         else {
             Tensor kctx = ctx_k_[l].slice({0, 0, 0}, {ctx_rows, local_nkv_, hd_});
             Tensor vctx = ctx_v_[l].slice({0, 0, 0}, {ctx_rows, local_nkv_, hd_});
-            invokeDflash2Attention(attn.raw_data(), q2.raw_data(), kctx.raw_data(), vctx.raw_data(), k2.raw_data(),
-                                   v2.raw_data(), rows, ctx_rows, local_nh_, local_nkv_, hd_, qscale, window_, 16,
+            invokeDflash2Attention(attn.raw_data(),
+                                   q2.raw_data(),
+                                   kctx.raw_data(),
+                                   vctx.raw_data(),
+                                   k2.raw_data(),
+                                   v2.raw_data(),
+                                   rows,
+                                   ctx_rows,
+                                   local_nh_,
+                                   local_nkv_,
+                                   hd_,
+                                   qscale,
+                                   window_,
+                                   dtype,
                                    stream);
         }
-        invokeDflash2Scale(attn.raw_data(), (long long)rows * local_nh_ * hd_, 1.0f / kResidualScale, 16, stream);
+        invokeDflash2Scale(attn.raw_data(), (long long)rows * local_nh_ * hd_, 1.0f / kResidualScale, dtype, stream);
         lin.Forward(attn.view({rows, local_nh_ * hd_}), *a->wo, o);
         allreduce(o);
         conv(layer->attention_conv.get(), o, false);
         resnorm(o, layer->ffn_norm.get(), kResidualScale);
         // mlp
         conv(layer->mlp_conv.get(), h, true);
-        auto* ff = layer->feed_forward.get();
-        void* gate_scale_ptr = nullptr;
-        long long gate_scale_n = 0;
+        auto*     ff             = layer->feed_forward.get();
+        void*     gate_scale_ptr = nullptr;
+        long long gate_scale_n   = 0;
         if (ff->w1 && ff->w3) {
             lin.Forward(h, *ff->w1, gating);
             lin.Forward(h, *ff->w3, inter);
@@ -325,7 +421,7 @@ Tensor Dflash2Model::RunBlock(const Tensor& block_embeddings, const Tensor& posi
         }
         // Range-preserving: scale the MLP output (w2 input) down; fp32 residual
         // restores the reciprocal scale (silu(gate)*up overflows fp16 otherwise).
-        invokeDflash2Scale(gate_scale_ptr, gate_scale_n, 1.0f / kResidualScale, 16, stream);
+        invokeDflash2Scale(gate_scale_ptr, gate_scale_n, 1.0f / kResidualScale, dtype, stream);
         lin.Forward(gating, *ff->w2, down);
         allreduce(down);
         conv(layer->mlp_conv.get(), down, false);
@@ -341,15 +437,15 @@ void Dflash2Model::RunDraft(int phase, const DraftContext& ctx, TensorMap& env)
         return;  // no tap data during warm-up
     }
     if (ctx.batch_size != 1) {
-        return;  // single-request path only for now
+        return;  // single-request path (enforced at construction)
     }
-    const auto&    dw    = draft_.weights();
+    const auto&    dw     = draft_.weights();
     const auto     stream = core::Context::stream().handle();
-    const DataType dtype = dw.data_type;
+    const DataType dtype  = dw.data_type;
 
     // 1. context hidden (fc applied by the tap) for this round's rows
-    Tensor context_hidden = projection_->ProjectAndGather(phase, stream);  // [N, H]
-    const int rows = context_hidden.shape(0);
+    Tensor    context_hidden = projection_->ProjectAndGather(phase, stream);  // [N, H]
+    const int rows           = context_hidden.shape(0);
     if (rows == 0) {
         return;
     }
@@ -360,7 +456,8 @@ void Dflash2Model::RunDraft(int phase, const DraftContext& ctx, TensorMap& env)
     // `committed` is computed device-side (one D2H read is still needed below
     // to size the block attention over the context).
     Buffer_<int> base_dev{1, kDEVICE};
-    cudaMemcpyAsync(base_dev.data(), ctx_len_.data(), sizeof(int), cudaMemcpyDeviceToDevice, stream);  // base
+    // Reset the per-request context on the first pass of every new request.
+    invokeDflash2SelectBase(base_dev.data(), ctx_len_.data(), ctx.sequence_length.data(), stream);
     Buffer_<int> committed_dev{1, kDEVICE};
     invokeDflash2CommitLen(committed_dev.data(),
                            ctx.sequence_length.data(),
@@ -382,12 +479,8 @@ void Dflash2Model::RunDraft(int phase, const DraftContext& ctx, TensorMap& env)
 
     // 2. block ids [next, mask x (block-1)] (device-side)
     Buffer_<int> ids{block_, kDEVICE};
-    invokeDflash2BuildBlockIds(ids.data(),
-                               ctx.request_token_ids_ptrs,
-                               committed_dev.data(),
-                               block_,
-                               mask_token_id_,
-                               stream);
+    invokeDflash2BuildBlockIds(
+        ids.data(), ctx.request_token_ids_ptrs, committed_dev.data(), block_, mask_token_id_, stream);
 
     // 3. block embeddings (shared target embeddings)
     Tensor embed_buf{{block_, hidden_}, dtype, kDEVICE};
@@ -397,19 +490,23 @@ void Dflash2Model::RunDraft(int phase, const DraftContext& ctx, TensorMap& env)
     Buffer_<int> bpos_dev{block_, kDEVICE};
     invokeDflash2CountUp(bpos_dev.data(), committed_dev.data(), block_, stream);
 
-    Tensor block_hidden = RunBlock(embeds, bpos_dev, block_, committed, stream, env);  // [block, H]
+    Tensor block_hidden = RunBlock(embeds, bpos_dev, block_, committed, stream);  // [block, H]
 
     // 5. selector over the mask positions (rows 1..block-1)
-    const int L = block_ - 1;
+    const int L      = block_ - 1;
     Tensor    mask_h = block_hidden.slice({1, 0}, {L, hidden_});
     Tensor    sel_h{{L, sel_rank_}, dtype, kDEVICE};
     ctx_.linear->Forward(mask_h, *spec_weights_.selector->hidden_projection, sel_h);
 
-    Tensor        logits = target_.Logits(mask_h, {}, env);  // [L, vocab]
-    const int     vocab  = logits.shape(1);
-    Buffer_<int>  cand{L * top_k_, kDEVICE};
-    Tensor        unary{{L, top_k_}, DataType::kFloat32, kDEVICE};
-    invokeDflash2TopK(cand.data(), unary.data<float>(), logits.raw_data(), L, vocab, top_k_, 16, stream);
+    const auto& hw = target_.weights();
+    // Score only the real vocabulary; the padded columns are not valid candidate
+    // ids for the selector codebooks, but the padded width is the row stride.
+    const int    vocab  = hw.vocab_size;
+    Tensor       logits = target_.Logits(mask_h, {}, env);  // [L, vocab_size_padded]
+    const int    stride = static_cast<int>(logits.shape(1));
+    Buffer_<int> cand{L * top_k_, kDEVICE};
+    Tensor       unary{{L, top_k_}, DataType::kFloat32, kDEVICE};
+    invokeDflash2TopK(cand.data(), unary.data<float>(), logits.raw_data(), L, vocab, stride, top_k_, dtype, stream);
 
     Tensor edge{{L, top_k_, top_k_}, DataType::kFloat32, kDEVICE};
     invokeCandidateSelector(edge.data<float>(),
@@ -424,7 +521,7 @@ void Dflash2Model::RunDraft(int phase, const DraftContext& ctx, TensorMap& env)
                             top_k_,
                             vocab,
                             sel_rank_,
-                            16,
+                            dtype,
                             stream);
 
     // 6. greedy chain (device) + store into the request's token ids

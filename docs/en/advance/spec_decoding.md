@@ -145,6 +145,35 @@ When a DFlash block size is provided, it overrides
 `--speculative-num-draft-tokens` by setting the number of newly proposed
 tokens to `block_size - 1`.
 
+#### DFlash2 (TurboMind)
+
+DFlash2 is a block-diffusion drafter for the TurboMind backend. It uses a
+checkpoint-declared block size (currently 8, i.e. 7 draft tokens) and a
+BF16 target LM head; a 4-bit target head corrupts the candidate selector.
+
+```shell
+lmdeploy serve api_server <target-model> \
+--backend turbomind \
+--tp 2 \
+--language-model-only \
+--session-len 8192 \
+--max-batch-size 1 \
+--speculative-algorithm dflash2 \
+--speculative-num-draft-tokens 7 \
+--speculative-draft-model <dflash2-draft>
+```
+
+The optional `--speculative-draft-ctx-kv-int4` flag stores the draft context
+KV in int4 to save VRAM; it defaults to off and keeps the BF16 path.
+
+Constraints:
+
+- `--max-batch-size 1` (single-request path);
+- `--speculative-num-draft-tokens` must equal `block_size - 1`;
+- prefix caching is not supported (the draft context KV is outside the main
+  cache manager);
+- the draft must use `head_dim == 128` and default NeoX RoPE.
+
 ## Guided Decoding with Speculative Decoding
 
 Speculative decoding (MTP) can be combined with [structured output](./structed_output.md) so that the draft tokens proposed by the spec model also respect the grammar constraints (e.g. JSON schema, regex). This significantly improves the acceptance rate compared to running spec decoding without grammar masks.

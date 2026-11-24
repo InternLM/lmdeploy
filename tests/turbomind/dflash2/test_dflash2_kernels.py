@@ -11,6 +11,9 @@ from . import dflash2_kernels
 CUDA_REQUIRED = pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
 KERNELS_REQUIRED = pytest.mark.skipif(not torch.cuda.is_available() or not dflash2_kernels.is_available(),
                                       reason='TurboMind DFlash2 kernels unavailable')
+DTYPES = [torch.float16]
+if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+    DTYPES.append(torch.bfloat16)
 
 
 # --------------------------------------------------------------------------- #
@@ -62,7 +65,8 @@ def ref_attention(q, k_ctx, v_ctx, k_blk, v_blk, scale, window):
 
 
 def pack_int4(x):
-    """Pack [rows, nkv, 128] into int4 data/params and return the dequantized value."""
+    """Pack [rows, nkv, 128] into int4 data/params and return the dequantized
+    value."""
     assert x.shape[-1] == 128
     mn = x.amin(dim=-1, keepdim=True)
     mx = x.amax(dim=-1, keepdim=True)
@@ -83,34 +87,36 @@ def pack_int4(x):
 # kernel tests
 # --------------------------------------------------------------------------- #
 @KERNELS_REQUIRED
-def test_grouped_conv_matches_reference():
+@pytest.mark.parametrize('dtype', DTYPES)
+def test_grouped_conv_matches_reference(dtype):
     torch.manual_seed(0)
     rows, hidden_size, group_size, taps, block_size = 8, 32, 16, 2, 4
     groups = hidden_size // group_size
-    hidden = torch.randn(rows, hidden_size, dtype=torch.float16, device='cuda') * 0.5
-    delta = torch.randn(rows, taps, groups, dtype=torch.float16, device='cuda') * 0.5
-    base = torch.randn(taps, hidden_size, dtype=torch.float16, device='cuda') * 0.5
+    hidden = torch.randn(rows, hidden_size, dtype=dtype, device='cuda') * 0.5
+    delta = torch.randn(rows, taps, groups, dtype=dtype, device='cuda') * 0.5
+    base = torch.randn(taps, hidden_size, dtype=dtype, device='cuda') * 0.5
 
     out = dflash2_kernels.grouped_conv(hidden, delta, base, block_size, groups, group_size, taps)
     ref = ref_grouped_conv(hidden.float(), delta.float(), base.float(), block_size, group_size, taps)
-    torch.testing.assert_close(out.float(), ref, atol=2e-3, rtol=0)
+    torch.testing.assert_close(out.float(), ref, atol=2e-3 if dtype == torch.float16 else 2e-2, rtol=0)
 
 
 @KERNELS_REQUIRED
-def test_candidate_selector_matches_reference():
+@pytest.mark.parametrize('dtype', DTYPES)
+def test_candidate_selector_matches_reference(dtype):
     torch.manual_seed(0)
     batch, length, top_k, rank, vocab = 1, 2, 4, 8, 16
-    hidden = torch.randn(batch, length, rank, dtype=torch.float16, device='cuda') * 0.5
+    hidden = torch.randn(batch, length, rank, dtype=dtype, device='cuda') * 0.5
     unary = torch.randn(batch, length, top_k, dtype=torch.float32, device='cuda')
-    predecessor = torch.randn(vocab, rank, dtype=torch.float16, device='cuda') * 0.5
-    successor = torch.randn(vocab, rank, dtype=torch.float16, device='cuda') * 0.5
+    predecessor = torch.randn(vocab, rank, dtype=dtype, device='cuda') * 0.5
+    successor = torch.randn(vocab, rank, dtype=dtype, device='cuda') * 0.5
     candidate_ids = torch.randint(0, vocab, (batch, length, top_k), dtype=torch.int32, device='cuda')
     anchor = torch.randint(0, vocab, (batch, ), dtype=torch.int32, device='cuda')
 
     out = dflash2_kernels.candidate_selector_scores(hidden, unary, predecessor, successor, candidate_ids, anchor,
                                                     top_k)
     ref = ref_selector(hidden.float(), unary, predecessor.float(), successor.float(), candidate_ids, anchor, top_k)
-    torch.testing.assert_close(out, ref, atol=2e-4, rtol=0)
+    torch.testing.assert_close(out, ref, atol=2e-4 if dtype == torch.float16 else 2e-2, rtol=0)
 
 
 def _attention_inputs(dtype=torch.float16):
@@ -125,24 +131,35 @@ def _attention_inputs(dtype=torch.float16):
 
 
 @KERNELS_REQUIRED
-def test_block_attention_matches_reference():
-    q, k_ctx, v_ctx, k_blk, v_blk = _attention_inputs()
+@pytest.mark.parametrize('dtype', DTYPES)
+def test_block_attention_matches_reference(dtype):
+    q, k_ctx, v_ctx, k_blk, v_blk = _attention_inputs(dtype=dtype)
     scale, window = 1.0 / math.sqrt(q.shape[-1]), 4
     out = dflash2_kernels.dflash2_attention(q, k_ctx, v_ctx, k_blk, v_blk, scale, window)
     ref = ref_attention(q.float(), k_ctx.float(), v_ctx.float(), k_blk.float(), v_blk.float(), scale, window)
-    torch.testing.assert_close(out.float(), ref, atol=3e-3, rtol=0)
+    torch.testing.assert_close(out.float(), ref, atol=3e-3 if dtype == torch.float16 else 3e-2, rtol=0)
 
 
 @KERNELS_REQUIRED
-def test_int4_context_kv_matches_dequantized_reference():
-    q, k_ctx, v_ctx, k_blk, v_blk = _attention_inputs()
+@pytest.mark.parametrize('dtype', DTYPES)
+def test_int4_context_kv_matches_dequantized_reference(dtype):
+    q, k_ctx, v_ctx, k_blk, v_blk = _attention_inputs(dtype=dtype)
     k_data, k_param, k_deq = pack_int4(k_ctx)
     v_data, v_param, v_deq = pack_int4(v_ctx)
     scale, window = 1.0 / math.sqrt(q.shape[-1]), 4
 
     out = dflash2_kernels.dflash2_attention_int4(q, k_data, k_param, v_data, v_param, k_blk, v_blk, scale, window)
     ref = ref_attention(q.float(), k_deq, v_deq, k_blk.float(), v_blk.float(), scale, window)
-    torch.testing.assert_close(out.float(), ref, atol=5e-3, rtol=0)
+    torch.testing.assert_close(out.float(), ref, atol=5e-3 if dtype == torch.float16 else 5e-2, rtol=0)
+
+
+@KERNELS_REQUIRED
+def test_select_base_resets_on_new_request():
+    ctx_len = torch.tensor([11], dtype=torch.int32, device='cuda')
+    entry0 = torch.tensor([0], dtype=torch.int32, device='cuda')
+    assert dflash2_kernels.select_base(ctx_len, entry0).item() == 0
+    entry9 = torch.tensor([9], dtype=torch.int32, device='cuda')
+    assert dflash2_kernels.select_base(ctx_len, entry9).item() == 11
 
 
 # --------------------------------------------------------------------------- #

@@ -12,6 +12,12 @@ def is_available():
     return (_tm is not None and hasattr(_tm, 'grouped_conv') and hasattr(_tm, 'dflash2_attention'))
 
 
+def select_base(ctx_len, entry):
+    out = torch.empty(1, dtype=torch.int32, device='cuda')
+    _tm.dflash2_select_base(out, ctx_len, entry, _stream())
+    return out
+
+
 def _stream():
     return torch.cuda.current_stream().cuda_stream
 

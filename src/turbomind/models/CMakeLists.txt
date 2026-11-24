@@ -82,6 +82,7 @@ target_link_libraries(models PUBLIC
 target_link_libraries(models PRIVATE
         target_hidden_projection_kernels
         draft_carry_kernels
+        dflash2_kernels
         speculative_sequence_kernels
         device_comm)
 target_compile_options(models PRIVATE

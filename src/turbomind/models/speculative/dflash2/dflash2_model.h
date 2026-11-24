@@ -1,11 +1,9 @@
 // Copyright (c) OpenMMLab. All rights reserved.
 //
-// DFlash2 speculative method — M2 skeleton.
-//
-// At this stage the model only validates and holds the DFlash2 weight tree so
-// the engine can load target + draft together (smoke). The draft forward
-// (context-KV, grouped conv, non-causal SWA, selector) lands in M3; verification
-// reuses the D7 SM75 kernel in M4.
+// DFlash2 speculative method: block-diffusion drafting with a 5-layer decoder,
+// incremental context-KV materialization from the target-hidden tap, grouped
+// depthwise convs, a candidate-selector lattice, and a bespoke non-causal block
+// attention. The target keeps its normal forward and verification.
 #pragma once
 
 #include "src/turbomind/models/language_model.h"
@@ -27,9 +25,9 @@ class Dflash2Policy final: public SpeculativePolicy {
 public:
     explicit Dflash2Policy(int n_proposals): n_{n_proposals} {}
 
-    int max_proposals() const override;
-    int token_row_tail() const override;
-    RoundExtent Extent(const RoundRequest& request) const override;
+    int                            max_proposals() const override;
+    int                            token_row_tail() const override;
+    RoundExtent                    Extent(const RoundRequest& request) const override;
     std::optional<BootstrapExtent> Bootstrap(int prompt_len) const override;
 
 private:
@@ -42,22 +40,22 @@ public:
     ~Dflash2Model() override;
 
     const SpeculativePolicy& policy() const override;
-    void Run(BatchOp op, int phase, TensorMap& env) override;
-    HiddenStateTap* Tap(int phase) override;
-    void RunDraft(int phase, const DraftContext& ctx, TensorMap& env) override;
+    void                     Run(BatchOp op, int phase, TensorMap& env) override;
+    HiddenStateTap*          Tap(int phase) override;
+    void                     RunDraft(int phase, const DraftContext& ctx, TensorMap& env) override;
 
 private:
-    const Dflash2Weight&    spec_weights_;
-    Dflash2Policy           policy_;
-    LanguageModel           draft_;
+    const Dflash2Weight&                    spec_weights_;
+    Dflash2Policy                           policy_;
+    LanguageModel                           draft_;
     std::unique_ptr<TargetHiddenProjection> projection_;
 
     const Context&     ctx_;
     const EngineParam& param_;
     LanguageModel&     target_;
-    int   hidden_{}, hd_{}, local_nh_{}, local_nkv_{}, total_heads_{}, inter_local_{};
-    int   top_k_{}, sel_rank_{}, window_{}, block_{}, mask_token_id_{}, max_ctx_{};
-    float rope_base_{};
+    int                hidden_{}, hd_{}, local_nh_{}, local_nkv_{}, total_heads_{}, inter_local_{};
+    int                top_k_{}, sel_rank_{}, window_{}, block_{}, mask_token_id_{}, max_ctx_{};
+    float              rope_base_{};
 
     std::vector<Tensor> ctx_k_;
     std::vector<Tensor> ctx_v_;
@@ -68,12 +66,13 @@ private:
     Buffer_<int>        ctx_len_;
     bool                ctx_kv_int4_{};
 
-    void MaterializeContext(const Tensor& context_hidden, const Buffer_<int>& base_dev,
-                            const Buffer_<int>& committed_dev, int rows, cudaStream_t stream);
-    Tensor RunBlock(const Tensor& block_embeddings, const Tensor& positions, int rows, int ctx_rows,
-                    cudaStream_t stream, TensorMap& env);
-    void StoreProposals(const Buffer_<int>& proposals, const Buffer_<int>& positions, int rows, int batch_size,
-                        TensorMap& env);
+    void MaterializeContext(const Tensor&       context_hidden,
+                            const Buffer_<int>& base_dev,
+                            const Buffer_<int>& committed_dev,
+                            int                 rows,
+                            cudaStream_t        stream);
+    Tensor
+    RunBlock(const Tensor& block_embeddings, const Tensor& positions, int rows, int ctx_rows, cudaStream_t stream);
 };
 
 }  // namespace turbomind

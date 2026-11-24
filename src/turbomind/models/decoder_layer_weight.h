@@ -40,6 +40,8 @@ public:
     bool verify(std::vector<std::string>& missing) override;
 
     // --- X-macro field lists ---
+    // `attention_conv`/`mlp_conv` are DFlash2-only optional modules; they stay
+    // null for every other model and are populated by the qwen3-dflash2 builder.
 #define DECODER_LAYER_WEIGHT_CHILDREN(X)                                                                               \
     X(AttentionWeight, attention)                                                                                      \
     X(DeltaNetWeight, linear_attn)                                                                                     \
@@ -47,7 +49,7 @@ public:
     X(MoeWeight, moe_ffn)                                                                                              \
     X(NormWeight, attention_norm)                                                                                      \
     X(NormWeight, ffn_norm)                                                                                            \
-    X(GroupedConvWeight, attention_conv)                                                                              \
+    X(GroupedConvWeight, attention_conv)                                                                               \
     X(GroupedConvWeight, mlp_conv)
 
 #define DECODER_LAYER_WEIGHT_PARAMS(X)

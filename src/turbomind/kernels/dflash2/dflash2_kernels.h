@@ -5,6 +5,8 @@
 
 #include <cuda_runtime.h>
 
+#include "src/turbomind/core/data_type.h"
+
 namespace turbomind {
 
 /// Content-generated grouped depthwise conv (DFlash2 attention_conv / mlp_conv).
@@ -24,7 +26,7 @@ void invokeGroupedConv(void*        out,
                        int          group_size,
                        int          taps,
                        int          block_size,
-                       int          input_bits,
+                       DataType     dtype,
                        cudaStream_t stream);
 
 /// Candidate-selector edge scores (DFlash2 `_score_edges`).
@@ -48,7 +50,7 @@ void invokeCandidateSelector(float*       out,
                              int          top_k,
                              int          vocab,
                              int          rank,
-                             int          input_bits,
+                             DataType     dtype,
                              cudaStream_t stream);
 
 /// DFlash2 draft block attention: non-causal GQA over [context | block].
@@ -73,7 +75,7 @@ void invokeDflash2Attention(void*        out,
                             int          hd,
                             float        scale,
                             int          window,
-                            int          input_bits,
+                            DataType     dtype,
                             cudaStream_t stream);
 
 /// Quantized DFlash2 draft block attention: context K/V are packed int4 with
@@ -93,26 +95,12 @@ void invokeDflash2AttentionInt4(void*        out,
                                 int          hd,
                                 float        scale,
                                 int          window,
-                                int          input_bits,
+                                DataType     dtype,
                                 cudaStream_t stream);
 
 /// NeoX-style RoPE applied in place to a [rows, heads, head_dim] tensor.
-void invokeDflash2Rope(void*        x,
-                       const int*   positions,
-                       int          rows,
-                       int          heads,
-                       int          head_dim,
-                       float        base,
-                       int          input_bits,
-                       cudaStream_t stream);
-
-/// Elementwise `out = a + b` over `n` elements (fp16/bf16/fp32).
-void invokeDflash2Add(void*        out,
-                      const void*  a,
-                      const void*  b,
-                      long long    n,
-                      int          input_bits,
-                      cudaStream_t stream);
+void invokeDflash2Rope(
+    void* x, const int* positions, int rows, int heads, int head_dim, float base, DataType dtype, cudaStream_t stream);
 
 /// Per-row top-k over the vocabulary: fills `candidate_ids` [rows, k] (int) and
 /// `values` [rows, k] (fp32, descending) from `logits` [rows, vocab] (fp16/fp32).
@@ -121,27 +109,23 @@ void invokeDflash2TopK(int*         candidate_ids,
                        const void*  logits,
                        int          rows,
                        int          vocab,
+                       int          stride,
                        int          k,
-                       int          input_bits,
+                       DataType     dtype,
                        cudaStream_t stream);
 
 /// Build the DFlash2 block ids `[next_token, mask x (block-1)]` on device.
 /// `ids[0] = token_ids[seq_len-1]` when `seq_len > 0`, else `mask`.
-void invokeDflash2BuildBlockIds(int*               ids,
-                                const int* const*  token_ids_ptrs,  // device array of device pointers
-                                const int*         seq_len,         // device pointer to one int
-                                int                block,
-                                int                mask_token_id,
-                                cudaStream_t       stream);
+void invokeDflash2BuildBlockIds(int*              ids,
+                                const int* const* token_ids_ptrs,  // device array of device pointers
+                                const int*        seq_len,         // device pointer to one int
+                                int               block,
+                                int               mask_token_id,
+                                cudaStream_t      stream);
 
 /// Greedy chain through the candidate lattice: `props[l] = cand[l, argmax_c edge[l, prev, c]]`,
 /// `prev` starts at 0 and follows the chosen candidate index.
-void invokeDflash2GreedyChain(int*         props,
-                              const float* edge,
-                              const int*   cand,
-                              int          len,
-                              int          top_k,
-                              cudaStream_t stream);
+void invokeDflash2GreedyChain(int* props, const float* edge, const int* cand, int len, int top_k, cudaStream_t stream);
 
 /// Write `props[0..n)` into `token_ids_ptrs[0][base[0] + i]` (all device-side).
 void invokeDflash2StoreTokens(int* const*  token_ids_ptrs,
@@ -162,11 +146,15 @@ void invokeDflash2ResidualRMSNorm(void*        out,
                                   float        eps,
                                   int          has_x,
                                   float        x_scale,  // residual += x * x_scale
-                                  int          input_bits,
+                                  DataType     dtype,
                                   cudaStream_t stream);
 
 /// `out[0] = entry[0] + (has_accept ? accept[0] : 0)` (device-side draft length).
 void invokeDflash2CommitLen(int* out, const int* entry, const int* accept, int has_accept, cudaStream_t stream);
+
+/// Draft-context base for this round: `out[0] = entry[0] == 0 ? 0 : ctx_len[0]`.
+/// Resets the per-request context on the first pass of every new request.
+void invokeDflash2SelectBase(int* out, const int* ctx_len, const int* entry, cudaStream_t stream);
 
 /// `out[i] = base[0] + i` for i in [0, n) (device-side position generation).
 void invokeDflash2CountUp(int* out, const int* base, int n, cudaStream_t stream);
@@ -179,7 +167,7 @@ void invokeDflash2KvScatter(void*        dst,
                             const int*   committed,
                             int          rows,
                             int          per_row,
-                            int          input_bits,
+                            DataType     dtype,
                             cudaStream_t stream);
 
 /// Quantize and scatter context K/V rows: dst_data[base[0] + i] = int4(src[i]),
@@ -194,14 +182,10 @@ void invokeDflash2KvScatterInt4(void*        dst_data,
                                 int          rows,
                                 int          nkv,
                                 int          hd,
-                                int          input_bits,
+                                DataType     dtype,
                                 cudaStream_t stream);
 
-/// In-place `t *= factor` (elementwise, fp16/fp32).
-void invokeDflash2Scale(void*        t,
-                        long long    n,
-                        float        factor,
-                        int          input_bits,
-                        cudaStream_t stream);
+/// In-place `t *= factor` (elementwise, fp16/bf16/fp32).
+void invokeDflash2Scale(void* t, long long n, float factor, DataType dtype, cudaStream_t stream);
 
 }  // namespace turbomind
