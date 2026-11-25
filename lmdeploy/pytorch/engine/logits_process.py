@@ -241,6 +241,31 @@ class SamplingInputsDelta:
     generated_ids: None | torch.Tensor = None
 
 
+def _reconcile_generated_ids(scheduler_ids: torch.Tensor | None,
+                             delta_ids: torch.Tensor | None) -> torch.Tensor | None:
+    """Pick the generated ids of the next step, keeping them bounded.
+
+    The scheduler builds its history before the previous step's tokens reach the sequences, so it is one token
+    behind the device-side ``delta_ids``, which is fresher but never shrinks. Keep the freshness and drop the surplus:
+    at most one more column than the scheduler history (that column holds the latest token, also when the scheduler
+    history is empty), right-aligned.
+
+    - ``delta_ids is None``: the strategy opted out (ARSpec, DLLM), the scheduler's history is used as is.
+    - ``scheduler_ids is None``: no request in the batch needs the history, drop it.
+
+    The result may be a view of ``delta_ids``. It is only read for this step; ``step_sampling_delta`` re-materializes
+    it with ``torch.cat``, so the wide backing allocation is not carried over.
+    """
+    if delta_ids is None:
+        return scheduler_ids
+    if scheduler_ids is None:
+        return None
+    max_width = scheduler_ids.size(1) + 1
+    if delta_ids.size(1) > max_width:
+        delta_ids = delta_ids[:, -max_width:]
+    return delta_ids
+
+
 @dataclass
 class SamplingInputs:
     temperature: torch.Tensor = None
@@ -337,11 +362,16 @@ class SamplingInputs:
 
     def update_delta(self, delta: SamplingInputsDelta):
         """Update from delta."""
+        # read before it is overwritten: the scheduler's history is rebuilt every step
+        scheduler_generated_ids = self.generated_ids
         for f in fields(delta):
             k = f.name
             v = getattr(delta, k)
+            if k == 'generated_ids':
+                continue
             if v is not None:
                 setattr(self, k, v)
+        self.generated_ids = _reconcile_generated_ids(scheduler_generated_ids, delta.generated_ids)
 
 
 def _apply_custom_logits_processors(batched_logits_processors, all_ids, logits):

@@ -306,3 +306,167 @@ def test_sampling_delta_keeps_generated_ids_current():
 
     reindexed = reindex_sampling_delta(delta, SimpleNamespace(indices=torch.tensor([1])))
     assert reindexed.generated_ids.tolist() == [[pad, 7, 9]]
+
+
+def _rolling_requests(num_requests: int, lengths: tuple[int, ...]):
+    """Deterministic token streams: request ``rid`` emits ``1 + rid * 100 +
+    pos``; 0 is the pad id and never appears in a stream."""
+    return [[1 + rid * 100 + pos for pos in range(lengths[rid % len(lengths)])] for rid in range(num_requests)]
+
+
+def test_sampling_delta_generated_ids_bounded_under_rolling_batches():
+    """Requests are admitted and finish continuously (max batch 2, alternating
+    short/long outputs).
+
+    The scheduler rebuilds its generated history every step, one token behind the device. The persisted history must
+    always hold the latest token of every live row, and its width must stay bounded by the scheduler width + 1 instead
+    of growing with every decode step.
+    """
+    from types import SimpleNamespace
+
+    from lmdeploy.pytorch.engine.logits_process import (
+        SamplingInputs,
+        _process_repetition_penalty_,
+    )
+    from lmdeploy.pytorch.strategies.ar.step_inputs import (
+        merge_sampling_delta,
+        reindex_sampling_delta,
+        step_sampling_delta,
+    )
+
+    pad, vocab, max_batch, penalty = 0, 2000, 2, 2.0
+    streams = _rolling_requests(12, (5, 9))
+    max_len = max(len(s) for s in streams)
+    pending = list(range(len(streams)))
+    live: list[int] = []  # request ids, in batch order
+    emitted: dict[int, list[int]] = {}  # tokens produced so far per live request
+    delta = None  # persisted device-side sampling delta (StepInputs.sampling_delta)
+
+    def build_inputs(history: list[list[int]]) -> SamplingInputs:
+        width = max((len(h) for h in history), default=0)
+        ids = torch.full((len(history), width), pad, dtype=torch.int64)
+        for i, h in enumerate(history):
+            if h:
+                ids[i, -len(h):] = torch.tensor(h)
+        n = len(history)
+        return SamplingInputs(
+            num_ignore_eos=torch.zeros(n, dtype=torch.int64),
+            random_offsets=torch.zeros(n, dtype=torch.int64),
+            repetition_penalty=torch.full((n, ), penalty),
+            generated_ids=ids,
+            batch_size=n,
+        )
+
+    max_width_seen = 0
+    num_steps = 0
+    while pending or live:
+        # finished rows leave the batch (reindex)
+        keep = [i for i, rid in enumerate(live) if len(emitted[rid]) < len(streams[rid])]
+        if len(keep) != len(live):
+            if delta is not None:
+                if keep:
+                    delta = reindex_sampling_delta(delta, SimpleNamespace(indices=torch.tensor(keep)))
+                else:
+                    delta = None
+            live = [live[i] for i in keep]
+
+        # prefill of newly admitted requests, merged into the decode state
+        new = []
+        while pending and len(live) + len(new) < max_batch:
+            new.append(pending.pop(0))
+        if new:
+            prefill = build_inputs([[] for _ in new]).get_delta()
+            first = torch.tensor([streams[rid][0] for rid in new])
+            prefill = step_sampling_delta(prefill, first)
+            delta = prefill if delta is None else merge_sampling_delta(delta, prefill, pad)
+            for rid in new:
+                emitted[rid] = [streams[rid][0]]
+            live += new
+        if not live:
+            continue
+
+        # decode step: the scheduler history is one token behind the device
+        sched = build_inputs([emitted[rid][:-1] for rid in live])
+        sched_width = sched.generated_ids.size(1)
+        sched.update_delta(delta)
+        ids = sched.generated_ids
+
+        # latest token of every row is present and is the penalized one
+        assert ids.size(0) == len(live)
+        assert ids[:, -1].tolist() == [emitted[rid][-1] for rid in live]
+        # full history is intact, right-aligned
+        for i, rid in enumerate(live):
+            h = emitted[rid]
+            assert ids[i, -len(h):].tolist() == h
+            assert (ids[i, :ids.size(1) - len(h)] == pad).all()
+        scores = _process_repetition_penalty_(torch.ones(len(live), vocab), ids, sched.repetition_penalty)
+        for i, rid in enumerate(live):
+            assert scores[i, emitted[rid][-1]] == 1 / penalty
+
+        # width is bounded by what live requests need, not by past batches
+        longest = max(len(emitted[rid]) for rid in live)
+        assert ids.size(1) <= sched_width + 1
+        assert ids.size(1) <= longest
+        max_width_seen = max(max_width_seen, ids.size(1))
+
+        # advance one decode step
+        nxt = [streams[rid][len(emitted[rid])] for rid in live]
+        delta = step_sampling_delta(sched.get_delta(), torch.tensor(nxt))
+        for rid, token in zip(live, nxt):
+            emitted[rid].append(token)
+        # appended storage is compact, not a view into a larger allocation
+        gen = delta.generated_ids
+        assert gen.untyped_storage().nbytes() == gen.numel() * gen.element_size()
+        num_steps += 1
+
+    assert num_steps > 3 * max_len
+    assert max_width_seen <= max_len
+
+
+def test_update_delta_generated_ids_reconciliation():
+    from lmdeploy.pytorch.engine.logits_process import SamplingInputs, SamplingInputsDelta
+
+    def make(ids):
+        return SamplingInputs(num_ignore_eos=torch.tensor([0, 0]),
+                              random_offsets=torch.tensor([0, 0]),
+                              generated_ids=ids,
+                              batch_size=2)
+
+    def make_delta(ids):
+        return SamplingInputsDelta(num_ignore_eos=torch.tensor([0, 0]),
+                                   random_offsets=torch.tensor([0, 0]),
+                                   generated_ids=ids)
+
+    wide = torch.arange(1, 21).reshape(2, 10)
+
+    # empty scheduler history still keeps the latest token (and nothing more)
+    inputs = make(torch.empty(2, 0, dtype=torch.int64))
+    inputs.update_delta(make_delta(wide))
+    assert inputs.generated_ids.tolist() == [[10], [20]]
+
+    # at most scheduler width + 1 columns, right-aligned
+    inputs = make(torch.zeros(2, 3, dtype=torch.int64))
+    inputs.update_delta(make_delta(wide))
+    assert inputs.generated_ids.tolist() == [[7, 8, 9, 10], [17, 18, 19, 20]]
+
+    # a narrower delta is kept as is
+    inputs = make(torch.zeros(2, 20, dtype=torch.int64))
+    inputs.update_delta(make_delta(wide))
+    assert inputs.generated_ids.tolist() == wide.tolist()
+
+    # no request needs the history: drop it
+    inputs = make(None)
+    inputs.update_delta(make_delta(wide))
+    assert inputs.generated_ids is None
+
+    # ARSpec / DLLM opt out: scheduler history is untouched
+    sched = torch.tensor([[1, 2], [3, 4]])
+    inputs = make(sched)
+    inputs.update_delta(make_delta(None))
+    assert inputs.generated_ids is sched
+
+    # other delta fields are still applied
+    inputs = make(sched)
+    inputs.update_delta(SamplingInputsDelta(num_ignore_eos=torch.tensor([5, 6])))
+    assert inputs.num_ignore_eos.tolist() == [5, 6]
+    assert inputs.generated_ids is sched
