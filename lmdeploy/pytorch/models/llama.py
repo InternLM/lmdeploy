@@ -8,6 +8,7 @@ from torch import nn
 from transformers.models.llama import LlamaConfig
 
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
+from lmdeploy.pytorch.models.patch import add_prefix
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
 from lmdeploy.pytorch.nn.linear import (
     build_down_linear,
@@ -24,7 +25,12 @@ from .utils.cudagraph import CudaGraphMixin
 class LlamaAttention(nn.Module):
     """Rewrite module of LlamaAttention."""
 
-    def __init__(self, config: LlamaConfig, dtype: torch.dtype = None, device: torch.device = None, is_tp: bool = True):
+    def __init__(self,
+                 config: LlamaConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 is_tp: bool = True,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         num_heads = config.num_attention_heads
@@ -44,6 +50,7 @@ class LlamaAttention(nn.Module):
             device=device,
             num_replicate_kv_heads=num_replicate_kv_heads,
             is_tp=is_tp,
+            prefix=add_prefix('qkv_proj', prefix),
         )
 
         # rotary embedding
@@ -64,7 +71,8 @@ class LlamaAttention(nn.Module):
                                    quant_config=quantization_config,
                                    dtype=dtype,
                                    device=device,
-                                   is_tp=is_tp)
+                                   is_tp=is_tp,
+                                   prefix=add_prefix('o_proj', prefix))
 
     def forward(
         self,
@@ -112,7 +120,12 @@ class LlamaAttention(nn.Module):
 class LlamaMLP(nn.Module):
     """Llama mlp."""
 
-    def __init__(self, config: LlamaConfig, dtype: torch.dtype = None, device: torch.device = None, is_tp: bool = True):
+    def __init__(self,
+                 config: LlamaConfig,
+                 dtype: torch.dtype = None,
+                 device: torch.device = None,
+                 is_tp: bool = True,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         # gate up
@@ -125,6 +138,7 @@ class LlamaMLP(nn.Module):
             device=device,
             quant_config=quantization_config,
             is_tp=is_tp,
+            prefix=add_prefix('gate_up_proj', prefix),
         )
 
         # silu and mul
@@ -137,7 +151,8 @@ class LlamaMLP(nn.Module):
                                            quant_config=quantization_config,
                                            dtype=dtype,
                                            device=device,
-                                           is_tp=is_tp)
+                                           is_tp=is_tp,
+                                           prefix=add_prefix('down_proj', prefix))
 
     def forward(self, x):
         """forward."""
@@ -160,10 +175,14 @@ class LlamaDecoderLayer(nn.Module):
         quantization_config = getattr(config, 'quantization_config', None)
 
         # build attention layer
-        self.self_attn = LlamaAttention(config, dtype=dtype, device=device, is_tp=is_tp)
+        self.self_attn = LlamaAttention(config,
+                                        dtype=dtype,
+                                        device=device,
+                                        is_tp=is_tp,
+                                        prefix=f'model.layers.{layer_idx}.self_attn')
 
         # build MLP
-        self.mlp = LlamaMLP(config, dtype=dtype, device=device, is_tp=is_tp)
+        self.mlp = LlamaMLP(config, dtype=dtype, device=device, is_tp=is_tp, prefix=f'model.layers.{layer_idx}.mlp')
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -317,7 +336,8 @@ class LlamaForCausalLM(nn.Module, CudaGraphMixin):
                                             config.vocab_size,
                                             bias=False,
                                             dtype=dtype,
-                                            device=device)
+                                            device=device,
+                                            prefix=add_prefix('lm_head', 'model'))
 
     def forward(
         self,
