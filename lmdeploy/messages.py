@@ -545,6 +545,10 @@ class PytorchEngineConfig:
         mooncake_state_save_slots: Number of temporary hybrid state snapshots
             reserved for asynchronous Mooncake saves. Defaults to 8. A full
             snapshot pool skips the save without blocking inference.
+        enable_replayssm: Enable ReplaySSM for supported PyTorch CUDA Gated
+            DeltaNet and GLM-5.3 KDA models. Default False.
+        replayssm_buffer_len: ReplaySSM ring length. Supported values are 8,
+            16, and 32. Default 16.
         device_type: The inference device type, options ['cuda']
         eager_mode: Enable "eager" mode or not
         custom_module_map: nn module map customized by users. Once
@@ -584,6 +588,9 @@ class PytorchEngineConfig:
         dllm_denoising_steps: Dllm denoising steps.
         dllm_confidence_threshold: dllm unmasking threshold for
             dynamic unmasking.
+        communication_backend: ``nccl`` (default) uses native process-group collectives
+            unless a legacy communication optimization is explicitly enabled.
+            ``auto`` opts into eligible communication optimizations.
         kv_transfer_config: External KV-cache connector configuration. This is
             supported only by the PyTorch engine. ``None`` disables external
             KV-cache transfer.
@@ -616,6 +623,8 @@ class PytorchEngineConfig:
     prefill_save_alignment: int = 1024
     prefill_save_last_only: bool = False
     mooncake_state_save_slots: int = 8
+    enable_replayssm: bool = False
+    replayssm_buffer_len: int = 16
     device_type: str = 'cuda'
     eager_mode: bool = False
     custom_module_map: dict[str, str] = None
@@ -647,6 +656,7 @@ class PytorchEngineConfig:
     migration_backend: MigrationBackend = MigrationBackend.DLSlime
     kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
     piecewise_cudagraph_max_tokens: int | None = None
+    communication_backend: Literal['nccl', 'auto'] = 'nccl'
 
     def __post_init__(self):
         """Check input validation."""
@@ -673,6 +683,10 @@ class PytorchEngineConfig:
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         assert self.prefill_save_alignment > 0, 'invalid prefill_save_alignment'
         assert self.mooncake_state_save_slots > 0, 'invalid mooncake_state_save_slots'
+        assert self.replayssm_buffer_len in (8, 16, 32), \
+            'replayssm_buffer_len must be one of 8, 16, or 32'
+        if self.enable_replayssm:
+            assert self.device_type == 'cuda', 'ReplaySSM is supported only on CUDA'
         try:
             self.quant_policy = QuantPolicy(self.quant_policy)
         except ValueError as e:
@@ -701,7 +715,8 @@ class PytorchEngineConfig:
             self.kv_transfer_config = KVTransferConfig(**self.kv_transfer_config)
         elif self.kv_transfer_config is not None and not isinstance(self.kv_transfer_config, KVTransferConfig):
             raise TypeError('kv_transfer_config must be a KVTransferConfig, dict, or None')
-
+        if self.communication_backend not in ('nccl', 'auto'):
+            raise ValueError('communication_backend must be nccl or auto')
 
 class ResponseType(enum.Enum):
     """Response type."""

@@ -72,7 +72,7 @@ def _single_token_kda_inputs(q, k, g, beta, a_log, dt_bias, lower_bound):
 @torch.inference_mode()
 def indexed_chunk_gated_delta_rule(q, k, v, g, beta, pool, input_ids, final_ids, *, scale=None,
                                   state_v_first=False, cu_seqlens=None, chunk_indices=None, chunk_offsets=None,
-                                  checkpoint_ids=None, checkpoint_offsets=None):
+                                  checkpoint_ids=None, checkpoint_offsets=None, checkpoint_pool=None):
     """GDN with preprocessed q/k, log decay g and sigmoid beta (Qwen path)."""
     if cu_seqlens is not None and (chunk_indices is None or chunk_offsets is None):
         raise ValueError('Indexed varlen prefill requires prebuilt chunk metadata.')
@@ -86,7 +86,7 @@ def indexed_chunk_gated_delta_rule(q, k, v, g, beta, pool, input_ids, final_ids,
     h, v_new = indexed_chunk_state_fwd(
         k, w, u, pool, input_ids, final_ids, g=g, state_v_first=state_v_first,
         cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, chunk_offsets=chunk_offsets,
-        checkpoint_ids=checkpoint_ids, checkpoint_offsets=checkpoint_offsets)
+        checkpoint_ids=checkpoint_ids, checkpoint_offsets=checkpoint_offsets, checkpoint_pool=checkpoint_pool)
     return chunk_fwd_o(q=q, k=k, v=v_new, h=h, g=g, scale=scale,
                        state_v_first=state_v_first, **common).to(q.dtype)
 
@@ -96,7 +96,7 @@ def indexed_chunk_kda(q, k, v, g, beta, pool, input_ids, final_ids, *, A_log=Non
                       use_qk_l2norm_in_kernel=False, use_gate_in_kernel=False, use_beta_sigmoid_in_kernel=False,
                       safe_gate=False, lower_bound=None, state_v_first=True,
                       cu_seqlens=None, chunk_indices=None, chunk_offsets=None,
-                      checkpoint_ids=None, checkpoint_offsets=None):
+                      checkpoint_ids=None, checkpoint_offsets=None, checkpoint_pool=None):
     """KDA including GLM's normalized q/k, raw gate/beta and safe-gate path."""
     if cu_seqlens is not None and (chunk_indices is None or chunk_offsets is None):
         raise ValueError('Indexed varlen prefill requires prebuilt chunk metadata.')
@@ -129,6 +129,6 @@ def indexed_chunk_kda(q, k, v, g, beta, pool, input_ids, final_ids, *, A_log=Non
     h, v_new = indexed_chunk_state_fwd(
         kg, w, u, pool, input_ids, final_ids, gk=g, state_v_first=state_v_first,
         cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, chunk_offsets=chunk_offsets,
-        checkpoint_ids=checkpoint_ids, checkpoint_offsets=checkpoint_offsets)
+        checkpoint_ids=checkpoint_ids, checkpoint_offsets=checkpoint_offsets, checkpoint_pool=checkpoint_pool)
     return chunk_gla_fwd_o_gk(q=q, v=v_new, g=g, A=aqk, h=h, scale=scale,
                              state_v_first=state_v_first, **common).to(q.dtype)

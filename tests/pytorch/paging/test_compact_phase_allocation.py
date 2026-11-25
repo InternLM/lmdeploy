@@ -226,3 +226,50 @@ def test_promotion_excludes_frozen_unit_until_actual_store_put_completion():
     owner.complete(io)
     assert owner._store_refs == 0
     drained(owner)
+
+
+@pytest.mark.parametrize('width', [1, 6])
+@pytest.mark.parametrize('budget', [0, 1, 8])
+def test_auxiliary_runtime_holds_slot_without_per_token_full_states(width, budget):
+    owner = SSMStateManager(SSMStateCapacity(3, width, budget, runtime_is_auxiliary=True))
+    assert owner.capacity.bank_width == 0
+    assert owner.capacity.num_units == 1 + budget
+    bank = owner.allocate_bank(prefill=True)
+    assert bank.unit_ids == ()
+    producer = owner.submit_prefill((bank,))
+    assert producer.bank_ids == ((),)  # Still model work; auxiliary slot is held.
+    assert owner.promote_to_decode(bank)
+    decode = owner.submit_decode((bank,))
+    owner.release_bank(bank)
+    assert owner.get_num_free_runtime() == 1
+    owner.complete(producer)
+    assert bank.auxiliary_id in owner._banks
+    owner.complete(decode)
+    assert owner.get_num_free_runtime() == 2
+    drained(owner)
+
+
+@pytest.mark.parametrize('cancel', [False, True])
+def test_auxiliary_store_load_holds_shared_destination_through_consumer(cancel):
+    owner = SSMStateManager(SSMStateCapacity(3, 6, 1, runtime_is_auxiliary=True))
+    bank = owner.allocate_bank(prefill=True)
+    load = owner.submit_load(bank, 64)
+    unit = load._writes[0].unit_id
+    assert bank.unit_ids == () and bank.input_ref.unit_id == unit
+    assert owner.get_num_free_optional() == 0
+    with pytest.raises(ValueError, match='Store I/O'):
+        owner.submit_prefill((bank,))
+    if cancel:
+        owner.release_bank(bank)
+        assert owner.get_num_free_optional() == 0
+        owner.complete(load)
+    else:
+        owner.complete(load)
+        assert bank.loaded_input == (unit, 64)
+        forward = owner.submit_prefill((bank,))
+        owner.consume_loaded_inputs(forward)
+        owner.clear_input(bank)
+        owner.release_bank(bank)
+        assert owner.get_num_free_optional() == 0
+        owner.complete(forward)
+    drained(owner)

@@ -140,6 +140,8 @@ class SubCliServe:
         ArgumentHelper.prefill_save_alignment(pt_group)
         ArgumentHelper.prefill_save_last_only(pt_group)
         ArgumentHelper.mooncake_state_save_slots(pt_group)
+        ArgumentHelper.enable_replayssm(pt_group)
+        ArgumentHelper.replayssm_buffer_len(pt_group)
 
         # common engine args
         language_model_only = ArgumentHelper.language_model_only(pt_group)
@@ -165,6 +167,7 @@ class SubCliServe:
         ArgumentHelper.migration_backend(pt_group)
         ArgumentHelper.cudagraph_capture_batch_sizes(pt_group)
         ArgumentHelper.piecewise_cudagraph_max_tokens(pt_group)
+        ArgumentHelper.communication_backend(pt_group)
         # multi-node serving args
         node_rank_act = ArgumentHelper.node_rank(pt_group)
         num_nodes_act = ArgumentHelper.num_nodes(pt_group)
@@ -291,6 +294,8 @@ class SubCliServe:
                 prefill_save_alignment=args.prefill_save_alignment,
                 prefill_save_last_only=args.prefill_save_last_only,
                 mooncake_state_save_slots=args.mooncake_state_save_slots,
+                enable_replayssm=args.enable_replayssm,
+                replayssm_buffer_len=args.replayssm_buffer_len,
                 device_type=args.device,
                 quant_policy=args.quant_policy,
                 eager_mode=args.eager_mode,
@@ -314,6 +319,7 @@ class SubCliServe:
                 enable_return_routed_experts=args.enable_return_routed_experts,
                 distributed_executor_backend=args.distributed_executor_backend,
                 kv_transfer_config=kv_transfer_config,
+                communication_backend=args.communication_backend,
             )
         else:
             from lmdeploy.messages import TurbomindEngineConfig

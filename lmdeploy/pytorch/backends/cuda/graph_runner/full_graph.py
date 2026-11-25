@@ -9,6 +9,7 @@ import torch
 from packaging import version
 from torch.profiler import record_function
 
+from lmdeploy.pytorch.backends.deepep_state import get_deepep_state
 from lmdeploy.pytorch.config import ModelConfig
 from lmdeploy.pytorch.envs import enable_decode_torch_compile, fake_capture
 from lmdeploy.pytorch.models.utils.cudagraph import CudaGraphMeta
@@ -109,6 +110,7 @@ def _make_graph_meta(
         use_fa3_decoding=(model_config.model_paradigm == 'ar_spec' and not model_config.use_flash_mla),
         is_ssm=bool(model_config.states_shapes),
         use_mrope=model_config.use_mrope,
+        needs_replayssm_force_flush=(model_config.enable_replayssm and model_config.model_paradigm == 'ar'),
         block_size=model_config.block_size,
         decode_query_len=decode_query_len,
         step_meta_plan=step_meta_plan,
@@ -188,7 +190,8 @@ class CUDASingleGraphRunner:
     def _bind_inputs(self, **kwargs) -> dict[str, Any]:
         """Fill stable buffers and bind the current step context to them."""
         context = self._ctx_mgr.current_context()
-        if context.dp_meta is not None:
+        # DP1 can still use DeepEP; keep dummy route masking dynamic during replay.
+        if context.dp_meta is not None or get_deepep_state().enabled():
             if self._moe_valid_token_count is None:
                 self._moe_valid_token_count = torch.empty((), dtype=torch.int32, device=self.meta.device)
             valid_tokens = 0 if context.is_dummy else kwargs['input_ids'].numel()

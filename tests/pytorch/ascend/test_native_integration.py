@@ -33,6 +33,35 @@ def _context(device):
     return get_device_manager().context(DeviceContext(device))
 
 
+def test_ascend_communicator_builder_accepts_group_name(monkeypatch):
+    from lmdeploy.pytorch import envs
+    from lmdeploy.pytorch.backends import communicator
+    from lmdeploy.pytorch.backends.ascend.op_backend import AscendOpsBackend
+    from lmdeploy.pytorch.config import DistConfig
+    from lmdeploy.pytorch.distributed import DistContext, DistGroup, _build_communicators
+
+    monkeypatch.setattr(envs, 'enable_flashinfer_allreduce', False)
+    monkeypatch.setattr(envs, 'enable_symm_mem_allreduce', False)
+    calls = []
+
+    def build(cpu_group, device_group, dist_config, *, group_name):
+        calls.append((cpu_group, device_group, dist_config, group_name))
+        return communicator.DeviceCommunicator(device_group)
+
+    monkeypatch.setattr(communicator, 'build_communicator', build)
+    tp = DistGroup(cpu_group=object(), gpu_group=object())
+    dcp = DistGroup(cpu_group=object(), gpu_group=object())
+    config = DistConfig(tp=2)
+    context = DistContext(dist_config=config, attn_tp_group=tp, mlp_tp_group=tp,
+                          moe_tp_group=tp, dcp_group=dcp,
+                          communicator_builder=AscendOpsBackend.build_communicator)
+    _build_communicators(context)
+    assert calls == [(tp.cpu_group, tp.gpu_group, config, 'tp'),
+                     (dcp.cpu_group, dcp.gpu_group, config, 'dcp')]
+    assert tp.communicator.device_group is tp.gpu_group
+    assert dcp.communicator.device_group is dcp.gpu_group
+
+
 def test_native_selection_and_cuda_import_are_isolated():
     # A fresh interpreter catches accidental transitive imports and import-time patches.
     code = """
