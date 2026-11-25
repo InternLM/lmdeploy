@@ -27,8 +27,8 @@ class FakeStore:
         self.setup_calls.append(kwargs)
         return 0
 
-    def allocate_and_mount_segment(self, size, *, protocol):
-        self.mount_calls.append((size, protocol))
+    def allocate_and_mount_segment(self, size, *, protocol, location=''):
+        self.mount_calls.append((size, protocol, location))
         return next(self.allocation_results, {'ret': 0, 'allocated_size': size})
 
     def close(self):
@@ -98,7 +98,7 @@ def test_fabric_preserves_capacity_using_multiple_segments(ascend_env, total_gib
     assert AscendTransferBackend().setup_store(store, config, '10.0.0.8') == 0
 
     assert store.setup_calls[0]['global_segment_size'] == 0
-    assert store.mount_calls == [(gib * 1024**3, 'ascend') for gib in segment_gib]
+    assert store.mount_calls == [(gib * 1024**3, 'ascend', '*') for gib in segment_gib]
     assert store.close_calls == 0
 
 

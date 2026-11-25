@@ -258,7 +258,8 @@ class AscendTransferBackend(TransferBackend):
 
             for offset in range(setup_size, total_size, FABRIC_MAX_SEGMENT_SIZE):
                 size = min(total_size - offset, FABRIC_MAX_SEGMENT_SIZE)
-                result = allocate_segment(size, protocol=config.protocol)
+                # Match SDK setup's memory-location hint. Ascend Direct rejects the empty default.
+                result = allocate_segment(size, protocol=config.protocol, location='*')
                 if result['ret'] != 0 or result['allocated_size'] != size:
                     raise RuntimeError(f'Failed to mount the {size}-byte Ascend fabric segment at {offset}: '
                                        f'rc={result["ret"]}, allocated_size={result["allocated_size"]}')
