@@ -55,6 +55,11 @@ class TmQuantLinearMixin:
         """ct_fp8 scale layout: 1 = per-channel, 128 = blocked."""
         return 128 if getattr(self, 'fp8_blocked', False) else 1
 
+    def _blocked_scale_sections(self, out_features_list):
+        """Per-section scale row counts: ceil(N_i / block_out)."""
+        block = self._fp8_block_out
+        return [(n + block - 1) // block for n in out_features_list]
+
     def _apply(self, fn, recurse=True):
         """Keep the host-resident quant params out of module moves.
 
@@ -104,8 +109,14 @@ class TmQuantLinearMixin:
             else:
                 # 128-blocked checkpoint scales follow the format's accepts
                 # convention: [ceil(N/128), ceil(K/128)] (one scale per
-                # output block per input group).
-                scale_shape = ((out_features + 127) // 128, (in_features + 127) // 128)
+                # output block per input group). Merged projections keep
+                # per-projection sections of ceil(N_i/128) rows: a section
+                # ending inside a block must not share its block row.
+                if hasattr(self, 'all_out_features'):
+                    scale_rows = sum(self._blocked_scale_sections(self.all_out_features))
+                else:
+                    scale_rows = (out_features + 127) // 128
+                scale_shape = (scale_rows, (in_features + 127) // 128)
             params['weight_scale'] = torch.empty(scale_shape, dtype=compute_dtype, device=pack_device)
         params['bias'] = torch.empty((out_features, ), dtype=compute_dtype, device=device) if bias else None
         return params
@@ -142,6 +153,16 @@ class TmQuantLinearMixin:
         starts = [0] + ends[:-1]
         return list(zip(starts, ends, strict=True))
 
+    def _section_slices(self, sections):
+        """Row ranges of each section inside a parameter."""
+        ends = []
+        total = 0
+        for size in sections:
+            total += size
+            ends.append(total)
+        starts = [0] + ends[:-1]
+        return list(zip(starts, ends, strict=True))
+
     def _lane_shards(self):
         """Per-shard views of the fused parameters for packing."""
         slices = self._shard_slices()
@@ -156,9 +177,11 @@ class TmQuantLinearMixin:
             if self._fp8_block_out == 1:
                 scale_slices = slices
             else:
-                # Blocked scales are [ceil(N/128), ceil(K/128)]: one row per
-                # output block, so shard boundaries move in 128 blocks.
-                scale_slices = [((start + 127) // 128, (end + 127) // 128) for start, end in slices]
+                # Blocked scales hold one row per output block and each
+                # fused section keeps its own ceil(N_i/128) rows (a section
+                # may end inside a block), so slices come from the
+                # per-section counts, not the contiguous row boundaries.
+                scale_slices = self._section_slices(self._blocked_scale_sections(self.shard_sections))
         weights = [getattr(self, weight_key)[start:end] for start, end in slices]
         scales = [getattr(self, scale_key)[start:end] for start, end in scale_slices]
         biases = ([getattr(self, 'bias')[start:end] for start, end in slices]
@@ -392,7 +415,12 @@ class MergedTmQuantLinear(TmQuantLinear):
     def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shard_id: Any = 0):
         """Weight loader splitting the fused parameter rows by shard."""
         idx = self.out_names_map[shard_id]
-        param_w = param.data.split(self.all_out_features, 0)[idx]
+        if param._weight_type == 'weight_scale' and self._fp8_block_out != 1:
+            # Blocked scales pack ceil(N_i/128) rows per projection.
+            sections = self._blocked_scale_sections(self.all_out_features)
+        else:
+            sections = self.all_out_features
+        param_w = param.data.split(sections, 0)[idx]
         if param._weight_type == 'bias':
             weight = chunk_aligned(loaded_weight, self.tp, 0, 8)[self.tp_rank]
         else:
@@ -458,7 +486,12 @@ class QKVTmQuantLinear(MergedTmQuantLinear, QKVMixin):
             chunk_size = world_size // self.num_replicate_kv_heads
             chunk_idx = rank // self.num_replicate_kv_heads
 
-        param_w = param.data.split(self.all_out_features, 0)[idx]
+        if param._weight_type == 'weight_scale' and self._fp8_block_out != 1:
+            # Blocked scales pack ceil(N_i/128) rows per projection.
+            sections = self._blocked_scale_sections(self.all_out_features)
+        else:
+            sections = self.all_out_features
+        param_w = param.data.split(sections, 0)[idx]
         if param._weight_type == 'bias':
             weight = chunk_aligned(loaded_weight, chunk_size, 0, 8)[chunk_idx]
         else:
