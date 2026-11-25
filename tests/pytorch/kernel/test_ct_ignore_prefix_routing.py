@@ -90,11 +90,15 @@ def test_full_llama_model_with_ignore_list_constructs():
     from lmdeploy.pytorch.models.llama import LlamaForCausalLM
 
     ignore = ['lm_head']
+    quant_config = _ct_quant_config(ignore)
     config = _tiny_llama_config(ignore=ignore)
-    with build_model_context(BuildModelContext(quant_config=_ct_quant_config(ignore))):
+    with build_model_context(BuildModelContext(quant_config=quant_config)):
         model = LlamaForCausalLM(config, StepContextManager(), dtype=torch.float16, device=torch.device('cuda'))
     assert _is_quantized(model.model.layers[0].self_attn.qkv_proj)
     assert isinstance(model.lm_head, BaseLinear)
+    # Ignore rules match the canonical checkpoint key by exact equality.
+    assert quant_config.get_quant_method('lm_head') is None
+    assert quant_config.get_quant_method('model.lm_head') is not None
 
 
 @cuda_required

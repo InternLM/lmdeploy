@@ -337,7 +337,7 @@ class LlamaForCausalLM(nn.Module, CudaGraphMixin):
                                             bias=False,
                                             dtype=dtype,
                                             device=device,
-                                            prefix=add_prefix('lm_head', 'model'))
+                                            prefix=add_prefix('lm_head', ''))
 
     def forward(
         self,
