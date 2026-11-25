@@ -94,12 +94,13 @@ def test_cuda_backend_close_store_closes_the_store():
 
 
 def test_ascend_backend_close_store_parks_the_store(ascend_env):
+    backend = AscendTransferBackend()
     store = FakeStore()
     store_ref = weakref.ref(store)
 
-    assert AscendTransferBackend().close_store(store) is None
+    assert backend.close_store(store) is None
     del store
     gc.collect()
 
-    assert store_ref() is not None, 'store must survive garbage collection'
+    assert store_ref() is not None, 'store must survive garbage collection as long as the backend lives'
     assert store_ref().close_calls == 0
