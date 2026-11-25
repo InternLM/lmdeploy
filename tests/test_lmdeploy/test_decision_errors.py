@@ -32,7 +32,7 @@ class ErrorEngine(FakeEngine):
             def encode(*args, **kwargs):
                 raise ValueError(PRIVATE)
             self.tokenizer = SimpleNamespace(encode=encode)
-        if mode.startswith('shared_'):
+        if mode == 'tokenizer_error' or mode.startswith('shared_'):
             self.arch = 'Qwen3ForCausalLM'
             self.session_len = 512
             self.backend_config = SimpleNamespace(enable_prefix_caching=False)
@@ -41,6 +41,9 @@ class ErrorEngine(FakeEngine):
             self._determine_gen_config = lambda ids, gen_config=None: gen_config
 
             async def get_prompt_input(**kwargs):
+                if mode == 'tokenizer_error':
+                    prompt = 'rendered'
+                    return {'prompt': prompt, 'input_ids': self.tokenizer.encode(prompt)}
                 if mode == 'shared_missing_ids':
                     return {'prompt': 'rendered'}
                 if mode == 'shared_media_error':

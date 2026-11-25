@@ -140,7 +140,7 @@ def test_user_image_marker_returns_400_with_real_preprocessing(checkpoint, prepr
 
 
 @pytest.mark.parametrize('systemone', [False, True])
-def test_wire_usage_counts_skeleton_with_checkpoint_tokenizer(checkpoint, preprocessing_engine, systemone):
+def test_wire_usage_with_checkpoint_tokenizer(checkpoint, preprocessing_engine, systemone):
     from lmdeploy.serve.core.async_engine import GenOut
     from lmdeploy.serve.openai.decision_protocol import SystemoneRequest
     from lmdeploy.serve.parsers.decision_parser import DecisionParser, create_decision_context
@@ -158,13 +158,15 @@ def test_wire_usage_counts_skeleton_with_checkpoint_tokenizer(checkpoint, prepro
     output = GenOut(response='', input_token_len=len(result['input_ids']), generate_token_len=0,
                     logprobs=rows, finish_reason='length')
     usage = parser.parse_output(output, model_name='local')['usage']
-    # An independent literal fixes the expected content and excludes chat wrappers.
-    expected = len(preprocessing_engine.tokenizer.model.model.encode(
-        '{\n    "q": "<decision>"\n}', add_special_tokens=False))
-    assert usage['output_tokens'] == expected > 0
     assert usage['input_tokens'] == len(result['input_ids'])
-    if not systemone:
-        assert usage['total_tokens'] == len(result['input_ids']) + expected
+    if systemone:
+        # An independent literal fixes the expected content and excludes chat wrappers.
+        expected = len(preprocessing_engine.tokenizer.model.model.encode(
+            '{\n    "q": "<decision>"\n}', add_special_tokens=False))
+        assert usage['output_tokens'] == expected > 0
+    else:
+        assert usage['output_tokens'] == 0
+        assert usage['total_tokens'] == usage['input_tokens']
 
 
 @pytest.mark.parametrize('image_count', [1, 2])
