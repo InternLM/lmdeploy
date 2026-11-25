@@ -66,26 +66,27 @@ def test_noncausal_gqa_guard(monkeypatch, dcp):
 @pytest.mark.parametrize('dcp', [1, 2, 4, 8])
 @pytest.mark.parametrize('method,arch', [
     ('dflash', 'DFlashDraftModel'),
+    ('dspark', 'Qwen3DSparkModel'),
     ('eagle3', 'Eagle3LlamaForCausalLM'),
     ('eagle3', 'Eagle3DeepseekV2ForCausalLM'),
     ('deepseek_mtp', None),
 ])
 def test_speculative_dcp_layout_guard(monkeypatch, tmp_path, dcp, method, arch):
-    from lmdeploy.pytorch.engine import config_builder as module
+    from lmdeploy.pytorch.spec_decode import config as module
 
     monkeypatch.setattr(module, 'config_from_pretrained',
                         lambda *args, **kwargs: SimpleNamespace(architectures=[arch]))
     build_draft = Mock()
     monkeypatch.setattr(module.SpecDecodeConfig, 'from_config', build_draft)
     dist_config = DistConfig(tp=8, dcp=dcp)
-    incompatible = dcp > 1 and (method == 'dflash' or arch == 'Eagle3LlamaForCausalLM')
+    incompatible = dcp > 1 and (method in ('dflash', 'dspark') or arch == 'Eagle3LlamaForCausalLM')
     kwargs = dict(target_model='target',
                   speculative_config=SpeculativeConfig(method=method, model=str(tmp_path), num_speculative_tokens=4),
                   engine_config=PytorchEngineConfig(tp=8, dcp=dcp),
                   cache_config=CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=8),
                   dist_config=dist_config)
     if incompatible:
-        with pytest.raises(ValueError, match=r'(DFlash|draft_arch=Eagle3LlamaForCausalLM).*dcp=1'):
+        with pytest.raises(ValueError, match=r'(DFlash|DSpark|draft_arch=Eagle3LlamaForCausalLM).*dcp=1'):
             ConfigBuilder.build_specdecode_config(**kwargs)
         build_draft.assert_not_called()
     else:

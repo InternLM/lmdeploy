@@ -106,6 +106,8 @@ deepseek-ai/DeepSeek-V3 \
 
 ### DFlash
 
+DFlash supports DP/EP parallel inference.
+
 For DFlash, the block size is the complete draft query/target verification
 window. It includes one current target token, so a block size of 8 proposes
 seven new draft tokens. The block size must not exceed the maximum declared by
@@ -144,6 +146,51 @@ Qwen/Qwen3.5-35B-A3B \
 When a DFlash block size is provided, it overrides
 `--speculative-num-draft-tokens` by setting the number of newly proposed
 tokens to `block_size - 1`.
+
+### DSpark
+
+DSpark uses a parallel DFlash-style draft backbone followed by a lightweight
+left-to-right Markov correction. The first LMDeploy implementation uses a
+fixed verification window. Draft proposals are deterministic, while target
+verification supports both greedy and non-greedy sampling through the common
+rejection sampler. Qwen3.5 uses a separate DSpark draft checkpoint.
+
+```python
+from lmdeploy import PytorchEngineConfig, pipeline
+from lmdeploy.messages import SpeculativeConfig
+
+def main():
+    model = 'Qwen/Qwen3.5-35B-A3B'
+    pipe = pipeline(
+        model,
+        backend_config=PytorchEngineConfig(tp=2),
+        speculative_config=SpeculativeConfig(
+            method='dspark',
+            model='jinzex/Qwen3.5-35B-A3B-DSpark',
+            num_speculative_tokens=3,
+        ),
+    )
+
+
+if __name__ == '__main__':
+    main()
+```
+
+```shell
+lmdeploy serve api_server Qwen/Qwen3.5-35B-A3B \
+  --backend pytorch \
+  --tp 2 \
+  --speculative-algorithm dspark \
+  --speculative-draft-model jinzex/Qwen3.5-35B-A3B-DSpark \
+  --speculative-num-draft-tokens 3
+```
+
+DSpark enables CUDA Graph by default and supports DP/EP parallel inference.
+Qwen3.5 with a `Qwen3DSparkModel` draft also supports local prefix caching
+with attention TP=1, including DP/EP.
+Set `enable_prefix_caching=True` (or `--enable-prefix-caching`) to reuse
+aligned prefill checkpoints, and use
+`prefix_cache_state_budget` to reserve additional checkpoint capacity.
 
 ## Guided Decoding with Speculative Decoding
 

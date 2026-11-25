@@ -226,12 +226,14 @@ class BlockTrie:
         """Check the exact key payload after the hash-table lookup."""
         return np.array_equal(token_ids, node.token_ids) and extra_identity == node.extra_identity
 
-    def _find_deepest_block_match_step(self, seq: SchedulerSequence, start_node: Node):
+    def _find_deepest_block_match_step(self, seq: SchedulerSequence, start_node: Node,
+                                       *, include_last_full_block: bool = False):
         """Find the deepest KV trie match without acquiring block refs."""
         block_size = self.block_size
         node = start_node
         prefix_len = node.prefix_len
-        while prefix_len + block_size < seq.num_valid_ids:
+        max_end = seq.num_valid_ids if include_last_full_block else seq.num_valid_ids - 1
+        while prefix_len + block_size <= max_end:
             start = prefix_len
             end = prefix_len + block_size
             token_ids = seq.history_cache[start:end]
@@ -457,6 +459,11 @@ class BlockTrie:
                     overlap_end_step = self._find_recompute_overlap_end(seq, node, step, recompute_blocks)
                     if overlap_end_step < 0:
                         continue
+                else:
+                    # A checkpoint hit only shares [0, step). Matching suffix
+                    # blocks are recomputed, including a final complete block.
+                    overlap_end_step = self._find_deepest_block_match_step(
+                        seq, node, include_last_full_block=True)
 
                 self._apply_state_checkpoint_hit(seq, node, verification.matched_block_ids, initial_step,
                                                  overlap_end_step)

@@ -51,14 +51,24 @@ class ARSpecStrategyFactory(StrategyFactoryBase):
                               scheduler_config: 'SchedulerConfig') -> 'EngineStrategy':
         """Build engine strategy."""
         from .engine import ARSpecEngineStrategy
+        query_len = None
+        if self.specdecode_config.method == 'dflash':
+            query_len = self.specdecode_config.num_speculative_tokens + 1
+        elif self.specdecode_config.method == 'dspark':
+            dspark = self.specdecode_config.dspark
+            query_len = None if dspark is None else dspark.draft_query_len
+            if query_len is None:
+                raise ValueError('DSpark requires a resolved draft query length for KV allocation.')
         return ARSpecEngineStrategy(cache_config=cache_config,
                                     scheduler_config=scheduler_config,
-                                    num_spec_tokens=self.specdecode_config.num_speculative_tokens)
+                                    num_spec_tokens=self.specdecode_config.num_speculative_tokens,
+                                    draft_kv_lookahead=query_len)
 
     def build_sequence_strategy(self) -> SequenceStrategy:
         from .sequence import ARSpecSequenceStrategy
         return ARSpecSequenceStrategy(
-            prefill_input_shift=0 if self.specdecode_config.method in ('dflash', 'dspark') else 1)
+            prefill_input_shift=0 if self.specdecode_config.method in ('dflash', 'dspark') else 1,
+            recompute_blocks=0 if self.specdecode_config.method == 'dspark' else 1)
 
     def build_step_inputs(self) -> 'StepInputs':
         """Build step inputs for the decoding loop."""

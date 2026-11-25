@@ -104,10 +104,12 @@ def test_noncompact_release_needs_no_compact_stop_proof(monkeypatch):
     agent.cache_config = SimpleNamespace(compact_state_capacity=None)
     agent._background_task = object()
     agent.kv_connector = agent.memdecode_agent = agent._checkpoint_engine_zmq_ctx = None
+    agent.spec_agent = SimpleNamespace(cache_engine=object())
     agent.reset_graph_runner = lambda: None
     step_inputs = agent.step_inputs = object()
     monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
     agent.release()
+    assert agent.spec_agent.cache_engine is None
     assert agent.step_inputs is step_inputs
 
 
@@ -156,7 +158,9 @@ def test_release_clears_compact_resources_without_stop_registration(monkeypatch,
     agent.kv_connector = None
     agent._checkpoint_engine_zmq_ctx = None
     agent.memdecode_agent = None
+    agent.spec_agent = SimpleNamespace(cache_engine=object())
     agent.reset_graph_runner = lambda: None
     monkeypatch.setattr(torch.cuda, 'empty_cache', lambda: None)
     agent.release()
+    assert agent.spec_agent.cache_engine is None
     assert agent.cache_engine is None and agent.ssm_state_cursor is None

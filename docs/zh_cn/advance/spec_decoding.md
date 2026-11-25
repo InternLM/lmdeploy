@@ -105,6 +105,8 @@ deepseek-ai/DeepSeek-V3 \
 
 ### DFlash
 
+DFlash 支持 DP/EP 并行推理。
+
 对于 DFlash，block size 表示完整的草稿查询/目标验证窗口，其中包含一个当前
 目标 token。因此 block size 为 8 时会提出 7 个新的草稿 token。运行时 block
 size 不能超过草稿模型 checkpoint 中声明的最大值。
@@ -141,6 +143,49 @@ Qwen/Qwen3.5-35B-A3B \
 
 设置 DFlash block size 后，它会覆盖 `--speculative-num-draft-tokens`，
 并将新提出的 token 数设置为 `block_size - 1`。
+
+### DSpark
+
+DSpark 使用 DFlash 风格的并行草稿骨干网络，并通过轻量的从左到右 Markov
+校正引入块内依赖。LMDeploy 的首个实现使用固定验证窗口。草稿 token 采用确定性
+生成，目标验证则通过通用拒绝采样器同时支持贪心和非贪心采样。Qwen3.5 使用独立的
+DSpark 草稿 checkpoint。
+
+```python
+from lmdeploy import PytorchEngineConfig, pipeline
+from lmdeploy.messages import SpeculativeConfig
+
+def main():
+    model = 'Qwen/Qwen3.5-35B-A3B'
+    pipe = pipeline(
+        model,
+        backend_config=PytorchEngineConfig(tp=2),
+        speculative_config=SpeculativeConfig(
+            method='dspark',
+            model='jinzex/Qwen3.5-35B-A3B-DSpark',
+            num_speculative_tokens=3,
+        ),
+    )
+
+
+if __name__ == '__main__':
+    main()
+```
+
+```shell
+lmdeploy serve api_server Qwen/Qwen3.5-35B-A3B \
+  --backend pytorch \
+  --tp 2 \
+  --speculative-algorithm dspark \
+  --speculative-draft-model jinzex/Qwen3.5-35B-A3B-DSpark \
+  --speculative-num-draft-tokens 3
+```
+
+DSpark 默认启用 CUDA Graph，支持 DP/EP 并行推理。
+Qwen3.5 搭配 `Qwen3DSparkModel` 草稿模型时，还支持 attention TP=1 下的本地前缀缓存，
+可与 DP/EP 组合使用。
+设置 `enable_prefix_caching=True`（或 `--enable-prefix-caching`）可复用对齐的
+prefill checkpoint，通过 `prefix_cache_state_budget` 预留额外的 checkpoint 容量。
 
 ## 投机解码与结构化输出
 

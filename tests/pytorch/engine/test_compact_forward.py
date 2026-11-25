@@ -106,7 +106,7 @@ def test_worker_consumes_bindings_before_forward(monkeypatch, decoding):
     class ReachedForward(Exception):
         pass
 
-    async def forward(inputs, return_logits, cache_inputs):
+    async def forward(inputs, return_logits, cache_inputs, sampling_inputs=None):
         assert len(bindings) == 1 and bindings[0] is ids
         assert inputs.ssm_source_state_ids is None
         assert cache_inputs.ssm_state_access_id == 1
@@ -445,7 +445,8 @@ def test_async_step_continues_chunks_from_final_with_current_bank(monkeypatch, w
     agent.kv_connector = agent.memdecode_agent = None
     agent.cache_engine = cache
     agent.cache_config = SimpleNamespace(role=module.EngineRole.Hybrid)
-    agent.spec_agent = SimpleNamespace(cache_engine=None, is_enabled=lambda: False)
+    agent.spec_agent = SimpleNamespace(cache_engine=None, is_enabled=lambda: False,
+                                       get_proposal_method=lambda: None)
     agent._prev_chunk_output = None
     agent.ssm_state_cursor = SSMStateCursor(1100)
     agent._out_que = asyncio.Queue()
@@ -475,7 +476,7 @@ def test_async_step_continues_chunks_from_final_with_current_bank(monkeypatch, w
     monkeypatch.setattr(module, 'get_dist_manager', lambda: SimpleNamespace(current_context=lambda: SimpleNamespace(
         dist_config=SimpleNamespace(attn_tp=1, dp=1))))
 
-    async def forward(inputs, return_logits, cache_inputs=None):
+    async def forward(inputs, return_logits, cache_inputs=None, sampling_inputs=None):
         assert inputs.ssm_source_state_ids is None
         output = model_forward(model, inputs, config, cache, state_cache, cache_inputs=cache_inputs)
         actual.append(output['hidden_states'].clone())

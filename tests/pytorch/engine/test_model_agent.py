@@ -1559,6 +1559,49 @@ def test_async_model_forward_preserves_cache_inputs_through_forward_impl():
     assert output['logits'] is hidden_states
 
 
+def test_non_spec_follower_postprocess_has_no_rejection_counts():
+    from contextlib import nullcontext
+
+    from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
+
+    next_token = torch.tensor([7])
+    extra = SimpleNamespace()
+
+    class _AgentStrategy:
+
+        def make_dummy_next_token(self, inputs, logits, extra_inputs):
+            return next_token, extra_inputs
+
+        def make_extra_outputs(self, extra_inputs):
+            return 'extra-output'
+
+    class _SpecAgent:
+
+        async def async_model_forward(self, inputs, extra_inputs,
+                                      sampling_inputs):
+            return extra_inputs
+
+        def post_broadcast(self, *args, **kwargs):
+            return nullcontext()
+
+        def is_enabled(self):
+            return False
+
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.rank = 1
+    agent.dist_ctx = None
+    agent.agent_strategy = _AgentStrategy()
+    agent.spec_agent = _SpecAgent()
+    agent.model_config = SimpleNamespace(enable_replayssm=False)
+    agent._broadcast_next_token = lambda *args, **kwargs: nullcontext()
+    inputs = SimpleNamespace(is_dummy=False)
+
+    result = asyncio.run(agent._step_postprocess_without_output(
+        inputs, torch.ones(1, 2), extra, None, need_broadcast_next=True))
+
+    assert result == (inputs, next_token, extra, 'extra-output')
+
+
 class TestDrainQueues:
 
     def test_drain_empty_queues(self):
