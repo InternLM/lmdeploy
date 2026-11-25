@@ -1945,7 +1945,8 @@ class BaseModelAgent:
         if self._gptq_normalize_state is not None:
             # Flushed leftovers still carry data; feed them through the same
             # load path the shard streams used.
-            leftover = list(finalize_gptq_weights(self._gptq_normalize_state))
+            leftover = list(finalize_gptq_weights(self._gptq_normalize_state,
+                                                  checkpoint_format=self._gptq_checkpoint_format()))
             self._gptq_normalize_state = None
             if leftover:
                 model = self.patched_model.get_model() if self.patched_model is not None else None
