@@ -23,6 +23,7 @@ from lmdeploy.pytorch.disagg.runtime import aggregate_transfer_results
 
 @pytest.fixture
 def transfer_engine(monkeypatch, request):
+    monkeypatch.delenv('LMDEPLOY_PD_TRANSFER_THREADS', raising=False)
     engine = SimpleNamespace(initialize=Mock(return_value=0), get_rpc_port=Mock(return_value=1234),
                              register_memory=Mock(return_value=0), unregister_memory=Mock(return_value=0),
                              batch_transfer_sync_read=Mock(return_value=0))
@@ -50,7 +51,9 @@ def init_request():
 
 
 @pytest.fixture
-def backend(transfer_engine, init_request):
+def backend(transfer_engine, init_request, monkeypatch, request):
+    if getattr(request, 'param', None) is not None:
+        monkeypatch.setenv('LMDEPLOY_PD_TRANSFER_THREADS', request.param)
     backend = MooncakeBackend()
     for peer, addr in [('peer', 2000), ('other', 3000)]:
         backend.p2p_initialize(init_request.model_copy(update=dict(remote_engine_id=peer)))
@@ -109,6 +112,16 @@ def test_failed_initialization_does_not_publish_resources_or_links(transfer_engi
         backend.close()
 
 
+@pytest.mark.parametrize('value', ['0', '-1', 'invalid', ''])
+def test_invalid_thread_count_does_not_initialize_engine(transfer_engine, init_request, monkeypatch, value):
+    monkeypatch.setenv('LMDEPLOY_PD_TRANSFER_THREADS', value)
+    backend = MooncakeBackend()
+    with pytest.raises(ValueError, match='LMDEPLOY_PD_TRANSFER_THREADS must be a positive integer'):
+        backend.p2p_initialize(init_request)
+    transfer_engine.assert_not_called()
+    assert backend.resources is None and not backend.links
+
+
 def test_close_unregisters_shared_allocation_once(backend):
     resources = backend.resources
     backend.close()
@@ -140,8 +153,9 @@ def test_peers_read_from_their_own_remote_endpoints(backend, assignment):
         call('peer:1234', [1010], [2020], [30]), call('other:1234', [1010], [3020], [30])]
 
 
-def test_submission_slots_are_shared_across_peers(backend, assignment):
-    started = {1010: Event(), 1040: Event()}
+@pytest.mark.parametrize(('backend', 'num_threads'), [(None, 4), ('1', 1), ('8', 8)], indirect=['backend'])
+def test_submission_slots_are_shared_across_peers(backend, assignment, num_threads):
+    started = {1010 + i: Event() for i in range(num_threads)}
     finish = Event()
     resources = backend.resources
 
@@ -153,9 +167,10 @@ def test_submission_slots_are_shared_across_peers(backend, assignment):
     resources.engine.batch_transfer_sync_read.side_effect = read
 
     async def run():
-        second = assignment.model_copy(update=dict(
-            batch=[AssignmentInstruct(mr_key=0, source_offset=40, target_offset=20, length=30)]))
-        jobs = [asyncio.create_task(backend.p2p_migrate(item)) for item in (assignment, second)]
+        assignments = [assignment.model_copy(update=dict(batch=[
+            AssignmentInstruct(mr_key=0, source_offset=10 + i, target_offset=20 + i, length=1)
+        ])) for i in range(num_threads)]
+        jobs = [asyncio.create_task(backend.p2p_migrate(item)) for item in assignments]
         try:
             for event in started.values():
                 assert await asyncio.to_thread(event.wait, 3)
@@ -163,7 +178,7 @@ def test_submission_slots_are_shared_across_peers(backend, assignment):
             waiting = assignment.model_copy(update=dict(remote_engine_id='other', deadline=time() + 0.05))
             result = await asyncio.wait_for(backend.p2p_migrate(waiting), timeout=1)
             assert result.status == 'failed_drained'
-            assert resources.engine.batch_transfer_sync_read.call_count == 2
+            assert resources.engine.batch_transfer_sync_read.call_count == num_threads
         finally:
             finish.set()
             results = await asyncio.gather(*jobs)

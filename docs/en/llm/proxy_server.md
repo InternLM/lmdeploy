@@ -95,6 +95,13 @@ LMDeploy currently supports two serving strategies:
 - Hybrid: Does not distinguish between Prefill and Decoding instances, following the traditional inference deployment mode.
 - DistServe: Separates Prefill and Decoding instances, deploying them on different service nodes to achieve more flexible and efficient resource scheduling and scalability.
 
+The PyTorch Mooncake PD backend defaults to 4 transfer threads per worker. All peers share the thread pool and the same number of submission slots.
+Set `LMDEPLOY_PD_TRANSFER_THREADS` to a positive integer before starting the API server to override this count. The setting is also forwarded to Ray workers. For example:
+
+```shell
+export LMDEPLOY_PD_TRANSFER_THREADS=8
+```
+
 ## Dispatch Strategy
 
 The current distribution strategies of the proxy service are as follows:

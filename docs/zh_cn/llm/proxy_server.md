@@ -94,6 +94,13 @@ LMDeploy 当前支持混合部署服务（Hybrid），以及 PD 分离部署服�
 - Hybrid: 不区分 Prefill 和 Decoding 实例，即传统的推理部署模式。
 - DistServe: 将 Prefill 和 Decoding 实例分离，部署在不同的服务节点上以实现更灵活高效的资源调度和扩展。
 
+PyTorch Mooncake PD 后端默认每个 worker 使用 4 个传输线程，所有 peer 共享线程池和相同数量的提交 slot。
+启动 API server 前可通过环境变量 `LMDEPLOY_PD_TRANSFER_THREADS` 设置线程数，取值必须为正整数；该配置也会透传给 Ray workers。例如：
+
+```shell
+export LMDEPLOY_PD_TRANSFER_THREADS=8
+```
+
 ## 分发策略
 
 代理服务目前的分发策略如下：

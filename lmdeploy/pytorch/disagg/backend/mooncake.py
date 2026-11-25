@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import socket
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -80,6 +81,13 @@ class MooncakeTransferResources:
 
     def __init__(self, rank: int):
         try:
+            num_threads = int(os.getenv('LMDEPLOY_PD_TRANSFER_THREADS', '4'))
+        except ValueError as e:
+            raise ValueError('LMDEPLOY_PD_TRANSFER_THREADS must be a positive integer.') from e
+        if num_threads <= 0:
+            raise ValueError('LMDEPLOY_PD_TRANSFER_THREADS must be a positive integer.')
+
+        try:
             from mooncake.engine import TransferEngine
         except ImportError as e:
             raise ImportError('Please install mooncake by following the instructions at '
@@ -102,15 +110,15 @@ class MooncakeTransferResources:
 
         self.port: int = self.engine.get_rpc_port()
         self.local_kv_table: dict[str, dict] = {}
-        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='pd-transfer')
-        self.slots = asyncio.Semaphore(2)
+        self.executor = ThreadPoolExecutor(max_workers=num_threads, thread_name_prefix='pd-transfer')
+        self.slots = asyncio.Semaphore(num_threads)
         self.pending_jobs = set()
         self.pending_tickets = set()
         self.has_drain_ticket = hasattr(self.engine, 'scatter_transfer_sync_read_with_ticket')
         self.has_unknown_completion = False
 
         logger.info(f'Mooncake engine initialized for rank {rank} '
-                    f'with hostname {self.hostname}, RPC port: {self.port}')
+                    f'with hostname {self.hostname}, RPC port: {self.port}, PD transfer threads: {num_threads}')
 
     def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
         """Register a local allocation once for all peer connections."""
