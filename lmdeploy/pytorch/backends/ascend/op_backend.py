@@ -132,7 +132,7 @@ class AscendKVQuantMeta:
                 kv_zeros.append(torch.tensor([offset_k, offset_v], device=device, dtype=dtype))
         else:
             raise ValueError(
-                f"num of scale_offset_pairs({len(scale_offset_pairs)}) must match num of total_layers({total_layers})"
+                f'num of scale_offset_pairs({len(scale_offset_pairs)}) must match num of total_layers({total_layers})'
             )
 
         cls.quant_meta.update(
@@ -326,7 +326,7 @@ class AscendOpsBackend(DefaultOpsBackend):
         if SocVersion.is_Ascend910():
             return (block_size, num_heads, head_size)
         else:
-            raise ValueError(f"LMDeploy Ascend does not support {SocVersion.device_name()} device currently.")
+            raise ValueError(f'LMDeploy Ascend does not support {SocVersion.device_name()} device currently.')
 
     @staticmethod
     def get_v_block_shape(
@@ -338,7 +338,7 @@ class AscendOpsBackend(DefaultOpsBackend):
         if SocVersion.is_Ascend910():
             return (block_size, num_heads, head_size)
         else:
-            raise ValueError(f"LMDeploy Ascend does not support {SocVersion.device_name()} device currently.")
+            raise ValueError(f'LMDeploy Ascend does not support {SocVersion.device_name()} device currently.')
 
     @classmethod
     def update_step_context(cls, step_context):
@@ -525,7 +525,7 @@ class AscendOpsBackend(DefaultOpsBackend):
                 else:
                     return AscendMoECommType.ALLTOALL
             else:
-                raise ValueError(f"Unsupported soc_version: {SocVersion.soc_version()}")
+                raise ValueError(f'Unsupported soc_version: {SocVersion.soc_version()}')
 
         def get_pad_info(
             actual_tokens_current_rank, padded_tokens_current_rank, max_tokens_across_dp, tp_size, moe_comm_type
@@ -735,7 +735,7 @@ class AscendOpsBackend(DefaultOpsBackend):
         return True
 
     @classmethod
-    def build_communicator(cls, cpu_group, device_group, dist_config):
+    def build_communicator(cls, cpu_group, device_group, dist_config, *, group_name='tp'):
         """Build a Ascend communicator."""
         from lmdeploy.pytorch import envs
 
@@ -745,6 +745,7 @@ class AscendOpsBackend(DefaultOpsBackend):
             cpu_group=cpu_group,
             device_group=device_group,
             dist_config=dist_config,
+            group_name=group_name,
         )
 
     @staticmethod

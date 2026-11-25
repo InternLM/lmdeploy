@@ -255,6 +255,11 @@ class ConfigBuilder:
                 if draft_architectures:
                     draft_arch = draft_architectures[0]
             draft_dist_config = _build_draft_dist_ctx(dist_config, draft_arch)
+            if dist_config.dcp > 1 and draft_dist_config.dcp != dist_config.dcp:
+                raise ValueError(
+                    f'DCP with speculative method={speculative_config.method}, draft_arch={draft_arch} '
+                    f'cannot share the target KV page table: target dcp={dist_config.dcp}, '
+                    f'draft dcp={draft_dist_config.dcp}. Use dcp=1.')
             draft_model_format = (
                 None if draft_arch == _EAGLE3_DEEPSEEK_ARCH else engine_config.model_format)
 

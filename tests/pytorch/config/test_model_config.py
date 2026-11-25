@@ -4,7 +4,14 @@ import pytest
 
 from lmdeploy.hf_configs import config_from_pretrained
 from lmdeploy.hf_configs.configuration_kimi_k2 import KimiK2Config
-from lmdeploy.pytorch.config import CacheConfig, DistConfig, ModelConfig, QuantizationConfig
+from lmdeploy.pytorch.config import (
+    CacheConfig,
+    DistConfig,
+    DLLMConfig,
+    ModelConfig,
+    QuantizationConfig,
+    validate_dcp_dllm_compatibility,
+)
 from lmdeploy.pytorch.configurations import AutoModelConfigBuilder
 from lmdeploy.pytorch.configurations.deepseek_v4 import update_cache_config as update_deepseek_v4_cache_config
 
@@ -125,6 +132,32 @@ def test_get_num_qkv_head_by_tp_requires_divisible_heads():
 
     with pytest.raises(AssertionError):
         model_config.get_num_qkv_head_by_tp()
+
+
+@pytest.mark.parametrize(
+    ('dcp', 'block_length', 'raises'),
+    [(1, 4, False), (2, 4, True), (2, 1, False)],
+)
+def test_dcp_rejects_dllm_block_sparse_attention(dcp, block_length, raises):
+    model_config = _make_model_config(dist_config=DistConfig(tp=2, dcp=dcp))
+    model_config.model_paradigm = 'dllm'
+
+    if raises:
+        with pytest.raises(ValueError, match='block-sparse'):
+            validate_dcp_dllm_compatibility(model_config, block_length)
+    else:
+        validate_dcp_dllm_compatibility(model_config, block_length)
+
+
+def test_dllm_strategy_rejects_default_block_sparse_length_with_dcp():
+    from lmdeploy.pytorch.strategies.dllm import DLLMStrategyFactory
+
+    model_config = _make_model_config(dist_config=DistConfig(tp=2, dcp=2))
+    model_config.model_paradigm = 'dllm'
+    model_config.dllm_block_length = None
+
+    with pytest.raises(ValueError, match='dllm_block_length=4'):
+        DLLMStrategyFactory(model_config, DLLMConfig(block_length=None))
 
 
 def test_qwen3_next_cache_counts_follow_layer_types():
