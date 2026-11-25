@@ -109,6 +109,7 @@ class RMSNorm(nn.Module):
             world_size, rank = get_tp_world_rank('attn')
             hidden_size = get_distribute_size(hidden_size, world_size, rank, align=align)
 
+        # Ascend's fused residual RMSNorm requires the scale and activations to have the same dtype.
         self._fold_offset_in_fp32 = offset_weight and backend.get_name() != 'ascend'
         if self._fold_offset_in_fp32:
             dtype = torch.float32
