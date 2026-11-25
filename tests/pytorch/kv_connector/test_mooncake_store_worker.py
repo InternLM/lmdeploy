@@ -5,8 +5,9 @@ import json
 import sys
 import threading
 import weakref
+from contextlib import nullcontext
 from dataclasses import replace
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -16,10 +17,12 @@ from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
-from lmdeploy.pytorch.engine.model_agent.agent import _save_cache_checkpoint
+from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, _save_cache_checkpoint
 from lmdeploy.pytorch.kv_connector import KVCachePool, KVConnectorOutput
+from lmdeploy.pytorch.kv_connector.base import KVConnectorRole
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker as worker_module
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker_threads as worker_threads_module
+from lmdeploy.pytorch.kv_connector.mooncake.store.connector import MooncakeStoreConnector
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     DEFAULT_GLOBAL_SEGMENT_SIZE,
     DEFAULT_LOCAL_BUFFER_SIZE,
@@ -1111,30 +1114,9 @@ def test_shutdown_is_idempotent_and_propagates_close_error(tmp_path):
     assert worker.store is None
 
 
-class FakeFabricBackend:
-    """Ascend fabric backend: parks the store instead of closing it."""
-    device_type = 'npu'
-    use_fabric_mem = True
-
-    def __init__(self):
-        self.close_store_calls = []
-        self.close_calls = 0
-
-    def setup_store(self, store, config, local_hostname):
-        store.setup(local_hostname, config.protocol)
-        return 0
-
-    def close_store(self, store):
-        self.close_store_calls.append(store)
-        ctypes.pythonapi.Py_IncRef(ctypes.py_object(store))
-        return None
-
-    def close(self):
-        self.close_calls += 1
-
-
-def test_fabric_shutdown_parks_store_without_freezing_gc(tmp_path, monkeypatch, patch_worker_runtime):
+def test_agent_drains_and_closes_fabric_store(tmp_path, monkeypatch, patch_worker_runtime):
     finalized = []
+    shutdown_order = []
 
     class Cyclic:
 
@@ -1144,30 +1126,45 @@ def test_fabric_shutdown_parks_store_without_freezing_gc(tmp_path, monkeypatch, 
         def __del__(self):
             finalized.append('cyclic')
 
+    class FabricStore(FakeStore):
+
+        def setup(self, **kwargs):
+            self.setup_calls.append(kwargs)
+            return 0
+
+        def close(self):
+            shutdown_order.append('store')
+            return super().close()
+
     # Created before shutdown: gc.freeze() used to make it uncollectable forever.
     cycle = Cyclic()
     del cycle
 
-    backend = FakeFabricBackend()
-    monkeypatch.setattr(worker_module, 'build_transfer_backend', lambda *_: backend)
-    path = write_store_config(tmp_path, protocol='ascend')
-    store = FakeStore()
-    worker = MooncakeStoreWorker(make_cache_config(path), store_factory=lambda: store)
-    store_ref = weakref.ref(store)
+    monkeypatch.setenv('ASCEND_ENABLE_USE_FABRIC_MEM', '1')
+    monkeypatch.setitem(sys.modules, 'torch_npu', ModuleType('torch_npu'))
+    monkeypatch.setattr(torch, 'npu', SimpleNamespace(current_device=lambda: 0, device=lambda _: nullcontext()),
+                        raising=False)
+    monkeypatch.setattr(worker_module, '_load_mooncake_store_factory', lambda: FabricStore)
+    path = write_store_config(tmp_path, protocol='ascend', global_segment_size='8GB')
+    config = make_cache_config(path)
+    config.kv_transfer_config.kv_connector_extra_config['device_backend'] = 'ascend'
+    owner = SimpleNamespace(kv_connector=MooncakeStoreConnector(KVConnectorRole.WORKER, config))
+    worker = owner.kv_connector.connector_worker
+    store_ref = weakref.ref(worker.store)
+    worker.lookup_server = SimpleNamespace(close=lambda: shutdown_order.append('lookup'))
+    worker.kv_recv_thread = SimpleNamespace(close=lambda: shutdown_order.append('receiver'))
+    worker.kv_send_thread = SimpleNamespace(close=lambda: shutdown_order.append('sender'))
+    del worker
 
-    worker.shutdown()
+    BaseModelAgent._shutdown_kv_connector(owner)
 
-    assert store.close_calls == 0
-    assert len(backend.close_store_calls) == 1
-    assert backend.close_calls == 1
-    assert worker.store is None
+    assert owner.kv_connector is None
+    assert shutdown_order == ['lookup', 'receiver', 'sender', 'store']
     messages = [message for _, message in patch_worker_runtime.messages]
     assert any('interaction after: operation=close' in message for message in messages)
 
-    backend.close_store_calls.clear()
-    worker = backend = store = None
     gc.collect()
-    assert store_ref() is not None, 'store must survive finalization/pybind destruction'
+    assert store_ref() is None
     assert finalized == ['cyclic'], 'unrelated cycles must stay collectable'
 
 

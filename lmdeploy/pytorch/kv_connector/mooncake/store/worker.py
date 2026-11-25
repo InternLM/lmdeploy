@@ -673,9 +673,7 @@ class MooncakeStoreWorker:
     def shutdown(self) -> None:
         """Release Mooncake resources exactly once.
 
-        Transfer threads drain and join before the store is released, and the backend decides how: CUDA closes the
-        store, while the Ascend backend leaves it to process exit (see
-        ``TransferBackend.close_store``).
+        Transfer threads drain and join before the backend closes the store.
         """
         lookup_server = self.lookup_server
         self.lookup_server = None
