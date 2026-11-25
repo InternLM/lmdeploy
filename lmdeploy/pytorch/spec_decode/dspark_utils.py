@@ -61,9 +61,22 @@ def prepare_dspark_hf_config(config: Any) -> Any:
     ``transformer_layer_config``.  LMDeploy model builders consume a flat
     config, so copy that transformer metadata onto the outer config while
     retaining DSpark-specific fields.  Bundled DeepSeek-V4 checkpoints keep
-    their target config and only need a draft architecture override.
+    their target config; normalize nested DSpark metadata to the prefixed
+    fields consumed by their model builder before overriding architecture.
     """
     if checkpoint_bundles_dspark(config):
+        nested = _as_dict(_get(config, 'dspark_config', None))
+        missing = object()
+        for field, name in (
+            ('block_size', 'dspark_block_size'),
+            ('mask_token_id', 'dspark_noise_token_id'),
+            ('target_layer_ids', 'dspark_target_layer_ids'),
+            ('markov_rank', 'dspark_markov_rank'),
+            ('markov_head_type', 'dspark_markov_head_type'),
+            ('sample_from_anchor', 'sample_from_anchor'),
+        ):
+            if field in nested and _get(config, name, missing) is missing:
+                _set(config, name, nested[field])
         _set(config, 'architectures', ['DeepseekV4ForCausalLMDSpark'])
         return config
 

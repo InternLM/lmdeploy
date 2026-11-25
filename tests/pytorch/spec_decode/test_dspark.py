@@ -433,20 +433,25 @@ def test_dspark_query_does_not_commit_v4_window_rows(query_len):
     window, capacity, width = 128, 134, 6
     slots = torch.tensor([2, 0, 3])
     history = torch.tensor([126, 132, 400])
+
+    def payload(state):
+        raw = state.named_state_caches['v4_window_kv_fp8'].view(torch.uint8).view(1, 4, -1)
+        return raw[..., :capacity * 576].view(1, 4, capacity, 576).view(torch.float32)
+
     engines = []
     for _ in range(2):
         state = object.__new__(StateCacheEngine)
         state._named_state_caches = {
-            'v4_window_kv_fp8': torch.zeros(1, 4, capacity, 1),
+            'v4_window_kv_fp8': torch.zeros(1, 4, capacity, 584, dtype=torch.uint8).view(torch.float8_e4m3fn),
         }
         for slot, start in zip(slots.tolist(), history.tolist(), strict=True):
             positions = torch.arange(max(0, start - window), start)
-            state.named_state_caches['v4_window_kv_fp8'][0, slot, positions % capacity, 0] = (
+            payload(state)[0, slot, positions % capacity, 0] = (
                 positions.float() + slot * 10000)
         engines.append(SimpleNamespace(state_cache_engine=state))
 
     def visible(cache, starts):
-        tensor = cache.state_cache_engine.named_state_caches['v4_window_kv_fp8']
+        tensor = payload(cache.state_cache_engine)
         return [tensor[0, slot, torch.arange(max(0, start - window), start) % capacity].clone()
                 for slot, start in zip(slots.tolist(), starts.tolist(), strict=True)]
 
@@ -454,7 +459,7 @@ def test_dspark_query_does_not_commit_v4_window_rows(query_len):
         # Observe exactly the historical range used by the raw-KV flatten path,
         # then simulate query KV writes that must be rolled back.
         result = visible(cache_engine, inputs.history_lengths)
-        tensor = cache_engine.state_cache_engine.named_state_caches['v4_window_kv_fp8']
+        tensor = payload(cache_engine.state_cache_engine)
         rows = (inputs.history_lengths[:, None] + torch.arange(query_len)[None]) % capacity
         tensor[:, slots[:, None], rows] = -1
         return result
@@ -463,7 +468,7 @@ def test_dspark_query_does_not_commit_v4_window_rows(query_len):
     for step in range(96):
         lengths = torch.tensor([1, 3, 6]).roll(step % 3)
         for full, cache in enumerate(engines):
-            tensor = cache.state_cache_engine.named_state_caches['v4_window_kv_fp8']
+            tensor = payload(cache.state_cache_engine)
             for slot, start, length in zip(slots.tolist(), history.tolist(), lengths.tolist(), strict=True):
                 positions = torch.arange(start, start + (width if full else length))
                 tensor[0, slot, positions % capacity, 0] = positions.float() + slot * 10000
@@ -487,7 +492,8 @@ def test_dspark_query_does_not_commit_v4_window_rows(query_len):
             for lhs, rhs in zip(actual, expected, strict=True):
                 torch.testing.assert_close(lhs, rhs, rtol=0, atol=0)
             torch.testing.assert_close(
-                cache.state_cache_engine.named_state_caches['v4_window_kv_fp8'], before, rtol=0, atol=0)
+                cache.state_cache_engine.named_state_caches['v4_window_kv_fp8'].view(torch.uint8),
+                before.view(torch.uint8), rtol=0, atol=0)
         history = starts
 
 

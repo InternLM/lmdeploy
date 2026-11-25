@@ -291,6 +291,19 @@ class StateCacheEngine:
                 dst_tensor = tensor.narrow(slot_axis, dst, length)
                 dst_tensor.copy_(src_tensor, non_blocking=True)
 
+    def _v4_transaction_row_views(self, name: str) -> tuple[torch.Tensor, ...]:
+        cache = self.named_state_caches[name]
+        if name != 'v4_window_kv_fp8':
+            return (cache, )
+        from ...consts import V4_FLASHMLA_D_NOPE, V4_FLASHMLA_D_ROPE, V4_PACKED_TOKEN_DIM
+
+        # FlashMLA stores all token payloads before all scales, not 584-byte rows.
+        layers, slots, rows, _ = cache.shape
+        payload_bytes = V4_FLASHMLA_D_NOPE + 2 * V4_FLASHMLA_D_ROPE
+        flat = cache.view(torch.uint8).view(layers, slots, rows * V4_PACKED_TOKEN_DIM)
+        return (flat[..., :rows * payload_bytes].view(layers, slots, rows, payload_bytes),
+                flat[..., rows * payload_bytes:].view(layers, slots, rows, V4_PACKED_TOKEN_DIM - payload_bytes))
+
     def begin_v4_speculative_transaction(self, state_offsets: torch.Tensor,
                                          start_positions: torch.Tensor,
                                          q_seqlens: torch.Tensor,
@@ -335,8 +348,9 @@ class StateCacheEngine:
                     f'writes to one {name!r} ring row: query length '
                     f'{max_q_seqlen}, capacity {capacity}.')
 
-            # Layer-scoped V4 state views use [layers, slots, rows, ...].
-            before = cache[:, safe_state_offsets[:, None], rows].clone()
+            # Snapshot physical row views, including both FlashMLA partitions.
+            before = tuple(view[:, safe_state_offsets[:, None], rows].clone()
+                           for view in self._v4_transaction_row_views(name))
             snapshots[name] = (rows, before)
         if not snapshots:
             return None
@@ -360,25 +374,25 @@ class StateCacheEngine:
         valid = offsets.unsqueeze(0) < q_seqlens.unsqueeze(1)
         rejected = valid & (offsets.unsqueeze(0) >= accepted.unsqueeze(1))
 
-        for name, (rows, before) in snapshots.items():
-            cache = self.named_state_caches[name]
+        for name, (rows, saved_views) in snapshots.items():
             mask = rejected
             if rows.size(1) == 2 * max_q:
                 mask = torch.cat([mask, mask], dim=1)
-            if cache.is_cuda:
-                from lmdeploy.pytorch.kernels.cuda.copy_cache import restore_state_rows
-                restore_state_rows(cache, before, state_offsets, rows, mask)
-                continue
-            # CPU/reference path may compact; CUDA uses fixed-shape masked IO.
-            active = state_offsets >= 0
-            slots = state_offsets[active]
-            active_rows = rows[active]
-            current = cache[:, slots[:, None], active_rows]
-            mask = mask[active].unsqueeze(0)
-            while mask.dim() < current.dim():
-                mask = mask.unsqueeze(-1)
-            restored = torch.where(mask, before[:, active], current)
-            cache[:, slots[:, None], active_rows] = restored
+            for cache, before in zip(self._v4_transaction_row_views(name), saved_views):
+                if cache.is_cuda:
+                    from lmdeploy.pytorch.kernels.cuda.copy_cache import restore_state_rows
+                    restore_state_rows(cache, before, state_offsets, rows, mask)
+                    continue
+                # CPU/reference path may compact; CUDA uses fixed-shape masked IO.
+                active = state_offsets >= 0
+                slots = state_offsets[active]
+                active_rows = rows[active]
+                current = cache[:, slots[:, None], active_rows]
+                row_mask = mask[active].unsqueeze(0)
+                while row_mask.dim() < current.dim():
+                    row_mask = row_mask.unsqueeze(-1)
+                restored = torch.where(row_mask, before[:, active], current)
+                cache[:, slots[:, None], active_rows] = restored
 
     def copy_decode_slots(self, plan: torch.Tensor, copy_mask: torch.Tensor) -> None:
         """Freeze accepted state rings before the next forward can overwrite

@@ -275,6 +275,38 @@ def test_deepseek_v4_dspark_separates_logical_window_and_ring_storage():
     assert state_specs['v4_window_kv_fp8'].shape[0] == 134
 
 
+@pytest.mark.parametrize('schema', ['prefixed', 'nested', 'mixed'])
+def test_bundled_dspark_normalization_reaches_model_builder(schema):
+    from lmdeploy.pytorch.spec_decode.dspark_utils import parse_dspark_config, prepare_dspark_hf_config
+
+    hf_config = _make_deepseek_v4_hf_config([0, 4, 128])
+    fields = dict(block_size=5, mask_token_id=17, target_layer_ids=[1, 2],
+                  markov_rank=256, markov_head_type='vanilla', sample_from_anchor=True)
+    names = dict(block_size='dspark_block_size', mask_token_id='dspark_noise_token_id',
+                 target_layer_ids='dspark_target_layer_ids', markov_rank='dspark_markov_rank',
+                 markov_head_type='dspark_markov_head_type', sample_from_anchor='sample_from_anchor')
+    if schema == 'prefixed':
+        for key, value in fields.items():
+            setattr(hf_config, names[key], value)
+    else:
+        hf_config.dspark_config = fields.copy()
+        if schema == 'mixed':
+            hf_config.dspark_target_layer_ids = [0, 2]
+    before = parse_dspark_config(hf_config, 3, target_num_layers=3)
+    prepare_dspark_hf_config(hf_config)
+    prepare_dspark_hf_config(hf_config)  # Normalization must preserve top-level precedence on reuse.
+    assert parse_dspark_config(hf_config, 3, target_num_layers=3) == before
+    assert hf_config.dspark_target_layer_ids == ([0, 2] if schema == 'mixed' else [1, 2])
+    for key, value in fields.items():
+        if key != 'target_layer_ids':
+            assert getattr(hf_config, names[key]) == value
+    config = ModelConfig.from_hf_config(hf_config, is_draft_model=True, spec_method='dspark',
+                                       num_spec_tokens=3, device_type='cpu')
+    assert config.num_layers == 2
+    assert config.hf_config.architectures == ['DeepseekV4ForCausalLMDSpark']
+    assert config.state_cache_specs[0].layer_ids == [0, 1]
+
+
 @pytest.mark.parametrize('spec_method', ['dflash', 'mtp'])
 def test_deepseek_v4_all_spec_methods_reserve_rectangular_ring(spec_method):
     hf_config = _make_deepseek_v4_hf_config([0], num_hidden_layers=1)

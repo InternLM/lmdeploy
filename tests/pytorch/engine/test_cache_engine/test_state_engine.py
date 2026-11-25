@@ -375,9 +375,6 @@ def test_state_cache_engine_copy_slots_rejects_duplicate_destinations():
 def _make_v4_transaction_engine(num_layers=2, num_slots=3):
     engine = object.__new__(StateCacheEngine)
     engine._named_state_caches = {
-        'v4_window_kv_fp8': torch.arange(
-            num_layers * num_slots * 134).reshape(
-                num_layers, num_slots, 134, 1).float(),
         'v4_compress_state_r4': torch.arange(
             num_layers * num_slots * 16).reshape(
                 num_layers, num_slots, 16, 1).float(),
@@ -415,7 +412,7 @@ def test_v4_speculative_state_transaction_restores_only_rejected_rows():
 
     accepted = (2, 5)
     for name, cache in engine.named_state_caches.items():
-        rows, snapshot = transaction['snapshots'][name]
+        rows, (snapshot, ) = transaction['snapshots'][name]
         width = transaction['max_q_seqlen']
         for slot_index, slot in enumerate(state_offsets):
             accepted_mask = torch.arange(width) < accepted[slot_index]
@@ -429,8 +426,7 @@ def test_v4_speculative_state_transaction_restores_only_rejected_rows():
             torch.testing.assert_close(actual, expected)
         torch.testing.assert_close(cache[:, 0], before[name][:, 0])
 
-    assert transaction['snapshots']['v4_window_kv_fp8'][1].size(2) == 6
-    assert transaction['snapshots']['v4_compress_state_r4'][1].size(2) == 12
+    assert transaction['snapshots']['v4_compress_state_r4'][1][0].size(2) == 12
 
 
 def test_v4_speculative_state_transaction_rejects_ring_aliasing():
@@ -467,7 +463,7 @@ def test_v4_speculative_state_transaction_all_accept_lengths(accepted):
         transaction, num_rejected_tokens=torch.tensor([6 - accepted]))
 
     for name, cache in engine.named_state_caches.items():
-        rows, before = transaction['snapshots'][name]
+        rows, (before, ) = transaction['snapshots'][name]
         actual = cache[:, torch.tensor([[1]]), rows]
         accepted_mask = torch.arange(6) < accepted
         if rows.size(1) == 12:
@@ -502,14 +498,68 @@ def test_v4_transaction_ignores_padding_and_keeps_rejection_row_mapping(inactive
             if slot < 0:
                 continue
             positions = starts[row] + torch.arange(lengths[row] - rejected[row], lengths[row], device=device)
-            if name == 'v4_window_kv_fp8':
-                rows = positions % cache.size(2)
-            else:
-                capacity = cache.size(2) // 2
-                rows = (positions + (4 if '_r4' in name else 0)) % capacity
-                rows = torch.cat([rows, rows + capacity])
+            capacity = cache.size(2) // 2
+            rows = (positions + (4 if '_r4' in name else 0)) % capacity
+            rows = torch.cat([rows, rows + capacity])
             expected[:, slot, rows] = before[name][:, slot, rows]
         torch.testing.assert_close(cache, expected)
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+def test_v4_window_transaction_restores_physical_payload_and_scales(device):
+    if device == 'cuda' and (not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] < 9):
+        pytest.skip('Real FP8 pack kernel requires SM90+')
+    # Strided layer/slot storage, sentinel sibling regions and padded requests.
+    initial = torch.arange(2 * 3 * 2 * 132 * 584, device=device).to(torch.uint8).reshape(2, 3, 2, 132, 584)
+    storage = initial.clone()
+    cache = storage[:, :, 1].view(torch.float8_e4m3fn)
+    engine = object.__new__(StateCacheEngine)
+    engine._named_state_caches = {'v4_window_kv_fp8': cache}
+    slots = torch.tensor([1, -1, 2], device=device)
+    starts = torch.tensor([130, 131, 6], device=device)
+    lengths = torch.tensor([4, 2, 3], device=device)
+    rejected = lengths.clone()
+    offsets = torch.arange(4, device=device)[None]
+    positions = (starts[:, None] + offsets) % 132
+    valid = offsets < lengths[:, None]
+    kv = torch.arange(2 * 12 * 512, device=device).float().sin().reshape(2, 12, 512).bfloat16()
+    packed = torch.arange(2 * 12 * 584).to(torch.uint8).reshape(2, 12, 584)
+
+    def pack(dst, keep):
+        if device == 'cuda':
+            from lmdeploy.pytorch.kernels.cuda.v4_pack_window import pack_window_tokens_fp8
+            for layer in range(2):
+                pack_window_tokens_fp8(kv[layer], dst[layer], slots[:, None].expand(-1, 4).reshape(-1),
+                                       torch.where(keep, positions, -1).reshape(-1))
+        else:
+            # Independent byte-layout writer; do not use the transaction's views/rows as the oracle.
+            flat = dst.view(torch.uint8).view(2, 3, -1)
+            for batch, slot in enumerate(slots.tolist()):
+                for token in range(4):
+                    if slot >= 0 and keep[batch, token]:
+                        pos = int(positions[batch, token])
+                        flat[:, slot, pos * 576:(pos + 1) * 576] = packed[:, batch * 4 + token, :576]
+                        scale = 132 * 576 + pos * 8
+                        flat[:, slot, scale:scale + 7] = packed[:, batch * 4 + token, 576:583]
+
+    def step():
+        transaction = engine.begin_v4_speculative_transaction(slots, starts, lengths, 4)
+        pack(cache, valid)
+        engine.finish_v4_speculative_transaction(transaction, rejected)
+
+    for capture in ([False, True] if device == 'cuda' else [False]):
+        if capture:
+            step()  # Compile before capture; capture the entire snapshot/pack/rollback path.
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                step()
+        for accepted in (0, 1, 4):  # Draft workspace, partial target rejection, all-accepted control.
+            rejected.copy_((lengths - accepted).clamp_min(0))
+            storage.copy_(initial)
+            expected = initial.clone()
+            pack(expected[:, :, 1].view(torch.float8_e4m3fn), valid & (offsets < accepted))
+            graph.replay() if capture else step()
+            torch.testing.assert_close(storage, expected, atol=0, rtol=0)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required')
