@@ -170,6 +170,7 @@ class Qwen3_5MoeDecoderLayer(Qwen3_5DecoderLayer):
             config.hidden_size,
             config.rms_norm_eps,
             quant_config=quantization_config,
+            dtype=dtype,
             offset_weight=True,
             device=device,
             prefix=add_prefix('input_layernorm', prefix),
@@ -177,7 +178,7 @@ class Qwen3_5MoeDecoderLayer(Qwen3_5DecoderLayer):
 
         # build attention layer norm
         self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, config.rms_norm_eps, offset_weight=True, device=device)
+            config.hidden_size, config.rms_norm_eps, dtype=dtype, offset_weight=True, device=device)
 
 
 class Qwen3_5MoeTextModel(Qwen3_5TextModel):
@@ -213,7 +214,7 @@ class Qwen3_5MoeTextModel(Qwen3_5TextModel):
         self._aux_hidden_state_layers_set: frozenset[int] = frozenset(self.aux_hidden_state_layers)
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, offset_weight=True, device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, offset_weight=True, device=device)
 
         # build rotary embedding
         self.rotary_emb = build_rotary_embedding_from_config(config, device=device)

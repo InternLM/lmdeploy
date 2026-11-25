@@ -77,8 +77,9 @@ class RMSNorm(nn.Module):
 
     Args:
         offset_weight: If True, the checkpoint stores the RMSNorm scale as an
-            offset from 1. To preserve precision, the loader needs to compute
-            ``1 + offset`` in FP32 and store the result in FP32.
+            offset from 1. The loader folds and stores the scale in FP32.
+            Ascend folds in the checkpoint dtype and stores the scale in the
+            model dtype for its native RMSNorm operators.
     """
 
     def __init__(
@@ -108,7 +109,8 @@ class RMSNorm(nn.Module):
             world_size, rank = get_tp_world_rank('attn')
             hidden_size = get_distribute_size(hidden_size, world_size, rank, align=align)
 
-        if offset_weight:
+        self._fold_offset_in_fp32 = offset_weight and backend.get_name() != 'ascend'
+        if self._fold_offset_in_fp32:
             dtype = torch.float32
         self.register_parameter('weight', self.create_weight(hidden_size, dtype, device))
         if w8a8_flag:
@@ -141,7 +143,9 @@ class RMSNorm(nn.Module):
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
         if self.offset_weight:
-            loaded_weight = loaded_weight.float() + 1.0
+            if self._fold_offset_in_fp32:
+                loaded_weight = loaded_weight.float()
+            loaded_weight = loaded_weight + 1
         if self.tp:
             world_size, rank = get_tp_world_rank('attn')
             loaded_weight = chunk_aligned(loaded_weight, world_size, 0, self.align)[rank]

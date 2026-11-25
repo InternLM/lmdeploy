@@ -59,6 +59,7 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
         self.input_layernorm = RMSNorm(config.hidden_size,
                                        config.rms_norm_eps,
                                        quant_config=quantization_config,
+                                       dtype=dtype,
                                        offset_weight=True,
                                        device=device,
                                        prefix=add_prefix('input_layernorm', prefix=prefix),
@@ -66,7 +67,7 @@ class Qwen3_5MtpDecoderLayer(Qwen3_5DecoderLayer):
 
         # build attention layer norm
         self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, config.rms_norm_eps, offset_weight=True, device=device)
+            config.hidden_size, config.rms_norm_eps, dtype=dtype, offset_weight=True, device=device)
 
 
 class Qwen3_5MultiTokenPredictor(nn.Module):
@@ -95,11 +96,11 @@ class Qwen3_5MultiTokenPredictor(nn.Module):
             for idx in range(self.num_mtp_layers)
         })
 
-        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, offset_weight=True, device=device)
+        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, offset_weight=True, device=device)
         self.pre_fc_norm_hidden = RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps, offset_weight=True, device=device)
+            config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, offset_weight=True, device=device)
         self.pre_fc_norm_embedding = RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps, offset_weight=True, device=device)
+            config.hidden_size, eps=config.rms_norm_eps, dtype=dtype, offset_weight=True, device=device)
 
         # shared with target model
         self.embed_tokens = None

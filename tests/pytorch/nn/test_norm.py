@@ -6,7 +6,11 @@ from unittest.mock import Mock
 import pytest
 import torch
 
+from lmdeploy.pytorch.config import QuantizationConfig
 from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
+from lmdeploy.pytorch.model_inputs import BuildModelContext
+from lmdeploy.pytorch.models.patch import build_model_context
+from lmdeploy.pytorch.models.q_modules import QTensor
 from lmdeploy.pytorch.nn import RMSNorm
 from lmdeploy.pytorch.nn import norm as norm_module
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
@@ -71,45 +75,45 @@ def test_tp_shard_composes_with_offset_weight(rank, offset_weight, monkeypatch):
 
 
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize('checkpoint_dtype', DTYPES)
 @pytest.mark.parametrize('with_residual', [False, True])
-@pytest.mark.parametrize('offset_weight', [False, True])
-def test_ascend_rms_norm_weight_dtype(dtype, with_residual, offset_weight, monkeypatch):
-    # Stub the vendor extension while exercising the real backend and operator wrappers.
+@pytest.mark.parametrize('smooth_quant', [False, True])
+def test_ascend_offset_weight_uses_native_norm(dtype, checkpoint_dtype, with_residual, smooth_quant, monkeypatch):
     if 'torch_npu' not in sys.modules:
         monkeypatch.setitem(sys.modules, 'torch_npu', ModuleType('torch_npu'))
     x = torch.tensor([[1, 1, 1, 3]], dtype=dtype)
-    residual = torch.tensor([[0, 2, 0, -2]], dtype=dtype) if with_residual else None
-    summed = x if residual is None else x + residual
+    residual = x / 2 if with_residual else None
+    summed = x + residual if with_residual else x
     plain_op = Mock(return_value=(x, None))
     residual_op = Mock(return_value=(x, None, summed))
+    quantized = x.to(torch.int8)
+    scale = torch.ones(1)
+    quant_op = Mock(return_value=(quantized, scale))
     monkeypatch.setattr(torch.ops.npu, 'npu_rms_norm', plain_op, raising=False)
     monkeypatch.setattr(torch.ops.npu, 'npu_add_rms_norm', residual_op, raising=False)
+    monkeypatch.setattr(torch.ops.npu, 'npu_dynamic_quant', quant_op, raising=False)
 
-    eps = 1e-5
-    offset = torch.full((x.size(-1), ), torch.finfo(dtype).eps / 2, dtype=dtype)
-    scale = 1 + offset.float()
-    with get_device_manager().context(DeviceContext('ascend')):
-        norm = RMSNorm(x.size(-1), eps=eps, dtype=dtype, device='cpu', offset_weight=offset_weight)
-    assert type(norm.impl).__module__ == 'lmdeploy.pytorch.backends.ascend.norm'
-    load_weight(norm.weight, offset if offset_weight else scale.to(dtype))
+    config = QuantizationConfig(quant_method='smooth_quant' if smooth_quant else None, quant_dtype=torch.int8)
+    ctx = BuildModelContext(quant_config=config)
+    with get_device_manager().context(DeviceContext('ascend')), build_model_context(ctx):
+        norm = RMSNorm(x.size(-1), dtype=dtype, device='cpu', offset_weight=True, quant_config=config)
+    offset = torch.tensor([2**-9, 0.24609375, -1.0, 0.0], dtype=checkpoint_dtype)
+    load_weight(norm.weight, offset)
+    torch.testing.assert_close(norm.weight, (offset + 1).to(dtype), rtol=0, atol=0)
+
     result = norm(x, residual)
-
-    if offset_weight:
-        plain_op.assert_not_called()
-        residual_op.assert_not_called()
-        torch.testing.assert_close(norm.weight, scale, rtol=0, atol=0)
-        normalized = summed.float() * torch.rsqrt(summed.float().square().mean(-1, keepdim=True) + eps)
-        expected = (normalized * scale).to(dtype)
-        assert not torch.equal(expected, (normalized * scale.to(dtype)).to(dtype))
-    else:
-        expected = x
-        if with_residual:
-            plain_op.assert_not_called()
-            residual_op.assert_called_once_with(x, residual, norm.weight, eps)
-        else:
-            residual_op.assert_not_called()
-            plain_op.assert_called_once_with(x, norm.weight, eps)
     if with_residual:
+        plain_op.assert_not_called()
+        residual_op.assert_called_once_with(x, residual, norm.weight, norm.eps)
         result, result_residual = result
-        torch.testing.assert_close(result_residual, summed, rtol=0, atol=0)
-    torch.testing.assert_close(result, expected, rtol=0, atol=0)
+        assert result_residual is summed
+    else:
+        residual_op.assert_not_called()
+        plain_op.assert_called_once_with(x, norm.weight, norm.eps)
+    if smooth_quant:
+        quant_op.assert_called_once_with(x, dst_type=torch.int8)
+        assert isinstance(result, QTensor)
+        assert result.tensor is quantized and result.scale is scale
+    else:
+        quant_op.assert_not_called()
+        assert result is x

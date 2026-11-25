@@ -135,6 +135,7 @@ class InternS2MobiusDecoderLayer(Qwen3_5DecoderLayer):
             config.hidden_size,
             config.rms_norm_eps,
             quant_config=quantization_config,
+            dtype=dtype,
             offset_weight=True,
             device=device,
             prefix=add_prefix('input_layernorm', prefix),
@@ -142,7 +143,7 @@ class InternS2MobiusDecoderLayer(Qwen3_5DecoderLayer):
 
         # build attention layer norm
         self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, config.rms_norm_eps, offset_weight=True, device=device)
+            config.hidden_size, config.rms_norm_eps, dtype=dtype, offset_weight=True, device=device)
 
     def forward(
         self,
@@ -237,7 +238,7 @@ class InternS2MobiusTextModel(Qwen3_5TextModel):
             for idx in range(config.num_blocks)])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, offset_weight=True, device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, offset_weight=True, device=device)
 
         # build rotary embedding
         self.rotary_emb = build_rotary_embedding_from_config(config, device=device)

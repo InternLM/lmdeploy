@@ -1,12 +1,15 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 """Check zero-centered norm loading and task-specific Qwen3.5 selection."""
 import importlib
+import sys
+from types import ModuleType
 
 import pytest
 import torch
 from transformers import Qwen3_5Config, Qwen3_5TextConfig, Qwen3NextConfig
 
 from lmdeploy.pytorch.config import DistConfig, ModelConfig, QuantizationConfig
+from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.model_inputs import BuildModelContext, StepContextManager
 from lmdeploy.pytorch.models.intern_decision import InternDecisionForConditionalGeneration
 from lmdeploy.pytorch.models.patch import build_model_context, build_model_from_hf_config, build_patched_model
@@ -80,6 +83,22 @@ def test_offset_weight_norm_loading(model_path, dtype, checkpoint_dtype):
         torch.testing.assert_close(norm.weight, expected[name], rtol=0, atol=0, msg=name)
     for norm in gated.values():
         torch.testing.assert_close(norm.weight, torch.full_like(norm.weight, 0.25), rtol=0, atol=0)
+
+
+def test_ascend_qwen3_5_norms_keep_model_dtype(monkeypatch):
+    if 'torch_npu' not in sys.modules:
+        monkeypatch.setitem(sys.modules, 'torch_npu', ModuleType('torch_npu'))
+    config = _tiny_config()
+    # Full-attention layers exercise Q/K norms without importing NPU GatedDelta kernels.
+    config.text_config.layer_types = ['full_attention'] * config.text_config.num_hidden_layers
+    ctx = BuildModelContext(language_model_only=True)
+    with build_model_context(ctx), get_device_manager().context(DeviceContext('ascend')):
+        model = Qwen3_5ForConditionalGeneration(config, StepContextManager(ctx), dtype=torch.bfloat16, device='cpu')
+
+    norms = [module for module in model.modules() if isinstance(module, RMSNorm)]
+    assert norms
+    for norm in norms:
+        assert norm.weight.dtype == torch.bfloat16
 
 
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16])
