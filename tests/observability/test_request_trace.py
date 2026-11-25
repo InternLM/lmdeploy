@@ -12,7 +12,6 @@ import importlib.util
 import json
 import logging
 import sys
-import tempfile
 import time
 import unittest
 from contextlib import asynccontextmanager
@@ -66,13 +65,38 @@ def event(name, timestamp):
 
 class RecordTestCase(unittest.TestCase):
     def setUp(self):
-        self.records = []
-        self.patches = [patch.object(obs, 'LOG_ENABLED', True),
-                        patch.object(obs, 'emit', side_effect=lambda name, rid, **kw: self.records.append(
-            dict(event=name, request_id=rid, **kw))), patch.object(obs, 'enabled', return_value=True)]
-        for p in self.patches:
+        try:
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+            from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        except ImportError:
+            self.skipTest('install lmdeploy[serve] to inspect exported spans')
+        self.exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(self.exporter))
+        self.addCleanup(provider.shutdown)
+        self.traces = []
+        finish_engine = otel.finish_engine
+        def capture(trace, status):
+            finish_engine(trace, status)
+            self.traces.append(trace)
+        for p in (patch.object(obs, 'enabled', return_value=True),
+                  patch.object(otel, 'initialize'),
+                  patch.object(otel, '_tracer', provider.get_tracer('test')),
+                  patch.object(otel, 'finish_engine', side_effect=capture)):
             p.start()
             self.addCleanup(p.stop)
+
+    @property
+    def http_spans(self):
+        return [s for s in self.exporter.get_finished_spans() if s.kind.name == 'SERVER']
+
+    @property
+    def prompt_spans(self):
+        return [s for s in self.exporter.get_finished_spans() if s.name == 'inference']
+
+    def exported_attributes(self):
+        return [dict(s.attributes) for s in self.exporter.get_finished_spans()]
 
 
 class TimingTests(RecordTestCase):
@@ -82,32 +106,39 @@ class TimingTests(RecordTestCase):
         t.observe(output([2, 3], 19, [event('QUEUED', 10), event('SCHEDULED', 12),
                                                event('PREEMPTED', 16), event('SCHEDULED', 17)]))
         t.finish('success')
-        row = self.records[0]
-        self.assertEqual((row['queue_seconds'], row['prefill_seconds'], row['decode_seconds']), (2, 3, 4))
-        self.assertIsNone(row['output_tokens'])
-        self.assertNotIn('token_ids', row)
+        row = self.traces[0]
+        self.assertEqual(row.otel_span.attributes['lmdeploy.queue_seconds'], 2)
+        self.assertEqual(obs.interval(row.scheduled, row.first_token), 3)
+        self.assertEqual(obs.interval(row.first_token, row.last_token), 4)
+        self.assertIsNone(row.output_tokens)
+        self.assertNotIn('token_ids', row.otel_span.attributes)
         t.finish('error')
-        self.assertEqual(len(self.records), 1)
+        self.assertEqual(len(self.traces), 1)
+
 
     def test_missing_metrics_unknown_not_zero(self):
         t = obs.RequestTrace()
         t.observe(NS(token_ids=[], req_metrics=None))
         t.finish('error')
-        for field in ('queue_seconds', 'prefill_seconds', 'decode_seconds', 'kv_load_seconds'):
-            self.assertIsNone(self.records[0][field])
+        for field in ('queue_seconds', 'kv_load_seconds'):
+            self.assertNotIn('lmdeploy.' + field, t.otel_span.attributes)
+        self.assertEqual([s.name for s in self.exporter.get_finished_spans()], ['llm_request'])
+
 
     def test_scoring_has_no_invented_first_token(self):
         t = obs.RequestTrace()
         t.observe(output([], 15, [event('QUEUED', 10), event('SCHEDULED', 12)]))
         t.finish('success')
-        self.assertIsNone(self.records[0]['prefill_seconds'])
-        self.assertIsNone(self.records[0]['decode_seconds'])
+        self.assertIsNone(obs.interval(self.traces[0].scheduled, self.traces[0].first_token))
+        self.assertIsNone(obs.interval(self.traces[0].first_token, self.traces[0].last_token))
+
 
     def test_single_token_decode_zero(self):
         t = obs.RequestTrace()
         t.observe(output([1], 15))
         t.finish('success')
-        self.assertEqual(self.records[0]['decode_seconds'], 0)
+        self.assertEqual(obs.interval(self.traces[0].first_token, self.traces[0].last_token), 0)
+
 
     def test_wall_clock_regression_is_unknown(self):
         self.assertIsNone(obs.interval(10, 9))
@@ -119,8 +150,9 @@ class TimingTests(RecordTestCase):
                   event('KV_LOAD_STARTED', 14), event('KV_LOAD_FAILED', 17)]
         t.observe(output(events=events))
         t.finish('error')
-        self.assertEqual(self.records[0]['kv_load_seconds'], 5)
-        self.assertEqual(self.records[0]['kv_load_status'], 'failed')
+        self.assertEqual(self.traces[0].kv_seconds, 5)
+        self.assertEqual(self.traces[0].kv_status, 'failed')
+
 
     def test_preprocess_error_and_cancellation(self):
         async def run():
@@ -131,8 +163,9 @@ class TimingTests(RecordTestCase):
                 with self.assertRaises(type(exc)):
                     await fail()
         asyncio.run(run())
-        self.assertEqual([r['status'] for r in self.records], ['error', 'cancelled'])
-        self.assertNotIn('private input', json.dumps(self.records))
+        self.assertEqual([r.engine_status for r in self.traces], ['error', 'cancelled'])
+        self.assertNotIn('private input', json.dumps(self.exported_attributes()))
+
 
     def test_fanout_and_concurrent_context_isolation(self):
         @obs.trace_preprocess
@@ -140,14 +173,14 @@ class TimingTests(RecordTestCase):
             await asyncio.sleep(0)
             return NS(session=NS(session_id=7), input_token_len=2, trace=None)
         async def child(rid):
-            context = {'traces': [], 'request_id': rid}
+            context = {'traces': [], 'request_id': rid, 'otel_span': otel._tracer.start_span('llm_request')}
             tok = obs.request_outcome_context.set(context)
             try:
                 return await prepare(), await prepare()
             finally:
                 obs.request_outcome_context.reset(tok)
         pairs = asyncio.run(self._gather(child('a'), child('b')))
-        ids = [p.trace.log_context['span_id'] for pair in pairs for p in pair]
+        ids = [p.trace.otel_span.get_span_context().span_id for pair in pairs for p in pair]
         self.assertEqual([p.trace.request_id for pair in pairs for p in pair], ['a', 'a', 'b', 'b'])
         self.assertEqual(len(set(ids)), 4)
         self.assertEqual([p.trace.prompt_index for pair in pairs for p in pair], [0, 1, 0, 1])
@@ -173,81 +206,12 @@ class TimingTests(RecordTestCase):
             self.assertIsNone(third.trace.model)
             third.trace.finish('success')
         asyncio.run(run())
-        self.assertNotIn('private', json.dumps(self.records))
+        self.assertNotIn('private', json.dumps(self.exported_attributes()))
+
 
     @staticmethod
     async def _gather(*coroutines):
         return await asyncio.gather(*coroutines)
-
-
-class WriterTests(unittest.TestCase):
-    def test_default_disabled_and_path_validation(self):
-        with patch.dict('os.environ', {}, clear=True):
-            self.assertIsNone(obs.get_writer())
-        with self.assertRaises(ValueError):
-            obs.JsonlWriter('relative')
-        with patch.dict('os.environ', {}, clear=True), patch.object(obs, 'enabled', return_value=True), \
-                patch.object(obs, 'LOG_ENABLED', True):
-            with self.assertRaises(ValueError):
-                obs.get_writer()
-
-    def test_rotation_and_shutdown_drain(self):
-        with tempfile.TemporaryDirectory() as d:
-            writer = obs.JsonlWriter(d, max_bytes=70, capacity=64)
-            for i in range(20):
-                writer.submit(dict(event='test', index=i))
-            writer.close()
-            files = sorted(Path(d).rglob('*.jsonl'))
-            rows = [json.loads(line) for f in files for line in f.read_text().splitlines()]
-            self.assertGreater(len(files), 1)
-            self.assertEqual(sorted(r['index'] for r in rows), list(range(20)))
-            self.assertEqual(writer.io_errors, 0)
-            self.assertFalse(writer.thread.is_alive())
-
-    def test_date_rotation(self):
-        with tempfile.TemporaryDirectory() as d:
-            writer = obs.JsonlWriter(d)
-            writer.submit({'index': 1})
-            writer.queue.join()
-            writer._day = None
-            writer.submit({'index': 2})
-            writer.close()
-            self.assertEqual(len(list(Path(d).rglob('*.jsonl'))), 2)
-
-    def test_queue_overflow_nonblocking(self):
-        with tempfile.TemporaryDirectory() as d:
-            writer = obs.JsonlWriter(d, capacity=1)
-            gate = __import__('threading').Event()
-            original = writer._file
-            class BlockingFile:
-                def write(self, line):
-                    gate.wait(2)
-                    original.write(line)
-                def flush(self):
-                    original.flush()
-                def close(self):
-                    original.close()
-            writer._file = BlockingFile()
-            writer.submit({'index': 1})
-            deadline = time.monotonic() + 2
-            while not writer.queue.empty() and time.monotonic() < deadline:
-                time.sleep(.001)
-            for i in range(10):
-                writer.submit({'index': i})
-            self.assertGreater(writer.dropped, 0)
-            gate.set()
-            writer.close()
-
-    def test_io_failure_does_not_escape_submit(self):
-        with tempfile.TemporaryDirectory() as d:
-            writer = obs.JsonlWriter(d)
-            writer._file.close()
-            writer.submit({'test': 1})
-            writer.queue.join()
-            writer._retry_at = 0
-            writer.submit({'test': 2})
-            writer.close()
-            self.assertEqual(writer.io_errors, 1)
 
 
 class ASGITests(RecordTestCase):
@@ -266,11 +230,12 @@ class ASGITests(RecordTestCase):
             sent.append(message)
         async def receive():
             return {'type': 'http.disconnect'}
-        with patch.object(obs, 'get_writer'):
+        with patch.object(otel, 'initialize'):
             middleware = obs.RequestTraceMiddleware(app)
         await middleware({'type': 'http', 'method': 'POST', 'path': '/v1/chat/completions', 'headers': headers},
                          receive, send)
         return sent
+
 
     def test_fragmented_sse_payload_unchanged_and_stage_observation(self):
         data = [b'data: {"choices":[{"delta":{"reasoning_content":"private thought"}}]}\n\n',
@@ -279,63 +244,112 @@ class ASGITests(RecordTestCase):
         pieces = [body[i:i+7] for i in range(0, len(body), 7)]
         sent = asyncio.run(self.invoke(pieces, headers=[(obs.HEADER.encode(), b'client-123')]))
         self.assertEqual(b''.join(m.get('body', b'') for m in sent), body)
-        row = self.records[-1]
-        self.assertNotEqual(row['request_id'], 'client-123')
-        self.assertIsNone(row['request_id'])
-        self.assertEqual(row['status'], 'success')
-        self.assertIsNotNone(row['reasoning_to_content_seconds'])
-        self.assertNotIn('private', json.dumps(row))
+        row = self.http_spans[-1]
+        self.assertNotEqual(row.attributes.get('request.id'), 'client-123')
+        self.assertIsNone(row.attributes.get('request.id'))
+        self.assertEqual(row.attributes.get('lmdeploy.outcome'), 'success')
+        self.assertIsNotNone(row.attributes.get('lmdeploy.reasoning_to_content_seconds'))
+        self.assertNotIn('private', json.dumps(dict(row.attributes)))
         self.assertFalse(any(k == obs.HEADER.encode() for k, _ in sent[0]['headers']))
         self.assertIsNone(obs.request_outcome_context.get())
 
+
     def test_error_sse_is_error(self):
         asyncio.run(self.invoke([b'data: {"error":{"message":"private"}}\n\ndata: [DONE]\n\n']))
-        self.assertEqual(self.records[-1]['status'], 'error')
+        self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'), 'error')
+
 
     def test_http_error_and_invalid_id(self):
         asyncio.run(self.invoke(status=422, headers=[(obs.HEADER.encode(), b'bad\nvalue')]))
-        self.assertEqual(self.records[-1]['status'], 'error')
-        self.assertNotEqual(self.records[-1]['request_id'], 'bad\nvalue')
+        self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'), 'error')
+        self.assertNotEqual(self.http_spans[-1].attributes.get('request.id'), 'bad\nvalue')
+
 
     def test_send_failure_propagates(self):
         with self.assertRaises(BrokenPipeError):
             asyncio.run(self.invoke(failure=BrokenPipeError()))
-        self.assertEqual(self.records[-1]['status'], 'cancelled')
+        self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'), 'cancelled')
+
 
     def test_abort_protocol_is_cancelled_with_http_200(self):
         asyncio.run(self.invoke([b'data: {"choices":[{"finish_reason":"abort"}]}\ndata: [DONE]\n']))
-        self.assertEqual(self.records[-1]['status'], 'cancelled')
+        self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'), 'cancelled')
+
 
     def test_accepted_terminal_survives_later_disconnect(self):
         with self.assertRaises(BrokenPipeError):
-            asyncio.run(self.invoke([b'data: [DONE]\n'], failure=BrokenPipeError()))
-        self.assertEqual(self.records[-1]['status'], 'success')
+            asyncio.run(self.invoke([b'data: [DONE]\n\n'], failure=BrokenPipeError()))
+        self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'), 'success')
+
+
+    def test_partial_terminal_event_is_not_success(self):
+        prefixes = [b'event: response.completed\n',
+                    b'event: message_stop\ndata: {"type":"message_stop"}\n',
+                    b'data: {"type":"response.completed"}\n', b'data: [DONE]\n',
+                    b'data: [DONE]\n \n']
+        for prefix in prefixes:
+            for failure in (None, BrokenPipeError()):
+                with self.subTest(prefix=prefix, disconnected=failure is not None):
+                    if failure is None:
+                        asyncio.run(self.invoke([prefix]))
+                    else:
+                        with self.assertRaises(BrokenPipeError):
+                            asyncio.run(self.invoke([prefix], failure=failure))
+                    self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'), 'cancelled')
+
+
+    def test_large_fragmented_terminal_waits_for_event_boundary(self):
+        header = b'event: response.completed\n'
+        data = b'data: {"output":"' + b'x' * (1024 * 1024) + b'"}\n'
+        for complete in (False, True):
+            bodies = [header, data[:2], data[2:]] + ([b'\n'] if complete else [])
+            sent = asyncio.run(self.invoke(bodies))
+            self.assertEqual(b''.join(m.get('body', b'') for m in sent), b''.join(bodies))
+            self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'),
+                             'success' if complete else 'cancelled')
+
 
     def test_truncated_sse_is_not_success(self):
         asyncio.run(self.invoke([b'data: {"choices":[{"delta":{"content":"x"}}]}\n']))
-        self.assertEqual(self.records[-1]['status'], 'cancelled')
+        self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'), 'cancelled')
+
 
     def test_responses_cancelled_is_not_failed(self):
-        body = b'event: response.failed\ndata: {"type":"response.failed","response":{"status":"cancelled"}}\n'
+        body = b'event: response.failed\ndata: {"type":"response.failed","response":{"status":"cancelled"}}\n\n'
         asyncio.run(self.invoke([body]))
-        self.assertEqual(self.records[-1]['status'], 'cancelled')
+        self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'), 'cancelled')
+
+
+    def test_event_header_requires_data_and_dispatch_boundary(self):
+        observer = obs.OutputObservation(0)
+        observer.feed(b'event: response.completed\n\n')
+        self.assertFalse(observer.terminal)
+        observer.feed(b'event: response.failed\ndata: null\n')
+        self.assertFalse(observer.terminal)
+        self.assertFalse(observer.error)
+        observer.feed(b'\n')
+        self.assertTrue(observer.terminal)
+        self.assertTrue(observer.error)
 
     def test_parse_error_is_not_success(self):
-        body = b'data: {"choices":[{"finish_reason":"parse_error"}]}\ndata: [DONE]\n'
+        body = b'data: {"choices":[{"finish_reason":"parse_error"}]}\n\ndata: [DONE]\n\n'
         asyncio.run(self.invoke([body]))
-        self.assertEqual(self.records[-1]['status'], 'error')
+        self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'), 'error')
+
 
     def test_responses_tool_start_counts_as_first_output(self):
         body = (b'data: {"type":"response.output_item.added","item":{"type":"function_call",'
-                b'"arguments":""}}\ndata: {"type":"response.completed"}\n')
+                b'"arguments":""}}\n\ndata: {"type":"response.completed"}\n\n')
         asyncio.run(self.invoke([body]))
-        self.assertIsNotNone(self.records[-1]['first_output_seconds'])
-        self.assertIsNone(self.records[-1]['content_first_seconds'])
-        self.assertEqual(self.records[-1]['status'], 'success')
+        self.assertIsNotNone(self.http_spans[-1].attributes.get('lmdeploy.first_output_seconds'))
+        self.assertIsNone(self.http_spans[-1].attributes.get('lmdeploy.content_first_seconds'))
+        self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'), 'success')
+
 
     def test_nonstream_has_unknown_visible_stages(self):
         asyncio.run(self.invoke([b'{"content":"private"}'], sse=False))
-        self.assertIsNone(self.records[-1]['content_first_seconds'])
+        self.assertIsNone(self.http_spans[-1].attributes.get('lmdeploy.content_first_seconds'))
+
 
     def test_observer_bounds_and_recovers(self):
         o = obs.OutputObservation(time.monotonic())
@@ -452,10 +466,12 @@ class EngineIntegrationTests(RecordTestCase):
         result = asyncio.run(run())
         self.assertEqual(result[-1].finish_reason, 'length')
         self.assertFalse(handle.stream_output)
-        row = self.records[-1]
-        self.assertEqual((row['prefill_seconds'], row['decode_seconds']), (3, 4))
-        self.assertEqual(row['status'], 'success')
+        row = self.traces[-1]
+        self.assertEqual(obs.interval(row.scheduled, row.first_token), 3)
+        self.assertEqual(obs.interval(row.first_token, row.last_token), 4)
+        self.assertEqual(row.engine_status, 'success')
         self.assertEqual(e.session_mgr.sessions, {})
+
 
     def test_real_generate_final_only_keeps_nonstream_and_unknown_split(self):
         e, req, handle = self.engine('finalonly')
@@ -464,12 +480,13 @@ class EngineIntegrationTests(RecordTestCase):
         result = asyncio.run(run())
         self.assertFalse(handle.stream_output)
         self.assertEqual(result[-1].generate_token_len, 2)
-        row = self.records[-1]
-        self.assertIsNone(row['prefill_seconds'])
-        self.assertIsNone(row['decode_seconds'])
-        self.assertEqual(row['output_tokens'], 2)
-        self.assertEqual(row['finish_reason'], 'length')
-        self.assertTrue(row['token_counts_complete'])
+        row = self.traces[-1]
+        self.assertIsNone(obs.interval(row.scheduled, row.first_token))
+        self.assertIsNone(obs.interval(row.first_token, row.last_token))
+        self.assertEqual(row.output_tokens, 2)
+        self.assertEqual(row.finish_reason, 'length')
+        self.assertTrue(row.token_counts_complete)
+
 
     def test_usage_matches_actual_generation_result_when_stop_token_is_filtered(self):
         for mode in ('success', 'finalonly', 'stoponly'):
@@ -491,15 +508,16 @@ class EngineIntegrationTests(RecordTestCase):
                         self.assertEqual(final.finish_reason, 'stop')
                         expected = (1 if mode == 'stoponly' else 2) - (not include_stop)
                         self.assertEqual(final.generate_token_len, expected)
-                        row = self.records[-1]
-                        self.assertEqual(row['output_tokens'], final.generate_token_len)
+                        row = self.traces[-1]
+                        self.assertEqual(row.output_tokens, final.generate_token_len)
                         self.assertEqual(request.trace.generated_tokens, 1 if mode == 'stoponly' else 2)
-                        self.assertEqual(row['input_tokens'], final.input_token_len)
-                        self.assertEqual(row['cached_tokens'], final.cached_tokens)
+                        self.assertEqual(row.prompt_tokens, final.input_token_len)
+                        self.assertEqual(row.cached_tokens, final.cached_tokens)
                         if mode == 'success':
-                            self.assertEqual(row['tpot_seconds'], 4)
+                            self.assertEqual(row.otel_span.attributes.get('lmdeploy.tpot_seconds'), 4)
                         self.assertEqual(handle.stream_output, stream)
-                        self.assertTrue(row['token_counts_complete'])
+                        self.assertTrue(row.token_counts_complete)
+
 
     def test_scoring_result_reports_zero_without_inventing_token_timing(self):
         engine, request, _ = self.engine('scoring')
@@ -509,12 +527,14 @@ class EngineIntegrationTests(RecordTestCase):
             return [item async for item in engine.generate(request, stream_response=False)]
 
         result = asyncio.run(run())
-        row = self.records[-1]
-        self.assertEqual(row['output_tokens'], result[-1].generate_token_len)
-        self.assertEqual(row['output_tokens'], 0)
-        self.assertTrue(row['token_counts_complete'])
-        for field in ('prefill_seconds', 'decode_seconds', 'tpot_seconds', 'engine_ttft_seconds'):
-            self.assertIsNone(row[field])
+        row = self.traces[-1]
+        self.assertEqual(row.output_tokens, result[-1].generate_token_len)
+        self.assertEqual(row.output_tokens, 0)
+        self.assertTrue(row.token_counts_complete)
+        self.assertNotIn('gen_ai.latency.time_to_first_token', row.otel_span.attributes)
+        self.assertNotIn('lmdeploy.tpot_seconds', row.otel_span.attributes)
+        self.assertEqual([s.name for s in self.exporter.get_finished_spans()], ['llm_request'])
+
 
     def test_real_generate_backend_error_cleans_up(self):
         e, req, handle = self.engine('error')
@@ -522,11 +542,12 @@ class EngineIntegrationTests(RecordTestCase):
             return [out async for out in e.generate(req)]
         with self.assertRaises(self.ns['RequestError']):
             asyncio.run(run())
-        self.assertEqual(self.records[-1]['status'], 'error')
-        self.assertEqual(self.records[-1]['output_tokens'], 1)
-        self.assertFalse(self.records[-1]['token_counts_complete'])
+        self.assertEqual(self.traces[-1].engine_status, 'error')
+        self.assertEqual(self.traces[-1].output_tokens, 1)
+        self.assertFalse(self.traces[-1].token_counts_complete)
         self.assertTrue(handle.cancelled)
         self.assertEqual(e.session_mgr.sessions, {})
+
 
     def test_native_error_does_not_overwrite_last_api_usage_snapshot(self):
         engine, request, _ = self.engine('error_metrics')
@@ -538,23 +559,25 @@ class EngineIntegrationTests(RecordTestCase):
 
         with self.assertRaises(self.ns['RequestError']):
             asyncio.run(run())
-        row = self.records[-1]
-        self.assertEqual(row['output_tokens'], results[-1].generate_token_len)
-        self.assertEqual(row['cached_tokens'], results[-1].cached_tokens)
-        self.assertEqual(row['cached_tokens'], 2)
-        self.assertFalse(row['token_counts_complete'])
-        self.assertEqual(row['status'], 'error')
+        row = self.traces[-1]
+        self.assertEqual(row.output_tokens, results[-1].generate_token_len)
+        self.assertEqual(row.cached_tokens, results[-1].cached_tokens)
+        self.assertEqual(row.cached_tokens, 2)
+        self.assertFalse(row.token_counts_complete)
+        self.assertEqual(row.engine_status, 'error')
+
 
     def test_real_generate_cancellation_suppressed_by_session_still_recorded(self):
         e, req, handle = self.engine('cancel')
         async def run():
             return [out async for out in e.generate(req)]
         asyncio.run(run())
-        self.assertEqual(self.records[-1]['status'], 'cancelled')
-        self.assertEqual(self.records[-1]['output_tokens'], 1)
-        self.assertFalse(self.records[-1]['token_counts_complete'])
+        self.assertEqual(self.traces[-1].engine_status, 'cancelled')
+        self.assertEqual(self.traces[-1].output_tokens, 1)
+        self.assertFalse(self.traces[-1].token_counts_complete)
         self.assertTrue(handle.cancelled)
         self.assertEqual(e.session_mgr.sessions, {})
+
 
     def test_real_generate_early_close_cleans_up(self):
         e, req, handle = self.engine()
@@ -563,11 +586,12 @@ class EngineIntegrationTests(RecordTestCase):
             await anext(gen)
             await gen.aclose()
         asyncio.run(run())
-        self.assertEqual(self.records[-1]['status'], 'cancelled')
-        self.assertEqual(self.records[-1]['output_tokens'], 1)
-        self.assertFalse(self.records[-1]['token_counts_complete'])
+        self.assertEqual(self.traces[-1].engine_status, 'cancelled')
+        self.assertEqual(self.traces[-1].output_tokens, 1)
+        self.assertFalse(self.traces[-1].token_counts_complete)
         self.assertTrue(handle.cancelled)
         self.assertEqual(e.session_mgr.sessions, {})
+
 
     def test_disabled_trace_preserves_nonstream_backend_mode(self):
         e, req, handle = self.engine()
@@ -576,7 +600,7 @@ class EngineIntegrationTests(RecordTestCase):
             return [out async for out in e.generate(req, stream_response=False)]
         asyncio.run(run())
         self.assertFalse(handle.stream_output)
-        self.assertEqual(self.records, [])
+        self.assertEqual(self.traces, [])
 
 
 class AdditionalIntegrationTests(RecordTestCase):
@@ -621,12 +645,12 @@ class AdditionalIntegrationTests(RecordTestCase):
 
     def test_anthropic_and_responses_visible_stages(self):
         for parts in (
-            [b'data: {"type":"content_block_delta","delta":{"thinking":"private"}}\n',
-             b'data: {"type":"content_block_delta","delta":{"text":"answer"}}\n',
-             b'data: {"type":"message_stop"}\n'],
-            [b'data: {"type":"response.reasoning_summary_text.delta","delta":"private"}\n',
-             b'data: {"type":"response.output_text.delta","delta":"answer"}\n',
-             b'data: {"type":"response.completed"}\n']):
+            [b'data: {"type":"content_block_delta","delta":{"thinking":"private"}}\n\n',
+             b'data: {"type":"content_block_delta","delta":{"text":"answer"}}\n\n',
+             b'data: {"type":"message_stop"}\n\n'],
+            [b'data: {"type":"response.reasoning_summary_text.delta","delta":"private"}\n\n',
+             b'data: {"type":"response.output_text.delta","delta":"answer"}\n\n',
+             b'data: {"type":"response.completed"}\n\n']):
             o = obs.OutputObservation(time.monotonic())
             for part in parts:
                 o.feed(part)
@@ -644,64 +668,56 @@ class AdditionalIntegrationTests(RecordTestCase):
                 await anext(generate(None, NS(trace=trace, consumed=True)))
         asyncio.run(run())
         self.assertFalse(trace.finished)
-        self.assertEqual(self.records, [])
+        self.assertEqual(self.traces, [])
 
 
 class ReviewedScopeTests(RecordTestCase):
-    def test_invalid_native_timestamps_do_not_poison_jsonl(self):
+    def test_invalid_native_timestamps_are_omitted(self):
         trace = obs.RequestTrace()
         trace.observe(output([1], float('inf'), [event('QUEUED', float('nan')),
                                                  event('SCHEDULED', float('inf'))]))
         trace.finish('error')
-        row = self.records[-1]
-        self.assertIsNone(row['queue_seconds'])
-        self.assertIsNone(row['engine_timestamps']['queued'])
-        self.assertIsNone(row['engine_timestamps']['first_token'])
-        json.dumps(row, allow_nan=False)
+        row = self.traces[-1]
+        self.assertIsNone(row.otel_span.attributes.get('lmdeploy.queue_seconds'))
+        self.assertIsNone(row.queued)
+        self.assertIsNone(row.first_token)
+        json.dumps(dict(row.otel_span.attributes), allow_nan=False)
+
 
     def test_final_only_multitoken_output_does_not_invent_first_token(self):
         trace = obs.RequestTrace()
         trace.observe(output([1, 2, 3], 20, [event('QUEUED', 10), event('SCHEDULED', 12)], 'FINISH'))
         trace.finish('success')
-        row = self.records[-1]
-        self.assertIsNone(row['prefill_seconds'])
-        self.assertIsNone(row['decode_seconds'])
-        self.assertIsNone(row['tpot_seconds'])
-        self.assertEqual(row['queue_seconds'], 2)
-        self.assertIsNone(row['output_tokens'])
-        self.assertFalse(row['token_counts_complete'])
+        row = self.traces[-1]
+        self.assertIsNone(obs.interval(row.scheduled, row.first_token))
+        self.assertIsNone(obs.interval(row.first_token, row.last_token))
+        self.assertIsNone(row.otel_span.attributes.get('lmdeploy.tpot_seconds'))
+        self.assertEqual(row.otel_span.attributes.get('lmdeploy.queue_seconds'), 2)
+        self.assertIsNone(row.output_tokens)
+        self.assertFalse(row.token_counts_complete)
         self.assertEqual(trace.generated_tokens, 3)
-        self.assertEqual(row['engine_timestamps']['last_token'], 20)
+        self.assertEqual(row.last_token, 20)
+
 
     def test_late_metrics_do_not_relabel_later_token_as_first(self):
         trace = obs.RequestTrace()
         trace.observe(NS(token_ids=[1], req_metrics=None, status='SUCCESS'))
         trace.observe(output([2], 20, status='FINISH'))
         trace.finish('success')
-        self.assertIsNone(self.records[-1]['prefill_seconds'])
-        self.assertIsNone(self.records[-1]['output_tokens'])
+        self.assertIsNone(obs.interval(self.traces[-1].scheduled, self.traces[-1].first_token))
+        self.assertIsNone(self.traces[-1].output_tokens)
+
 
     def test_partial_token_counts_and_absent_cache_are_explicit(self):
         trace = obs.RequestTrace()
         trace.observe(NS(token_ids=[1], req_metrics=None, status='SUCCESS'))
         trace.finish('cancelled')
-        row = self.records[-1]
-        self.assertIsNone(row['output_tokens'])
-        self.assertFalse(row['token_counts_complete'])
-        self.assertIsNone(row['cached_tokens'])
-        self.assertIsNone(row['input_tokens'])
+        row = self.traces[-1]
+        self.assertIsNone(row.output_tokens)
+        self.assertFalse(row.token_counts_complete)
+        self.assertIsNone(row.cached_tokens)
+        self.assertIsNone(row.prompt_tokens)
 
-    def test_native_delivery_lag_and_output_stall(self):
-        trace = obs.RequestTrace()
-        with patch.object(obs.time, 'monotonic', side_effect=[100., 150.]):
-            with patch.object(obs.time, 'time', return_value=110.):
-                trace.observe(output([1], 90))
-                trace.observe(output([2], 140, status='FINISH'))
-        trace.finish('success')
-        row = self.records[-1]
-        self.assertEqual(row['token_delivery_delay_seconds'], 20)
-        self.assertEqual(row['max_engine_output_gap_seconds'], 50)
-        self.assertEqual(row['tpot_seconds'], 50)
 
     def test_visible_output_gap_excludes_metadata_and_terminal(self):
         o = obs.OutputObservation(0)
@@ -721,10 +737,11 @@ class ReviewedScopeTests(RecordTestCase):
                   event('KV_LOAD_FINISHED', 14)]
         trace.observe(output(events=events))
         trace.finish('success')
-        row = self.records[-1]
-        self.assertEqual(row['kv_load_status'], 'failed')
-        self.assertEqual(row['kv_loaded_tokens'], 4)
-        self.assertEqual(row['kv_load_seconds'], 3)
+        row = self.traces[-1]
+        self.assertEqual(row.kv_status, 'failed')
+        self.assertEqual(row.kv_loaded_tokens, 4)
+        self.assertEqual(row.kv_seconds, 3)
+
 
     def test_lookup_and_load_are_distinct_with_token_counts(self):
         trace = obs.RequestTrace()
@@ -734,12 +751,13 @@ class ReviewedScopeTests(RecordTestCase):
                   event('KV_LOAD_FINISHED', 16)]
         trace.observe(output(events=events))
         trace.finish('success')
-        row = self.records[-1]
-        self.assertEqual(row['store_lookup_seconds'], 2)
-        self.assertEqual(row['store_matched_tokens'], 8)
-        self.assertEqual(row['kv_load_seconds'], 3)
-        self.assertEqual(row['kv_loaded_tokens'], 8)
-        self.assertEqual(row['kv_load_status'], 'success')
+        row = self.traces[-1]
+        self.assertEqual(row.lookup_seconds, 2)
+        self.assertEqual(row.store_matched_tokens, 8)
+        self.assertEqual(row.kv_seconds, 3)
+        self.assertEqual(row.kv_loaded_tokens, 8)
+        self.assertEqual(row.kv_status, 'success')
+
 
     def test_mooncake_polling_records_once_and_releases_lookup_state(self):
         path = SOURCE / 'lmdeploy/pytorch/kv_connector/mooncake/store/scheduler.py'
@@ -832,60 +850,6 @@ class ReviewedScopeTests(RecordTestCase):
             self.assertEqual(discarded, [1, 1])
 
 
-class LightweightWriterTests(unittest.TestCase):
-    def test_overflow_submit_never_logs_on_request_thread(self):
-        writer = obs.JsonlWriter.__new__(obs.JsonlWriter)
-        writer.closed = False
-        writer._lock = __import__('threading').Lock()
-        writer.queue = __import__('queue').Queue(maxsize=1)
-        writer.dropped = 0
-        with patch.object(obs.logger, 'warning') as warning:
-            writer.submit({'first': 1})
-            writer.submit({'second': 2})
-            self.assertEqual(writer.dropped, 1)
-            warning.assert_not_called()
-
-    def test_writer_flushes_batches_instead_of_each_record(self):
-        with tempfile.TemporaryDirectory() as d:
-            with patch.object(obs.threading, 'Thread'):
-                writer = obs.JsonlWriter(d, capacity=256)
-            stream = writer._file
-            flushes = []
-            class File:
-                def write(self, line):
-                    return stream.write(line)
-                def flush(self):
-                    flushes.append(1)
-                    stream.flush()
-                def close(self):
-                    stream.close()
-            writer._file = File()
-            for i in range(130):
-                writer.submit({'index': i})
-            writer._stop.set()
-            writer._run()
-            self.assertEqual(len(flushes), 3)
-            self.assertEqual(writer.queue.unfinished_tasks, 0)
-            rows = [json.loads(line) for f in Path(d).rglob('*.jsonl') for line in f.read_text().splitlines()]
-            self.assertEqual([row['index'] for row in rows], list(range(130)))
-
-    def test_fault_warning_is_rate_limited(self):
-        with tempfile.TemporaryDirectory() as d:
-            with patch.object(obs.threading, 'Thread'):
-                writer = obs.JsonlWriter(d)
-            with patch.object(obs.logger, 'warning') as warning:
-                with patch.object(obs.time, 'monotonic', return_value=100.):
-                    writer.dropped = 1
-                    writer._report_errors()
-                    writer.dropped = 2
-                    writer._report_errors()
-                    self.assertEqual(warning.call_count, 1)
-                with patch.object(obs.time, 'monotonic', return_value=161.):
-                    writer._report_errors()
-                    self.assertEqual(warning.call_count, 2)
-            writer._discard_file()
-
-
 class ReviewRegressionTests(RecordTestCase):
     def test_repeated_cumulative_events_do_not_multiply_store_metrics(self):
         trace = obs.RequestTrace()
@@ -898,14 +862,15 @@ class ReviewRegressionTests(RecordTestCase):
             snapshot = __import__('copy').deepcopy(events)
             trace.observe(output([i], 20 + i, snapshot, 'FINISH' if i == 99 else 'SUCCESS'))
         trace.finish('success')
-        row = self.records[-1]
-        self.assertEqual(row['store_lookup_seconds'], 2)
-        self.assertEqual(row['kv_load_seconds'], 3)
-        self.assertEqual(row['kv_loaded_tokens'], 8)
-        self.assertIsNone(row['output_tokens'])
+        row = self.traces[-1]
+        self.assertEqual(row.lookup_seconds, 2)
+        self.assertEqual(row.kv_seconds, 3)
+        self.assertEqual(row.kv_loaded_tokens, 8)
+        self.assertIsNone(row.output_tokens)
         self.assertEqual(trace.generated_tokens, 100)
         self.assertEqual(trace.event_cursor, len(events))
         self.assertFalse(any(isinstance(value, list) for value in vars(trace).values()))
+
 
     def test_repeated_nonfinite_event_timestamp_still_deduplicates_tokens(self):
         trace = obs.RequestTrace()
@@ -914,9 +879,10 @@ class ReviewRegressionTests(RecordTestCase):
                       event('KV_LOAD_FINISHED', float('nan'))]
             trace.observe(output(events=events))
         trace.finish('success')
-        self.assertEqual(self.records[-1]['kv_loaded_tokens'], 8)
-        self.assertIsNone(self.records[-1]['kv_load_seconds'])
-        json.dumps(self.records[-1], allow_nan=False)
+        self.assertEqual(self.traces[-1].kv_loaded_tokens, 8)
+        self.assertIsNone(self.traces[-1].kv_seconds)
+        json.dumps(dict(self.traces[-1].otel_span.attributes), allow_nan=False)
+
 
     def test_growing_cumulative_events_process_only_appended_boundaries(self):
         trace = obs.RequestTrace()
@@ -930,8 +896,9 @@ class ReviewRegressionTests(RecordTestCase):
         trace.observe(output(events=events))
         trace.observe(output(events=events))
         trace.finish('success')
-        self.assertEqual(self.records[-1]['kv_load_seconds'], 5)
-        self.assertEqual(self.records[-1]['kv_loaded_tokens'], 12)
+        self.assertEqual(self.traces[-1].kv_seconds, 5)
+        self.assertEqual(self.traces[-1].kv_loaded_tokens, 12)
+
 
     def test_changed_event_batches_are_marked_untrusted_without_replay(self):
         trace = obs.RequestTrace()
@@ -939,9 +906,10 @@ class ReviewRegressionTests(RecordTestCase):
         trace.observe(output(events=[]))
         trace.observe(output(events=[event('KV_LOAD_FINISHED', 13)]))
         trace.finish('success')
-        self.assertIsNone(self.records[-1]['kv_load_seconds'])
-        self.assertIsNone(self.records[-1]['kv_loaded_tokens'])
-        self.assertFalse(self.records[-1]['engine_events_trusted'])
+        self.assertIsNone(self.traces[-1].kv_seconds)
+        self.assertIsNone(self.traces[-1].kv_loaded_tokens)
+        self.assertFalse(self.traces[-1].engine_events_trusted)
+
 
     def test_missing_latest_token_timestamp_invalidates_decode(self):
         for metrics in (None, NS(token_timestamp=float('inf'), engine_events=[], cached_tokens=0)):
@@ -949,12 +917,13 @@ class ReviewRegressionTests(RecordTestCase):
             trace.observe(output([1], 20, [event('SCHEDULED', 18)]))
             trace.observe(NS(token_ids=[2], req_metrics=metrics, status='FINISH'))
             trace.finish('success')
-            row = self.records[-1]
-            self.assertEqual(row['prefill_seconds'], 2)
-            self.assertIsNone(row['decode_seconds'])
-            self.assertIsNone(row['tpot_seconds'])
-            self.assertIsNone(row['engine_timestamps']['last_token'])
-            self.assertIsNone(row['output_tokens'])
+            row = self.traces[-1]
+            self.assertEqual(obs.interval(row.scheduled, row.first_token), 2)
+            self.assertIsNone(obs.interval(row.first_token, row.last_token))
+            self.assertIsNone(row.otel_span.attributes.get('lmdeploy.tpot_seconds'))
+            self.assertIsNone(row.last_token)
+            self.assertIsNone(row.output_tokens)
+
 
     def test_generator_cleanup_failure_is_not_logged_as_success(self):
         trace = obs.RequestTrace()
@@ -970,12 +939,13 @@ class ReviewRegressionTests(RecordTestCase):
             with self.assertRaisesRegex(RuntimeError, 'cleanup failed'):
                 await generator.aclose()
         asyncio.run(run())
-        self.assertEqual(self.records[-1]['status'], 'error')
+        self.assertEqual(self.traces[-1].engine_status, 'error')
+
 
     def test_coalesced_sse_records_share_one_accepted_send_time(self):
         observer = obs.OutputObservation(0)
-        body = (b'data: {"choices":[{"delta":{"reasoning":"x"}}]}\n'
-                b'data: {"choices":[{"delta":{"content":"y"}}]}\ndata: [DONE]\n')
+        body = (b'data: {"choices":[{"delta":{"reasoning":"x"}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"y"}}]}\n\ndata: [DONE]\n\n')
         with patch.object(obs.time, 'monotonic', return_value=10.) as clock:
             observer.feed(body)
         clock.assert_called_once()
@@ -984,9 +954,10 @@ class ReviewRegressionTests(RecordTestCase):
         self.assertEqual(row['max_output_gap_seconds'], 0)
         self.assertEqual(row['first_output_seconds'], 10)
 
+
     def test_deeply_malformed_sse_recovers_without_retaining_payload(self):
         observer = obs.OutputObservation(0)
-        observer.feed(b'data: ' + b'[' * 2000 + b']' * 2000 + b'\ndata: [DONE]\n')
+        observer.feed(b'data: ' + b'[' * 2000 + b']' * 2000 + b'\n\ndata: [DONE]\n\n')
         self.assertTrue(observer.terminal)
         self.assertFalse(observer.buffer)
         self.assertIsNone(observer.first_output)
@@ -1007,11 +978,10 @@ class ReviewRegressionTests(RecordTestCase):
                     sent.append(message)
                 async def receive():
                     return {'type': 'http.request', 'body': b''}
-                with patch.object(obs, 'get_writer'):
+                with patch.object(otel, 'initialize'):
                     middleware = obs.RequestTraceMiddleware(app)
                 await middleware({'type': 'http', 'method': 'POST', 'path': '/v1/chat/completions'}, receive, send)
-                self.assertEqual(self.records[-1]['event'], 'request_finished')
-                self.assertEqual(self.records[-1]['status'], result)
+                self.assertEqual(self.http_spans[-1].attributes.get('lmdeploy.outcome'), result)
                 self.assertEqual(sent[-1]['body'], b'{"result":"unchanged"}')
                 self.assertIsNone(obs.request_outcome_context.get())
         asyncio.run(run())
@@ -1023,10 +993,11 @@ class TargetedReviewTests(RecordTestCase):
         trace.observe(output(events=[NS(type=NS(name='KV_LOAD_STARTED'), timestamp=10, value=8),
                                      event('KV_LOAD_CANCELLED', 12)]))
         trace.finish('cancelled')
-        row = self.records[-1]
-        self.assertEqual(row['kv_load_status'], 'cancelled')
-        self.assertEqual(row['kv_load_seconds'], 2)
-        self.assertEqual(row['kv_loaded_tokens'], 0)
+        row = self.traces[-1]
+        self.assertEqual(row.kv_status, 'cancelled')
+        self.assertEqual(row.kv_seconds, 2)
+        self.assertEqual(row.kv_loaded_tokens, 0)
+
 
     def test_shrinking_or_restarted_event_stream_never_replays_totals(self):
         for latest in ([event('KV_LOAD_FINISHED', 13)], [event('QUEUED', 11), event('SCHEDULED', 14)]):
@@ -1035,11 +1006,12 @@ class TargetedReviewTests(RecordTestCase):
                                          event('KV_LOAD_FINISHED', 13)]))
             trace.observe(output([1], 15, latest))
             trace.finish('success')
-            row = self.records[-1]
-            self.assertFalse(row['engine_events_trusted'])
-            self.assertIsNone(row['kv_loaded_tokens'])
-            self.assertIsNone(row['kv_load_seconds'])
-            self.assertIsNone(row['output_tokens'])
+            row = self.traces[-1]
+            self.assertFalse(row.engine_events_trusted)
+            self.assertIsNone(row.kv_loaded_tokens)
+            self.assertIsNone(row.kv_seconds)
+            self.assertIsNone(row.output_tokens)
+
 
     def test_overlapping_loads_are_untrusted_instead_of_overwritten(self):
         trace = obs.RequestTrace()
@@ -1047,16 +1019,18 @@ class TargetedReviewTests(RecordTestCase):
                                      NS(type=NS(name='KV_LOAD_STARTED'), timestamp=11, value=4),
                                      event('KV_LOAD_FINISHED', 14)]))
         trace.finish('success')
-        self.assertFalse(self.records[-1]['engine_events_trusted'])
-        self.assertIsNone(self.records[-1]['kv_load_seconds'])
-        self.assertIsNone(self.records[-1]['kv_loaded_tokens'])
+        self.assertFalse(self.traces[-1].engine_events_trusted)
+        self.assertIsNone(self.traces[-1].kv_seconds)
+        self.assertIsNone(self.traces[-1].kv_loaded_tokens)
+
 
     def test_cancelled_lookup_preserves_elapsed_time_without_claiming_miss(self):
         trace = obs.RequestTrace()
         trace.observe(output(events=[event('KV_LOOKUP_STARTED', 10), event('KV_LOOKUP_CANCELLED', 12)]))
         trace.finish('cancelled')
-        self.assertEqual(self.records[-1]['store_lookup_seconds'], 2)
-        self.assertIsNone(self.records[-1]['store_matched_tokens'])
+        self.assertEqual(self.traces[-1].lookup_seconds, 2)
+        self.assertIsNone(self.traces[-1].store_matched_tokens)
+
 
     def test_disabled_generate_returns_original_generator(self):
         async def original(self, request):
@@ -1067,7 +1041,8 @@ class TargetedReviewTests(RecordTestCase):
             self.assertIs(generator.ag_code, original.__code__)
             await generator.aclose()
         asyncio.run(run())
-        self.assertEqual(self.records, [])
+        self.assertEqual(self.traces, [])
+
 
     def test_library_preprocessing_requires_explicit_opt_in(self):
         @obs.trace_preprocess
@@ -1079,69 +1054,19 @@ class TargetedReviewTests(RecordTestCase):
                 factory.assert_not_called()
         asyncio.run(run())
 
-    def test_flag_tokens_are_cached_at_startup(self):
+    def test_only_otlp_endpoint_enables_cached_flag(self):
         source = (SOURCE / 'lmdeploy/trace.py').read_text()
-        for value in ('1', 'TRUE', 'yes', 'on', 'Y'):
+        for env in ({}, {'LMDEPLOY_TRACE_ENABLED': '1', 'LMDEPLOY_TRACE_LOG_DIR': '/unused'}):
             module = {}
-            with patch.dict('os.environ', {'LMDEPLOY_TRACE_ENABLED': value}, clear=True):
+            with patch.dict('os.environ', env, clear=True):
                 exec(compile(source, 'trace.py', 'exec'), module)
-            self.assertTrue(module['ENABLED'])
-            with patch.dict('os.environ', {'LMDEPLOY_TRACE_ENABLED': '0'}, clear=True):
-                self.assertTrue(module['ENABLED'])
-        module = {}
-        with patch.dict('os.environ', {}, clear=True):
-            exec(compile(source, 'trace.py', 'exec'), module)
-        self.assertFalse(module['ENABLED'])
-        self.assertFalse(module['LOG_ENABLED'])
+            self.assertFalse(module['ENABLED'])
         for endpoint in ('OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT'):
-            for log_flag in (None, '0'):
-                env = {endpoint: 'http://localhost:4317'}
-                if log_flag is not None:
-                    env['LMDEPLOY_TRACE_ENABLED'] = log_flag
-                with self.subTest(endpoint=endpoint, log_flag=log_flag):
-                    module = {}
-                    with patch.dict('os.environ', env, clear=True):
-                        exec(compile(source, 'trace.py', 'exec'), module)
-                    self.assertTrue(module['ENABLED'])
-                    self.assertTrue(module['OTLP_ENABLED'])
-                    self.assertFalse(module['LOG_ENABLED'])
-
-    def test_each_prompt_has_unique_span_and_preserves_gateway_request_id(self):
-        async def run():
-            batches = []
-            for count in (2, 260):
-                async def app(scope, receive, send):
-                    traces = [obs.RequestTrace() for _ in range(count)]
-                    batches.append([trace.log_context['span_id'] for trace in traces])
-                    for trace in traces:
-                        trace.finish('success')
-                    await send({'type': 'http.response.start', 'status': 200, 'headers': []})
-                    await send({'type': 'http.response.body', 'body': b'{}', 'more_body': False})
-                async def receive():
-                    return {'type': 'http.request', 'body': b''}
-                sent = []
-                async def send(message):
-                    sent.append(message)
-                with patch.object(obs, 'get_writer'):
-                    middleware = obs.RequestTraceMiddleware(app)
-                before = len(self.records)
-                await middleware({'type': 'http', 'method': 'POST', 'path': '/v1/completions',
-                                  'headers': [(obs.HEADER.encode(), b'req_gateway_12345678')]}, receive, send)
-                records = self.records[before:]
-                self.assertEqual(len(records), count * 2)
-                self.assertEqual(len(set(batches[-1])), count)
-                for index, request_id in enumerate(batches[-1]):
-                    pair = [r for r in records if r['span_id'] == request_id]
-                    self.assertTrue(all(r['request_id'] == 'req_gateway_12345678' for r in pair))
-                    self.assertEqual({r['event'] for r in pair}, {'engine_request_finished', 'request_finished'})
-                    self.assertTrue(all(r['prompt_index'] == index for r in pair))
-                    for row in pair:
-                        self.assertEqual(len(row['trace_id']), 32)
-                        self.assertNotIn('trace_ids', row)
-                        self.assertNotIn('session_id', row)
-                self.assertIn((obs.HEADER.encode(), b'req_gateway_12345678'), sent[0]['headers'])
-            self.assertFalse(set(batches[0]) & set(batches[1]))
-        asyncio.run(run())
+            module = {}
+            with patch.dict('os.environ', {endpoint: 'http://collector.example:4317'}, clear=True):
+                exec(compile(source, 'trace.py', 'exec'), module)
+            with patch.dict('os.environ', {}, clear=True):
+                self.assertTrue(module['ENABLED'])
 
     def test_byte_filter_never_classifies_payload_strings_as_errors(self):
         observer = obs.OutputObservation(0)
@@ -1152,71 +1077,6 @@ class TargetedReviewTests(RecordTestCase):
         escaped = obs.OutputObservation(0)
         escaped.feed(b'data: {"choices":[{"delta":{"\\u0063ontent":"ok"}}]}\n')
         self.assertIsNotNone(escaped.content_first)
-
-
-class RuntimeFaultTests(unittest.TestCase):
-    def test_emit_configuration_and_writer_errors_never_escape(self):
-        before = obs._emit_failures
-        for error in (ValueError('missing directory'), ValueError('256MB'), OSError('disk failed')):
-            with patch.object(obs, 'get_writer', side_effect=error), patch.object(obs, 'LOG_ENABLED', True):
-                obs.emit('test', 'request')
-        self.assertEqual(obs._emit_failures - before, 3)
-
-    def test_emit_fault_preserves_original_exception_and_context_cleanup(self):
-        class OriginalError(Exception):
-            pass
-        async def app(scope, receive, send):
-            raise OriginalError('application failure')
-        async def no_op(*args):
-            pass
-        async def run():
-            with patch.object(obs, 'enabled', return_value=True), patch.object(obs, 'get_writer'):
-                middleware = obs.RequestTraceMiddleware(app)
-            with patch.object(obs, 'enabled', return_value=True), \
-                    patch.object(obs, 'get_writer', side_effect=OSError('writer failed')):
-                with self.assertRaises(OriginalError):
-                    await middleware({'type': 'http', 'method': 'POST', 'path': '/v1/completions'}, no_op, no_op)
-            self.assertIsNone(obs.request_outcome_context.get())
-        asyncio.run(run())
-
-    def test_continuous_write_failure_does_not_create_per_record_files(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with patch.object(obs.threading, 'Thread'):
-                writer = obs.JsonlWriter(directory, capacity=2048)
-            original = writer._file
-            class FailedFile:
-                def write(self, line):
-                    raise OSError('disk full')
-                def close(self):
-                    original.close()
-            writer._file = FailedFile()
-            for index in range(1000):
-                writer.submit({'index': index})
-            writer._stop.set()
-            with patch.object(obs.time, 'monotonic', return_value=100.):
-                with patch.object(writer, '_open', wraps=writer._open) as open_file:
-                    writer._run()
-                    open_file.assert_not_called()
-            self.assertEqual(writer.io_errors, 1)
-            self.assertEqual(writer.dropped, 999)
-            self.assertEqual(len(list(Path(directory).rglob('*.jsonl'))), 1)
-            self.assertEqual(writer.queue.unfinished_tasks, 0)
-            writer._stop.clear()
-            writer.submit({'recovered': True})
-            writer._stop.set()
-            with patch.object(obs.time, 'monotonic', return_value=102.):
-                writer._run()
-            rows = [json.loads(line) for file in Path(directory).rglob('*.jsonl')
-                    for line in file.read_text().splitlines()]
-            self.assertEqual(rows, [{'recovered': True}])
-            self.assertEqual(writer._retry_delay, 1.)
-
-    def test_log_directory_expands_home(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with patch.object(obs.Path, 'expanduser', return_value=Path(directory) / 'logs'):
-                writer = obs.JsonlWriter('~/logs')
-            writer.close()
-            self.assertTrue((Path(directory) / 'logs').is_dir())
 
 
 class RealImportSmokeTests(unittest.TestCase):
@@ -1231,7 +1091,7 @@ class RealImportSmokeTests(unittest.TestCase):
                        cwd=SOURCE, check=True, capture_output=True, text=True)
 
 
-class OptionalCORSRuntimeTests(unittest.TestCase):
+class OptionalCORSRuntimeTests(RecordTestCase):
     @unittest.skipUnless(importlib.util.find_spec('starlette') and importlib.util.find_spec('httpx'),
                          'Starlette/httpx unavailable; real CORS test pending')
     def test_browser_can_read_outer_trace_response_header(self):
@@ -1247,22 +1107,17 @@ class OptionalCORSRuntimeTests(unittest.TestCase):
         app = Starlette(routes=[Route('/v1/completions', endpoint, methods=['POST'])])
         app.add_middleware(CORSMiddleware, allow_origins=['https://client.example'], expose_headers=[obs.HEADER])
         app = obs.RequestTraceMiddleware(app)
-        with tempfile.TemporaryDirectory() as directory:
-            writer = obs.JsonlWriter(directory)
-            try:
-                with patch.object(obs, 'ENABLED', True), patch.object(obs, 'get_writer', return_value=writer):
-                    async def request():
-                        async with AsyncClient(transport=ASGITransport(app),
-                                               base_url='http://testserver', trust_env=False) as client:
-                            return await client.post('/v1/completions',
-                                                     headers={'Origin': 'https://client.example',
-                                                              'x-request-id': 'req_browser_123456'})
-                    response = asyncio.run(request())
-                self.assertEqual(response.status_code, 200)
-                self.assertIn(obs.HEADER, response.headers)
-                self.assertIn(obs.HEADER, response.headers['access-control-expose-headers'].lower())
-            finally:
-                writer.close()
+        async def request():
+            async with AsyncClient(transport=ASGITransport(app),
+                                   base_url='http://testserver', trust_env=False) as client:
+                return await client.post('/v1/completions',
+                                         headers={'Origin': 'https://client.example',
+                                                  'x-request-id': 'req_browser_123456'})
+        response = asyncio.run(request())
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(obs.HEADER, response.headers)
+        self.assertIn(obs.HEADER, response.headers['access-control-expose-headers'].lower())
+        self.assertEqual(self.http_spans[0].attributes['request.id'], 'req_browser_123456')
 
 
 class PromptIdentityTests(RecordTestCase):
@@ -1273,7 +1128,7 @@ class PromptIdentityTests(RecordTestCase):
                 sent.append(message)
             async def receive():
                 return {'type': 'http.disconnect'}
-            with patch.object(obs, 'get_writer'):
+            with patch.object(otel, 'initialize'):
                 middleware = obs.RequestTraceMiddleware(app)
             await middleware({'type': 'http', 'method': 'POST', 'path': '/v1/completions'}, receive, send)
             self.assertIsNone(obs.request_outcome_context.get())
@@ -1288,7 +1143,7 @@ class PromptIdentityTests(RecordTestCase):
             trace.finish('success')
             await send({'type': 'http.response.body', 'body': b'data: [DONE]\n\n'})
         sent = self.run_app(app)
-        ids = {r['request_id'] for r in self.records}
+        ids = {s.attributes.get('request.id') for s in self.exporter.get_finished_spans()}
         self.assertEqual(len(ids), 1)
         self.assertEqual(ids, {None})
         self.assertFalse(any(k == obs.HEADER.encode() for k, _ in sent[0]['headers']))
@@ -1317,18 +1172,18 @@ class PromptIdentityTests(RecordTestCase):
                     step += 1
             await send({'type': 'http.response.body', 'body': b'data: [DONE]\n\n'})
         self.run_app(app)
-        outputs = [r for r in self.records if r['event'] == 'request_finished']
+        outputs = self.prompt_spans
         self.assertEqual(len(outputs), 2)
         first, second = outputs
-        self.assertNotEqual(first['span_id'], second['span_id'])
-        self.assertIsNone(first['request_id'])
-        self.assertEqual(first['reasoning_first_seconds'], 2)
-        self.assertEqual(first['content_first_seconds'], 4)
-        self.assertIsNone(second['reasoning_first_seconds'])
-        self.assertEqual(second['content_first_seconds'], 6)
-        self.assertEqual({r['request_id'] for r in self.records if r['event'] == 'engine_request_finished'},
-                         {first['request_id'], second['request_id']})
-        self.assertNotIn('private', json.dumps(self.records))
+        self.assertNotEqual(first.context.span_id, second.context.span_id)
+        self.assertIsNone(first.attributes.get('request.id'))
+        self.assertEqual(first.attributes.get('lmdeploy.reasoning_first_seconds'), 2)
+        self.assertEqual(first.attributes.get('lmdeploy.content_first_seconds'), 4)
+        self.assertIsNone(second.attributes.get('lmdeploy.reasoning_first_seconds'))
+        self.assertEqual(second.attributes.get('lmdeploy.content_first_seconds'), 6)
+        self.assertEqual({t.request_id for t in self.traces},
+                         {first.attributes.get('request.id'), second.attributes.get('request.id')})
+        self.assertNotIn('private', json.dumps(self.exported_attributes()))
 
     def test_prepared_but_unconsumed_prompts_are_recorded_on_disconnect(self):
         async def app(scope, receive, send):
@@ -1339,10 +1194,10 @@ class PromptIdentityTests(RecordTestCase):
             raise asyncio.CancelledError()
         with self.assertRaises(asyncio.CancelledError):
             self.run_app(app)
-        engines = [r for r in self.records if r['event'] == 'engine_request_finished']
+        engines = self.traces
         self.assertEqual(len(engines), 2)
-        self.assertTrue(all(r['status'] == 'cancelled' and r['output_tokens'] is None for r in engines))
-        self.assertTrue(all(not r['token_counts_complete'] for r in engines))
+        self.assertTrue(all(r.engine_status == 'cancelled' and r.output_tokens is None for r in engines))
+        self.assertTrue(all(not r.token_counts_complete for r in engines))
         self.assertIsNone(obs.request_outcome_context.get())
 
     def test_unmapped_or_ambiguous_choices_do_not_invent_prompt_observations(self):
@@ -1360,9 +1215,9 @@ class PromptIdentityTests(RecordTestCase):
                     await send({'type': 'http.response.body', 'body': body[offset:offset + 7], 'more_body': True})
             await send({'type': 'http.response.body', 'body': b'data: [DONE]\n\n'})
         self.run_app(app)
-        outputs = [r for r in self.records if r['event'] == 'request_finished']
+        outputs = self.prompt_spans
         self.assertEqual(len(outputs), 2)
-        self.assertTrue(all(r['reasoning_first_seconds'] is None for r in outputs))
+        self.assertTrue(all(r.attributes.get('lmdeploy.reasoning_first_seconds') is None for r in outputs))
 
 
 class SSEFramingTests(unittest.TestCase):
@@ -1429,7 +1284,7 @@ if __name__ == '__main__':
 
 
 class ReviewCorrelationTests(RecordTestCase):
-    def run_local(self, count=3, header=None, response_id=None, status=200, traceparent=None):
+    def run_request(self, count=3, header=None, response_id=None, status=200, traceparent=None):
         async def app(scope, receive, send):
             for _ in range(count):
                 trace = obs.RequestTrace()
@@ -1447,73 +1302,36 @@ class ReviewCorrelationTests(RecordTestCase):
             headers = [(b'x-request-id', header)] if header is not None else []
             if traceparent is not None:
                 headers.append((b'traceparent', traceparent.encode()))
-            with patch.object(obs, 'get_writer'), patch.object(otel, '_tracer', None):
+            with patch.object(otel, 'initialize'):
                 await obs.RequestTraceMiddleware(app)(
                     {'type': 'http', 'method': 'POST', 'path': '/v1/completions',
                      'headers': headers}, receive, send)
             return sent
         return asyncio.run(run())
 
-    def test_local_batch_has_http_group_and_independent_prompt_spans(self):
-        self.run_local()
-        rows = self.records[:]
-        self.assertEqual(len(rows), 6)
-        self.assertEqual(len({r['trace_id'] for r in rows}), 1)
-        self.assertEqual(len({r['parent_span_id'] for r in rows}), 1)
-        self.assertEqual(len({r['span_id'] for r in rows}), 3)
-        self.assertTrue(all(r['request_id'] is None for r in rows))
-        self.run_local()
-        self.assertNotEqual(rows[0]['trace_id'], self.records[-1]['trace_id'])
-
-    def test_local_logs_inherit_valid_parent_without_sdk(self):
-        for flags in ('00', '01'):
-            with self.subTest(flags=flags):
-                self.records.clear()
-                parent = f'00-{"a" * 32}-{"b" * 16}-{flags}'
-                self.run_local(traceparent=parent)
-                self.assertEqual({r['trace_id'] for r in self.records}, {'a' * 32})
-                http_ids = {r['parent_span_id'] for r in self.records}
-                self.assertEqual(len(http_ids), 1)
-                self.assertNotIn('b' * 16, http_ids)
-                self.assertFalse(http_ids & {r['span_id'] for r in self.records})
-                self.run_local(count=0, status=400, traceparent=parent)
-                rejected = self.records[-1]
-                self.assertEqual(rejected['trace_id'], 'a' * 32)
-                self.assertEqual(rejected['parent_span_id'], 'b' * 16)
-                self.assertNotIn(rejected['span_id'], http_ids)
-
-    def test_local_logs_reject_invalid_or_zero_parent(self):
-        for parent in ('invalid', f'00-{"0" * 32}-{"b" * 16}-01',
-                       f'00-{"a" * 32}-{"0" * 16}-01', f'00-{"a" * 32}-{"b" * 16}-01-extra'):
-            with self.subTest(parent=parent):
-                self.records.clear()
-                self.run_local(count=0, traceparent=parent)
-                row = self.records[0]
-                self.assertNotIn(row['trace_id'], ('a' * 32, '0' * 32))
-                self.assertNotIn('parent_span_id', row)
 
     def test_rejected_request_has_http_context_without_invented_request_id(self):
-        sent = self.run_local(count=0, status=400)
-        row = self.records[0]
-        self.assertEqual(len(row['trace_id']), 32)
-        self.assertEqual(len(row['span_id']), 16)
-        self.assertIsNone(row['request_id'])
+        sent = self.run_request(count=0, status=400)
+        span, = self.http_spans
+        self.assertTrue(span.context.is_valid)
+        self.assertEqual(span.attributes['http.response.status_code'], 400)
+        self.assertNotIn('request.id', span.attributes)
         self.assertEqual(sent[0]['headers'], [])
 
     def test_invalid_id_count_warn_once_and_existing_response_header_preserved(self):
         with patch.object(otel, '_invalid_request_ids', 0):
             with self.assertLogs(otel.__name__, level='WARNING') as logs:
                 for header in (b'short', b'has.dot:123456789', b'x'*65):
-                    sent = self.run_local(count=0, header=header, response_id=b'upstream-response')
+                    sent = self.run_request(count=0, header=header, response_id=b'upstream-response')
                     self.assertIn((b'x-request-id', b'upstream-response'), sent[0]['headers'])
             self.assertEqual(len(logs.output), 1)
             self.assertNotIn('has.dot', str(logs.output))
             self.assertEqual(otel.invalid_request_id_count(), 3)
-            self.run_local(count=0)
+            self.run_request(count=0)
             self.assertEqual(otel.invalid_request_id_count(), 3)
-        sent = self.run_local(header=b'req_valid_12345678', response_id=b'app-response')
+        sent = self.run_request(header=b'req_valid_12345678', response_id=b'app-response')
         self.assertIn((b'x-request-id', b'app-response'), sent[0]['headers'])
-        self.assertEqual(self.records[-1]['request_id'], 'req_valid_12345678')
+        self.assertEqual(self.http_spans[-1].attributes['request.id'], 'req_valid_12345678')
 
     def test_explicit_prompt_positions_survive_reordered_preprocessing(self):
         @obs.trace_preprocess
@@ -1528,13 +1346,6 @@ class ReviewCorrelationTests(RecordTestCase):
             finally:
                 obs.request_outcome_context.reset(token)
         asyncio.run(run())
-
-    def test_late_writer_submission_is_counted(self):
-        with tempfile.TemporaryDirectory() as directory:
-            writer = obs.JsonlWriter(directory)
-            writer.close()
-            writer.submit({'event': 'late'})
-            self.assertEqual(writer.dropped, 1)
 
 
     def test_generate_wrapper_preserves_async_iteration_contract(self):

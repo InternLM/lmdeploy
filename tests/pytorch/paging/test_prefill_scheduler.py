@@ -15,8 +15,10 @@ from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 
 
-def test_scheduler_publishes_cached_tokens_for_accepted_prefix_hit():
+@pytest.mark.parametrize('trace_enabled', [False, True])
+def test_scheduler_publishes_cached_tokens_for_accepted_prefix_hit(monkeypatch, trace_enabled):
     from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    monkeypatch.setattr('lmdeploy.pytorch.messages.TRACE_ENABLED', trace_enabled)
     block_size = 16
     seq_meta = SequenceMeta(block_size, strategy=ARSequenceStrategy())
     cache_config = CacheConfig(max_batches=1,
@@ -41,10 +43,24 @@ def test_scheduler_publishes_cached_tokens_for_accepted_prefix_hit():
     assert seq.num_history_ids == block_size * 2
     assert seq.cached_tokens == block_size * 2
 
+    if trace_enabled:
+        state = seq.prefill_trace
+        record = state.dispatch(seq, seq.num_history_ids, seq.num_token_ids, 1)
+        state.complete(*record[1:], now=2)
+        state.accept()
+        assert state.summary.local_cached_tokens == block_size * 2
+        assert state.summary.external_cached_tokens == 0
+        assert state.summary.computed_input_tokens == 1
+    else:
+        assert seq.prefill_trace is None
+
     seq.update_token_ids(torch.tensor([5]))
 
     assert seq.cached_tokens == 0
     assert seq.prefix_cache.match_start_step == -1
+    if trace_enabled:
+        assert seq.prefill_trace is not state
+        assert seq.prefill_trace.summary is None
 
 
 @pytest.mark.parametrize('no_drop', [False, True])

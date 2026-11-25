@@ -1,4 +1,4 @@
-# OpenTelemetry request tracing and optional JSONL logs
+# OpenTelemetry request tracing
 
 Request phase timing follows vLLM request-level metrics: queue, Prefill to first token, and Decode
 from first to last token. Completed phase spans also expose these intervals in the platform
@@ -30,22 +30,22 @@ These are tracing identifiers; `request_id` remains the read-only gateway busine
 3. At prompt completion, the observer emits the prompt summary and completed Prefill/Decode spans.
    HTTP completion supplies transport and visible-output summaries. The prompt index links
    each phase to the prompt that produced it.
-4. OpenTelemetry's bounded background processor exports OTLP. Independently, an optional bounded
-   writer queue serializes JSONL summaries to disk. Neither output requires per-token spans,
-   synchronous request-path disk/network I/O, extra Store RPCs, or internal streaming for nonstream
-   requests. Unknown timing boundaries remain unknown.
+4. OpenTelemetry's bounded background processor exports completed spans over OTLP. There are no
+   per-token spans, synchronous request-path disk/network I/O, extra Store RPCs, or internal
+   streaming for nonstream requests. Unknown timing boundaries remain unknown.
 
-| Source entry point                                                                                            | Responsibility                                                                               |
-| ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `lmdeploy/trace.py`, `lmdeploy/serve/openai/api_server.py`                                                    | Read startup enable flags and connect tracing to the API server                              |
-| `lmdeploy/serve/core/async_engine.py`, `lmdeploy/serve/openai/endpoints/completions.py`                       | Attach per-prompt state, assign batch positions and observe the existing generation path     |
-| `lmdeploy/serve/core/chat_runner.py`, `lmdeploy/serve/openai/chat_completions/`                               | Pass the resolved model and explicit choice identity through existing preprocessing metadata |
-| `lmdeploy/serve/observability/request_trace.py`                                                               | HTTP middleware, timing aggregation, bounded SSE observation and asynchronous JSONL writing  |
-| `lmdeploy/serve/observability/output_trace.py`                                                                | Payload-free metadata shared by streaming adapters and the accepted-send observer            |
-| `lmdeploy/serve/observability/otel_trace.py`                                                                  | SDK initialization, parent propagation, metadata filtering, spans and OTLP export            |
-| `lmdeploy/messages.py`, `lmdeploy/pytorch/messages.py`                                                        | Carry optional Store event boundaries and counts with ordinary engine output                 |
-| `lmdeploy/pytorch/kv_connector/mooncake/store/scheduler.py`, `lmdeploy/pytorch/paging/kv_load_coordinator.py` | Observe existing Store lookup and load lifecycle                                             |
-| `requirements/serve.txt`, `tests/observability/`, `tests/test_lmdeploy/serve/test_request_trace_*.py`         | Serving dependencies, behavioral/transport regression tests and real-package checks          |
+| Source entry point                                                                                               | Responsibility                                                                               |
+| ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `lmdeploy/trace.py`, `lmdeploy/serve/openai/api_server.py`                                                       | Read startup enable flags and connect tracing to the API server                              |
+| `lmdeploy/serve/core/async_engine.py`, `lmdeploy/serve/openai/endpoints/completions.py`                          | Attach per-prompt state, assign batch positions and observe the existing generation path     |
+| `lmdeploy/serve/core/chat_runner.py`, `lmdeploy/serve/openai/chat_completions/`                                  | Pass the resolved model and explicit choice identity through existing preprocessing metadata |
+| `lmdeploy/serve/observability/request_trace.py`                                                                  | HTTP middleware, timing aggregation, bounded SSE observation and request outcome tracking    |
+| `lmdeploy/serve/observability/output_trace.py`                                                                   | Payload-free metadata shared by streaming adapters and the accepted-send observer            |
+| `lmdeploy/serve/observability/otel_trace.py`                                                                     | SDK initialization, parent propagation, metadata filtering, spans and OTLP export            |
+| `lmdeploy/messages.py`, `lmdeploy/pytorch/messages.py`                                                           | Carry optional Store event boundaries and counts with ordinary engine output                 |
+| `lmdeploy/pytorch/kv_connector/mooncake/store/scheduler.py`, `lmdeploy/pytorch/paging/kv_load_coordinator.py`    | Observe existing Store lookup and load lifecycle                                             |
+| `lmdeploy/pytorch/trace.py`, `lmdeploy/pytorch/engine/inputs_maker.py`, `lmdeploy/pytorch/engine/engine_loop.py` | Accumulate bounded prefill diagnostics at host dispatch/completion boundaries                |
+| `requirements/serve.txt`, `tests/observability/`, `tests/test_lmdeploy/serve/test_request_trace_*.py`            | Serving dependencies, behavioral/transport regression tests and real-package checks          |
 
 ## Export traces to a Collector
 
@@ -66,10 +66,10 @@ export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 export OTEL_RESOURCE_ATTRIBUTES="deployment.environment=prod,k8s.cluster.name=cluster,k8s.namespace.name=ns,k8s.pod.name=pod,k8s.node.name=node"
 export OTEL_BSP_MAX_QUEUE_SIZE=2048
 export OTEL_BSP_MAX_EXPORT_BATCH_SIZE=512
-export OTEL_BSP_SCHEDULE_DELAY=1000
+export OTEL_BSP_SCHEDULE_DELAY=5000
 ```
 
-The endpoint enables tracing independently of JSONL. Both outputs can be enabled together.
+Tracing is disabled unless an OTLP endpoint is configured before startup.
 `OTEL_SERVICE_NAME` is configurable and defaults to `lmdeploy-full`; register the configured name
 in the platform's exact service allowlist before deployment. The engine and role remain
 `lmdeploy` and `full`, regardless of resource overrides. A service name does not enable P/D tracing.
@@ -77,11 +77,20 @@ OTLP/gRPC is the default; `http/protobuf` supports a Collector HTTP endpoint on 
 Signal-specific `OTEL_EXPORTER_OTLP_TRACES_*` settings take precedence. The HTTP generic endpoint
 gets `/v1/traces` appended by the exporter; a signal-specific endpoint must include the path.
 The SDK handles TLS, certificates, export timeout and transport retries using its standard settings.
-Never send JSONL to the trace pipeline. Collector persistent buffering is deployment owned.
+Collector persistent buffering is deployment owned.
+
+The three `OTEL_BSP_*` settings above are optional and show the defaults, matching vLLM's use
+of the OpenTelemetry SDK: a 5-second scheduled delay, batches of up to 512 completed spans and
+a queue of 2,048 spans. A full batch can be exported earlier. Ended spans are pushed
+asynchronously; an unfinished request is not exported periodically. The delay affects when
+data becomes visible, not the recorded span timestamps or request duration. Collector batching
+is separate and may add another delay. Existing deployment overrides still take precedence.
+Five seconds is not an upper bound on delivery time or data loss on forced termination;
+queued spans, export retries and shutdown behavior also matter.
 
 The private provider uses ParentBased(ALWAYS_ON), a bounded BatchSpanProcessor and asynchronous
 export. It respects an upstream unsampled flag; there is no additional random source sampling.
-With JSONL disabled, unsampled HTTP requests skip prompt observers and output inspection while
+Unsampled HTTP requests skip prompt observers and output inspection while
 preserving ordinary response behavior and valid request-ID correlation.
 Invalid startup settings fail startup; runtime instrumentation/export failures do not replace an
 inference result. No SDK work or per-token span creation is added to the engine output loop.
@@ -112,6 +121,11 @@ that HTTP code as ERROR. Phase spans and the prompt's `lmdeploy.outcome` describ
 Token completeness is explicit through `lmdeploy.token_counts_complete`; failed/cancelled counts
 are partial. Provider initialization is serialized once per process, and the SDK owns shutdown.
 Handle waiting and mean TPOT use `lmdeploy.handle_wait_seconds` and `lmdeploy.tpot_seconds`.
+
+For raw SSE fallback observation, a terminal event is accepted only after its blank-line
+delimiter is sent. A truncated terminal event does not mark the request successful. Event
+headers still identify oversized terminal records without retaining their payloads. Normal
+server adapters continue to use payload-free metadata attached to complete output frames.
 
 LMDeploy exports both phase names directly with `inference.engine=lmdeploy`,
 `inference.role=full`, a valid inbound `request.id` and optional `session.id` when available.
@@ -196,6 +210,70 @@ lmdeploy.preprocess_seconds
 `gen_ai.usage.cached_tokens` carries the same value for platform compatibility; do not add them.
 The platform accepts scalar attributes only, so finish reasons remain `lmdeploy.finish_reason`
 rather than introducing the array-valued `gen_ai.response.finish_reasons`.
+`gen_ai.usage.input_tokens` includes cached input. The cache-read count is a subset, not an
+additional input count. The compatibility cache alias and `gen_ai.latency.*` fields are part of
+the platform contract, not additional standard GenAI attributes. Token counts describe usage;
+they do not calculate monetary cost or GPU work. The Prefill summary below distinguishes cache
+sources, computation and recomputation where the PyTorch engine exposes them.
+
+### Request-level TTFT diagnostics
+
+With tracing enabled, PyTorch AR and ARSpec (including MTP) export this fixed-size summary on
+the corresponding `model.prefill` span. There is one collection mode, with no additional switch or
+per-chunk spans, events, arrays or token text. The summary is frozen when the engine accepts
+the final prefill output, then travels only with the terminal engine output, including
+nonstreaming and coalesced output. It is not copied on each decode token. It does not change
+sampling, chunking, cache policy or output behavior.
+If complete Prefill timing boundaries are unavailable, no `model.prefill` span or diagnostic
+summary is exported; the values are not moved to `inference` as a fallback.
+Host accounting follows the OTLP endpoint setting; it has no separate switch.
+If decode prefetch preempts a prefill whose output is then discarded, its executed work still
+counts. Accounting continues through rescheduling and recomputation until a prefill output is
+accepted; a completed forward alone does not freeze the summary.
+
+All names below have the prefix `lmdeploy.prefill.`:
+
+| Attribute                                                  | Meaning and TTFT use                                                                                                                                                       |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chunk_count`                                              | Number of completed target-model prefill forwards before the first output; a normal unsplit prefill counts as one.                                                         |
+| `computed_tokens`                                          | Total target-model token positions executed by these forwards, including retained history and replay work.                                                                 |
+| `computed_input_tokens`                                    | Executed positions within the current input; repeated execution is included.                                                                                               |
+| `recomputed_tokens`                                        | Executed positions below a previously completed prefill boundary, including positions previously skipped by cache reuse. Reveals replay work.                              |
+| `min_chunk_tokens`, `max_chunk_tokens`                     | Smallest and largest executed chunks; distinguish small scheduling slices from large forwards.                                                                             |
+| `local_cached_tokens`, `external_cached_tokens`            | Accepted reuse within the current input at its initial dispatch, split between local cache and successfully loaded external KV. Lookup hits and failed loads do not count. |
+| `inter_chunk_wait_seconds`, `max_inter_chunk_wait_seconds` | Total and longest host-observed gap from completion of one chunk to dispatch of the next when no chunk of this request is in flight.                                       |
+| `preemption_count`, `reschedule_count`                     | Preemption episodes and subsequent actual dispatches before the first output. Deactivation and reclamation in one episode are counted once.                                |
+
+Cache counts exclude previous-turn history and tentative matches rolled back before dispatch.
+They describe initial reuse; they are not cumulative cache-lookup counts. Replay may make
+`computed_input_tokens + local_cached_tokens + external_cached_tokens` exceed the input size.
+The coordinator publishes one accepted external interval after aggregating all TP ranks;
+duplicate progress and failed loads do not add intervals. Loads after initial dispatch are
+outside this initial-reuse summary and remain observable through the Store/load metrics.
+The summary belongs to one input turn, so resumed sessions and batched prompts do not share it.
+
+The waiting values are a **lower bound on scheduling gaps**, measured with the host monotonic
+clock. A prefetched chunk is already in flight and contributes no host gap, even if it later
+waits in the executor. Completion notification may also arrive after GPU completion. Do not
+interpret the remaining prefill interval as GPU compute time, or add Store lookup/load time
+to these intervals: those operations can overlap existing queue/prefill timing.
+
+Use input size, cache reuse and computed tokens to identify extra work; use chunk sizes,
+host gaps and preemption/replay counters to identify scheduling pressure. These summaries do
+not identify a slow GPU kernel. Existing initial queue, preprocessing, handle wait and Store
+lookup/load measurements remain available and retain their timing boundaries.
+
+DLLM and TurboMind do not provide this additional summary; their existing tracing is unchanged.
+Unsupported paths, missing native metrics
+and requests without a terminal native output leave the summary absent, rather than reporting zeros.
+An accounting error invalidates only affected inputs and clears their pending accounting;
+later inputs continue normally. Failed/cancelled submission and output waits also invalidate
+affected summaries. A successful executor completion counts even without generated tokens;
+a missing completion does not establish executed work. Diagnostics report the operation,
+exception type and a process-local omitted-summary count, with warnings at powers of two.
+Exception text and request data are not logged. No GPU synchronization is introduced.
+Platform attribute allowlists must include the new scalar keys; span-name allowlists and
+parent propagation do not change.
 
 Span events:
 
@@ -206,68 +284,24 @@ llm.stream.end
 error
 ```
 
-## Enable logging
-
-JSONL logging is disabled by default, including when OTLP tracing is enabled.
-Only set `LMDEPLOY_TRACE_ENABLED=1` when local files are required. Before starting the API server, set:
-
-```bash
-export LMDEPLOY_TRACE_ENABLED=1
-export LMDEPLOY_TRACE_LOG_DIR=/absolute/writable/logs/instance
-# Optional: 256 MiB by default, with additional UTC date rotation.
-export LMDEPLOY_TRACE_LOG_MAX_MB=256
-```
-
-The directory is expanded with `expanduser`, validated as writable and absolute, and created if
-missing. Flags are cached at process startup; settings take effect after restart.
-
-Logging preserves generation settings and streaming mode. Unavailable engine timings stay null;
-nonstream backend execution is never switched to internal streaming for logging.
-
-JSONL files are written to:
-
-```text
-<root>/lmdeploy/<hostname>/<YYYYMMDDTHHMMSS.ffffffZ>.<PID>.jsonl
-```
-
-Streaming adapters attach only choice indices and semantic flags to their existing serialized
-frames. The observer consumes that metadata after a successful ASGI send, without reparsing JSON.
-A shared bounded parser remains for unannotated fragmented/coalesced/CRLF frames.
-Per-choice flags are routed by explicit wire indices, even when one frame contains multiple choices.
-Unknown or ambiguous owners
-only contribute to HTTP observations, never to a guessed prompt. No shared last-yield state is used.
-Per-request engine observers are bound once before generation; token counts and
-status are read once per output. None of these paths retain generated text.
-
-Files are created exclusively; collisions use numeric suffixes. Rotation follows UTC dates and
-configured size. Old files remain until manually removed. JSONL bypasses native logging levels.
-Native stdout/stderr and its redirection remain deployment owned. Rotation does not bound total
-disk use. For example, assuming 2 KiB total JSONL per request at 2,000 requests/s gives about 354 GB
-per day before filesystem overhead. This is a sizing example, not measured log volume; provision
-capacity and an external cleanup policy according to actual traffic.
-
-The API server opts in when enabled. Library `pipeline()`/`AsyncEngine` users additionally pass
-`enable_request_trace=True`; setting the environment alone does not create their writer thread.
+The API server enables the observer when an OTLP endpoint is configured. Library
+`pipeline()`/`AsyncEngine` users additionally pass `enable_request_trace=True`.
 `PreprocessedRequest.trace` is explicitly typed and owned by the existing request, with no side table.
+Tracing does not write local request files.
 
-## Correlation and records
+## Correlation and outcomes
 
 For repeated correlation headers, the first occurrence is used, including when it fails validation.
 `request_id` is the validated incoming `x-request-id`, never generated or rewritten by the engine.
-Missing/invalid IDs remain null in JSONL and are omitted from spans. The gateway contract requires
+Missing/invalid IDs are omitted from spans. The gateway contract requires
 16–64 ASCII letters, digits, underscores or hyphens. Invalid values increment the process-local
 `otel_trace.invalid_request_id_count()` and emit one warning per process without the original value.
 Missing headers are not counted as invalid. No fallback business request ID is generated.
 An existing response `x-request-id` is preserved; a validated inbound ID is added only if that
 response header is absent. CORS exposes the header. Request/response bodies are unchanged.
-All prompts in one HTTP request share the gateway request ID. Each prompt has a distinct span ID
-and a zero-based `prompt_index`. Engine/output JSONL records share that prompt's `span_id` and
-its `trace_id`. In local-only mode a valid platform v00 `traceparent` supplies the trace ID and
-upstream parent; missing/invalid context generates a local trace ID. Each HTTP request gets a new
-HTTP span ID. All prompt records inherit the trace ID, use distinct span IDs, and reference the
-HTTP span through `parent_span_id`. Rejected requests still log their HTTP trace/span IDs and any
-valid upstream parent. This path needs no OpenTelemetry dependency, does not overwrite the gateway
-request ID, and does not create exported OTel spans.
+All prompts in one HTTP request share the gateway request ID and trace ID. Each prompt has a
+separate span ID, a zero-based `lmdeploy.prompt_index`, and the HTTP span as its parent.
+Rejected requests retain an HTTP span without an invented prompt.
 The completions endpoint supplies prompt positions explicitly when preprocessing a batch.
 Chat fan-out passes explicit choice indices through preprocessing metadata. The indices distinguish
 separate engine executions of a shared prompt without adding business request IDs.
@@ -290,42 +324,16 @@ up to 1024 characters are accepted, matching the metadata string-size bound; con
 oversized values and credential-like values are omitted. The request ID format is unchanged.
 Focused SDK tests cover these session ID boundaries and actual gRPC/HTTP protobuf export.
 
-`engine_request_finished` and `request_finished` remain per-prompt summaries, including cancelled
-prepared prompts. Rejected HTTP requests have an HTTP summary without an invented prompt.
+HTTP, prompt and completed phase spans carry `lmdeploy.outcome`: `success`, `error` or `cancelled`.
+Phase outcomes reflect the engine result; they are not separate per-phase exception diagnoses.
+HTTP status is recorded only when headers were accepted, so an SSE stream can retain HTTP 200
+while its span records an error or cancellation. Failed/cancelled requests keep available partial
+usage with `lmdeploy.token_counts_complete=false`; unknown phase boundaries are omitted.
 
 The generation wrapper returns an async generator and retains the original callable through
 `__wrapped__`; introspection should use `inspect.unwrap`. Subclasses overriding preprocessing or
 generation must preserve the tracing wrapper or call the base implementation.
 All tracing enable flags are process-start snapshots; environment changes require a restart.
-
-| Fields                                                                                                       | Purpose and interpretation                                                                                                                |
-| ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `timestamp`, `hostname`, `pid`, `backend`                                                                    | Locate the instance and corresponding native logs                                                                                         |
-| `request_id`, `prompt_index`, `choice_index`, `event`, `component`, `path`                                   | Associate an engine execution's records and locate its batch prompt and chat choice                                                       |
-| `model`, `base_model`                                                                                        | Identify the resolved API model/LoRA and the underlying model                                                                             |
-| `status`, `http_status`, `disconnected`, `finish_reason`                                                     | Distinguish success, errors, cancellation and length limits; HTTP 200 alone is insufficient                                               |
-| `input_tokens`, `output_tokens`, `cached_tokens`, `max_output_tokens`                                        | Distinguish long prompts, long generation, cache reuse and configured output limits                                                       |
-| `engine_events_trusted`                                                                                      | False if native event history shrinks, resets or contains overlapping loads; affected event metrics become null instead of being replayed |
-| `token_counts_complete`                                                                                      | True only with API counters and successful terminal engine output; failed/cancelled counts are partial                                    |
-| `preprocess_seconds`                                                                                         | Preprocess entry through rendering, tokenization, multimodal processing and validation                                                    |
-| `handle_wait_seconds`                                                                                        | Generate entry through acquisition of an engine request handle                                                                            |
-| `queue_seconds`                                                                                              | Native QUEUED through first SCHEDULED                                                                                                     |
-| `prefill_seconds`                                                                                            | First SCHEDULED through first observed native token boundary                                                                              |
-| `decode_seconds`                                                                                             | First through last native token boundary                                                                                                  |
-| `engine_ttft_seconds`                                                                                        | Native QUEUED through first token                                                                                                         |
-| `tpot_seconds`                                                                                               | Decode interval divided by native generated token count minus one (including stop tokens); null without usable boundaries                 |
-| `store_lookup_seconds`                                                                                       | Sum of observed lookup submission-to-result intervals, including asynchronous polling waits                                               |
-| `store_matched_tokens`                                                                                       | Maximum newly reusable token count returned by observed Store lookups                                                                     |
-| `kv_load_seconds`, `kv_loaded_tokens`, `kv_load_status`                                                      | Observed external-load duration, cumulative successfully published token ranges, and pending/success/failed/cancelled outcome             |
-| `token_delivery_delay_seconds`                                                                               | First native token timestamp through its receipt by frontend generation code                                                              |
-| `max_engine_output_gap_seconds`                                                                              | Largest monotonic interval between frontend receipts of nonempty engine output batches                                                    |
-| `engine_timestamps`                                                                                          | Native wall-clock queue/schedule/first-token/last-token times for correlation with delivery and native logs                               |
-| `http_received_unix_seconds`                                                                                 | HTTP entry wall clock; shared by prompts within a batch                                                                                   |
-| `total_seconds`                                                                                              | This prompt's preprocessing entry through generation exit                                                                                 |
-| `http_first_body_seconds`, `http_total_seconds`                                                              | HTTP entry through first accepted body / response exit; shared transport measurements for batch prompts                                   |
-| `first_output_seconds`                                                                                       | This prompt's preprocessing entry through first visible reasoning/content/tool output                                                     |
-| `max_output_gap_seconds`                                                                                     | Largest gap between visible SSE observations; metadata and terminal markers are excluded                                                  |
-| `reasoning_first_seconds`, `reasoning_last_seconds`, `content_first_seconds`, `reasoning_to_content_seconds` | Locate visible reasoning and content stages; null when unobserved                                                                         |
 
 Output token counts use the same cumulative `GenOut` counters consumed by the API adapters,
 after stop-token filtering and the configured stop-token inclusion policy. No text is retokenized.
@@ -336,9 +344,8 @@ remain unknown, not zero. Failed/cancelled results report available partial API 
 Input usage includes cached tokens. OpenAI input usage is directly comparable; Anthropic Messages
 reports uncached `input_tokens` and separate `cache_read_input_tokens`, whose sum is comparable.
 
-These fields address observed slow-request patterns: long prompts, KV waits, engine-to-frontend
-first-output gaps, and stalls after generation starts. They locate intervals without claiming a
-network or GPU root cause. Output-batch gaps are not per-token ITL, and TPOT is an average.
+These fields help locate long prompts, KV waits and visible-output stalls without claiming a
+network or GPU root cause. Visible-output gaps are not per-token ITL, and TPOT is an average.
 
 ## Timing boundaries and unknown values
 
@@ -358,9 +365,8 @@ reusing an earlier timestamp.
 Local elapsed times use monotonic clocks. HTTP and prompt span ends use their starting epoch plus
 monotonic elapsed time, so wall-clock adjustments during execution cannot reverse their durations.
 Prompt starts share their HTTP request's clock anchor, keeping parent/child ordering consistent.
-Prompt JSONL and span E2E values share the same measurement. Native events and token times keep the
-existing wall clock for PyTorch/TurboMind interoperability. Invalid, missing or regressing intervals
-are null.
+Native events and token times keep the existing wall clock for PyTorch/TurboMind interoperability. Invalid, missing or regressing intervals
+are omitted from spans.
 Cross-host comparisons and native-to-frontend delay require synchronized clocks. TurboMind token
 time is a Python callback observation, while PyTorch supplies model-agent timing. Buffered output
 can limit boundary precision; missing boundaries cannot diagnose an unobserved interval.
@@ -368,7 +374,10 @@ can limit boundary precision; missing boundaries cannot diagnose an unobserved i
 Visible stages are observed from Chat/Completions, Responses, Messages and native Generate SSE.
 Nonstream JSON and hidden reasoning do not infer visible stage times. The fallback parser bounds SSE
 lines to 1 MiB; oversized or malformed lines can leave stages unknown without changing the response
-body. Responses terminal event headers preserve completion for oversized terminal payloads.
+body. Responses terminal event headers preserve completion for oversized terminal payloads
+only after a data line and the terminating blank line. Raw SSE fields must start at the line
+boundary; an event without data or without its final blank line is not a completed event,
+even at clean EOF. This matches the API Server adapters' framing.
 Annotated frames are observed without this parser limit.
 Records accepted in one ASGI body share its observation timestamp; parsing time is not counted as
 a visible output gap. Frames use JSON semantics, including escaped keys; words inside generated
@@ -407,22 +416,24 @@ KV events travel with ordinary engine outputs. An engine that dies before return
 lose pending events; missing load results are unknown. Request cancellation, lookup cancellation,
 request cleanup and worker-drain behavior retain their native ownership rules.
 
-## Lightweight writing and failure behavior
+## Lightweight observation and failure behavior
 
-Each request maintains fixed-size timing and counters. End summaries enter an 8192-record bounded
-queue; a background thread serializes and writes up to 64 queued records per flush. Overflow and
-I/O failures are counted and reported from the writer with a 60-second warning limit, keeping disk
-I/O and fault-reporting logs off the request's submit path. Runtime `emit` errors are counted and
-suppressed, preserving successful responses and original application exceptions. Configuration
-errors still fail explicit startup validation. Write/open/flush failures trigger exponential retry
-backoff from 1 to 60 seconds; queued records are dropped during backoff rather than creating one
-file per record. Shutdown attempts a five-second drain.
+Each request maintains bounded timing and counters. Only completed spans enter the SDK's bounded
+queue for asynchronous OTLP export. No trace-specific local files, disk writer thread or local-log
+configuration are used. Native request logging remains a separate feature.
 
-There is no per-token disk record, per-record fsync, log retention service, query utility, OTLP
-collector or alert webhook. Prompt text, generated text, reasoning text, token arrays, hashes and
-KV contents are not retained in JSONL. Native request logging remains a separate feature.
-Queue overflow, storage faults, blocked disks and forced termination can lose records. This is a
-request-diagnosis log, not an audit trail or guaranteed durable delivery mechanism.
+Instrumentation exceptions are isolated from generation, preprocessing and ASGI output observation.
+Malformed native diagnostic metadata invalidates that request's affected timings without changing
+its API output or token usage. Failures in span creation/finalization or output observation do not
+replace the application's original exception or cancellation. Context is cleared when each request
+exits; a failed request or observation does not disable tracing for later requests. Runtime faults
+produce a bounded warning without exception text or request content. Invalid explicit startup
+configuration still fails validation before serving.
+
+Request success, failure and cancellation are recorded when observation is available. Exporter
+outages, queue overflow, process termination and instrumentation faults can lose spans; this is
+best-effort telemetry, not a durable audit trail. Exporting waits outside the request path. Prompt
+text, output text, reasoning text, token arrays, hashes and KV contents are not exported.
 
 CPU tests run with:
 
@@ -445,11 +456,8 @@ The import smoke skips when torch is unavailable and otherwise imports the real 
 
 ### PyTorch with Router and Mooncake Store
 
-The current tracing corrections passed 119 observability tests, including real gRPC and
-HTTP/protobuf export, and 3,039 serving tests. Three tests requiring an unbuilt TurboMind
-C++ extension were skipped. These checks use the real serving package and cover output
-ownership, unchanged response bytes, mounted APIs, text stops, oversized terminal events,
-unsampled requests and native first-token timestamps across output coalescing.
+The following GPU measurements predate the request-level Prefill diagnostics and OTLP-only
+cleanup. They are a historical baseline, not an overhead measurement for the current code.
 
 GLM-5.3-Flash (revision `3f1971b7b5f7a528c9c4ef6212c8785298a8c24a`) ran on one
 eight-H200 node with PyTorch DP8/EP8, MTP5 and Mooncake Store. Settings included batch size
@@ -465,8 +473,7 @@ The reported throughput uses the approximately 940-second window. The same separ
 client ran both modes. Model and client startup were outside the measurement window.
 
 The comparison covers tracing disabled in both Router and LMDeploy versus their full
-sampling and asynchronous OTLP export through a local Collector to the gateway. JSONL is
-disabled in both modes. Collector file export is also disabled during measurement.
+sampling and asynchronous OTLP export through a local Collector to the gateway. Collector file export is also disabled during measurement.
 
 | Metric (completed requests) |  Trace off | Full sampling | Change |
 | --------------------------- | ---------: | ------------: | -----: |
@@ -493,103 +500,3 @@ refused or failed exports and an empty queue at completion. The off run exported
 These counters establish OTLP transport delivery, not final gateway filtering or query acceptance.
 The deployment's five business span names, parent relationships and timing boundaries are
 unchanged by the streaming metadata optimization.
-
-### Earlier cross-backend validation
-
-The following measurements predate the current corrections and describe a separate workload.
-
-Validation passed 2,560 CPU checks, 212 existing Store scheduling/loading checks and
-three TurboMind native grammar checks (plus 41 subtests). The trace suite also ran
-with the minimum supported OpenTelemetry SDK/exporters 1.27.0: 105 passed and three
-runtime-dependent tests skipped in that isolated environment. Current SDK/exporters
-1.45.2 were tested with the full runtime. Real gRPC and HTTP/protobuf export ran on both
-SDK versions. The unit-test workflow installs the serving dependencies, including tracing.
-
-Both backends were tested with Qwen3-Coder-480B-A35B-Instruct-FP8 on four H200 GPUs,
-TP4/EP1, Python 3.12, PyTorch 2.12.1/CUDA 13.0 and Transformers 5.17.0. Runtime and
-build dependencies were checked against the official declarations. TurboMind native
-libraries were built from the same source; PyTorch used eager mode and Ray. Both used
-max batch size 64, session length 32,768, prefill chunk limit 2,048, cache fraction 0.5
-and disabled local prefix caching. The API used `reasoning_parser=default` and abort handling.
-Only this 480B checkpoint was used.
-
-The four modes (off, JSONL, OTLP, both) passed 120 functional cases and 48 additional
-Responses/Anthropic/Generate protocol cases, including streaming and nonstreaming.
-Checks cover concurrent choices, batch prompts, usage/model metadata, output ownership,
-parent propagation, session priorities, sampling, rejection and cancellation. Deterministic
-output hashes matched across modes. Each backend also passed a 96-request burst above
-the engine batch limit and exposed measurable request waiting.
-
-### Steady-state performance
-
-Thirty rounds completed 18,241 measured requests without errors. Normal-load request
-IDs were reconciled against JSONL records and exported request/prompt spans with no missing
-records. Mode order was off/OTLP/JSONL/both/off for each workload. Each mode had a warmup
-batch; throughput includes the measurement window and draining its outstanding requests.
-The off reference pools the two bracketing rounds. The same loaded engine was reused;
-off retained idle SDK/writer threads. These are incremental steady-state measurements
-with a loopback protobuf receiver, not cold-start or production Collector measurements.
-
-For 128 input/128 output tokens, streaming, concurrency 32, each window was 180 seconds:
-
-| Backend   | Mode  | Output tokens/s | Mean/p99 TTFT (ms) | Mean/p99 TPOT (ms) |
-| --------- | ----- | --------------- | ------------------ | ------------------ |
-| pytorch   | off   | 386.08          | 280.43/811.66      | 81.19/87.53        |
-| pytorch   | otlp  | 388.77          | 288.03/1148.12     | 80.51/82.37        |
-| pytorch   | jsonl | 386.83          | 237.64/427.30      | 81.32/83.59        |
-| pytorch   | both  | 384.78          | 283.24/613.41      | 81.35/83.78        |
-| turbomind | off   | 1569.13         | 98.38/218.39       | 19.70/20.60        |
-| turbomind | otlp  | 1484.83         | 93.41/225.82       | 20.93/21.89        |
-| turbomind | jsonl | 1543.13         | 97.24/224.76       | 20.08/21.55        |
-| turbomind | both  | 1529.32         | 95.66/232.08       | 20.28/21.08        |
-
-The other workloads were chat with three choices (136 actual input tokens, 128 output tokens
-per choice, concurrency 16, 90-second windows) and nonstreaming completions (2,048 input,
-128 output tokens, concurrency 16, 60-second windows). All used temperature 0, seed 23 and
-ignore-EOS with identical effective sampling settings across modes. TPOT is per choice;
-nonstreaming client TTFT/TPOT remain unobserved. Throughput changes versus pooled off:
-
-| Backend   | Workload               | OTLP   | JSONL  | Both   | Off-round spread |
-| --------- | ---------------------- | ------ | ------ | ------ | ---------------- |
-| pytorch   | stream 128/128 C32     | +0.70% | +0.19% | -0.34% | 0.21%            |
-| pytorch   | chat n=3 C16           | +1.29% | +0.53% | +0.08% | 3.40%            |
-| pytorch   | nonstream 2048/128 C16 | +0.28% | +0.45% | -0.27% | 0.05%            |
-| turbomind | stream 128/128 C32     | -5.37% | -1.66% | -2.54% | 0.63%            |
-| turbomind | chat n=3 C16           | -0.70% | +1.62% | +1.39% | 0.70%            |
-| turbomind | nonstream 2048/128 C16 | -1.43% | -1.41% | -1.08% | 2.26%            |
-
-Positive/negative changes include runtime variation; a small positive result is not evidence
-that tracing speeds up inference. These measurements do not establish a universal overhead
-bound or compare absolute backend performance.
-
-An independent same-configuration TurboMind run used four 180-second streaming windows
-in OTLP/off/OTLP/off order, reusing the loaded model. All 8,480 measured requests
-succeeded and their expected records/spans were present. Pooled off throughput was
-1529.72 tokens/s versus 1473.53 with OTLP
-(-3.67%); the two off rounds differed by
-1.25%. Both groups measured lower throughput with OTLP for this
-workload. Include this observed cost in capacity planning; it is not a universal bound.
-
-### Store, adapter identity and exporter failure
-
-The existing PyTorch Mooncake Store connector passed eight cases on the same 480B checkpoint,
-including repeated cache loads and two-choice requests with both the base model and a real
-rank-4 zero-valued LoRA adapter. Request/response model names and shared-input usage matched
-the API; the adapter's base model was recorded separately. The engine started with JSONL off,
-and two-choice OTLP-only cases confirmed Store tracing works independently of JSONL.
-Four warm requests each matched and loaded 1,984 tokens; observed lookup took 3.0–6.1 ms
-and successful loads took 3.14–6.23 seconds. These are Store intervals, not logging overhead.
-This validates adapter routing and metadata; trained-LoRA quality remains unverified.
-Store used loopback TCP, 4 GB global segments and 256 MB
-local buffers per worker to fit the 78.1 GiB Pod memory limit. It is not an RDMA or Store-overhead
-benchmark. No extra lookup RPC or save synchronization was introduced.
-
-With the receiver deliberately unavailable, all 96 inference requests succeeded and
-all 192 JSONL records were written. After recovery, 16 HTTP spans remained missing,
-consistent with bounded, non-durable export. This validates failure isolation, not guaranteed
-delivery or zero latency impact.
-
-The receiver and upstream parent spans were explicit local test fixtures. Production
-Collector/Gateway contract deployment, TLS, cross-host clock synchronization,
-ClickHouse/Grafana queries and verify-component acceptance remain unverified. Complete
-that production-chain acceptance before deployment.

@@ -169,6 +169,7 @@ def test_final_scoring_prefill_uses_existing_logprob_carrier(actual_ids, expecte
                                      num_logprobs=0,
                                      logprob_start_len=0),
         cached_tokens=0,
+        prefill_trace=None,
         engine_events=[],
         routed_experts=None,
         return_ce_loss=False,

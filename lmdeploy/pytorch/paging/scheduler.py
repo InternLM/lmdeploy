@@ -629,6 +629,8 @@ class Scheduler:
     def preempt_seqs(self, seqs: Iterable[SchedulerSequence]) -> None:
         """Return invalid decode sequences to their evictable queue states."""
         for seq in seqs:
+            if seq.prefill_trace is not None:
+                seq.prefill_trace.preempt()
             if seq.status == MessageStatus.RUNNING:
                 seq.state.deactivate()
             # A prefill retry can roll back retained blocks before another

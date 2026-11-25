@@ -32,9 +32,9 @@ from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeInitRequest,
 )
 from lmdeploy.serve.managers import Session, SessionManager
+from lmdeploy.serve.observability import otel_trace
 from lmdeploy.serve.observability.request_trace import (
     RequestTrace,
-    get_writer,
     supported_engine,
     trace_generate,
     trace_preprocess,
@@ -164,7 +164,7 @@ class AsyncEngine:
                  **kwargs) -> None:
         self.request_trace_enabled = enable_request_trace and supported_engine(backend, backend_config)
         if self.request_trace_enabled:
-            get_writer()
+            otel_trace.initialize()
         logger.info(f'input backend={backend}, backend_config={backend_config}')
         logger.info(f'speculative_config={speculative_config}')
         backend_config = backend_config or (TurbomindEngineConfig()

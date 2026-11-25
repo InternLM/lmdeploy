@@ -24,6 +24,7 @@ from lmdeploy.pytorch.prefix_cache_state import (  # noqa: F401
     StateCheckpointSaveReservation,
     TokenLookahead,
 )
+from lmdeploy.trace import ENABLED as TRACE_ENABLED
 from lmdeploy.utils import get_logger
 from lmdeploy.vl.constants import Modality
 
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from lmdeploy.pytorch.paging.seq_states.states import SequenceLifecycle, StateBase
     from lmdeploy.pytorch.strategies.base.sampling import SamplingStrategy
     from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
+    from lmdeploy.pytorch.trace import PrefillTrace
 
 logger = get_logger('lmdeploy')
 
@@ -696,6 +698,15 @@ class SchedulerSequence:
 
     # Prefix-cache tokens accepted by the scheduler that are present in the current request prompt.
     cached_tokens: int = 0
+    prefill_trace: 'PrefillTrace | None' = None
+
+    def reset_prefill_trace(self):
+        """Start an independent summary for each input turn."""
+        if TRACE_ENABLED:
+            from lmdeploy.pytorch.trace import PrefillTrace
+            self.prefill_trace = PrefillTrace()
+        else:
+            self.prefill_trace = None
 
     def __post_init__(self):
         """Post init."""

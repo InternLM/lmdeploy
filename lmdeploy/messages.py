@@ -12,6 +12,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 
 from .tokenizer import Tokenizer
+from .trace import PrefillMetrics
 from .utils import get_logger
 
 logger = get_logger('lmdeploy')
@@ -902,6 +903,9 @@ class RequestMetrics:
     spec_info: dict[str, Any] | None = None
     cached_tokens: int = 0
     first_token_timestamp: float = 0.0
+    # Keep absent summaries out of per-token pickle payloads. The terminal
+    # PyTorch output sets the instance field only when a summary is available.
+    prefill: PrefillMetrics | None = field(default=None, init=False)
 
 
 @dataclass

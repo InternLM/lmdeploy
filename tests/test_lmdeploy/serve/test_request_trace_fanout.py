@@ -30,13 +30,11 @@ def test_concurrent_choices_keep_output_usage_and_adapter_identity(monkeypatch, 
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     monkeypatch.setattr(otel_trace, '_tracer', provider.get_tracer('fanout-test'))
     monkeypatch.setattr(request_trace, 'ENABLED', True)
-    monkeypatch.setattr(request_trace, 'get_writer', lambda: None)
+    monkeypatch.setattr(otel_trace, 'initialize', lambda: None)
     if stream:
         def reject_reparse(*args):
             raise AssertionError('The final fan-out frame must carry output metadata')
         monkeypatch.setattr(request_trace, '_decode_json', reject_reparse)
-    records = []
-    monkeypatch.setattr(request_trace, 'emit', lambda event, rid, **kw: records.append(dict(event=event, **kw)))
 
     class Engine:
         model_name = 'base-model'
@@ -115,6 +113,8 @@ def test_concurrent_choices_keep_output_usage_and_adapter_identity(monkeypatch, 
         for index, span in prompts.items():
             assert span.attributes['lmdeploy.prompt_index'] == 0
             assert span.attributes['lmdeploy.base_model'] == 'base-model'
+            assert span.attributes['lmdeploy.finish_reason'] == 'stop'
+            assert 'gen_ai.response.finish_reasons' not in span.attributes
             assert span.parent.span_id == root.context.span_id
             if stream:
                 visible = 'lmdeploy.reasoning_first_seconds' if index == 0 else 'lmdeploy.content_first_seconds'
@@ -133,8 +133,6 @@ def test_concurrent_choices_keep_output_usage_and_adapter_identity(monkeypatch, 
             assert usage['prompt_tokens'] == 10
             assert usage['completion_tokens'] == root.attributes['gen_ai.usage.output_tokens']
         assert 'private' not in str([dict(s.attributes) for s in spans])
-        assert 'private' not in json.dumps(records)
-        assert len({(r['prompt_index'], r['choice_index']) for r in records}) == count
         assert request_trace.request_outcome_context.get() is None
     finally:
         provider.shutdown()
@@ -157,7 +155,6 @@ def test_protocol_usage_conventions_match_normalized_trace_counts(monkeypatch, c
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     monkeypatch.setattr(otel_trace, '_tracer', provider.get_tracer('usage-conventions'))
     monkeypatch.setattr(request_trace, 'ENABLED', True)
-    monkeypatch.setattr(request_trace, 'emit', lambda *args, **kwargs: None)
     trace = request_trace.RequestTrace()
     prepared = SimpleNamespace(trace=trace, consumed=False)
 
@@ -181,5 +178,8 @@ def test_protocol_usage_conventions_match_normalized_trace_counts(monkeypatch, c
         assert span.attributes['gen_ai.usage.output_tokens'] == openai.completion_tokens == anthropic.output_tokens
         assert span.attributes['gen_ai.usage.cached_tokens'] == openai.prompt_tokens_details.cached_tokens
         assert span.attributes['gen_ai.usage.cached_tokens'] == anthropic.cache_read_input_tokens
+        assert span.attributes['gen_ai.usage.cache_read.input_tokens'] == anthropic.cache_read_input_tokens
+        assert span.attributes['lmdeploy.finish_reason'] == result.finish_reason
+        assert all(isinstance(value, (str, bool, int, float)) for value in span.attributes.values())
     finally:
         provider.shutdown()

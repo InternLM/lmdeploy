@@ -14,6 +14,7 @@ from lmdeploy.messages import RequestMetrics
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
+from lmdeploy.pytorch.trace import complete_prefill, discard_prefill
 from lmdeploy.pytorch.utils import cancel_async_tasks, wait_for_async_tasks
 from lmdeploy.trace import ENABLED as TRACE_ENABLED
 from lmdeploy.utils import get_logger
@@ -439,11 +440,21 @@ class EngineLoop:
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens.item())
             if TRACE_ENABLED and len(token_ids) and not msg.resp.first_token_timestamp:
                 msg.resp.first_token_timestamp = new_token_timestamp
+            # Prefetch can preempt a completed prefill before its output is
+            # consumed. Only rows admitted by is_run may freeze the summary.
+            if (TRACE_ENABLED and model_inputs is not None and not model_inputs.is_decoding
+                    and msg.prefill_trace is not None):
+                msg.prefill_trace.accept()
+            # Only the terminal output needs this frozen summary. Repeating it
+            # on every decode token adds IPC cost and provides no new data.
+            prefill_trace = msg.prefill_trace if TRACE_ENABLED and finish else None
             req_metrics = RequestMetrics(new_token_timestamp,
                                          msg.engine_events,
                                          spec_info=spec_info,
                                          cached_tokens=msg.cached_tokens,
                                          first_token_timestamp=msg.resp.first_token_timestamp)
+            if prefill_trace is not None and prefill_trace.summary is not None:
+                req_metrics.prefill = prefill_trace.summary
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
                               finish=finish,
@@ -525,6 +536,7 @@ class EngineLoop:
         """Get outputs and prefetch."""
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
+        trace_batch = forward_inputs.get('prefill_trace')
         cache_inputs = forward_inputs['cache_inputs']
         ssm_state_access_id = cache_inputs.ssm_state_access_id if cache_inputs is not None else None
         has_compact_checkpoints = (
@@ -552,8 +564,22 @@ class EngineLoop:
             )
         if has_compact_checkpoints:
             self.state_checkpoints.publish_forward(ssm_state_access_id)
-        forward_inputs, next_running = await self._prefetch_next_inputs()
-        out = await self.executor.get_output_async()
+        try:
+            forward_inputs, next_running = await self._prefetch_next_inputs()
+            out = await self.executor.get_output_async()
+        except BaseException as exc:
+            discard_prefill(trace_batch, 'output', type(exc).__name__)
+            # A successful prefetch may also have queued a forward that will
+            # not be consumed after this failure/cancellation.
+            if forward_inputs is not None:
+                discard_prefill(forward_inputs.get('prefill_trace'), 'output', type(exc).__name__)
+            raise
+        if trace_batch is not None:
+            if out is None:
+                discard_prefill(trace_batch, 'output', 'MissingOutput')
+            else:
+                # An executor completion envelope need not carry generated tokens.
+                complete_prefill(trace_batch)
         completed_access_id = out.ssm_state_access_id if out is not None else None
         if completed_access_id != ssm_state_access_id:
             raise RuntimeError('Compact completion does not match the submitted forward access.')

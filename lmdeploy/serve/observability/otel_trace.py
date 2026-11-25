@@ -27,16 +27,25 @@ _RESOURCE_ATTRIBUTES = frozenset((
 _failed = False
 
 
+def report_failure():
+    """Report an instrumentation fault once without disabling later
+    requests."""
+    global _failed
+    if not _failed:
+        _failed = True
+        try:
+            logging.getLogger(__name__).warning('Trace instrumentation failed; inference continues')
+        except Exception:
+            pass  # A logging handler failure must not reach the request path.
+
+
 def fail_open(func):
     @functools.wraps(func)
     def call(*args, **kwargs):
-        global _failed
         try:
             return func(*args, **kwargs)
         except Exception:
-            if not _failed:
-                logging.getLogger(__name__).warning('Trace instrumentation failed; inference continues')
-                _failed = True
+            report_failure()
             return None
     return call
 
@@ -80,7 +89,7 @@ def _initialize():
                               or (type(v) is float and math.isfinite(v)))})
     capacity = int(os.getenv('OTEL_BSP_MAX_QUEUE_SIZE', '2048'))
     batch = int(os.getenv('OTEL_BSP_MAX_EXPORT_BATCH_SIZE', '512'))
-    delay = int(os.getenv('OTEL_BSP_SCHEDULE_DELAY', '1000'))
+    delay = int(os.getenv('OTEL_BSP_SCHEDULE_DELAY', '5000'))
     if not 0 < batch <= capacity or delay <= 0:
         raise ValueError('Trace queue/batch sizes and delay must be positive; batch must fit queue')
     provider = TracerProvider(resource=resource, sampler=ParentBased(ALWAYS_ON))
@@ -181,15 +190,6 @@ def begin_prompt(parent, start_ns, index, rid):
 
 
 @fail_open
-def correlation(span):
-    """Return hexadecimal trace and span IDs for local record correlation."""
-    if span is None:
-        return {}
-    ctx = span.get_span_context()
-    return dict(trace_id=f'{ctx.trace_id:032x}', span_id=f'{ctx.span_id:016x}')
-
-
-@fail_open
 def attributes(span, values):
     """Attach available safe scalar values to a recording span."""
     if span is not None and span.is_recording():
@@ -258,6 +258,9 @@ def finish_engine(t, status):
             if t.choice_index is not None:
                 child_attrs['lmdeploy.choice_index'] = t.choice_index
             child = _tracer.start_span(name, context=ctx, start_time=start, attributes=child_attrs)
+            if name == 'model.prefill' and t.prefill_metrics is not None:
+                attributes(child, {f'lmdeploy.prefill.{key}': value
+                                   for key, value in t.prefill_metrics.items()})
             finish(child, status, stop)
     if t.first_token is not None and t.start_ns <= int(t.first_token*1e9) <= end:
         span.add_event('llm.first_token', timestamp=int(t.first_token*1e9))

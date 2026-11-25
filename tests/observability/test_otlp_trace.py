@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import patch
 
@@ -38,8 +39,62 @@ class OTLPTests(unittest.TestCase):
         self.addCleanup(self.patch.stop)
         self.addCleanup(self.provider.shutdown)
 
+    def test_prefill_summary_is_exported_as_scalar_attributes(self):
+        from test_prefill_summary import complete, dispatch, sequence
+
+        parent = otel._tracer.start_span('llm_request')
+        token = obs.request_outcome_context.set({'traces': [], 'otel_span': parent})
+        try:
+            traces = []
+            for cached in (16, 8):
+                seq = sequence(cached=cached)
+                complete(dispatch([seq], [cached], [96 - cached], 1), 2)
+                t = obs.RequestTrace()
+                t.prefill_metrics = asdict(seq.prefill_trace.summary)
+                t.scheduled = t.start_ns / 1e9 + 0.05
+                t.first_token = t.scheduled + 0.1
+                t.last_token = t.first_token + 0.1
+                with patch.object(obs.time, 'monotonic', return_value=t.start + 1):
+                    t.finish('success')
+                otel.finish(t.otel_span, 'success', t.end_ns)
+                traces.append(t)
+        finally:
+            obs.request_outcome_context.reset(token)
+        parent.end(end_time=max(t.end_ns for t in traces) + 1)
+        spans = self.exporter.get_finished_spans()
+        prefills = {s.attributes['lmdeploy.prompt_index']: s for s in spans if s.name == 'model.prefill'}
+        self.assertEqual(set(prefills), {0, 1})
+        for index, cached in enumerate((16, 8)):
+            prefill = prefills[index]
+            self.assertEqual(prefill.attributes['lmdeploy.prefill.chunk_count'], 1)
+            self.assertEqual(prefill.attributes['lmdeploy.prefill.computed_tokens'], 96 - cached)
+            self.assertEqual(prefill.attributes['lmdeploy.prefill.local_cached_tokens'], cached)
+            self.assertEqual(prefill.attributes['lmdeploy.prefill.external_cached_tokens'], 0)
+            self.assertEqual(prefill.parent.span_id, parent.get_span_context().span_id)
+            self.assertNotIn('envoy.error', prefill.attributes)
+        for span in spans:
+            if span.name in ('inference', 'model.decode'):
+                self.assertFalse(any(key.startswith('lmdeploy.prefill.') for key in span.attributes))
+
+    def test_batch_defaults_and_environment_override(self):
+        # Validate our production processor construction against SDK defaults;
+        # no network, sleeps or assumptions about SDK-private fields.
+        for config, expected_delay in (({}, 5000), ({'OTEL_BSP_SCHEDULE_DELAY': '1234'}, 1234)):
+            with patch.dict(os.environ, config, clear=True), \
+                    patch('opentelemetry.sdk.trace.export.BatchSpanProcessor') as processor, \
+                    patch.object(otel, '_provider', None), patch.object(otel, '_tracer', None), \
+                    patch.object(otel, '_pid', None):
+                otel._initialize()
+                try:
+                    options = processor.call_args.kwargs
+                    self.assertEqual(options['schedule_delay_millis'], expected_delay)
+                    self.assertEqual(options['max_export_batch_size'], 512)
+                    self.assertEqual(options['max_queue_size'], 2048)
+                finally:
+                    otel._provider.shutdown()
+
     def request(self, headers=(), status=200, count=2, crash=False, stream=False):
-        records, sent = [], []
+        sent = []
         async def app(scope, receive, send):
             for _ in range(count):
                 t = obs.RequestTrace()
@@ -63,12 +118,9 @@ class OTLPTests(unittest.TestCase):
             return {'type': 'http.request', 'body': b'private-prompt'}
         async def send(message):
             sent.append(message)
-        def record(event, rid, **kw):
-            records.append(dict(event=event, request_id=rid, **kw))
 
         async def run():
-            with patch.object(obs, 'enabled', return_value=True), patch.object(obs, 'get_writer'), \
-                 patch.object(obs, 'emit', side_effect=record):
+            with patch.object(obs, 'enabled', return_value=True), patch.object(otel, 'initialize'):
                 await obs.RequestTraceMiddleware(app)(
                     {'type': 'http', 'method': 'POST', 'path': '/v1/completions', 'headers': headers}, receive, send)
         if crash:
@@ -77,11 +129,48 @@ class OTLPTests(unittest.TestCase):
         else:
             asyncio.run(run())
         self.assertIsNone(obs.request_outcome_context.get())
-        return records, sent
+        return sent
+
+    def test_fragmented_sse_terminal_status_reaches_sdk(self):
+        terminals = {
+            '/v1/chat/completions': b'data: [DONE]\n',
+            '/v1/messages': b'event: message_stop\ndata: {"type":"message_stop"}\n',
+            '/v1/responses': b'event: response.completed\ndata: {"type":"response.completed"}\n',
+        }
+        for path, terminal in terminals.items():
+            for complete in (False, True):
+                with self.subTest(path=path, complete=complete):
+                    self.exporter.clear()
+                    sent = []
+                    # Deliberately split field names, JSON and CRLF boundaries.
+                    payload = terminal.replace(b'\n', b'\r\n') + (b'\r\n' if complete else b'')
+                    async def app(scope, receive, send):
+                        await send({'type': 'http.response.start', 'status': 200,
+                                    'headers': [(b'content-type', b'text/event-stream')]})
+                        for value in payload:
+                            await send({'type': 'http.response.body', 'body': bytes([value]), 'more_body': True})
+                        await send({'type': 'http.response.body', 'body': b'', 'more_body': False})
+                    async def receive():
+                        return {'type': 'http.request', 'body': b''}
+                    async def send(message):
+                        sent.append(message)
+                    with patch.object(obs, 'enabled', return_value=True), patch.object(otel, 'initialize'):
+                        asyncio.run(obs.RequestTraceMiddleware(app)(
+                            {'type': 'http', 'method': 'POST', 'path': path,
+                             'headers': [(b'traceparent', b'00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01')]},
+                            receive, send))
+                    span, = self.exporter.get_finished_spans()
+                    self.assertEqual(span.name, 'llm_request')
+                    self.assertEqual(span.status.status_code, StatusCode.OK if complete else StatusCode.ERROR)
+                    self.assertEqual(span.attributes['lmdeploy.outcome'], 'success' if complete else 'cancelled')
+                    self.assertEqual(span.attributes['http.response.status_code'], 200)
+                    self.assertEqual(span.parent.span_id, int('b' * 16, 16))
+                    self.assertEqual(any(e.name == 'llm.stream.end' for e in span.events), complete)
+                    self.assertEqual(b''.join(m.get('body', b'') for m in sent), payload)
 
     def test_parent_prompt_stages_and_readonly_ids(self):
         trace_id, parent_id = 'a'*32, 'b'*16
-        records, sent = self.request([(b'traceparent', f'00-{trace_id}-{parent_id}-01'.encode()),
+        sent = self.request([(b'traceparent', f'00-{trace_id}-{parent_id}-01'.encode()),
             (b'x-request-id', b'req_gateway_123456'), (b'x-session-id', b'session.prod:42'),
             (b'x-session-affinity', b'private-affinity')])
         spans = self.exporter.get_finished_spans()
@@ -108,8 +197,6 @@ class OTLPTests(unittest.TestCase):
             self.assertEqual(phase.attributes['request.id'], 'req_gateway_123456')
             self.assertEqual(phase.attributes['session.id'], 'session.prod:42')
             self.assertFalse(any(k.startswith(('gen_ai.usage.', 'gen_ai.latency.')) for k in phase.attributes))
-        self.assertTrue(all(r['request_id'] == 'req_gateway_123456' for r in records))
-        self.assertEqual(len({r['span_id'] for r in records}), 2)
         self.assertEqual(sent[-1]['body'], b'private-completion')
         wire = str([dict(s.attributes) for s in spans])
         self.assertNotIn('private', wire)
@@ -141,8 +228,7 @@ class OTLPTests(unittest.TestCase):
         t.queued = t.scheduled = stamp + .00001
         t.first_token, t.last_token = stamp + .00002, stamp + .00003
         time.sleep(.001)
-        with patch.object(obs, 'emit'):
-            t.finish('success')
+        t.finish('success')
         spans = self.exporter.get_finished_spans()
         root = next(s for s in spans if s.name == 'llm_request')
         self.assertIsNone(root.parent)
@@ -157,7 +243,7 @@ class OTLPTests(unittest.TestCase):
                       ' session.prod:42 ', 's' * 129, 's' * 1024):
             with self.subTest(value_length=len(value)):
                 self.exporter.clear()
-                _, sent = self.request([(b'x-session-id', value.encode()),
+                sent = self.request([(b'x-session-id', value.encode()),
                                         (b'x-session-affinity', b'private-affinity'),
                                         (b'x-request-id', b'req_gateway_123456')], count=0)
                 span = self.exporter.get_finished_spans()[0]
@@ -242,7 +328,7 @@ class OTLPTests(unittest.TestCase):
         fixture = EngineIntegrationTests()
         for include_stop in (False, True):
             self.exporter.clear()
-            records, sent = [], []
+            sent = []
 
             async def app(scope, receive, send):
                 engine, prepared, _ = fixture.engine()
@@ -265,8 +351,7 @@ class OTLPTests(unittest.TestCase):
                 return dict(type='http.request', body=b'')
 
             async def run():
-                with patch.object(obs, 'enabled', return_value=True), patch.object(obs, 'get_writer'), \
-                        patch.object(obs, 'emit', side_effect=lambda event, rid, **kw: records.append(kw)):
+                with patch.object(obs, 'enabled', return_value=True), patch.object(otel, 'initialize'):
                     await obs.RequestTraceMiddleware(app)(
                         dict(type='http', method='POST', path='/v1/completions'), receive, send)
 
@@ -278,12 +363,10 @@ class OTLPTests(unittest.TestCase):
                     for field, expected in usage.items():
                         self.assertEqual(span.attributes['gen_ai.usage.' + field], expected)
                     self.assertTrue(span.attributes['lmdeploy.token_counts_complete'])
-            self.assertEqual(records[0]['output_tokens'], usage['output_tokens'])
 
     def test_secret_after_underscore_is_not_exported_as_an_id(self):
-        records, sent = self.request([(b'x-request-id', b'req_sk-ant-private-value'),
+        sent = self.request([(b'x-request-id', b'req_sk-ant-private-value'),
                                       (b'x-session-id', b'session_sk-private-value')], count=1)
-        self.assertTrue(all(r['request_id'] is None for r in records))
         self.assertNotIn(b'x-request-id', dict(sent[0]['headers']))
         for span in self.exporter.get_finished_spans():
             self.assertNotIn('request.id', span.attributes)
@@ -298,10 +381,8 @@ class OTLPTests(unittest.TestCase):
         from starlette.routing import Route
         async def endpoint(request):
             raise ValueError('private application detail')
-        records = []
         async def run():
-            with patch.object(obs, 'enabled', return_value=True), patch.object(obs, 'get_writer'), \
-                 patch.object(obs, 'emit', side_effect=lambda *args, **kw: records.append(kw)):
+            with patch.object(obs, 'enabled', return_value=True), patch.object(otel, 'initialize'):
                 app = obs.RequestTraceMiddleware(Starlette(routes=[
                     Route('/v1/completions', endpoint, methods=['POST'])]))
                 async with AsyncClient(transport=ASGITransport(app, raise_app_exceptions=False),
@@ -314,8 +395,7 @@ class OTLPTests(unittest.TestCase):
                         await client.post('/v1/completions')
                 self.assertIsNone(obs.request_outcome_context.get())
         asyncio.run(run())
-        self.assertEqual(len(records), 2)
-        self.assertTrue(all(r['http_status'] == 500 and r['status'] == 'error' for r in records))
+        self.assertEqual(len(self.exporter.get_finished_spans()), 2)
         for span in self.exporter.get_finished_spans():
             self.assertEqual(span.attributes['http.response.status_code'], 500)
             self.assertEqual(span.status.status_code.name, 'ERROR')
@@ -359,14 +439,13 @@ class OTLPTests(unittest.TestCase):
         async def send(message):
             raise BrokenPipeError()
 
-        with patch.object(obs, 'enabled', return_value=True), patch.object(obs, 'get_writer'), \
-                patch.object(obs, 'emit') as emit, self.assertRaises(BrokenPipeError):
+        with patch.object(obs, 'enabled', return_value=True), patch.object(otel, 'initialize'), \
+                self.assertRaises(BrokenPipeError):
             asyncio.run(obs.RequestTraceMiddleware(app)(
                 {'type': 'http', 'method': 'POST', 'path': '/v1/completions'}, None, send))
         root, = self.exporter.get_finished_spans()
         self.assertEqual(root.status.status_code.name, 'ERROR')
         self.assertNotIn('http.response.status_code', root.attributes)
-        self.assertIsNone(emit.call_args.kwargs['http_status'])
 
     def test_unsampled_parent_and_exception_privacy(self):
         self.request([(b'traceparent', ('00-'+'a'*32+'-'+'b'*16+'-00').encode())])
@@ -378,7 +457,7 @@ class OTLPTests(unittest.TestCase):
 
     def test_instrumentation_failure_does_not_replace_result(self):
         with patch.object(otel._tracer, 'start_span', side_effect=RuntimeError('private')):
-            _, sent = self.request()
+            sent = self.request()
         self.assertEqual(sent[-1]['body'], b'private-completion')
 
     def test_batch_prompt_ends_before_next_prompt_and_error_events_in_bounds(self):
@@ -407,14 +486,13 @@ class OTLPTests(unittest.TestCase):
                         calls += 1
                         return real_time_ns() + (jump if calls > 2 else 0)
                     with patch.object(obs.time, 'time_ns', side_effect=adjusted_clock):
-                        records, _ = self.request(count=1, crash=crash, stream=True)
+                        self.request(count=1, crash=crash, stream=True)
                     spans = self.exporter.get_finished_spans()
                     root = next(s for s in spans if s.name == 'llm_request')
                     prompt = next(s for s in spans if s.name == 'inference')
                     duration = prompt.attributes['gen_ai.latency.e2e']
                     self.assertGreaterEqual(duration, .001)
                     self.assertAlmostEqual((prompt.end_time - prompt.start_time) / 1e9, duration, places=8)
-                    self.assertEqual(records[0]['total_seconds'], duration)
                     self.assertGreaterEqual(root.end_time, prompt.end_time)
                     if not crash:
                         self.assertIn('llm.stream.end', {event.name for event in root.events})
@@ -468,7 +546,7 @@ class OTLPTests(unittest.TestCase):
             original(t, status)
             t.model = []  # Deliberately break HTTP model aggregation.
         with patch.object(obs.RequestTrace, 'finish', finish):
-            _, sent = self.request()
+            sent = self.request()
         self.assertEqual(sent[-1]['body'], b'private-completion')
         self.assertIsNone(obs.request_outcome_context.get())
 
