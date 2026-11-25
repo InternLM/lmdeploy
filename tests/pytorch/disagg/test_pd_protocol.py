@@ -31,7 +31,7 @@ def test_peer_layout_ignores_capacity_but_requires_semantics():
 def test_handoff_requires_full_prompt_and_first_token_progress():
     fields = dict(transfer_id='operation', engine_epoch='source', cache_schema='model', prompt_digest='tokens',
                   prompt_token_count=66, valid_token_count=66, first_token_id=10, random_seed=42, random_offset=67,
-                  first_token_logprobs=[{10: -0.2, 20: -1.7}],
+                  first_token_logprobs=[([-0.2, -1.7], [10, 20])],
                   block_size=64, block_ids=[3, 8],
                   state_ids=[7, 11], auxiliary_id=2)
     handoff = PDHandoff(**fields)

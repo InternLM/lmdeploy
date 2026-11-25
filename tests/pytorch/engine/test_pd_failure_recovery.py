@@ -16,7 +16,7 @@ from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
 
 
-def make_transfer(migrate):
+def make_transfer(migrate, logprobs=None):
     def scheduler():
         return Scheduler(SchedulerConfig(max_batches=2, max_session_len=32),
                          CacheConfig(max_batches=2, block_size=4, num_gpu_blocks=8, num_cpu_blocks=0),
@@ -28,7 +28,8 @@ def make_transfer(migrate):
     prefill.block_manager.allocate(source)
     source.sampling_param.random_seed = 42
     source.update_token_ids(np.array([8]), mode=UpdateTokenMode.PREFILL)
-    handoff = prefill.pd_coordinator.publish(source, 'schema', [])
+    handoff = prefill.pd_coordinator.publish(source, 'schema', [], first_token_logprobs=logprobs)
+    handoff = type(handoff).model_validate_json(handoff.model_dump_json())
     migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill',
                                  remote_session_id=1, handoff=handoff)
     target = decode.add_session(2).add_sequence(np.arange(8), migration_request=migration)
@@ -49,6 +50,26 @@ def make_transfer(migrate):
         config=EngineLoopConfig(role=EngineRole.Decode),
         engine_conn=SimpleNamespace(local_engine_id='decode', control=control))
     return loop, prefill, target, responses
+
+
+@pytest.mark.parametrize('max_new_tokens', [1, 2])
+def test_received_first_token_logprobs_use_normal_response_assembly(max_new_tokens):
+    async def run():
+        async def migrate(batch):
+            return [PDTransferResult(transfer_id=batch.receives[0].handoff.transfer_id, status='completed')]
+
+        loop, _, seq, _ = make_transfer(migrate, [[[-0.2, -0.2, -1.7], [8, 8, 9]]])
+        seq.sampling_param.max_new_tokens = max_new_tokens
+        seq.resp.data = None
+        await loop._receive_handoff(seq)
+        await asyncio.gather(*loop._pd_control_tasks)
+        output = loop.resp_queue.get_nowait()[seq.session_id]
+        assert output.token_ids.tolist() == [8]
+        assert output.finish == (max_new_tokens == 1)
+        loop._update_logprobs([output])
+        assert seq.resp.data['logprobs'] == [{8: -0.2, 9: -1.7}]
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize('force', [False, True])

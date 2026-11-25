@@ -114,7 +114,8 @@ class PDHandoff(BaseModel):
     draft_token_ids: list[int] = Field(default_factory=list)
     random_seed: int
     random_offset: int = Field(ge=0)
-    first_token_logprobs: list[dict[int, float]] | None = None
+    # Preserve engine rows as (values, token IDs); response assembly converts them to dictionaries.
+    first_token_logprobs: list[tuple[list[float], list[int]]] | None = None
     model_meta: dict | None = None
     # Reused prompt tokens on P, excluding this request's P-to-D transfer.
     prefill_cached_tokens: int = Field(default=0, ge=0)
