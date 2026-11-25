@@ -795,6 +795,9 @@ class PiecewiseGraphManager:
         select must have seen one warmup call before capture begins.
         """
         stream = self._stream if self._stream is not None else torch.cuda.current_stream()
+        caller_stream = torch.cuda.current_stream()
+        if stream is not caller_stream:
+            stream.wait_stream(caller_stream)
         with torch.cuda.stream(stream):
             self._runtime.warmup(descriptor, kwargs)
         build = self._runtime.build(descriptor, kwargs, self._bridge_pool, stream)

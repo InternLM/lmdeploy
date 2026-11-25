@@ -247,3 +247,45 @@ def test_piecewise_trace_with_zero_warmup_iterations():
     replayed_other = plan.replay(*other)
     torch.cuda.synchronize()
     assert torch.equal(replayed_other, eager_other)
+
+
+def test_piecewise_prepare_warmup_orders_caller_stream_inputs():
+    """``prepare`` must order the caller's in-flight inputs before the eager
+    warmup runs on the capture stream: a delayed fill queued on the caller
+    stream must be visible to a warmup that copies the input."""
+    from lmdeploy.pytorch.backends.cuda.graph_runner.piecewise import PiecewiseGraphBuild, PiecewiseGraphManager
+
+    torch.cuda.synchronize()
+    caller = torch.cuda.current_stream()
+    capture = torch.cuda.Stream()
+    input = torch.zeros(4, device='cuda')
+
+    with torch.cuda.stream(caller):
+        torch.cuda._sleep(50_000_000)  # keep the caller busy so the capture stream can race ahead
+        input.fill_(1.0)
+
+    class StubRuntime:
+
+        def __init__(self):
+            self.warmup_copy = None
+
+        def get_capture_token_sizes(self):
+            return []
+
+        def get_piecewise_graph_descriptor(self, context, kwargs):
+            return 'descriptor'
+
+        def warmup(self, descriptor, kwargs):
+            self.warmup_copy = kwargs['input'].clone()
+
+        def build(self, descriptor, kwargs, bridge_pool, stream):
+            return PiecewiseGraphBuild(plan=object(), output=None)
+
+        def replay(self, plan, kwargs):
+            return None
+
+    runtime = StubRuntime()
+    manager = PiecewiseGraphManager(runtime, stream=capture)
+    manager.prepare('descriptor', {'input': input})
+    torch.cuda.synchronize()
+    assert torch.equal(runtime.warmup_copy, torch.ones_like(input))
