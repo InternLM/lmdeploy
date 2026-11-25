@@ -311,10 +311,16 @@ class Scheduler:
             key=lambda seq: seq.arrive_time,
         )
 
-        max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
+        occupied = sum(self.seq_manager.num_sequences(status) for status in (
+            MessageStatus.READY, MessageStatus.RUNNING, MessageStatus.MIGRATION_READY,
+            MessageStatus.MIGRATION_RUNNING, MessageStatus.MIGRATION_DONE))
+        max_batches = self.scheduler_config.max_batches - occupied
         while migration_waiting and len(migration_ready) < max_batches:
             seq = migration_waiting.pop(0)
             handoff = seq.migration_request.handoff
+            # Reserve the target verification and draft tail before pinning a
+            # receive, so a full prompt cannot strand D without decode space.
+            prealloc_size = 2 * len(handoff.draft_token_ids) + 1 if handoff is not None else 0
             prefix_match = None
             if self.block_trie.enabled:
                 prefix_match = _TentativePrefixMatch(
@@ -333,14 +339,14 @@ class Scheduler:
             if not self.eviction_helper.try_make_capacity_for(
                 seq,
                 evictable,
-                0,
+                prealloc_size,
             ):
                 if prefix_match is not None:
                     prefix_match.rollback('migration capacity admission failed')
                 break
 
             # allocate session memory
-            self.block_manager.allocate(seq)
+            self.block_manager.allocate(seq, prealloc_size)
             if self.is_ssm:
                 self.state_manager.allocate(seq)
             if handoff is not None:
@@ -668,7 +674,19 @@ class Scheduler:
     def resume_completed_migrations(self):
         """Move completed migration sequences back to the waiting queue."""
         for seq in self.migration_done:
+            if not seq.pd_decode_pending:
+                seq.state.activate()
+
+    def schedule_pd_decode(self):
+        """Admit complete remote prefills directly to their first decode."""
+        running = [seq for seq in self.migration_done if seq.pd_decode_pending]
+        for seq in running:
             seq.state.activate()
+            seq.state.activate()
+            if isinstance(self.state_manager, SSMStateManager):
+                if not self.state_manager.promote_to_decode(self.state_manager.bank_for(seq)):
+                    raise RuntimeError('PD receive lost its reserved decode state capacity.')
+        return running
 
     def _get_request_cache_usage(self, total_blocks: int):
         """Return GPU KV blocks referenced by requests, counted once."""

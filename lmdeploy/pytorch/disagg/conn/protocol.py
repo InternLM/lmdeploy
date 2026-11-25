@@ -98,10 +98,11 @@ class PDHandoff(BaseModel):
     """One immutable export, valid only within its source engine incarnation.
 
     Block IDs address target and draft pools. Compact state IDs are per attention rank; auxiliary and legacy slots
-    belong to the request, not the block table. The receiver owns the original prompt and computes its remaining tail.
+    belong to the request, not the block table. P has computed the entire prompt and sampled the first output. D's first
+    forward consumes that output and verifies the drafts; drafts are not committed output tokens.
     """
 
-    version: Literal[2] = 2
+    version: Literal[3] = 3
     transfer_id: str
     engine_epoch: str
     session_id: int = 0
@@ -109,6 +110,12 @@ class PDHandoff(BaseModel):
     prompt_digest: str
     prompt_token_count: int = Field(gt=0)
     valid_token_count: int = Field(ge=0)
+    first_token_id: int = Field(ge=0)
+    draft_token_ids: list[int] = Field(default_factory=list)
+    random_seed: int
+    random_offset: int = Field(ge=0)
+    first_token_logprobs: list[dict[int, float]] | None = None
+    model_meta: dict | None = None
     # Reused prompt tokens on P, excluding this request's P-to-D transfer.
     prefill_cached_tokens: int = Field(default=0, ge=0)
     block_size: int = Field(gt=0)
@@ -119,8 +126,12 @@ class PDHandoff(BaseModel):
 
     @model_validator(mode='after')
     def validate_boundary(self):
-        if self.valid_token_count >= self.prompt_token_count:
-            raise ValueError('PD requires a nonempty original prompt tail for decode replay.')
+        if self.valid_token_count != self.prompt_token_count:
+            raise ValueError('PD must export the complete prompt cache.')
+        if self.random_offset != self.prompt_token_count + 1:
+            raise ValueError('PD sampling must resume after exactly one generated token.')
+        if any(token < 0 for token in self.draft_token_ids):
+            raise ValueError('PD draft token IDs must be nonnegative.')
         if self.prefill_cached_tokens > self.valid_token_count:
             raise ValueError('PD cache hits cannot exceed the exported prefix.')
         expected = (self.valid_token_count + self.block_size - 1) // self.block_size

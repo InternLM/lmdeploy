@@ -8,7 +8,7 @@ so the portable implementation stays untouched.
 
 import torch
 
-from ..default.rejection_sampling import DefaultRejectionSamplingImpl
+from ..default.rejection_sampling import DefaultRejectionSamplingImpl, _rejection_randoms
 from ..rejection_sampling import PLACEHOLDER_TOKEN_ID
 
 
@@ -64,15 +64,17 @@ class AscendRejectionSamplingImpl(DefaultRejectionSamplingImpl):
             target_token_ids[:, -1],
         )
 
-    def forward(self, target_logits, draft_token_ids, bonus_token_ids, *, is_greedy, draft_probs=None):
+    def forward(self, target_logits, draft_token_ids, bonus_token_ids, *, is_greedy, draft_probs=None,
+                random_seeds=None, random_offsets=None):
         import os
         from types import SimpleNamespace
 
         # The current LMDeploy BuildSpec path uses the Torch implementation by default.
         # The legacy dlinfer function patch no longer reaches RejectionSampler.
-        if os.getenv('DLINFER_ASCEND_REJECT_SAMPLE_USE_TRITON', '0') != '1':
+        if random_seeds is not None or os.getenv('DLINFER_ASCEND_REJECT_SAMPLE_USE_TRITON', '0') != '1':
             return self._forward_torch(
-                target_logits.float(), draft_token_ids, bonus_token_ids, is_greedy=is_greedy, draft_probs=draft_probs
+                target_logits.float(), draft_token_ids, bonus_token_ids, is_greedy=is_greedy, draft_probs=draft_probs,
+                random_seeds=random_seeds, random_offsets=random_offsets,
             )
 
         from lmdeploy.pytorch.kernels.ascend.triton_ops.reject_sample import rejection_sample
@@ -96,6 +98,8 @@ class AscendRejectionSamplingImpl(DefaultRejectionSamplingImpl):
         *,
         is_greedy: torch.Tensor | None,
         draft_probs: torch.Tensor | None = None,
+        random_seeds: torch.Tensor | None = None,
+        random_offsets: torch.Tensor | None = None,
     ):
         target_token_ids = None
         greedy_accepted = None
@@ -103,32 +107,21 @@ class AscendRejectionSamplingImpl(DefaultRejectionSamplingImpl):
             target_token_ids = target_logits.argmax(dim=-1)
             greedy_accepted = draft_token_ids == target_token_ids
 
-        batch_size, num_spec_tokens = draft_token_ids.shape
-        vocab_size = target_logits.shape[-1]
+        _, num_spec_tokens = draft_token_ids.shape
         target_probs = target_logits.softmax(dim=-1, dtype=torch.float32)
-        uniform_probs = torch.rand(
-            (batch_size, num_spec_tokens),
-            dtype=torch.float64,
-            device=target_logits.device,
-        )
-        q = torch.empty(
-            (batch_size, vocab_size),
-            dtype=torch.float32,
-            device=target_logits.device,
-        )
-        q.exponential_()
-        inv_q = q.reciprocal()
+        uniform_probs, inv_q = _rejection_randoms(
+            target_logits, num_spec_tokens, random_seeds, random_offsets)
 
         draft_indices = draft_token_ids.unsqueeze(-1)
         target_draft_probs = target_probs.gather(-1, draft_indices).squeeze(-1)
         if draft_probs is None:
             random_accepted = target_draft_probs >= uniform_probs
-            recovered_scores = target_probs * inv_q[:, None, :]
+            recovered_scores = target_probs * inv_q
             recovered_scores.scatter_(-1, draft_indices, 0.0)
         else:
             draft_token_probs = draft_probs.gather(-1, draft_indices).squeeze(-1)
             random_accepted = (draft_token_probs > 0) & (target_draft_probs / draft_token_probs >= uniform_probs)
-            recovered_scores = (target_probs - draft_probs).clamp_min_(0) * inv_q[:, None, :]
+            recovered_scores = (target_probs - draft_probs).clamp_min_(0) * inv_q
 
         recovered_token_ids = recovered_scores.argmax(dim=-1)
         random_token_ids = torch.where(

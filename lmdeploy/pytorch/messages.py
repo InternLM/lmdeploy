@@ -679,6 +679,7 @@ class SchedulerSequence:
     preserve_cache: bool = False
     pd_prompt_tokens: np.ndarray | None = None
     pd_prefix_length: int = 0
+    pd_decode_pending: bool = False
 
     # For logging
     engine_events: list[EngineEvent] = field(default_factory=list)
@@ -768,28 +769,17 @@ class SchedulerSequence:
 
     @property
     def cache_identity_ids(self) -> np.ndarray:
-        """Include the known successor withheld by PD, never a P proposal."""
-        return self.pd_prompt_tokens if self.pd_prompt_tokens is not None else self.all_ids
+        """Only confirmed tokens can identify a shared MTP successor."""
+        return self.valid_ids
 
     @property
     def cache_identity_token_count(self) -> int:
-        return len(self.pd_prompt_tokens) if self.pd_prompt_tokens is not None else self.num_valid_ids
+        return self.num_valid_ids
 
     def prepare_pd_prefill(self) -> None:
-        """Compute a proper prompt prefix and leave its real tail for D."""
+        """Keep the complete prompt, including any trailing multimodal span."""
         self.pd_prompt_tokens = self.valid_ids.copy()
-        boundary = len(self.pd_prompt_tokens) - 1
-        lookahead = self.prefill_input_shift
-        spans = [(span.start, span.end) for span in self.prefix_cache.multimodal_spans]
-        spans.extend((span.start, span.end) for span in self.history_embeddings.embeddings)
-        for start, end in sorted(spans, reverse=True):
-            if max(0, start - lookahead) < boundary < end:
-                boundary = max(0, start - lookahead)
-        self.pd_prefix_length = boundary
-        self.history_cache.resize(boundary)
-        self._num_history_ids = 0
-        self._num_token_ids = boundary
-        self.input_end_pos = self.output_start_pos = boundary
+        self.pd_prefix_length = len(self.pd_prompt_tokens)
 
     @property
     def generated_ids(self) -> np.ndarray:

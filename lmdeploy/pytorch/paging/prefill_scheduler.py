@@ -675,8 +675,6 @@ class _PrefillAdmissionAttempt:
 
         A block beyond ``history // block_size`` occupies the logical range
         that another shared match would append, misaligning table positions.
-        This includes PD receivers, even when Store lookup is disabled. Their
-        exact imported state must survive admission of the withheld prompt tail.
         Block-granular external load reuses the boundary block as its first
         destination.
         """

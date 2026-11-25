@@ -248,7 +248,7 @@ class MigrationDoneState(StateBase):
     status = MessageStatus.MIGRATION_DONE
 
     def activate(self):
-        self.to_state(WaitingState)
+        self.to_state(ReadyState if self.seq.pd_decode_pending else WaitingState)
 
     def finish(self):
         self.to_state(WaitingState)

@@ -478,7 +478,7 @@ class Engine(EngineBase):
             sampling_param = msg.sampling_param
             max_new_tokens = sampling_param.max_new_tokens
             num_all_tokens = msg.num_valid_ids
-            if self.engine_config.role == EngineRole.Prefill:
+            if self.engine_config.role == EngineRole.Prefill and msg.pd_prompt_tokens is None:
                 sampling_param.max_new_tokens = 1
             elif max_new_tokens + num_all_tokens > max_session_len:
                 logger.warning(
@@ -508,6 +508,11 @@ class Engine(EngineBase):
                                   preserve_cache=req.data.get('preserve_cache'))
                 msg = next(iter(sess.sequences.values()))
                 if req.data.get('pd_prefill'):
+                    if sampling_param.max_new_tokens == 0:
+                        scheduler.end_session(session_id)
+                        self._response(req.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                                       err_msg='PD handoff requires at least one generated token.')
+                        continue
                     if (self.engine_config.role != EngineRole.Prefill or not msg.preserve_cache
                             or not self.engine_conn.cache_schema):
                         scheduler.end_session(session_id)
@@ -515,20 +520,13 @@ class Engine(EngineBase):
                                        err_msg='pd_prefill requires a preserving Prefill request and v2 handshake.')
                         continue
                     msg.prepare_pd_prefill()
-                    if not msg.pd_prefix_length:
-                        # A one-token prompt (or a media-only tail) has no
-                        # exportable prefix. D performs its ordinary prefill.
-                        handoff = scheduler.pd_coordinator.publish(msg, self.engine_conn.cache_schema, [])
-                        msg.state.stop()
-                        self._response(req.resp, ResponseType.FINISH,
-                                       data=dict(token_ids=np.empty(0, dtype=np.int64), cache_block_ids=[],
-                                                 pd_handoff=handoff.model_dump(),
-                                                 req_metrics=RequestMetrics(time.time(), msg.engine_events)))
-                        continue
                 if migration_request:
                     if migration_request.handoff is not None:
                         try:
                             scheduler.pd_coordinator.validate_receive(msg, self.engine_conn.cache_schema)
+                            num_drafts = self.engine_strategy.get_num_decode_tokens() - 1
+                            if len(migration_request.handoff.draft_token_ids) != num_drafts:
+                                raise ValueError('PD draft count does not match the decode strategy.')
                         except (ValueError, RuntimeError) as error:
                             scheduler.end_session(session_id)
                             self._response(req.resp, ResponseType.INTERNAL_ENGINE_ERROR, err_msg=str(error))

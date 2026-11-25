@@ -51,7 +51,7 @@ def test_prefill_to_decode_chooses_final_not_token_count(width):
 @pytest.mark.parametrize('width', [1, 2, 4, 6])
 def test_actual_spec_step_uses_consumed_count_including_target_token(monkeypatch, width):
     from lmdeploy.pytorch.strategies.ar_spec import step_inputs as module
-    monkeypatch.setattr(module, 'step_sampling_delta', lambda delta, next_tokens: delta)
+    monkeypatch.setattr(module, 'step_sampling_delta', lambda delta, next_tokens, count: delta)
     inputs = _inputs(width=width)
     inputs.ssm_prefill_meta = SSMPrefillMetadata.from_lengths([4] * 3, [2048] * 3).to_device('cuda')
     inputs.ssm_source_state_ids = torch.zeros(3, device='cuda', dtype=torch.long)
@@ -59,6 +59,7 @@ def test_actual_spec_step_uses_consumed_count_including_target_token(monkeypatch
     # All rejected draft tokens still consume the initial target token.
     rejected = torch.tensor([0, width - 1, (width - 1) // 2], device='cuda')
     extras = SimpleNamespace(num_rejected_tokens=rejected,
+                             output_token_ids=None,
                              output_draft_token_ids=torch.zeros(3, width - 1, device='cuda', dtype=torch.long))
     runtime = SSMStateCursor(1100)
     steps = ARSpecStepInputs(_num_spec_tokens=width - 1, ssm_state_cursor=runtime)

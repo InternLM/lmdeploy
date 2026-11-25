@@ -377,8 +377,17 @@ class _ForwardInputsTask:
         # 1. Pick the primary lane for this loop. Active chunks are
         # engine-local runnable work, so they are considered before waiting
         # scheduler prefill. Without an active chunk, honor do_prefill().
+        imported = self.scheduler.schedule_pd_decode() if maker.config.role == EngineRole.Decode else []
         maker.long_context_chunker.check_enable()
-        if maker.long_context_chunker.enabled():
+        if imported:
+            inputs = maker.create_model_inputs(imported, False)
+            delta, maker.running_seqs, _ = maker.create_model_inputs_delta_valid_only()
+            carrier = CacheCheckpointInputs(pd_import_token_ids=tuple(int(seq.generated_ids[0]) for seq in imported))
+            self.result.set_work(imported, inputs, delta,
+                                 maker.model_agent_strategy.make_extra_inputs(imported, inputs), cache_inputs=carrier)
+            for seq in imported:
+                seq.pd_decode_pending = False
+        elif maker.long_context_chunker.enabled():
             self._select_active_chunk_work()
         elif state.prefill:
             self._select_prefill_work()
@@ -594,7 +603,7 @@ class _ForwardInputsTask:
                           prefer_long_prefill: bool = False):
         maker = self.maker
         if maker.config.role == EngineRole.Prefill:
-            prealloc_size = 0
+            prealloc_size = maker.engine_strategy.get_prealloc_size(False)
         else:
             prealloc_size = maker.engine_strategy.get_prealloc_size(True)
         scheduler_output = self.scheduler.schedule(is_prefill=True,
@@ -662,10 +671,8 @@ class _ForwardInputsTask:
                        chunk_size: int,
                        is_last_chunk: bool):
         maker = self.maker
-        if maker.config.role == EngineRole.Prefill:
-            prealloc_size = 0
-        elif is_last_chunk:
-            prealloc_size = maker.engine_strategy.get_prealloc_size(True)
+        if is_last_chunk:
+            prealloc_size = maker.engine_strategy.get_prealloc_size(maker.config.role != EngineRole.Prefill)
         else:
             prealloc_size = 0
         return self.scheduler.reserve_long_context_chunk(seq,
@@ -1045,8 +1052,10 @@ class InputsMakerAsync:
         state = None
         prefill = None
         if inputs is not None:
-            if inputs.is_decoding or inputs.ssm_state_meta is not None:
-                raise ValueError('Fresh compact packets must be unbound prefills; decode uses a delta.')
+            if inputs.ssm_state_meta is not None:
+                raise ValueError('Fresh compact packets must be unbound.')
+            if inputs.is_decoding and carrier.pd_import_token_ids is None:
+                raise ValueError('Only migrated requests can initialize fresh decode inputs.')
             if (inputs.state_offsets is None or inputs.state_offsets.device.type != 'cpu'
                     or inputs.state_offsets.tolist() != [bank.auxiliary_id for bank in banks]):
                 raise ValueError('Compact prefill auxiliary IDs must match admitted request order.')
@@ -1069,10 +1078,11 @@ class InputsMakerAsync:
                                                   for step, history in zip(steps, histories)]
             # Validate every export BEFORE reserving units, binding sources or
             # pinning KV. Actual unit IDs replace these validation placeholders.
-            prefill = SSMPrefillMetadata.from_lengths(
-                lengths, histories, checkpoint_ids=None if steps is None else [int(step > 0) for step in steps],
-                checkpoint_offsets=offsets)
-            if prefill.cu_seqlens.numel() != len(banks) + 1:
+            if not inputs.is_decoding:
+                prefill = SSMPrefillMetadata.from_lengths(
+                    lengths, histories, checkpoint_ids=None if steps is None else [int(step > 0) for step in steps],
+                    checkpoint_offsets=offsets)
+            if prefill is not None and prefill.cu_seqlens.numel() != len(banks) + 1:
                 raise ValueError('Compact prefill lengths must match admitted request count.')
         elif delta.block_offsets.shape[0] != len(banks) or delta.ssm_state_ids is not None:
             raise ValueError('Compact decode delta must match admitted request count and be unbound.')
@@ -1153,8 +1163,11 @@ class InputsMakerAsync:
                     [bank.unit_ids + (-1,) * (owner.capacity.bank_width - len(bank.unit_ids)) for bank in banks],
                     dtype=torch.int64)
                 state = SSMStateMetadata(bank_ids, torch.full((len(banks),), -1, dtype=torch.int64),
-                                           torch.full((len(banks), 1), -1, dtype=torch.int64), partial_bank=True)
-                access = owner.submit_prefill(banks, checkpoints=checkpoints)
+                                           torch.full((len(banks), inputs.max_q_seqlen if inputs.is_decoding else 1),
+                                                      -1, dtype=torch.int64),
+                                           partial_bank=not inputs.is_decoding)
+                access = (owner.submit_decode(banks) if inputs.is_decoding else
+                          owner.submit_prefill(banks, checkpoints=checkpoints))
             else:
                 access = owner.submit_decode(banks, checkpoints=checkpoints)
             carrier = replace(carrier, ssm_state_access_id=access.access_id)
@@ -1642,18 +1655,10 @@ class InputsMakerAsync:
             return None, None
         next_running = forward_inputs.pop('running')
         inputs = forward_inputs['inputs']
-        if inputs is not None and not inputs.is_dummy and not inputs.is_decoding:
-            inputs.skip_sampling = all(
-                seq.pd_prompt_tokens is not None and not seq.return_logits and not seq.return_ce_loss
-                and seq.logprob_start_pos < 0 and seq.sampling_param.num_logprobs <= 0 for seq in next_running)
         if (inputs is not None and not inputs.is_dummy and (not inputs.is_chunk or inputs.is_last_chunk)
                 and any(seq.pd_prompt_tokens is not None for seq in next_running)):
             carrier = forward_inputs['cache_inputs'] or CacheCheckpointInputs()
             forward_inputs['cache_inputs'] = replace(carrier, pd_export=True)
-            inputs.prefill_next_token_ids = torch.tensor([
-                int(seq.pd_prompt_tokens[seq.pd_prefix_length]) if seq.pd_prompt_tokens is not None else -1
-                for seq in next_running
-            ], dtype=torch.long)
         if logger.level <= logging.DEBUG and inputs is not None:
             logger.debug(f'Sending forward inputs: {inputs.log_info()}')
             session_ids = [seq.session_id for seq in next_running]

@@ -6,7 +6,7 @@ import torch
 from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig, SSMStateCapacity
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest, PDControlRequest, PDHandoff
 from lmdeploy.pytorch.disagg.messages import PDTransferResult
-from lmdeploy.pytorch.messages import SequenceMeta
+from lmdeploy.pytorch.messages import SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.paging.pd_coordinator import prompt_digest
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
@@ -17,10 +17,12 @@ def make_export(cached_tokens=0):
     scheduler = Scheduler(SchedulerConfig(max_batches=2, max_session_len=32), cache,
                           SequenceMeta(4, strategy=ARSequenceStrategy()))
     seq = scheduler.add_session(1).add_sequence(np.arange(8), preserve_cache=True)
-    seq.pd_prompt_tokens = np.arange(9)
+    seq.pd_prompt_tokens = np.arange(8)
     seq.pd_prefix_length = 8
     seq.cached_tokens = cached_tokens
     scheduler.block_manager.allocate(seq)
+    seq.sampling_param.random_seed = 42
+    seq.update_token_ids(np.array([8]), mode=UpdateTokenMode.PREFILL)
     handoff = scheduler.pd_coordinator.publish(seq, 'schema', [])
     return scheduler, seq, handoff
 
@@ -34,7 +36,7 @@ def test_handoff_preserves_prefill_cache_hits_separately_from_imported_history(c
                           SequenceMeta(4, strategy=ARSequenceStrategy()))
     migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill',
                                  remote_session_id=1, handoff=handoff)
-    seq = scheduler.add_session(2).add_sequence(np.arange(9), migration_request=migration)
+    seq = scheduler.add_session(2).add_sequence(np.arange(8), migration_request=migration)
     assert scheduler.schedule_migration() == [seq]
     result = PDTransferResult(transfer_id=handoff.transfer_id, status='completed')
     assert scheduler.pd_coordinator.finish_receive(seq, result) == 'ready'
@@ -94,7 +96,8 @@ def test_receive_reuses_prefix_and_cancellation_retains_private_destination(stat
     seq = scheduler.add_session(2).add_sequence(np.arange(10), migration_request=migration)
     migration.handoff = PDHandoff(transfer_id='read', engine_epoch='prefill-epoch', cache_schema='model',
                                    prompt_digest=prompt_digest(seq, seq.valid_ids), prompt_token_count=10,
-                                   valid_token_count=9, block_size=4, block_ids=[0, 1, 2])
+                                   valid_token_count=10, first_token_id=10, random_seed=42, random_offset=11,
+                                   block_size=4, block_ids=[0, 1, 2])
     assert scheduler.schedule_migration() == [seq]
     owner = scheduler.pd_coordinator
     receive = owner.receives[seq.seq_id]
@@ -122,7 +125,7 @@ def test_receive_reuses_prefix_and_cancellation_retains_private_destination(stat
 
 @pytest.mark.parametrize('compact', [False, True])
 @pytest.mark.parametrize('expire', [False, True])
-def test_receive_state_lifetime_through_prompt_replay_or_expiry(compact, expire, monkeypatch):
+def test_receive_state_lifetime_through_direct_decode_or_expiry(compact, expire, monkeypatch):
     cache = CacheConfig(max_batches=1, block_size=4, num_gpu_blocks=8, num_cpu_blocks=0,
                         states_shapes=[((2,), torch.float32)], num_state_caches=2,
                         enable_prefix_caching=True,
@@ -133,7 +136,8 @@ def test_receive_state_lifetime_through_prompt_replay_or_expiry(compact, expire,
     seq = scheduler.add_session(2).add_sequence(np.arange(10), migration_request=migration)
     migration.handoff = PDHandoff(transfer_id='read', engine_epoch='source', cache_schema='model',
                                    prompt_digest=prompt_digest(seq, seq.valid_ids), prompt_token_count=10,
-                                   valid_token_count=9, block_size=4, block_ids=[0, 1, 2], state_ids=[17],
+                                   valid_token_count=10, first_token_id=10, random_seed=42, random_offset=11,
+                                   block_size=4, block_ids=[0, 1, 2], state_ids=[17],
                                    auxiliary_id=4, legacy_state_id=None if compact else 4)
     assert scheduler.schedule_migration() == [seq]
     seq.state.activate()
@@ -155,7 +159,7 @@ def test_receive_state_lifetime_through_prompt_replay_or_expiry(compact, expire,
         assert replacement.logical_state == state_id
         return
     assert scheduler.pd_coordinator.finish_receive(seq, result) == 'ready'
-    scheduler.block_trie.allocate(seq, token_limit=9)
+    scheduler.block_trie.allocate(seq, token_limit=10)
     seq.state.deactivate()
     scheduler.resume_completed_migrations()
 
@@ -163,12 +167,12 @@ def test_receive_state_lifetime_through_prompt_replay_or_expiry(compact, expire,
         pytest.fail('PD replay must retain its imported state without another prefix match.')
 
     monkeypatch.setattr(scheduler.block_trie, 'match', unexpected_match)
-    assert scheduler.schedule(is_prefill=True).running == [seq]
+    assert scheduler.schedule_pd_decode() == [seq]
     assert seq.logical_state == state_id
     if compact:
-        assert bank.loaded_input == (bank.unit_ids[0], 9)
-    assert seq.num_history_ids == 9 and seq.token_ids.tolist() == [9]
-    assert seq.num_new_tokens == 0
+        assert bank.loaded_input == (bank.unit_ids[0], 10)
+    assert seq.num_history_ids == 10 and seq.token_ids.tolist() == [10]
+    assert seq.num_new_tokens == 1
 
 
 def test_grant_renewal_abort_and_expiry_preserve_other_owners(monkeypatch):

@@ -92,7 +92,7 @@ class PDWorkerRuntime:
             # Existing callers only describe target blocks. They cannot safely
             # initialize draft or recurrent caches through this legacy path.
             if any(pool.group != 'target' for pool in self.pool_infos):
-                raise ValueError('Hybrid and MTP PD require a version 2 handoff.')
+                raise ValueError('Hybrid and MTP PD require a full-prompt handoff.')
             for peer, pairs in batch.requests:
                 remote = self.remote_endpoints[peer]
                 plan = build_cache_pool_assignments(self.pool_infos, remote.cache_pools, pairs)

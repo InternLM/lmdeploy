@@ -85,6 +85,8 @@ def _rejection_random_sample_kernel(
     bonus_token_ids_ptr,
     recovered_token_ids_ptr,
     uniform_probs_ptr,
+    random_seeds_ptr,
+    random_offsets_ptr,
     is_greedy_ptr,
     num_spec_tokens,
     vocab_size,
@@ -118,8 +120,12 @@ def _rejection_random_sample_kernel(
                 target_probs_ptr
                 + (req_idx * draft_stride + pos) * vocab_size
                 + draft_token_id)
-            uniform_prob = tl.load(
-                uniform_probs_ptr + req_idx * draft_stride + pos)
+            if random_seeds_ptr is not None:
+                seed = tl.load(random_seeds_ptr + req_idx).to(tl.uint64)
+                offset = tl.load(random_offsets_ptr + req_idx) + pos
+                uniform_prob = tl.rand(seed ^ 0xA0761D6478BD642F, offset.to(tl.uint32))
+            else:
+                uniform_prob = tl.load(uniform_probs_ptr + req_idx * draft_stride + pos)
 
             if draft_prob > 0 and target_prob / draft_prob >= uniform_prob:
                 token_id = draft_token_id
@@ -156,6 +162,8 @@ def _sample_recovered_tokens_kernel(
     draft_probs_ptr,
     target_probs_ptr,
     inv_q_ptr,
+    random_seeds_ptr,
+    random_offsets_ptr,
     num_spec_tokens,
     vocab_size,
     BLOCK_SIZE: tl.constexpr,
@@ -197,11 +205,17 @@ def _sample_recovered_tokens_kernel(
             )
             prob = tl.maximum(target_prob - draft_prob, 0.0)
 
-        inv_q = tl.load(
-            inv_q_ptr + req_idx * vocab_size + vocab_offset,
-            mask=vocab_mask,
-            other=0.0,
-        )
+        if random_seeds_ptr is not None:
+            # Recovery has its own stream for each absolute output position.
+            # Neither batch order nor unrelated CUDA RNG draws affect it.
+            seed = tl.load(random_seeds_ptr + req_idx).to(tl.uint64)
+            position = (tl.load(random_offsets_ptr + req_idx) + pos).to(tl.uint64)
+            key = (seed | (position << 32)) ^ 0xE7037ED1A0B428DB
+            uniform = tl.maximum(tl.rand(key, vocab_offset.to(tl.uint32)), 1.0e-7)
+            inv_q = -1.0 / tl.log(uniform)
+        else:
+            inv_q = tl.load(inv_q_ptr + req_idx * vocab_size + vocab_offset,
+                            mask=vocab_mask, other=0.0)
         score = prob * inv_q
         local_max, local_id = tl.max(score, axis=0, return_indices=True)
         if local_max > max_val:
@@ -251,8 +265,11 @@ def random_rejection_sample(
     target_probs: torch.Tensor,
     bonus_token_ids: torch.LongTensor,
     recovered_token_ids: torch.LongTensor,
-    uniform_probs: torch.Tensor,
+    uniform_probs: torch.Tensor | None,
     is_greedy: torch.Tensor | None,
+    *,
+    random_seeds: torch.Tensor | None = None,
+    random_offsets: torch.Tensor | None = None,
 ):
     """Launch probabilistic rejection for non-greedy rows."""
     batch_size, num_spec_tokens = draft_token_ids.shape
@@ -267,6 +284,8 @@ def random_rejection_sample(
         bonus_token_ids,
         recovered_token_ids,
         uniform_probs,
+        random_seeds,
+        random_offsets,
         is_greedy,
         num_spec_tokens,
         vocab_size,
@@ -279,7 +298,10 @@ def sample_recovered_tokens(
     draft_token_ids: torch.LongTensor,
     draft_probs: torch.Tensor | None,
     target_probs: torch.Tensor,
-    inv_q: torch.Tensor,
+    inv_q: torch.Tensor | None,
+    *,
+    random_seeds: torch.Tensor | None = None,
+    random_offsets: torch.Tensor | None = None,
 ):
     """Launch recovered-token sampling."""
     batch_size, num_spec_tokens = draft_token_ids.shape
@@ -291,6 +313,8 @@ def sample_recovered_tokens(
         draft_probs,
         target_probs,
         inv_q,
+        random_seeds,
+        random_offsets,
         num_spec_tokens,
         vocab_size,
         block_size,

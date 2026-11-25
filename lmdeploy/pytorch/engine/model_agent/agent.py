@@ -1160,6 +1160,12 @@ class BaseModelAgent:
                 inputs,
                 delta,
             )
+            if (cache_inputs is not None and cache_inputs.pd_import_token_ids is not None
+                    and self.need_output and self.guided_decoding_manager is not None):
+                manager = self.guided_decoding_manager
+                processors = manager.get_processors(sampling_inputs.session_ctx, sampling_inputs.response_formats)
+                for row, processor in processors.items():
+                    manager.accept_token(processor, cache_inputs.pd_import_token_ids[row])
 
         if ssm_state_access_id is not None:
             if inputs.is_dummy or inputs.ssm_state_meta is None:

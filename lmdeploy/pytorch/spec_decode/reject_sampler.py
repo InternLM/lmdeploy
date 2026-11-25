@@ -41,6 +41,16 @@ class RejectionSampler(nn.Module):
             target_token_ids = target_logits.argmax(dim=-1)
             return self._impl.forward_greedy(target_token_ids, draft_token_ids)
 
+        if draft_probs is None:
+            # Greedy proposals have a point-mass distribution. Sampling the
+            # target at each absolute position and accepting matching drafts
+            # has the same distribution/acceptance rate as rejection sampling.
+            # It also couples the output to AR sampling: changing the draft or
+            # verification boundary cannot select a different RNG stream.
+            target_token_ids = FusedLogitsProcessor(expanded_sampling_inputs).sampling(
+                target_logits.flatten(0, 1)).view(batch_size, num_tokens)
+            return self._impl.forward_greedy(target_token_ids, draft_token_ids)
+
         bonus_sampling_inputs = expanded_sampling_inputs.select_sampling_rows(
             slice(num_tokens - 1, None, num_tokens))
         bonus_logits = target_logits[:, -1]
@@ -67,4 +77,6 @@ class RejectionSampler(nn.Module):
             bonus_token_ids,
             is_greedy=is_greedy,
             draft_probs=draft_probs,
+            random_seeds=expanded_sampling_inputs.random_seeds[::num_tokens].contiguous(),
+            random_offsets=expanded_sampling_inputs.random_offsets[::num_tokens].contiguous(),
         )

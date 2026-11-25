@@ -121,7 +121,7 @@ class ExecutorBase:
         if self.misc_config.memdecode_config is not None:
             raise NotImplementedError('Compact state does not support MemDecode.')
         if cache.role != EngineRole.Hybrid and cache.migration_backend != MigrationBackend.Mooncake:
-            raise NotImplementedError('Compact PD requires Mooncake and a version 2 handoff.')
+            raise NotImplementedError('Compact PD requires the Mooncake migration backend.')
         if cache.kv_transfer_config is not None and not cache.use_mooncake_store:
             raise NotImplementedError('Compact state supports only the Mooncake Store connector.')
         if cache.num_cpu_blocks > 0:

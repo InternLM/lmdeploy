@@ -11,6 +11,7 @@ import numpy as np
 from lmdeploy.pytorch.disagg.config import PD_RELEASE_TIMEOUT, PD_TRANSFER_TIMEOUT
 from lmdeploy.pytorch.disagg.conn.protocol import PDControlRequest, PDHandoff
 from lmdeploy.pytorch.disagg.messages import PDReceiveRequest
+from lmdeploy.pytorch.messages import UpdateTokenMode
 
 from .compact_state import SSMStateManager, StateAccess
 
@@ -116,8 +117,14 @@ class PDCoordinator:
         success = result.status == 'completed' and not receive.cancelled and not receive.quarantined
         self._release_receive(receive, success=success)
         if success:
-            seq.set_step(receive.request.handoff.valid_token_count)
-            seq.remote_prefill_cached_tokens = receive.request.handoff.prefill_cached_tokens
+            handoff = receive.request.handoff
+            seq.set_step(handoff.valid_token_count)
+            seq.update_token_ids(np.array([handoff.first_token_id], dtype=np.int64),
+                                 draft_token_ids=np.asarray(handoff.draft_token_ids, dtype=np.int64),
+                                 mode=UpdateTokenMode.PREFILL, model_meta=handoff.model_meta)
+            seq.sampling_param.random_seed = handoff.random_seed
+            seq.remote_prefill_cached_tokens = handoff.prefill_cached_tokens
+            seq.pd_decode_pending = True
             seq.migration_request = None
             seq.kv_token_limit = None
             return 'ready'
@@ -148,7 +155,7 @@ class PDCoordinator:
         self.block_manager.release_logical_blocks(receive.logical_blocks)
         del self.receives[receive.sequence.seq_id]
 
-    def publish(self, seq, cache_schema, state_ids) -> PDHandoff:
+    def publish(self, seq, cache_schema, state_ids, *, draft_token_ids=(), first_token_logprobs=None) -> PDHandoff:
         existing = self._export_by_sequence.get(seq.seq_id)
         if existing is not None:
             return self.exports[existing].handoff
@@ -165,6 +172,9 @@ class PDCoordinator:
                             prompt_digest=prompt_digest(seq, tokens), prompt_token_count=len(tokens),
                             prefill_cached_tokens=seq.cached_tokens,
                             valid_token_count=boundary, block_size=seq.block_size, block_ids=physical,
+                            first_token_id=int(seq.generated_ids[0]), draft_token_ids=list(draft_token_ids),
+                            random_seed=seq.sampling_param.random_seed, random_offset=seq.num_valid_ids,
+                            first_token_logprobs=first_token_logprobs, model_meta=seq.model_meta,
                             state_ids=state_ids if compact and boundary else [], auxiliary_id=auxiliary,
                             legacy_state_id=legacy)
         access = None

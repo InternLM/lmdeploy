@@ -657,7 +657,11 @@ class EngineLoop:
                 response = step_outputs.get(seq.session_id)
                 if response is not None and response.finish and seq.pd_prompt_tokens is not None:
                     ids = out.pd_state_ids[:, index].tolist() if out.pd_state_ids.numel() else []
-                    handoff = self.scheduler.pd_coordinator.publish(seq, self.engine_conn.cache_schema, ids)
+                    drafts = (out.extra_outputs.draft_token_ids[index].tolist()
+                              if self.config.num_speculative_tokens else [])
+                    handoff = self.scheduler.pd_coordinator.publish(
+                        seq, self.engine_conn.cache_schema, ids,
+                        draft_token_ids=drafts, first_token_logprobs=response.logprobs)
                     response.pd_handoff = handoff.model_dump()
         if cache_inputs is not None and cache_inputs.decode_save_id is not None:
             self.scheduler.decode_checkpoints.finish(
@@ -879,6 +883,16 @@ class EngineLoop:
             # recurrent state is a one-shot input, never an invented checkpoint.
             self.scheduler.block_trie.allocate(seq, token_limit=handoff.valid_token_count)
             seq.state.deactivate()
+            finished = (seq.sampling_param.max_new_tokens <= 1
+                        or handoff.first_token_id in seq.sampling_param.stop_words)
+            output = InferOutput(session_id=seq.session_id, resp=seq.resp, finish=finished,
+                                 token_ids=seq.generated_ids.copy(), logprobs=handoff.first_token_logprobs,
+                                 req_metrics=RequestMetrics(time.time(), seq.engine_events,
+                                                            cached_tokens=seq.remote_prefill_cached_tokens))
+            self.resp_queue.put_nowait({seq.session_id: output})
+            if finished:
+                seq.pd_decode_pending = False
+                seq.state.stop()
             self.has_runable_event.set()
             self.migration_event.set()
             return

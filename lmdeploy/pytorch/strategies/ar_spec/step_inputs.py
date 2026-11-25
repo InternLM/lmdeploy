@@ -119,13 +119,20 @@ class ARSpecStepInputs(StepInputs):
             [next_token_ids_expanded, extra_outputs.draft_token_ids], dim=-1)
         max_q_seqlen = next_token_ids_expanded.size(-1)
         next_token_ids_flat = next_token_ids_expanded.flatten()[None, :]
-        inputs = get_model_inputs_next_decoding(
-            inputs, next_token_ids_flat,
-            max_q_seqlen=max_q_seqlen, model_metas=model_metas, ssm_state_cursor=self.ssm_state_cursor)
+        imported_decode = inputs.is_decoding
+        num_new_tokens = 1
+        if imported_decode:
+            num_new_tokens = inputs.seq_length - extra_inputs.num_rejected_tokens
+            inputs = inputs.step(next_token_ids_flat, num_new_tokens, ssm_state_cursor=self.ssm_state_cursor)
+            inputs.model_metas = model_metas
+        else:
+            inputs = get_model_inputs_next_decoding(
+                inputs, next_token_ids_flat,
+                max_q_seqlen=max_q_seqlen, model_metas=model_metas, ssm_state_cursor=self.ssm_state_cursor)
 
         # update mrope pos ids
         mrope_pos_ids = inputs.mrope_pos_ids
-        if mrope_pos_ids is not None:
+        if mrope_pos_ids is not None and not imported_decode:
             offsets = torch.arange(
                 max_q_seqlen, dtype=mrope_pos_ids.dtype,
                 device=mrope_pos_ids.device)[None, None, :]
@@ -137,7 +144,12 @@ class ARSpecStepInputs(StepInputs):
 
         # advance sampling state
         stopping_criteria = stopping_criteria.clone()
-        sampling_delta = step_sampling_delta(sampling_delta, next_token_ids)
+        output_ids = extra_inputs.output_token_ids if imported_decode else next_token_ids
+        if output_ids is not None:
+            output_ids = output_ids.masked_fill(output_ids < 0, self._pad_token_id)
+        else:
+            output_ids = next_token_ids
+        sampling_delta = step_sampling_delta(sampling_delta, output_ids, num_new_tokens)
 
         if self.model_inputs is None:
             self.model_inputs = inputs
@@ -190,4 +202,9 @@ class ARSpecStepInputs(StepInputs):
 
         # advance sampling state
         self.stopping_criteria = stopping_criteria.clone()
-        self.sampling_delta = step_sampling_delta(sampling_delta, next_token_ids)
+        output_ids = extra_inputs.output_token_ids
+        if output_ids is None:
+            output_ids = next_token_ids
+        else:
+            output_ids = output_ids.masked_fill(output_ids < 0, self._pad_token_id)
+        self.sampling_delta = step_sampling_delta(sampling_delta, output_ids, step_seqlens)

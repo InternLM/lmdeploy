@@ -48,6 +48,8 @@ class CudaRejectionSamplingImpl(RejectionSamplingImpl):
         *,
         is_greedy: torch.Tensor | None,
         draft_probs: torch.Tensor | None = None,
+        random_seeds: torch.Tensor | None = None,
+        random_offsets: torch.Tensor | None = None,
     ):
         assert draft_probs is None or draft_probs.is_contiguous()
         draft_token_ids = draft_token_ids.contiguous()
@@ -71,18 +73,12 @@ class CudaRejectionSamplingImpl(RejectionSamplingImpl):
         target_probs = target_logits.softmax(dim=-1, dtype=torch.float32)
         batch_size, num_spec_tokens = draft_token_ids.shape
         vocab_size = target_logits.shape[-1]
-        uniform_probs = torch.rand(
-            (batch_size, num_spec_tokens),
-            dtype=torch.float64,
-            device=target_logits.device,
-        )
-        q = torch.empty(
-            (batch_size, vocab_size),
-            dtype=torch.float32,
-            device=target_logits.device,
-        )
-        q.exponential_()
-        inv_q = q.reciprocal()
+        uniform_probs = inv_q = None
+        if random_seeds is None:
+            uniform_probs = torch.rand((batch_size, num_spec_tokens), dtype=torch.float64,
+                                       device=target_logits.device)
+            inv_q = torch.empty((batch_size, vocab_size), dtype=torch.float32,
+                                device=target_logits.device).exponential_().reciprocal_()
         recovered_token_ids = draft_token_ids.new_empty(
             (batch_size, num_spec_tokens))
         sample_recovered_tokens(
@@ -90,7 +86,7 @@ class CudaRejectionSamplingImpl(RejectionSamplingImpl):
             draft_token_ids,
             draft_probs,
             target_probs,
-            inv_q,
+            inv_q, random_seeds=random_seeds, random_offsets=random_offsets,
         )
         random_rejection_sample(
             output_token_ids,
@@ -102,6 +98,6 @@ class CudaRejectionSamplingImpl(RejectionSamplingImpl):
             bonus_token_ids,
             recovered_token_ids,
             uniform_probs,
-            is_greedy,
+            is_greedy, random_seeds=random_seeds, random_offsets=random_offsets,
         )
         return output_token_ids, num_rejected_tokens, last_token_ids

@@ -11,7 +11,7 @@ from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest, PDControlRequest
 from lmdeploy.pytorch.disagg.messages import PDTransferResult
 from lmdeploy.pytorch.engine.engine_loop import EngineLoop, EngineLoopConfig
-from lmdeploy.pytorch.messages import SequenceMeta
+from lmdeploy.pytorch.messages import SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
 
@@ -24,13 +24,15 @@ def make_transfer(migrate):
 
     prefill, decode = scheduler(), scheduler()
     source = prefill.add_session(1).add_sequence(np.arange(8), preserve_cache=True)
-    source.pd_prompt_tokens = np.arange(9)
+    source.pd_prompt_tokens = np.arange(8)
     source.pd_prefix_length = 8
     prefill.block_manager.allocate(source)
+    source.sampling_param.random_seed = 42
+    source.update_token_ids(np.array([8]), mode=UpdateTokenMode.PREFILL)
     handoff = prefill.pd_coordinator.publish(source, 'schema', [])
     migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill',
                                  remote_session_id=1, handoff=handoff)
-    target = decode.add_session(2).add_sequence(np.arange(9), migration_request=migration)
+    target = decode.add_session(2).add_sequence(np.arange(8), migration_request=migration)
     target.resp = SimpleNamespace(type=ResponseType.SUCCESS)
     assert decode.schedule_migration() == [target]
 

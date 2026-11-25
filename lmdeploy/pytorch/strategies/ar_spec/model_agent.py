@@ -184,12 +184,17 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
 
     def make_stopping_criteria(self, seqs: SeqList) -> ARSpecStoppingCriteria:
         """Create stopping criteria."""
-        num_appendable = [seq.sampling_param.max_new_tokens - seq.num_new_tokens for seq in seqs]
+        num_appendable = [1 if seq.pd_prompt_tokens is not None else
+                          seq.sampling_param.max_new_tokens - seq.num_new_tokens for seq in seqs]
         num_appendable = torch.tensor(num_appendable)
         return ARSpecStoppingCriteria(num_appendable_ids=num_appendable)
 
     def make_extra_inputs(self, seqs: 'SeqList', model_inputs: 'ModelInputs') -> ExtraInputs:
         """Create extra inputs."""
+        if model_inputs.is_decoding:
+            tokens = model_inputs.input_ids.reshape(len(seqs), self.num_spec_tokens + 1)
+            return ARSpecExtraInputs(output_draft_token_ids=tokens[:, 1:].contiguous(),
+                                     num_rejected_tokens=torch.zeros(len(seqs), dtype=torch.long))
         return ARSpecExtraInputs()
 
     def make_extra_outputs(self, extra_inputs: ARSpecExtraInputs) -> ARSpecExtraOutputs:

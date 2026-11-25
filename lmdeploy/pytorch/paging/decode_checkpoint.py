@@ -71,7 +71,10 @@ class DecodeCheckpointCoordinator:
         for row, seq in enumerate(running):
             if seq.logical_state <= 0:
                 continue
-            if inputs is not None:
+            if inputs is not None and inputs.is_decoding:
+                minimum = seq.num_history_ids + 1
+                maximum = seq.num_all_ids
+            elif inputs is not None:
                 # Prefill retains only its final state. Recompute can extend
                 # beyond the original prompt without changing input_end_pos.
                 minimum = maximum = seq.num_all_ids

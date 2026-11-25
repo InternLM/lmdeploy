@@ -35,6 +35,8 @@ class RejectionSamplingImpl(ABC):
         *,
         is_greedy: torch.Tensor | None,
         draft_probs: torch.Tensor | None = None,
+        random_seeds: torch.Tensor | None = None,
+        random_offsets: torch.Tensor | None = None,
     ) -> tuple[torch.LongTensor, torch.LongTensor, torch.LongTensor]:
         """Verify processed target logits against draft tokens.
 

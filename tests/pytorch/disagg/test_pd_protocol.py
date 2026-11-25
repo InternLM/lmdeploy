@@ -28,17 +28,19 @@ def test_peer_layout_ignores_capacity_but_requires_semantics():
         validate_pd_peer(endpoint, remote)
 
 
-def test_handoff_requires_exact_prefix_and_real_replay_tail():
+def test_handoff_requires_full_prompt_and_first_token_progress():
     fields = dict(transfer_id='operation', engine_epoch='source', cache_schema='model', prompt_digest='tokens',
-                  prompt_token_count=66, valid_token_count=65, block_size=64, block_ids=[3, 8],
+                  prompt_token_count=66, valid_token_count=66, first_token_id=10, random_seed=42, random_offset=67,
+                  first_token_logprobs=[{10: -0.2, 20: -1.7}],
+                  block_size=64, block_ids=[3, 8],
                   state_ids=[7, 11], auxiliary_id=2)
     handoff = PDHandoff(**fields)
     assert PDHandoff.model_validate_json(handoff.model_dump_json()) == handoff
     assert handoff.prefill_cached_tokens == 0
     with pytest.raises(ValueError, match='cache hits'):
-        PDHandoff(**(fields | dict(prefill_cached_tokens=66)))
-    with pytest.raises(ValueError, match='prompt tail'):
-        PDHandoff(**(fields | dict(valid_token_count=66)))
+        PDHandoff(**(fields | dict(prefill_cached_tokens=67)))
+    with pytest.raises(ValueError, match='complete prompt'):
+        PDHandoff(**(fields | dict(valid_token_count=65)))
     with pytest.raises(ValueError, match='exactly'):
         PDHandoff(**(fields | dict(block_ids=[3])))
     assert PDHandoff(**(fields | dict(block_ids=[]))).state_ids == [7, 11]
