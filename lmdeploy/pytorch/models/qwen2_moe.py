@@ -16,6 +16,7 @@ from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_pr
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import add_prefix
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, build_embedding
 
@@ -116,7 +117,8 @@ class Qwen2MoeMLP(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None,
                  is_tp: bool = True,
-                 all_reduce: bool = True):
+                 all_reduce: bool = True,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         if intermediate_size is None:
@@ -130,6 +132,7 @@ class Qwen2MoeMLP(nn.Module):
             device=device,
             quant_config=quantization_config,
             is_tp=is_tp,
+            prefix=add_prefix('gate_up_proj', prefix),
         )
 
         # silu and mul
@@ -143,7 +146,8 @@ class Qwen2MoeMLP(nn.Module):
                                               dtype=dtype,
                                               device=device,
                                               is_tp=is_tp,
-                                              all_reduce=all_reduce)
+                                              all_reduce=all_reduce,
+                                              prefix=add_prefix('down_proj', prefix))
 
     def forward(self, x):
         """forward."""
@@ -159,7 +163,8 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
                  config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype = None,
-                 device: torch.device = None):
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
@@ -194,6 +199,7 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
             device=device,
             quant_config=quantization_config,
             all_reduce=False,
+            prefix=add_prefix('experts', prefix),
         )
 
         intermediate_size = config.shared_expert_intermediate_size
@@ -204,6 +210,7 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
             device=device,
             is_tp=True,
             all_reduce=False,
+            prefix=add_prefix('shared_expert', prefix),
         )
         self.shared_expert_gate = build_rowwise_linear(config.hidden_size,
                                                        1,
@@ -265,9 +272,17 @@ class Qwen2MoeDecoderLayer(nn.Module):
         # build MLP
         if (layer_idx not in config.mlp_only_layers) and (config.num_experts
                                                           > 0) and ((layer_idx + 1) % config.decoder_sparse_step == 0):
-            self.mlp = Qwen2MoeSparseMoeBlock(config, layer_idx=layer_idx, dtype=dtype, device=device)
+            self.mlp = Qwen2MoeSparseMoeBlock(config,
+                                              layer_idx=layer_idx,
+                                              dtype=dtype,
+                                              device=device,
+                                              prefix=f'model.layers.{layer_idx}.mlp')
         else:
-            self.mlp = Qwen2MoeMLP(config, intermediate_size=config.intermediate_size, dtype=dtype, device=device)
+            self.mlp = Qwen2MoeMLP(config,
+                                   intermediate_size=config.intermediate_size,
+                                   dtype=dtype,
+                                   device=device,
+                                   prefix=f'model.layers.{layer_idx}.mlp')
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
