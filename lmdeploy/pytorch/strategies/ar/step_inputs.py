@@ -26,11 +26,12 @@ from .model_inputs import get_model_inputs_next_decoding, index_select_model_inp
 
 
 def step_sampling_delta(sampling_delta: SamplingInputsDelta,
-                         next_token_ids: torch.Tensor) -> SamplingInputsDelta:
+                         next_token_ids: torch.Tensor,
+                         random_offset_step: int | torch.Tensor = 1) -> SamplingInputsDelta:
     """Advance sampling delta for one decode step."""
     sampling_delta.num_ignore_eos = sampling_delta.num_ignore_eos - 1
     if sampling_delta.random_offsets is not None:
-        sampling_delta.random_offsets += 1
+        sampling_delta.random_offsets += random_offset_step
     all_ids = sampling_delta.all_ids
     if all_ids is not None:
         sampling_delta.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)

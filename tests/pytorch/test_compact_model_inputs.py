@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.compact_state import SSMPrefillMetadata, SSMStateCursor, SSMStateMetadata
+from lmdeploy.pytorch.engine.logits_process import SamplingInputsDelta
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta
 from lmdeploy.pytorch.strategies.ar.model_inputs import (
     get_model_inputs_next_decoding,
@@ -49,9 +50,7 @@ def test_prefill_to_decode_chooses_final_not_token_count(width):
 
 
 @pytest.mark.parametrize('width', [1, 2, 4, 6])
-def test_actual_spec_step_uses_consumed_count_including_target_token(monkeypatch, width):
-    from lmdeploy.pytorch.strategies.ar_spec import step_inputs as module
-    monkeypatch.setattr(module, 'step_sampling_delta', lambda delta, next_tokens: delta)
+def test_actual_spec_step_uses_consumed_count_including_target_token(width):
     inputs = _inputs(width=width)
     inputs.ssm_prefill_meta = SSMPrefillMetadata.from_lengths([4] * 3, [2048] * 3).to_device('cuda')
     inputs.ssm_source_state_ids = torch.zeros(3, device='cuda', dtype=torch.long)
@@ -62,11 +61,14 @@ def test_actual_spec_step_uses_consumed_count_including_target_token(monkeypatch
                              output_draft_token_ids=torch.zeros(3, width - 1, device='cuda', dtype=torch.long))
     runtime = SSMStateCursor(1100)
     steps = ARSpecStepInputs(_num_spec_tokens=width - 1, ssm_state_cursor=runtime)
-    steps.step_decode(inputs, extras, SimpleNamespace(clone=lambda: None), None,
+    sampling_delta = SamplingInputsDelta(num_ignore_eos=torch.zeros(3, device='cuda', dtype=torch.long),
+                                         random_offsets=torch.full((3,), 2049, device='cuda'))
+    steps.step_decode(inputs, extras, SimpleNamespace(clone=lambda: None), sampling_delta,
                       torch.zeros(3, device='cuda', dtype=torch.long), None, None)
     next_inputs = steps.model_inputs
     assert next_inputs.ssm_prefill_meta is next_inputs.ssm_source_state_ids is None
     consumed = inputs.seq_length - rejected
+    torch.testing.assert_close(steps.sampling_delta.random_offsets, 2049 + consumed, rtol=0, atol=0)
     expected = original.output_state_ids[torch.arange(3, device='cuda'), consumed - 1]
     torch.testing.assert_close(next_inputs.ssm_state_meta.input_state_ids, expected, rtol=0, atol=0)
     torch.testing.assert_close(next_inputs.history_lengths, inputs.history_lengths + consumed, rtol=0, atol=0)

@@ -66,5 +66,7 @@ class RejectionSampler(nn.Module):
             draft_token_ids,
             bonus_token_ids,
             is_greedy=is_greedy,
+            random_seeds=expanded_sampling_inputs.random_seeds[::num_tokens],
+            random_offsets=expanded_sampling_inputs.random_offsets[::num_tokens],
             draft_probs=draft_probs,
         )

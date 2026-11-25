@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from lmdeploy.pytorch.backends.default.rejection_sampling import (
+    DefaultRejectionSamplingImpl,
     torch_greedy_rejection_sample,
 )
 from lmdeploy.pytorch.backends.rejection_sampling import PLACEHOLDER_TOKEN_ID
@@ -14,7 +15,6 @@ from lmdeploy.pytorch.spec_decode.spec_agent import _expand_sampling_inputs
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 _rejection_sampler = (RejectionSampler('cuda')
                       if torch.cuda.is_available() else None)
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
 
 
 def rejection_sample(target_logits,
@@ -80,6 +80,7 @@ def _extract_valid(output_token_ids):
     return out
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
 class TestRejectSample:
     """Tests for rejection_sample and torch_greedy_rejection_sample.
 
@@ -289,3 +290,87 @@ class TestRejectSample:
         valid = _extract_valid(out)
         for i in range(2):
             assert len(valid[i]) == 1, f'row {i}: expected 1 token, got {valid[i]}'
+
+    def test_request_seed_survives_rng_interference_and_batch_changes(self):
+        batch, width, vocab = 16, 4, 32
+        logits = torch.linspace(-2, 2, vocab, device=device).expand(batch, width, -1).contiguous()
+        drafts = torch.full((batch, width - 1), vocab - 1, device=device, dtype=torch.long)
+        rows = torch.arange(batch, device=device)
+
+        def sample(indices, seed_delta=0, offset_delta=0):
+            inputs = SamplingInputs(
+                batch_size=len(indices), max_top_k=0, has_greedy=True,
+                top_k=torch.where(indices % 4 == 0, 1, 0),
+                random_seeds=indices + 1234 + seed_delta,
+                random_offsets=indices + 100 + offset_delta)
+            return _rejection_sampler(logits[indices], drafts[indices], _expand_sampling_inputs(inputs, width))
+
+        # Includes the bonus sampler and the strided per-request RNG inputs.
+        rng_state = torch.cuda.get_rng_state()
+        expected = sample(rows)
+        assert torch.equal(torch.cuda.get_rng_state(), rng_state)
+        torch.rand(4096, device=device)
+        for indices in (rows, rows.flip(0), rows[::2], rows[1:2]):
+            for actual, reference in zip(sample(indices), expected):
+                torch.testing.assert_close(actual, reference[indices], rtol=0, atol=0)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            captured = sample(rows)
+        graph.replay()
+        for actual, reference in zip(captured, expected):
+            torch.testing.assert_close(actual, reference, rtol=0, atol=0)
+        assert not torch.equal(sample(rows, seed_delta=1)[0], expected[0])
+        assert not torch.equal(sample(rows, offset_delta=1)[0], expected[0])
+
+    @pytest.mark.parametrize('has_draft_probs', [False, True])
+    def test_seeded_cuda_matches_portable_rejection(self, has_draft_probs):
+        from lmdeploy.pytorch.backends.cuda.rejection_sampling import CudaRejectionSamplingImpl
+
+        torch.manual_seed(42)
+        logits = torch.randn(32, 3, 4099, device=device)
+        drafts = torch.randint(4099, (32, 3), device=device)
+        bonus = torch.randint(4099, (32,), device=device)
+        # Force different accepted-prefix lengths; recovery spans multiple vocabulary blocks.
+        for pos in range(3):
+            rows = torch.arange(32, device=device)[torch.arange(32, device=device) % 4 > pos]
+            logits[rows, pos] = -1000
+            logits[rows, pos, drafts[rows, pos]] = 1000
+        kwargs = dict(
+            is_greedy=torch.arange(32, device=device) % 5 == 0,
+            random_seeds=torch.arange(32, device=device) + 1234,
+            random_offsets=torch.arange(32, device=device) + 2**32,
+            draft_probs=torch.randn_like(logits).softmax(-1) if has_draft_probs else None)
+        expected = DefaultRejectionSamplingImpl().forward(logits, drafts, bonus, **kwargs)
+        actual = CudaRejectionSamplingImpl().forward(logits, drafts, bonus, **kwargs)
+        for result, reference in zip(actual, expected):
+            torch.testing.assert_close(result, reference, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('backend', ['default', pytest.param('cuda', marks=pytest.mark.skipif(
+    not torch.cuda.is_available(), reason='requires CUDA'))])
+def test_seeded_rejection_preserves_target_distribution(backend):
+    from lmdeploy.pytorch.backends.cuda.rejection_sampling import CudaRejectionSamplingImpl
+
+    sample_device = 'cpu' if backend == 'default' else 'cuda'
+    impl = DefaultRejectionSamplingImpl() if backend == 'default' else CudaRejectionSamplingImpl()
+    num_trials = 10000
+    probabilities = torch.tensor([0.1, 0.2, 0.3, 0.4], device=sample_device)
+    logits = probabilities.log().repeat(num_trials, 1, 1)
+    drafts = torch.full((num_trials, 1), 2, dtype=torch.long, device=sample_device)
+    output, rejected, _ = impl.forward(
+        logits, drafts, drafts[:, 0], is_greedy=None,
+        random_seeds=torch.arange(num_trials, device=sample_device),
+        random_offsets=torch.full((num_trials,), 100, device=sample_device))
+    frequencies = torch.bincount(output[:, 0], minlength=4).float() / num_trials
+    torch.testing.assert_close(frequencies, probabilities, rtol=0, atol=0.02)
+    assert abs((rejected == 0).float().mean().item() - 0.3) < 0.02
+
+    # This seed rounds the recovery uniform for token 1 to 1 in fp32 without clamping.
+    logits = torch.tensor([[[-float('inf'), 0.0, -float('inf')]]], device=sample_device)
+    drafts = torch.zeros((1, 1), dtype=torch.long, device=sample_device)
+    output, _, last = impl.forward(
+        logits, drafts, drafts[:, 0], is_greedy=None,
+        random_seeds=torch.tensor([5249637], device=sample_device),
+        random_offsets=torch.zeros(1, dtype=torch.long, device=sample_device))
+    assert output.tolist() == [[1, PLACEHOLDER_TOKEN_ID]]
+    assert last.item() == 1

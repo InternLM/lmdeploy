@@ -17,6 +17,8 @@ import os
 
 import torch
 
+from lmdeploy.pytorch.kernels.default.random import rejection_uniform
+
 PLACEHOLDER_TOKEN_ID = -1
 
 # ---------------------------------------------------------------------------
@@ -347,13 +349,14 @@ def _rejection_sample_torch(
         is_greedy = torch.zeros(batch_size, dtype=torch.bool, device=device)
 
     target_argmax = target_probs.argmax(dim=-1)
-    uniform_probs = torch.rand((batch_size, num_spec_tokens), dtype=torch.float64, device=device)
+    positions = sampling_inputs.random_offsets[:, None] + torch.arange(num_spec_tokens, device=device)
+    uniform_probs = rejection_uniform(sampling_inputs.random_seeds[:, None], positions, torch.zeros_like(positions), 1)
     # Precompute the reciprocal of the exponential samples and multiply below:
     # NPU in-kernel division uses a low-precision reciprocal, so performing the
     # division here in torch keeps the recovered-token argmax accurate.
-    inv_q = torch.empty((batch_size, target_probs.shape[-1]), dtype=torch.float32, device=device)
-    inv_q.exponential_()
-    inv_q = inv_q.reciprocal()
+    uniform = rejection_uniform(sampling_inputs.random_seeds[:, None], sampling_inputs.random_offsets[:, None],
+                                torch.arange(target_probs.shape[-1], device=device), 2, dtype=torch.float32)
+    inv_q = (-torch.log1p(-uniform)).reciprocal()
 
     recovered_token_ids = torch.empty((batch_size, num_spec_tokens), dtype=torch.long, device=device)
     zero = target_probs.new_tensor(0.0)
@@ -422,6 +425,8 @@ def _rejection_sample_impl(
     is_greedy,  # [batch_size] bool or None
     all_greedy,  # bool
     all_random,  # bool
+    random_seeds,
+    random_offsets,
 ):
     batch_size = len(num_draft_tokens)
     num_tokens = draft_token_ids.shape[0]
@@ -460,11 +465,14 @@ def _rejection_sample_impl(
     # ------------------------------------------------------------------
     # Random rejection pass — sample recovered tokens, then accept/reject
     # ------------------------------------------------------------------
-    uniform_probs = torch.rand(num_tokens, dtype=torch.float64, device=device).to(torch.float32)
+    positions = random_offsets[:, None] + torch.arange(max_spec_len, device=device)
+    uniform_probs = rejection_uniform(
+        random_seeds[:, None], positions, torch.zeros_like(positions), 1).flatten().float()
 
     # q ~ Exp(1); recovered token = argmax((target - draft) / q)
-    q = torch.empty((batch_size, vocab_size), dtype=torch.float32, device=device)
-    q.exponential_()
+    uniform = rejection_uniform(random_seeds[:, None], random_offsets[:, None],
+                                torch.arange(vocab_size, device=device), 2, dtype=torch.float32)
+    q = -torch.log1p(-uniform)
 
     recovered_token_ids = torch.empty(num_tokens, dtype=torch.int32, device=device)
     padded_vocab = triton.next_power_of_2(vocab_size)
@@ -549,9 +557,9 @@ def rejection_sample(
         )
     if not _TRITON_AVAILABLE:
         raise RuntimeError(
-            f"{_USE_TRITON_ENV} selects the Triton rejection-sampling backend, "
+            f'{_USE_TRITON_ENV} selects the Triton rejection-sampling backend, '
             'but Triton (or the Ascend CANN get_element extension) is unavailable. '
-            f"Set {_USE_TRITON_ENV}=0 to use the PyTorch backend."
+            f'Set {_USE_TRITON_ENV}=0 to use the PyTorch backend.'
         )
 
     batch_size, num_spec_tokens, vocab_size = target_logits.shape
@@ -594,6 +602,8 @@ def rejection_sample(
         is_greedy=is_greedy,
         all_greedy=all_greedy,
         all_random=all_random,
+        random_seeds=sampling_inputs.random_seeds,
+        random_offsets=sampling_inputs.random_offsets,
     )
 
     return _extract_outputs(output_token_ids.long(), num_spec_tokens)
