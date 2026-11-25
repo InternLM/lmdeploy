@@ -36,16 +36,21 @@ class VanillaMarkovHead(nn.Module):
 
     def init_state(self, batch_size: int, dtype: torch.dtype,
                    device: torch.device):
+        """Return no recurrent state for a token-only transition bias."""
         return None
 
     def step(self, token_ids: torch.Tensor, hidden_states: torch.Tensor | None,
              state: torch.Tensor | None):
+        """Compute draft-vocabulary bias from the previous target token."""
         del hidden_states, state
         embedding = self.markov_w1(token_ids.long())
         return self.markov_w2(embedding), None
 
 
 class GatedMarkovHead(VanillaMarkovHead):
+    """Gate the previous-token transition embedding with draft hidden
+    features."""
+
     head_type = 'gated'
 
     def __init__(self, vocab_size: int, draft_vocab_size: int, markov_rank: int,
@@ -62,6 +67,8 @@ class GatedMarkovHead(VanillaMarkovHead):
 
     def step(self, token_ids: torch.Tensor, hidden_states: torch.Tensor | None,
              state: torch.Tensor | None):
+        """Return a hidden-conditioned transition bias without recurrent
+        state."""
         del state
         if hidden_states is None:
             raise ValueError('Gated DSpark head requires per-position hidden states.')
@@ -71,6 +78,8 @@ class GatedMarkovHead(VanillaMarkovHead):
 
 
 class RNNMarkovHead(VanillaMarkovHead):
+    """Carry a gated recurrent state across positions in one proposal block."""
+
     head_type = 'rnn'
 
     def __init__(self, vocab_size: int, draft_vocab_size: int, markov_rank: int,
@@ -87,6 +96,8 @@ class RNNMarkovHead(VanillaMarkovHead):
 
     def init_state(self, batch_size: int, dtype: torch.dtype,
                    device: torch.device):
+        """Initialize one zero recurrent vector per sequence for a new
+        block."""
         return torch.zeros(batch_size,
                            self.markov_rank,
                            dtype=dtype,
@@ -94,6 +105,8 @@ class RNNMarkovHead(VanillaMarkovHead):
 
     def step(self, token_ids: torch.Tensor, hidden_states: torch.Tensor | None,
              state: torch.Tensor | None):
+        """Update the recurrent state and return the current draft-vocabulary
+        bias."""
         if hidden_states is None or state is None:
             raise ValueError('RNN DSpark head requires hidden states and initialized state.')
         embedding = self.markov_w1(token_ids.long())

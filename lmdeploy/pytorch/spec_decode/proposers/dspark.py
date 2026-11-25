@@ -33,6 +33,8 @@ class DSpark(DFlash):
 
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None,
                     build_model_ctx=None):
+        """Build the draft and attach target embeddings and a shareable output
+        head."""
         self._full_context_materialization = False
         if target_model is None:
             raise RuntimeError('DSpark requires the target model for shared modules.')
@@ -53,6 +55,7 @@ class DSpark(DFlash):
 
     @property
     def draft_query_len(self) -> int:
+        """Return the fixed query width resolved from the checkpoint layout."""
         config = self.specdecode_config.dspark
         query_len = None if config is None else config.draft_query_len
         if query_len is None:
@@ -64,6 +67,8 @@ class DSpark(DFlash):
                         target_model_config: ModelConfig,
                         capture_batch_sizes: list[int],
                         cache_config: CacheConfig) -> ProposalWarmupPlan:
+        """Plan context prefill and fixed-width query warmup for each graph
+        bucket."""
         if cache_config is None:
             raise RuntimeError('DSpark warmup requires a draft cache configuration.')
         target_hidden_size = self.get_target_hidden_size(target_model_config)
@@ -107,6 +112,8 @@ class DSpark(DFlash):
         self._full_context_materialization = enabled
 
     def prepare_warmup_forward(self, inputs: ModelInputs, cache_engine: CacheEngine) -> ModelInputs | None:
+        """Validate allocated context-cache geometry before preparing warmup
+        inputs."""
         self._configure_context_materialization(cache_engine)
         return super().prepare_warmup_forward(inputs, cache_engine)
 
@@ -212,6 +219,8 @@ class DSpark(DFlash):
                             extra_inputs: ARSpecExtraInputs,
                             cache_engine: CacheEngine,
                             guided_processors: dict | None = None):
+        """Materialize context and return owned proposal IDs with DP padding
+        removed."""
         if guided_processors:
             raise NotImplementedError('DSpark guided decoding is not implemented in V1.')
         if cache_engine is None:

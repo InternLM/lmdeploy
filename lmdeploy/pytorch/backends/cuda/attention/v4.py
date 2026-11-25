@@ -445,6 +445,8 @@ class _V4AttentionExecutorBase:
 
     @property
     def ring_storage_capacity(self):
+        """Return physical ring capacity, including speculative lookahead
+        rows."""
         return self.impl.ring_storage_capacity
 
     @property
@@ -727,6 +729,8 @@ class _V4RectangularDecodeExecutor(_V4AttentionExecutorBase):
                 attn_metadata: CudaV4AttentionMetadata, window_state_fp8,
                 block_caches, slot,
                 index_out=None):
+        """Verify a fixed-width causal block using row-specific sparse cache
+        indices."""
         query_len = attn_metadata.max_q_seqlen
         padded_query, padded_sink, original_heads = self._pad_query_heads(
             query, attn_sink)
@@ -877,6 +881,8 @@ class TritonV4AttentionImpl(V4AttentionImpl):
         return _V4PrefillWindowMeta(slot=token_slot, ring_pos=ring_pos)
 
     def write_cache(self, kv, window_state, metadata):
+        """Pack projected KV into FP8 window slots selected by write
+        metadata."""
         self._pack_window_fp8(kv.squeeze(0), window_state,
                              metadata.slot, metadata.ring_pos)
 

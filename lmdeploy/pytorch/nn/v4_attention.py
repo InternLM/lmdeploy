@@ -32,10 +32,14 @@ class V4Attention(nn.Module):
 
     def build_cache_write_metadata(self, attn_metadata, position_ids: torch.Tensor,
                                    state_ids: torch.Tensor, num_tokens: int):
+        """Request backend metadata for KV-only context writes when
+        supported."""
         return self.impl.build_cache_write_metadata(
             attn_metadata, position_ids, state_ids, num_tokens)
 
     def write_cache(self, kv: torch.Tensor, window_state: torch.Tensor, metadata) -> None:
+        """Write projected context KV into the window cache without
+        attention."""
         self.impl.write_cache(kv, window_state, metadata)
 
     def forward(self,

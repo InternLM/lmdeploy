@@ -105,6 +105,8 @@ deepseek-ai/DeepSeek-V3 \
 
 ### DFlash
 
+DFlash 支持 DP/EP 并行推理。
+
 对于 DFlash，block size 表示完整的草稿查询/目标验证窗口，其中包含一个当前
 目标 token。因此 block size 为 8 时会提出 7 个新的草稿 token。运行时 block
 size 不能超过草稿模型 checkpoint 中声明的最大值。
@@ -179,16 +181,7 @@ lmdeploy serve api_server deepseek-ai/DeepSeek-V4-Flash-0731 \
   --speculative-num-draft-tokens 5
 ```
 
-DSpark V1 支持 CUDA Graph 执行，该模式是默认且推荐的高性能路径。
-仅在调试时使用 `eager_mode=True` 或传入 `--eager-mode` 作为回退方案。
-DSpark V1 的 `Qwen3DSparkModel` 和 `DeepseekV4ForCausalLMDSpark` 草稿架构支持
-DP/EP；DFlash 的 `DFlashDraftModel` 同样支持。DP/EP 需要关闭 microbatch overlap
-和 KV transfer，且不支持 PD 分离。固定窗口版本暂不支持前缀缓存、草稿
-KV-cache 量化、引导解码以及基于置信度的动态验证。使用合适的
-`--logprobs-mode`（例如 `raw_logprobs`）启动服务后，OpenAI 兼容的 Chat
-接口可以返回输出 log probabilities。目标模型的单 token 解码与固定窗口验证在
-logits 接近并列时可能产生不同的浮点结果，因此 DSpark V1 目前不保证贪心输出与
-仅使用目标模型时逐比特一致。
+DSpark 默认启用 CUDA Graph，支持 DP/EP 并行推理。
 
 ## 投机解码与结构化输出
 

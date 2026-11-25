@@ -904,6 +904,9 @@ class MiscConfig:
 
 @dataclass(frozen=True)
 class DSparkConfig:
+    """Resolved checkpoint metadata for DSpark query layout and Markov
+    correction."""
+
     target_layer_ids: tuple[int, ...]
     mask_token_id: int
     sample_from_anchor: bool

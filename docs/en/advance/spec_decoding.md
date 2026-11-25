@@ -106,6 +106,8 @@ deepseek-ai/DeepSeek-V3 \
 
 ### DFlash
 
+DFlash supports DP/EP parallel inference.
+
 For DFlash, the block size is the complete draft query/target verification
 window. It includes one current target token, so a block size of 8 proposes
 seven new draft tokens. The block size must not exceed the maximum declared by
@@ -184,20 +186,7 @@ lmdeploy serve api_server deepseek-ai/DeepSeek-V4-Flash-0731 \
   --speculative-num-draft-tokens 5
 ```
 
-DSpark V1 supports CUDA Graph execution, which is the default and recommended
-performance path. Set `eager_mode=True` or pass `--eager-mode` only as a
-debugging fallback. DSpark V1 supports DP/EP with the `Qwen3DSparkModel` and
-`DeepseekV4ForCausalLMDSpark` draft architectures; DFlash supports it with
-`DFlashDraftModel`. DP/EP requires microbatch overlap and KV transfer to be
-disabled, and does not support PD disaggregation. Prefix caching, draft
-KV-cache quantization, guided decoding, and confidence-based dynamic
-verification are not supported in this fixed-window version. The
-OpenAI-compatible chat endpoint can return output log probabilities when the
-server is configured with an appropriate `--logprobs-mode`, such as
-`raw_logprobs`. Target-only one-token decoding and fixed-window target
-verification can produce different floating-point logits at near ties, so
-DSpark V1 does not currently guarantee bitwise-identical greedy output to
-target-only execution.
+DSpark enables CUDA Graph by default and supports DP/EP parallel inference.
 
 ## Guided Decoding with Speculative Decoding
 

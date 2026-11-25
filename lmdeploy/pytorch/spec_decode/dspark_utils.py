@@ -300,6 +300,8 @@ def validate_dspark_dist_config(dist_config: Any):
 
 
 def validate_dspark_cache_config(cache_config: Any):
+    """Validate draft-cache support using the shared block-speculation
+    rules."""
     try:
         return validate_dflash_cache_config(cache_config)
     except ValueError as exc:
@@ -308,6 +310,8 @@ def validate_dspark_cache_config(cache_config: Any):
 
 def validate_dspark_runtime_config(cache_config: Any = None,
                                    backend_config: Any = None):
+    """Reject runtime options incompatible with fixed-window DSpark
+    execution."""
     try:
         validate_dflash_runtime_config(cache_config, backend_config)
     except ValueError as exc:

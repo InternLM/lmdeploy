@@ -155,15 +155,20 @@ class DeepseekV4ForCausalLMDSpark(nn.Module, CudaGraphMixin):
                 and self.args.ring_storage_capacity >= self.args.window_size + num_spec)
 
     def set_input_embeddings(self, embed_tokens: nn.Module):
+        """Attach the target embedding module shared by all draft stages."""
         self.embed_tokens = embed_tokens
 
     def get_input_embeddings(self):
+        """Return the shared target embedding module."""
         return self.embed_tokens
 
     def set_output_head(self, output_head: nn.Module):
+        """Attach the target vocabulary projection used for draft base
+        logits."""
         self.output_head = output_head
 
     def embed_input_ids(self, input_ids: torch.Tensor):
+        """Embed target token IDs and replicate features across HC streams."""
         if self.embed_tokens is None:
             raise RuntimeError('DeepSeek-V4 DSpark requires target-shared embeddings.')
         hidden = self.embed_tokens(input_ids)
@@ -201,6 +206,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module, CudaGraphMixin):
                 inputs_embeds: torch.Tensor | None = None,
                 state_ids: torch.Tensor | None = None,
                 **kwargs):
+        """Run bundled draft stages and return proposal IDs for decoding
+        queries."""
         del past_key_values, kwargs
         if state_ids is None:
             raise RuntimeError('DeepSeek-V4 DSpark requires state_ids.')
@@ -217,6 +224,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module, CudaGraphMixin):
         return dict(hidden_states=h, draft_token_ids=draft_token_ids)
 
     def project_target_hidden(self, target_hidden: torch.Tensor):
+        """Project concatenated target-layer features to normalized draft
+        features."""
         expected = self.config.hidden_size * len(self.target_layer_ids)
         if target_hidden.ndim != 2 or target_hidden.size(-1) != expected:
             raise ValueError('DeepSeek-V4 DSpark target hidden width mismatch: '
@@ -301,6 +310,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module, CudaGraphMixin):
         return torch.sum(pre.unsqueeze(-1) * flat.view(shape), dim=2).to(dtype)
 
     def compute_base_logits(self, hidden_states: torch.Tensor):
+        """Collapse HC streams, normalize and project to target-vocabulary
+        logits."""
         if self.output_head is None:
             raise RuntimeError('DeepSeek-V4 DSpark requires the target output head.')
         hidden_states = self.norm(self._collapse_hc(hidden_states))
@@ -308,18 +319,22 @@ class DeepseekV4ForCausalLMDSpark(nn.Module, CudaGraphMixin):
 
     def init_sequential_state(self, batch_size: int, dtype: torch.dtype,
                               device: torch.device):
+        """Initialize the Markov head state for a new proposal block."""
         return self.markov_head.init_state(batch_size, dtype, device)
 
     def sequential_head_step(self, prev_token_ids: torch.Tensor,
                              hidden_states: torch.Tensor,
                              state: torch.Tensor | None):
         # Gated/RNN checkpoints consume the ordinary post-hc hidden state.
+        """Collapse HC features when needed and advance the Markov head."""
         if hidden_states.ndim == 3:
             hidden_states = self._collapse_hc(hidden_states.unsqueeze(1)).squeeze(1)
         return self.markov_head.step(prev_token_ids, hidden_states, state)
 
     @staticmethod
     def map_draft_to_target(draft_ids: torch.Tensor):
+        """Return IDs unchanged because bundled stages use the target
+        vocabulary."""
         return draft_ids
 
     def get_outputs_cudagraph(self, output_buffers: dict[str, torch.Tensor],
@@ -337,6 +352,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module, CudaGraphMixin):
                                       past_key_values,
                                       inputs_embeds=None,
                                       context: StepContext = None):
+        """Collect forward inputs and state-slot IDs from the current step
+        context."""
         return dict(input_ids=context.input_ids,
                     position_ids=context.position_ids,
                     past_key_values=past_key_values,
@@ -346,6 +363,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module, CudaGraphMixin):
 
     def update_model_metas(self, past_key_values, inputs_embeds=None,
                            context: StepContext = None):
+        """Return no per-sequence model metadata for the bundled draft
+        stages."""
         return None
 
     # Reuse the target's quantized V4 attention/expert loading primitives.
@@ -353,6 +372,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module, CudaGraphMixin):
     _load_expert = DeepseekV4ForCausalLM._load_expert
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
+        """Load configured mtp stages and shared projections, skipping
+        confidence heads."""
         params = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if not name.startswith('mtp.'):

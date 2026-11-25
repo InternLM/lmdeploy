@@ -13,16 +13,23 @@ from ..model_inputs import DPMeta, ModelInputs
 
 @dataclass(frozen=True)
 class BlockDraftStepPlan:
+    """Immutable per-rank batch sizes and query readiness for one DP draft
+    step."""
+
     batches: tuple[int, ...]
     query_ready: tuple[bool, ...]
     global_is_decoding: bool
 
     @property
     def run_query(self):
+        """Return whether any rank needs a query, requiring all ranks to
+        participate."""
         return any(self.query_ready)
 
     @property
     def batch_bound(self):
+        """Return the largest local batch used to size the padded query
+        bucket."""
         return max(self.batches)
 
 

@@ -63,20 +63,25 @@ class Qwen3DSparkModel(DFlashDraftModel):
             self.output_head = output_head
 
     def compute_base_logits(self, hidden_states: torch.Tensor):
+        """Project draft hidden states to logits before Markov correction."""
         if self.output_head is None:
             raise RuntimeError('DSpark draft model requires a shared or checkpoint output head.')
         return self.output_head(hidden_states)
 
     def init_sequential_state(self, batch_size: int, dtype: torch.dtype,
                               device: torch.device):
+        """Initialize the selected Markov head for a new proposal block."""
         return self.markov_head.init_state(batch_size, dtype, device)
 
     def sequential_head_step(self, prev_token_ids: torch.Tensor,
                              hidden_states: torch.Tensor,
                              state: torch.Tensor | None):
+        """Return the Markov bias and next state for one proposal position."""
         return self.markov_head.step(prev_token_ids, hidden_states, state)
 
     def map_draft_to_target(self, draft_ids: torch.Tensor):
+        """Map draft IDs to target IDs using checkpoint offsets when
+        present."""
         if self.draft_id_to_target_id is None:
             return draft_ids
         return draft_ids + self.draft_id_to_target_id[draft_ids]
@@ -111,6 +116,8 @@ class Qwen3DSparkModel(DFlashDraftModel):
         return outputs
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]):
+        """Load backbone, Markov head, optional output head and vocabulary
+        offsets."""
         backbone_weights = []
         own_params = dict(self.named_parameters())
         for raw_name, loaded_weight in weights:

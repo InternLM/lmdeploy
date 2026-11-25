@@ -675,6 +675,8 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
         inputs_embeds: torch.Tensor = None,
         **kwargs,
     ):
+        """Use ordered layer execution when speculative auxiliary states are
+        requested."""
         del kwargs
         # Layer capture needs the ordinary ordered loop; microbatch overlap
         # cannot expose completed intermediate states.
@@ -691,6 +693,8 @@ class DeepseekV32ForCausalLM(DeepseekV2ForCausalLM):
 
     def get_outputs_cudagraph(self, output_buffers: dict[str, torch.Tensor],
                               input_ids: torch.Tensor, **kwargs):
+        """Slice captured outputs and auxiliary hidden states to the live token
+        count."""
         outputs = super().get_outputs_cudagraph(output_buffers, input_ids,
                                                 **kwargs)
         aux_hidden_states = output_buffers.get('aux_hidden_states')
