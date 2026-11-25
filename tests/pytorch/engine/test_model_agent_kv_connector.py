@@ -97,6 +97,7 @@ def _bare_model_agent():
     agent.dist_config = SimpleNamespace(attn_tp=8)
     agent.memdecode_agent = None
     agent._checkpoint_engine_zmq_ctx = None
+    agent.spec_agent = SimpleNamespace(cache_engine=None)
     return agent
 
 
@@ -685,7 +686,7 @@ def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(mo
         def clear_connector_metadata(self):
             events.append('clear')
 
-    async def target_forward(_inputs, return_logits, cache_inputs=None):
+    async def target_forward(_inputs, return_logits, cache_inputs=None, sampling_inputs=None):
         events.append('target')
         return {'logits': torch.zeros((1, 1, 1))}
 
@@ -706,6 +707,7 @@ def test_model_agent_restores_both_caches_and_saves_after_speculative_forward(mo
     agent.rank = 0
     agent.kv_connector = _Connector()
     agent.spec_agent = SimpleNamespace(is_enabled=lambda: True,
+                                       get_proposal_method=lambda: None,
                                        cache_engine=SimpleNamespace(copy_logical_blocks=copy_mtp_blocks))
     agent.need_output = False
     agent.memdecode_agent = None

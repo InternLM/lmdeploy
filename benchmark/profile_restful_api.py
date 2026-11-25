@@ -164,6 +164,7 @@ async def async_request_openai_completions(
     assert api_url.endswith('completions'), "OpenAI Completions API URL must end with 'completions'."
 
     prompt = request_func_input.prompt
+    output_len = request_func_input.output_len
 
     async with aiohttp.ClientSession(timeout=AIOHTTP_TIMEOUT) as session:
         payload = {
@@ -200,10 +201,14 @@ async def async_request_openai_completions(
                         else:
                             data = json.loads(chunk)
 
-                            # NOTE: Some completion API might have a last
-                            # usage summary response without a token so we
-                            # want to check a token was generated
-                            if data['choices'][0]['text']:
+                            # A usage-only final chunk has no choices. Use its
+                            # actual token count, especially when EOS is enabled.
+                            reported_tokens = (data.get('usage') or {}).get('completion_tokens')
+                            if reported_tokens is not None:
+                                output_len = reported_tokens
+                            choices = data.get('choices') or []
+                            text = choices[0].get('text') if choices else None
+                            if text:
                                 timestamp = time.perf_counter()
                                 # First token
                                 if ttft == 0.0:
@@ -215,12 +220,12 @@ async def async_request_openai_completions(
                                     output.itl.append(timestamp - most_recent_timestamp)
 
                                 most_recent_timestamp = timestamp
-                                generated_text += data['choices'][0]['text']
+                                generated_text += text
 
                     output.generated_text = generated_text
                     output.success = True
                     output.latency = latency
-                    output.output_len = request_func_input.output_len
+                    output.output_len = output_len
                 else:
                     output.error = response.reason or ''
                     output.success = False

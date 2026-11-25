@@ -344,7 +344,8 @@ def indexed_causal_conv1d_fwd(x, weight, pool, input_ids, final_ids, *, seq_idx,
 def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, width: int, has_bias: bool,
                              activation: str | None, dtype, conv_stride: tuple[int, int, int], is_circular_buffer: bool,
                              has_state_indices: bool, num_warps: int, weight_dtype=None, bias_dtype=None,
-                             x_stride=None, has_output_state_indices: bool = False, index_dtype=torch.int32):
+                             x_stride=None, has_output_state_indices: bool = False, index_dtype=torch.int32,
+                             out_stride=None):
     """TileLang kernel for causal convolution forward pass.
 
     Each thread processes one output position for all channels sequentially.
@@ -360,6 +361,8 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
     conv_batch_stride = T.dynamic('conv_batch_stride')
     if x_stride is None:
         x_stride = (hidden_size * seqlen, seqlen, 1)
+    if out_stride is None:
+        out_stride = (hidden_size * seqlen, seqlen, 1)
     update_idx_base = -(width - 1)
 
     @T.prim_func
@@ -370,7 +373,7 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
                                     strides=(conv_batch_stride, conv_stride[1], conv_stride[2])),
         W: T.Tensor((hidden_size, width), dtype=weight_dtype),
         Bias: T.Tensor((hidden_size, ), dtype=bias_dtype) = None,
-        Out: T.Tensor((batch, hidden_size, seqlen), dtype=dtype) = None,
+        Out: T.StridedTensor((batch, hidden_size, seqlen), dtype=dtype, strides=out_stride) = None,
         Cache_seqlens: T.Tensor((batch, ), dtype=T.int32) = None,
         Conv_state_indices: T.Tensor((batch, ), dtype=index_dtype) = None,
         Output_state_indices: T.Tensor((batch, seqlen), dtype=T.int64) = None,
@@ -465,7 +468,6 @@ def causal_conv1d_update_fwd(hidden_size: int, seqlen: int, state_len: int, widt
     return causal_conv1d_update_main
 
 
-# TODO: support complex layout
 def causal_conv1d_update(x,
                          conv_state,
                          weight,
@@ -521,7 +523,9 @@ def causal_conv1d_update(x,
                 or not output_state_indices.is_contiguous()):
             raise ValueError('Output state IDs must be contiguous int64 [B, T] on the input device.')
 
-    out = x.new_empty(x.shape)
+    # Preserve dense BTH-backed views of logical BHT inputs. This avoids both
+    # decode layout copies and gives coalesced channel IO for speculative tokens.
+    out = torch.empty_like(x)
 
     num_warps = 2
     kernel = causal_conv1d_update_fwd(hidden_size=hidden_size,
@@ -539,6 +543,7 @@ def causal_conv1d_update(x,
                                       bias_dtype=bias.dtype if bias is not None else x.dtype,
                                       x_stride=x.stride(),
                                       has_output_state_indices=output_state_indices is not None,
+                                      out_stride=out.stride(),
 
                                       index_dtype=conv_state_indices.dtype if conv_state_indices is not None
                                       else torch.int32)

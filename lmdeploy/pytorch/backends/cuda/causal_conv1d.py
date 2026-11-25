@@ -13,6 +13,8 @@ from .utils import has_tilelang
 class CausalConv1dTilelangImpl(CausalConv1dImpl):
     """CausalConv1d update implementation."""
 
+    _supports_strided_update = True
+
     def __init__(self, indexed_state: bool = False):
         self.indexed_state = indexed_state
         from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_fn, causal_conv1d_update
@@ -144,7 +146,9 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
         is_spec_decoding = q_seqlen != 1
         x = x.squeeze(0)
         if is_spec_decoding:
-            x = x.unflatten(0, (batch_size, q_seqlen)).transpose(1, 2).contiguous()
+            x = x.unflatten(0, (batch_size, q_seqlen)).transpose(1, 2)
+            if not self._supports_strided_update:
+                x = x.contiguous()
         output = self.update_fn(
             x,
             conv_state,
@@ -262,6 +266,9 @@ class CausalConv1dTilelangImpl(CausalConv1dImpl):
 
 
 class CausalConv1dDaoImpl(CausalConv1dTilelangImpl):
+
+    # Keep the external implementation's existing layout contract unchanged.
+    _supports_strided_update = False
 
     def __init__(self):
         self.indexed_state = False

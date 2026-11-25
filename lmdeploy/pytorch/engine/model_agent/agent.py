@@ -37,6 +37,7 @@ from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from lmdeploy.pytorch.spec_decode import build_spec_agent
+from lmdeploy.pytorch.spec_decode.proposers.base import ProposalMethod
 from lmdeploy.pytorch.strategies import build_strategy_factory
 from lmdeploy.pytorch.strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from lmdeploy.pytorch.utils import get_gpu_memory, monkey_patch_hf_modules_cache, wait_for_async_tasks
@@ -499,10 +500,15 @@ class BaseModelAgent:
         self._prev_chunk_output: dict = None
         # Last logit row of the previous chunk, used to score cross-chunk prompt tokens.
         self._prev_chunk_last_logit: torch.Tensor | None = None
+        self._v4_speculative_state_transaction = None
 
     def reset_runtime_state(self):
         """Discard request-local decode and chunk state after sleep cancels
         sessions."""
+        transaction = getattr(self, '_v4_speculative_state_transaction', None)
+        if transaction is not None:
+            self._finish_v4_speculative_state_transaction(
+                transaction['q_seqlens'])
         self.step_inputs = self.strategy_factory.build_step_inputs()
         self.ssm_state_cursor = None
         self._prev_chunk_output = None
@@ -658,38 +664,93 @@ class BaseModelAgent:
         inputs: ModelInputs,
         return_logits: bool,
         cache_inputs: CacheCheckpointInputs | None = None,
+        sampling_inputs: SamplingInputs | None = None,
     ):
         """Model forward."""
         memdecode_agent = getattr(self, 'memdecode_agent', None)
         if memdecode_agent is not None and return_logits:
             raise RuntimeError('MemDecode does not support returned prompt logits yet.')
 
-        ret = await self.async_forward(inputs, cache_inputs=cache_inputs)
-        if self._is_prefill_input_logprobs(inputs):
-            # This is the only lm-head projection for scoring: return before
-            # the ordinary all/sampling-logits projection below.
-            ret['logits'] = self._get_input_logits(ret['hidden_states'][0], inputs)
+        spec_agent = getattr(self, 'spec_agent', None)
+        spec_config = getattr(spec_agent, 'specdecode_config', None)
+        state_cache_engine = getattr(self, 'state_cache_engine', None)
+        use_v4_transaction = (
+            spec_config is not None and spec_config.method == 'dspark'
+            and inputs.is_decoding and not inputs.is_dummy
+            and state_cache_engine is not None
+            and 'v4_window_kv_fp8' in state_cache_engine.named_state_caches)
+        if use_v4_transaction:
+            self._v4_speculative_state_transaction = (
+                self.state_cache_engine.begin_v4_speculative_transaction(
+                    inputs.state_offsets,
+                    inputs.history_lengths,
+                    inputs.seq_length,
+                    inputs.max_q_seqlen,
+                ))
+
+        try:
+            ret = await self.async_forward(
+                inputs, cache_inputs=cache_inputs)
+
+            if self._is_prefill_input_logprobs(inputs):
+                # This is the only lm-head projection for scoring: return
+                # before the ordinary all/sampling-logits projection below.
+                ret['logits'] = self._get_input_logits(
+                    ret['hidden_states'][0], inputs)
+                return ret
+
+            if not return_logits:
+                ret = self._postprocess_forward_output(ret, inputs)
+
+            if memdecode_agent is not None:
+                base_hidden_states = ret['hidden_states']
+                base_logits = self.get_logits(base_hidden_states)
+
+                return await memdecode_agent.fuse_with_base(
+                    inputs=inputs,
+                    base_output=ret,
+                    base_logits=base_logits,
+                    postprocess_output=self._postprocess_forward_output,
+                )
+
+            hidden_states, ret = self.spec_agent.update_main_model_outputs(
+                ret, inputs)
+
+            if use_v4_transaction and inputs.max_q_seqlen > 1:
+                # Keep the comparatively cheap LM head at the ordinary
+                # per-position batch shape while the transformer verifies the
+                # whole candidate block in one batched forward.
+                query_len = inputs.max_q_seqlen
+                logits = torch.stack([
+                    self.get_logits(
+                        hidden_states[:, position::query_len])
+                    for position in range(query_len)
+                ], dim=2).flatten(1, 2)
+            else:
+                logits = self.get_logits(hidden_states)
+            ret['logits'] = logits
             return ret
+        except BaseException:
+            # No rejection decision exists when the target path fails. Undo
+            # every speculative row before leaving the agent reusable.
+            self._finish_v4_speculative_state_transaction(
+                inputs.seq_length)
+            raise
 
-        if not return_logits:
-            ret = self._postprocess_forward_output(ret, inputs)
-
-        if memdecode_agent is not None:
-            base_hidden_states = ret['hidden_states']
-            base_logits = self.get_logits(base_hidden_states)
-
-            return await memdecode_agent.fuse_with_base(
-                inputs=inputs,
-                base_output=ret,
-                base_logits=base_logits,
-                postprocess_output=self._postprocess_forward_output,
-            )
-
-        hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, inputs)
-
-        logits = self.get_logits(hidden_states)
-        ret['logits'] = logits
-        return ret
+    def _finish_v4_speculative_state_transaction(
+            self, num_rejected_tokens: torch.Tensor | None):
+        """Commit accepted V4 verifier rows and restore its rejected tail."""
+        transaction = getattr(self, '_v4_speculative_state_transaction', None)
+        if transaction is None:
+            return
+        if num_rejected_tokens is None:
+            raise RuntimeError(
+                'Missing rejection counts for a pending V4 transaction.')
+        try:
+            self.state_cache_engine.finish_v4_speculative_transaction(
+                transaction, num_rejected_tokens)
+        finally:
+            self._v4_speculative_state_transaction = None
 
     def _get_outputs_with_logprobs(
         self,
@@ -819,6 +880,7 @@ class BaseModelAgent:
         # gather dp forward metadata
         batch_size = inputs.seq_length.numel()
         is_sleeping = self.state.is_sleeping
+        is_block_spec_enabled = self.spec_agent.get_proposal_method() == ProposalMethod.DIFFUSION
         draft_num_tokens = num_tokens if is_spec_enabled else None
 
         dp_forward_meta = DPForwardMeta(is_decoding=is_decoding,
@@ -826,7 +888,10 @@ class BaseModelAgent:
                                         num_tokens=num_tokens,
                                         is_sleeping=is_sleeping,
                                         batch_size=batch_size,
-                                        draft_num_tokens=draft_num_tokens)
+                                        draft_num_tokens=draft_num_tokens,
+                                        block_query_ready=(not is_dummy
+                                                           and not self._is_prefill_input_logprobs(inputs)
+                                                           and (not inputs.is_chunk or inputs.is_last_chunk)))
         # check enable_microbatch
         if is_microbatch_enabled:
             tokens_num = inputs.input_ids.numel()
@@ -844,6 +909,7 @@ class BaseModelAgent:
             dp_forward_meta.values(
                 is_spec_enabled=is_spec_enabled,
                 is_microbatch_enabled=is_microbatch_enabled,
+                is_block_spec_enabled=is_block_spec_enabled,
             ),
             world_size,
             device=device,
@@ -853,6 +919,7 @@ class BaseModelAgent:
             (await gathered_meta.async_wait()).cpu(),
             is_spec_enabled=is_spec_enabled,
             is_microbatch_enabled=is_microbatch_enabled,
+            is_block_spec_enabled=is_block_spec_enabled,
         )
 
         # check is_decoding
@@ -885,6 +952,11 @@ class BaseModelAgent:
         inputs.dp_meta.dp_is_decoding = global_is_decoding
         if is_spec_enabled:
             inputs.dp_meta.dp_draft_num_tokens = gathered_meta.all_draft_num_tokens
+        if is_block_spec_enabled:
+            from lmdeploy.pytorch.spec_decode.block_parallel import BlockDraftStepPlan
+            inputs.dp_meta.block_plan = BlockDraftStepPlan(
+                tuple(all_batch_sizes),
+                tuple(gathered_meta.block_query_ready.tolist()), global_is_decoding)
         inputs = self.patched_model.update_inputs(inputs)
         return inputs, is_all_sleeping
 
@@ -971,6 +1043,10 @@ class BaseModelAgent:
         with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
+        # Rejection results are now available on every TP rank. Roll back the
+        # rejected target rows before any rank starts the next draft proposal.
+        self._finish_v4_speculative_state_transaction(
+            getattr(extra_inputs, 'num_rejected_tokens', None))
         extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
 
         if inputs.is_dummy:
@@ -1028,6 +1104,8 @@ class BaseModelAgent:
         with self._broadcast_next_token(next_token_ids, extra_inputs, enable=need_broadcast_next):
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
+        self._finish_v4_speculative_state_transaction(
+            getattr(extra_inputs, 'num_rejected_tokens', None))
         extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
 
         if inputs.is_dummy:
@@ -1202,6 +1280,7 @@ class BaseModelAgent:
             inputs,
             return_logits=return_logits or return_ce_loss,
             cache_inputs=cache_inputs,
+            sampling_inputs=sampling_inputs,
         )
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
@@ -1221,9 +1300,16 @@ class BaseModelAgent:
             cursor = self.ssm_state_cursor
             if cursor is not None and inputs.ssm_state_meta is not None:
                 cursor.advance(inputs.ssm_state_meta, inputs.state_offsets, (inputs.seq_length > 0).long(), width=1)
-            # Scoring-only forwards do not run the speculative model.  Record
-            # the target KV writes here instead of waiting for a postprocess
-            # hook that is intentionally skipped on this path.
+            if self.spec_agent.get_proposal_method() == ProposalMethod.DIFFUSION and inputs.dp_meta is not None:
+                from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
+                dummy_extra = ARSpecExtraInputs(
+                    next_token_ids=inputs.input_ids.new_zeros(inputs.seq_length.numel()),
+                    # Scoring returns before update_main_model_outputs swaps in aux.
+                    target_hidden_states=output['aux_hidden_states'])
+                await self.spec_agent.async_model_forward(inputs.clone(is_dummy=True), dummy_extra, None)
+            # Scoring-only requests do not publish proposals. Collective-only
+            # dummy participation above still bypasses normal postprocessing,
+            # so record target KV writes here rather than in that hook.
             start_kv_connector_save(self.kv_connector, connector_step)
             model_metas = output.get('model_metas')
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
@@ -2181,6 +2267,7 @@ class BaseModelAgent:
         spec_model = self.spec_agent.get_model()
         if spec_model is not None:
             self.spec_agent.cache_engine = None
+            self.spec_agent.state_cache_engine = None
             spec_model.to(device=device, non_blocking=True)
 
         torch.cuda.synchronize()
@@ -2253,6 +2340,9 @@ class BaseModelAgent:
         self.cache_engine = None
         self.block_cache_plan = None
         self.state_cache_engine = None
+        self.spec_agent.cache_engine = None
+        self.spec_agent.state_cache_engine = None
+
         self.compact_state_plan = None
         self.ssm_state_cursor = None
         if self.cache_config.compact_state_capacity is not None:

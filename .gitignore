@@ -99,3 +99,5 @@ proxy_config.yml
 # Claude Code local config
 CLAUDE.local.md
 .worktrees/
+
+.deep_gemm

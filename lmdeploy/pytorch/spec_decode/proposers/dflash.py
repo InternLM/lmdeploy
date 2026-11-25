@@ -8,6 +8,8 @@ from ...config import CacheConfig, ModelConfig
 from ...engine.cache_engine import CacheEngine
 from ...model_inputs import ModelInputs, step_ctx_manager
 from ...strategies.ar_spec.model_agent import ARSpecExtraInputs
+from ..block_parallel import context_inputs as prepare_context_inputs
+from ..block_parallel import prepare_query
 from .base import (
     SPEC_PROPOSERS,
     BaseSpecProposer,
@@ -90,8 +92,9 @@ class DFlash(BaseSpecProposer):
         self._materialize_context(context_inputs, target_hidden, cache_engine)
         if not inputs.is_decoding:
             return None
-        return self._build_query_inputs(inputs, context_lengths, extra_inputs.next_token_ids,
-                                        query_start_positions=query_start_positions)
+        query_inputs = self._build_query_inputs(inputs, context_lengths, extra_inputs.next_token_ids,
+                                                query_start_positions=query_start_positions)
+        return prepare_query(self, query_inputs, cache_engine)
 
     def _draft_model(self):
         """Return the underlying draft nn.Module when graph runner wraps it."""
@@ -189,6 +192,10 @@ class DFlash(BaseSpecProposer):
         """Project target aux hidden states into the draft KV cache."""
         if target_hidden.numel() == 0:
             return
+        if context_inputs.is_dummy and context_inputs.dp_meta is not None:
+            # No request state to commit. Query participation is independent.
+            return
+        context_inputs = prepare_context_inputs(context_inputs)
         kv_caches = cache_engine.gpu_cache
         ctx_mgr = self.model.ctx_mgr
         with step_ctx_manager(ctx_mgr):
@@ -197,7 +204,14 @@ class DFlash(BaseSpecProposer):
                 model_config=self.specdecode_config.model_config,
                 cache_config=cache_engine.cache_config,
                 kv_caches=kv_caches,
+                state_caches=(None if getattr(cache_engine,
+                                              'state_cache_engine', None) is None
+                              else cache_engine.state_cache_engine.state_caches),
             )
+            context.block_caches = cache_engine.block_caches
+            if getattr(cache_engine, 'state_cache_engine', None) is not None:
+                context.named_state_caches = \
+                    cache_engine.state_cache_engine.named_state_caches
             with ctx_mgr.context(context):
                 self._draft_model().precompute_and_store_context_kv(
                     target_hidden=target_hidden,
@@ -277,6 +291,8 @@ class DFlash(BaseSpecProposer):
                                                 query_start_positions=query_start_positions)
 
         self._materialize_context(context_inputs, target_hidden, cache_engine)
+        local_batch = model_inputs.seq_length.numel()
+        query_inputs = prepare_query(self, query_inputs, cache_engine)
         outputs = self._forward(query_inputs, cache_engine=cache_engine)
         hidden_states = outputs['hidden_states']
         if hidden_states.dim() == 3:
@@ -289,7 +305,7 @@ class DFlash(BaseSpecProposer):
             1, batch_size * self.num_speculative_tokens, hidden_size)
         logits = self.get_logits(mask_hidden_states)[0]
         draft_token_ids = logits.argmax(dim=-1).view(batch_size, self.num_speculative_tokens)
-        return draft_token_ids
+        return draft_token_ids[:local_batch]
 
     async def propose(self,
                       model_inputs: ModelInputs,
@@ -305,7 +321,10 @@ class DFlash(BaseSpecProposer):
         if orig_processors:
             raise NotImplementedError('DFlash guided decoding is not implemented yet.')
 
-        if model_inputs.is_chunk and not model_inputs.is_last_chunk:
+        plan = model_inputs.dp_meta.block_plan if model_inputs.dp_meta is not None else None
+        skip_query = (not plan.run_query if plan is not None else
+                      model_inputs.is_chunk and not model_inputs.is_last_chunk)
+        if skip_query:
             self.materialize_context(model_inputs, extra_inputs, proposal_ctx.cache_engine)
             output_draft_ids = model_inputs.input_ids.new_zeros(model_inputs.seq_length.size(0),
                                                                 self.num_speculative_tokens)

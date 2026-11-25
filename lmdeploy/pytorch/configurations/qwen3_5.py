@@ -110,7 +110,7 @@ class Qwen3_5ModelConfigBuilder(AutoModelConfigBuilder):
         if device_type == 'ascend' and spec_method is not None:
             assert spec_method == 'qwen3_5_mtp', 'Ascend Qwen3.5 supports qwen3_5_mtp.'
         if spec_method is not None:
-            assert spec_method in ['qwen3_5_mtp', 'dflash']
+            assert spec_method in ['qwen3_5_mtp', 'dflash', 'dspark']
             cfg.model_paradigm = 'ar_spec'
 
         # draft model cfg

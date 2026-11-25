@@ -105,6 +105,8 @@ deepseek-ai/DeepSeek-V3 \
 
 ### DFlash
 
+DFlash 支持 DP/EP 并行推理。
+
 对于 DFlash，block size 表示完整的草稿查询/目标验证窗口，其中包含一个当前
 目标 token。因此 block size 为 8 时会提出 7 个新的草稿 token。运行时 block
 size 不能超过草稿模型 checkpoint 中声明的最大值。
@@ -141,6 +143,45 @@ Qwen/Qwen3.5-35B-A3B \
 
 设置 DFlash block size 后，它会覆盖 `--speculative-num-draft-tokens`，
 并将新提出的 token 数设置为 `block_size - 1`。
+
+### DSpark
+
+DSpark 使用 DFlash 风格的并行草稿骨干网络，并通过轻量的从左到右 Markov
+校正引入块内依赖。LMDeploy 的首个实现使用固定验证窗口。草稿 token 采用确定性
+生成，目标验证则通过通用拒绝采样器同时支持贪心和非贪心采样。该实现支持外部
+Speculators 格式草稿模型，以及在同一 checkpoint 中包含 `mtp.*` DSpark
+权重的 DeepSeek-V4 模型。对于后一种模型，将 `model` 留空即可复用目标
+checkpoint 作为草稿权重来源。
+
+```python
+from lmdeploy import PytorchEngineConfig, pipeline
+from lmdeploy.messages import SpeculativeConfig
+
+def main():
+    model = 'deepseek-ai/DeepSeek-V4-Flash-0731'
+    pipe = pipeline(
+        model,
+        backend_config=PytorchEngineConfig(tp=4),
+        speculative_config=SpeculativeConfig(
+            method='dspark',
+            num_speculative_tokens=5,
+        ),
+    )
+
+
+if __name__ == '__main__':
+    main()
+```
+
+```shell
+lmdeploy serve api_server deepseek-ai/DeepSeek-V4-Flash-0731 \
+  --backend pytorch \
+  --tp 4 \
+  --speculative-algorithm dspark \
+  --speculative-num-draft-tokens 5
+```
+
+DSpark 默认启用 CUDA Graph，支持 DP/EP 并行推理。
 
 ## 投机解码与结构化输出
 

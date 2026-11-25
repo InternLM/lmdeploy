@@ -129,9 +129,15 @@ class ExecutorBase:
         spec = self.specdecode_config
         if spec is not None:
             expected_method = 'deepseek_mtp' if model.hf_config.model_type == 'glm5_next' else 'qwen3_5_mtp'
-            if (spec.method != expected_method or spec.model_config.states_shapes
-                    or spec.model_config.num_layers != 1
+            block_draft = spec.method in ('dflash', 'dspark')
+            if (spec.model_config.states_shapes
                     or (spec.cache_config is not None and spec.cache_config.compact_state_capacity is not None)):
+                raise NotImplementedError('Compact state requires a stateless draft without its own compact pool.')
+            if block_draft:
+                supported_arch = 'DFlashDraftModel' if spec.method == 'dflash' else 'Qwen3DSparkModel'
+                if spec.model_config.hf_config.architectures != [supported_arch]:
+                    raise NotImplementedError('Compact state requires a supported stateless block draft.')
+            elif spec.method != expected_method or spec.model_config.num_layers != 1:
                 raise NotImplementedError('Compact state requires the matching stateless single-layer MTP draft.')
         width = 1 if spec is None else 1 + spec.num_speculative_tokens
         expected = SSMStateCapacity.from_cache_config(cache, width, runtime_is_auxiliary=model.enable_replayssm)
@@ -500,7 +506,9 @@ class ExecutorBase:
         return free_mems
 
     def _reserve_state_cache_mem(self, free_mems: list[int],
-                                 cache_plan_sizes: list[_WorkerCachePlanSizes] | None = None) -> list[int]:
+                                 cache_plan_sizes: list[_WorkerCachePlanSizes] | None = None,
+                                 spec_cache_config: CacheConfig | None = None,
+                                 spec_model_config: ModelConfig | None = None) -> list[int]:
         """Reserve non-pageable state cache memory from free memory."""
         if self.cache_config.compact_state_capacity is not None:
             if (cache_plan_sizes is None or len(cache_plan_sizes) != len(free_mems)
@@ -511,6 +519,10 @@ class ExecutorBase:
                 raise RuntimeError('Compact state does not fit at the unchanged request capacity.')
             return free_mems
         state_cache_mem = self._get_state_cache_mem() + self._get_mem_state_cache_mem()
+        if spec_cache_config is not None and spec_model_config is not None:
+            state_cache_mem += self._get_state_cache_mem(
+                cache_config=spec_cache_config,
+                model_config=spec_model_config)
         # State cache is allocated as a separate pool and is not governed by
         # cache_max_entry_count, so subtract it from every rank first.
         free_mems = [free_mem - state_cache_mem for free_mem in free_mems]
@@ -617,10 +629,14 @@ class ExecutorBase:
             raise ValueError('prefix_cache_decode_state_interval must be a multiple of block_size')
 
         spec_cache_config, spec_model_config = self._get_spec_configs()
+        if spec_cache_config is not None and spec_model_config is not None:
+            spec_cache_config.states_shapes = spec_model_config.states_shapes
         cache_block_sizes = self._prepare_worker_cache_plans(self.cache_config, spec_cache_config)
 
         free_mems = self._get_free_gpu_mems()
-        free_mems = self._reserve_state_cache_mem(free_mems, cache_block_sizes)
+        free_mems = self._reserve_state_cache_mem(
+            free_mems, cache_block_sizes, spec_cache_config=spec_cache_config,
+            spec_model_config=spec_model_config)
         free_mems = self._reserve_runtime_mem(free_mems, cache_block_sizes, spec_cache_config)
         self._update_num_gpu_blocks(free_mems, cache_block_sizes, spec_cache_config)
 

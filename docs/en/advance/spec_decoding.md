@@ -106,6 +106,8 @@ deepseek-ai/DeepSeek-V3 \
 
 ### DFlash
 
+DFlash supports DP/EP parallel inference.
+
 For DFlash, the block size is the complete draft query/target verification
 window. It includes one current target token, so a block size of 8 proposes
 seven new draft tokens. The block size must not exceed the maximum declared by
@@ -144,6 +146,47 @@ Qwen/Qwen3.5-35B-A3B \
 When a DFlash block size is provided, it overrides
 `--speculative-num-draft-tokens` by setting the number of newly proposed
 tokens to `block_size - 1`.
+
+### DSpark
+
+DSpark uses a parallel DFlash-style draft backbone followed by a lightweight
+left-to-right Markov correction. The first LMDeploy implementation uses a
+fixed verification window. Draft proposals are deterministic, while target
+verification supports both greedy and non-greedy sampling through the common
+rejection sampler. It supports external Speculators-format drafts and
+DeepSeek-V4 checkpoints that bundle `mtp.*` DSpark weights. For a bundled
+checkpoint, leave `model` empty so the target checkpoint is also used as the
+draft weight source.
+
+```python
+from lmdeploy import PytorchEngineConfig, pipeline
+from lmdeploy.messages import SpeculativeConfig
+
+def main():
+    model = 'deepseek-ai/DeepSeek-V4-Flash-0731'
+    pipe = pipeline(
+        model,
+        backend_config=PytorchEngineConfig(tp=4),
+        speculative_config=SpeculativeConfig(
+            method='dspark',
+            num_speculative_tokens=5,
+        ),
+    )
+
+
+if __name__ == '__main__':
+    main()
+```
+
+```shell
+lmdeploy serve api_server deepseek-ai/DeepSeek-V4-Flash-0731 \
+  --backend pytorch \
+  --tp 4 \
+  --speculative-algorithm dspark \
+  --speculative-num-draft-tokens 5
+```
+
+DSpark enables CUDA Graph by default and supports DP/EP parallel inference.
 
 ## Guided Decoding with Speculative Decoding
 
