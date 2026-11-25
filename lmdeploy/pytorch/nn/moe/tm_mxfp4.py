@@ -80,6 +80,13 @@ class TmMoeMXFP4Weights(nn.Module):
         # marks the per-projection width inside the fused storage. The
         # loader deinterleaves the checkpoint's interleaved gate/up rows.
         self.split = out_features // 2 if weight_type == 'gate_up' else None
+        # The down projection is row-parallel over moe-TP: its bias spans
+        # the unsliced hidden width, so a copy on every rank would enter
+        # the group's single outer reduce once per rank. The group's lead
+        # rank is the sole owner; non-lead ranks keep zero storage (the
+        # gate/up bias is width-sliced, so every rank owns its chunk).
+        _, moe_tp_rank = get_tp_world_rank('moe')
+        self.moe_tp_lead = moe_tp_rank == 0
 
         shapes = {
             'blocks': (num_local_experts, out_features, in_features // 2),
@@ -90,7 +97,14 @@ class TmMoeMXFP4Weights(nn.Module):
         self._loaded_parts: set[tuple[int, str, str]] = set()
         for name, shape in shapes.items():
             dtype_ = dtype if name == 'bias' else torch.uint8
-            parameter = nn.Parameter(torch.empty(shape, dtype=dtype_, device=device), requires_grad=False)
+            # Non-lead moe-TP ranks never receive the down bias: their
+            # storage must start (and stay) zero to keep the packed
+            # addend neutral ahead of the group's outer reduce.
+            if name == 'bias' and self.weight_type == 'down' and not self.moe_tp_lead:
+                init_tensor = torch.zeros(shape, dtype=dtype_, device=device)
+            else:
+                init_tensor = torch.empty(shape, dtype=dtype_, device=device)
+            parameter = nn.Parameter(init_tensor, requires_grad=False)
             parameter.weight_loader = self.weight_loader
             self.register_parameter(name, parameter)
 
@@ -116,7 +130,13 @@ class TmMoeMXFP4Weights(nn.Module):
 
     def _expected_keys(self) -> set:
         """The complete loaded-part ledger of a fully loaded module."""
-        return set(product(range(self.blocks.shape[0]), self._expected_shards(), self._expected_parts()))
+        if self.weight_type == 'down' and self.with_bias and not self.moe_tp_lead:
+            # The moe-TP group's lead rank owns the down bias: non-lead
+            # ranks never receive it, so their ledger must not expect it.
+            parts = _PARTS
+        else:
+            parts = self._expected_parts()
+        return set(product(range(self.blocks.shape[0]), self._expected_shards(), parts))
 
     def _half(self, shard_id: str) -> tuple[int, int]:
         """Row range of one logical projection inside the fused gate_up
@@ -156,6 +176,12 @@ class TmMoeMXFP4Weights(nn.Module):
         # completeness ledger only tracks local slots.
         local_expert_id = self.expert_map.get(expert_id)
         if local_expert_id is None:
+            return
+        if part == 'bias' and self.weight_type == 'down' and not self.moe_tp_lead:
+            # Row-parallel down bias: the moe-TP group's lead rank is the
+            # sole owner. Non-lead ranks skip the copy (and the ledger
+            # key) so the bias enters the group's outer reduce exactly
+            # once; the skipped stream stays a valid hot-update prefix.
             return
         key = (local_expert_id, shard_id, part)
         if key in self._loaded_parts:
