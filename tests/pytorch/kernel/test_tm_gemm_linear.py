@@ -609,3 +609,53 @@ def test_deepseek_mla_kv_b_proj_absorption_is_device_coherent():
     max_abs = (weight.float() - reference.float()).abs().max().item()
     assert kl <= 1e-2, f'absorbed weight KL vs AWQ Triton reference {kl:.3e}'
     assert max_abs <= 1.0, f'absorbed weight max abs diff {max_abs:.3e}'
+
+
+@cuda_required
+def test_deepseek_mla_post_load_hook_matches_dense_reference():
+    """The real ``process_weights_after_loading`` hook builds kc/vc correctly.
+
+    Runs the actual MLA absorption hook on a real ``DeepseekV2Attention`` and
+    compares ``kc``/``vc`` against a first-principles dequant of the loaded
+    kv_b weights. Pre-fix, ``get_unquantized_weight`` returned ``[N, K, 1]``
+    and the hook failed at ``kc.weight.copy_``.
+    """
+    import lmdeploy.pytorch.models.deepseek_v2 as ds_mod
+    from lmdeploy.pytorch.models.patch import BuildModelContext, build_model_context
+    from lmdeploy.turbomind.weight_format import _unpack_awq_gemm
+
+    cfg = _mla_config()
+    ctx = BuildModelContext(quant_config=cfg.quantization_config)
+    with build_model_context(ctx):
+        attn = ds_mod.DeepseekV2Attention(cfg, dtype=torch.float16, device=torch.device('cuda'))
+
+    kv_b = attn.kv_b_proj
+    assert type(kv_b).__name__ == 'TmGemmLinear'
+    qw, sc, qz, _ = _random_awq(512, 256, 128, seed=13)
+    kv_b.qweight.data.copy_(qw)
+    kv_b.scales.data.copy_(sc)
+    kv_b.qzeros.data.copy_(qz)
+    kv_b.update_weights()
+    torch.cuda.synchronize()
+
+    attn.process_weights_after_loading()
+
+    # First-principles ground truth: unpack the AWQ nibbles, apply zero point
+    # and per-group scale, then reshape into the per-head kc/vc blocks.
+    codes = _unpack_awq_gemm(qw).float()  # [K, N]
+    zeros = _unpack_awq_gemm(qz).float()  # [G, N]
+    groups = qw.shape[0] // sc.shape[0]
+    weight = (codes - zeros.repeat_interleave(groups, dim=0)) * sc.float().repeat_interleave(groups, dim=0)
+    weight = weight.T.reshape(2, cfg.qk_nope_head_dim + cfg.v_head_dim, cfg.kv_lora_rank)
+    w_kc, w_vc = weight.split([cfg.qk_nope_head_dim, cfg.v_head_dim], dim=1)
+
+    w_kc = w_kc.cpu()
+    w_vc = w_vc.transpose(1, 2).cpu()
+    assert attn.kc.weight.shape == w_kc.shape
+    assert attn.vc.weight.shape == w_vc.shape
+    assert torch.allclose(attn.kc.weight.float().cpu(), w_kc, rtol=2e-3, atol=1e-3), (
+        f'kc mismatch, max abs diff {(attn.kc.weight.float().cpu() - w_kc).abs().max().item():.4e}'
+    )
+    assert torch.allclose(attn.vc.weight.float().cpu(), w_vc, rtol=2e-3, atol=1e-3), (
+        f'vc mismatch, max abs diff {(attn.vc.weight.float().cpu() - w_vc).abs().max().item():.4e}'
+    )

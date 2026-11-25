@@ -61,6 +61,22 @@ class TmGemmLinearMixin:
                 enable_deterministic=get_build_model_context().enable_deterministic,
             )
 
+    def get_unquantized_weight(self, out_dtype: torch.dtype) -> torch.Tensor:
+        """Return the local dequantized weight in ``[out_features,
+        in_features]`` layout."""
+        param = next(self.parameters())
+        inputs = torch.eye(self.in_features, dtype=out_dtype, device=param.device)
+        outputs = self._forward_default(inputs, all_reduce=False, tp_sizes=None)
+        bias = getattr(self, 'bias', None)
+        if bias is not None:
+            outputs = outputs - bias
+        # The packed forward returns one [K, N] plane per input row.
+        if outputs.dim() == 3:
+            assert outputs.size(0) == 1, 'expected a single [K, N] plane from the packed forward'
+            outputs = outputs.squeeze(0)
+        assert outputs.dim() == 2, f'unexpected forward output rank {outputs.dim()}, expected [1, K, N] or [K, N]'
+        return outputs.T.to(out_dtype)
+
     @property
     def cpu_resident(self) -> bool:
         """Whether the packed quant storages live on the host (CPU-direct
