@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import numpy as np
 import torch
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
@@ -129,6 +130,11 @@ class GenerationConfig:
             entries. Requires ``logprob_start_len >= 0``. Useful for scoring a
             fixed candidate set (e.g. answer symbols) at prompt positions.
             PyTorch engine only.
+        logprobs_format: Container of the generated-token logprobs in
+            outputs. ``'dict'`` gives one ``{token_id: logprob}`` dict per
+            token. ``'array'`` gives a :class:`LogprobArrays` per output, with
+            no per-token Python objects. PyTorch engine only, and not
+            available with ``logprob_start_len >= 0``.
         response_format: Generate responses according to given formatting.
             Examples:
 
@@ -211,6 +217,7 @@ class GenerationConfig:
     logprobs: int = None
     logprob_start_len: int = -1
     logprob_extra_token_ids: list[int] | None = None
+    logprobs_format: Literal['dict', 'array'] = 'dict'
     response_format: dict | None = None
     logits_processors: list[LogitsProcessor] | None = None
     output_logits: Literal['all', 'generation'] = None
@@ -296,6 +303,10 @@ class GenerationConfig:
                 raise ValueError('logprob_extra_token_ids requires logprob_start_len >= 0')
             if not all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in self.logprob_extra_token_ids):
                 raise ValueError('logprob_extra_token_ids must be a list of non-negative ints')
+        if self.logprobs_format not in ('dict', 'array'):
+            raise ValueError(f"logprobs_format must be 'dict' or 'array', got {self.logprobs_format!r}")
+        if self.logprobs_format == 'array' and self.logprob_start_len >= 0:
+            raise ValueError("logprobs_format='array' does not support logprob_start_len >= 0")
         if self.repetition_ngram_size <= 0 or self.repetition_ngram_threshold <= 0:
             self.repetition_ngram_size = 0
             self.repetition_ngram_threshold = 0
@@ -580,7 +591,14 @@ class PytorchEngineConfig:
             It can be used to override the default config of the model,
         language_model_only: Whether to run as text-only LLM without loading
             vision/multimodal encoder modules. Default to False.
-        logprobs_mode: The mode of logprob, options: ['raw_logits', 'raw_logprobs']
+        logprobs_mode: The mode of logprob, options: ['raw_logits', 'raw_logprobs'].
+            Both are taken from the logits before temperature, penalties,
+            bad/stop-word masks, guided decoding and top-k/top-p/min-p
+            filtering. ``raw_logprobs`` therefore equals the sampling
+            distribution only with temperature 1 and none of those applied.
+            The values have the LM head's dtype (the model dtype unless
+            ``hf_overrides={'fp32_lm_head': True}``), so with a bf16 head
+            they are bf16-rounded.
         dllm_block_length: Block size of block diffusion model.
         dllm_unmasking_strategy: Dllm unmasking strategy, options:
             ['low_confidence_dynamic', 'low_confidence_static', 'sequential'].
@@ -717,6 +735,40 @@ class PytorchEngineConfig:
         if self.communication_backend not in ('nccl', 'auto'):
             raise ValueError('communication_backend must be nccl or auto')
 
+@dataclass(eq=False)
+class LogprobArrays:
+    """Logprob rows of consecutive generated tokens, kept as arrays.
+
+    Row ``i`` belongs to the ``i``-th token. Column 0 holds the id and logprob
+    of that token itself; columns ``1..k`` hold the top-k candidates in
+    descending order, ``k`` being the request's ``logprobs``. These are the
+    same numbers as the ``'dict'`` format of :class:`GenerationConfig`.
+
+    Args:
+        vals: float32 array of shape ``[n, 1 + k]``.
+        ids: int32 array of shape ``[n, 1 + k]``.
+    """
+    vals: np.ndarray
+    ids: np.ndarray
+
+    def __len__(self) -> int:
+        return self.vals.shape[0]
+
+    def __getitem__(self, rows: slice) -> 'LogprobArrays':
+        # Only row slices: iterating rows one by one is what this type avoids.
+        if not isinstance(rows, slice):
+            raise TypeError('LogprobArrays supports only slicing rows')
+        return LogprobArrays(vals=self.vals[rows], ids=self.ids[rows])
+
+    @classmethod
+    def concat(cls, parts: list['LogprobArrays']) -> 'LogprobArrays':
+        """Concatenate rows of consecutive parts."""
+        if len(parts) == 1:
+            return parts[0]
+        return cls(vals=np.concatenate([part.vals for part in parts]),
+                   ids=np.concatenate([part.ids for part in parts]))
+
+
 class ResponseType(enum.Enum):
     """Response type."""
 
@@ -751,9 +803,11 @@ class Response:
             stop point or a provided stop sequence, 'length' if the maximum
             number of tokens specified in the request was reached.
         token_ids: the output token ids.
-        logprobs: the top logprobs for each output position. For a scoring-only
-            input-logprob request, this field carries the complete ordered
-            input-token rows on the terminal response.
+        logprobs: the top logprobs for each output position, as a list of
+            dicts or, with ``GenerationConfig.logprobs_format='array'``, a
+            :class:`LogprobArrays`. For a scoring-only input-logprob request,
+            this field carries the complete ordered input-token rows on the
+            terminal response.
         index: it refers to the position index of the input request batch.
     """
     text: str
@@ -761,7 +815,7 @@ class Response:
     input_token_len: int
     finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
     token_ids: list[int] = field(default_factory=list)
-    logprobs: list[dict[int, float]] = None
+    logprobs: list[dict[int, float]] | LogprobArrays | None = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     index: int = 0
@@ -820,7 +874,10 @@ class Response:
         self.index = other.index
         if other.token_ids:
             self.token_ids += other.token_ids
-        if other.logprobs is not None:
+        if isinstance(other.logprobs, LogprobArrays):
+            self.logprobs = (other.logprobs if self.logprobs is None else LogprobArrays.concat(
+                [self.logprobs, other.logprobs]))
+        elif other.logprobs is not None:
             self.logprobs = self.logprobs or []
             self.logprobs += other.logprobs
         self.routed_experts = other.routed_experts
@@ -909,7 +966,9 @@ class EngineOutput:
     Args:
         status: the response type.
         token_ids: the newly generated token ids in each iteration.
-        logprobs: the top logprobs for each output position. For a scoring-only
+        logprobs: the top logprobs for each output position, as a list of
+            dicts or a :class:`LogprobArrays` (see
+            ``GenerationConfig.logprobs_format``). For a scoring-only
             input-logprob request, this internal field carries the complete
             ordered input-token rows on its terminal output.
         cache_block_ids: send cache blocks back for migration in
@@ -920,7 +979,7 @@ class EngineOutput:
     """
     status: ResponseType
     token_ids: list[int]
-    logprobs: list[dict[int, float]] = None
+    logprobs: list[dict[int, float]] | LogprobArrays | None = None
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     cache_block_ids: list[int] | None = None

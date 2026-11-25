@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Any
 
-from lmdeploy.messages import EngineOutput, GenerationConfig
+from lmdeploy.messages import EngineOutput, GenerationConfig, LogprobArrays
 from lmdeploy.utils import get_logger
 
 from ..messages import SamplingParam
@@ -253,6 +253,8 @@ class EngineInstance(EngineInstanceBase):
                 cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
                 req_metrics = resp.data.get('req_metrics', None) if resp.data else None
                 logprobs = resp.data.pop('logprobs', None) if resp.data else None
+                if logprobs and isinstance(logprobs[0], LogprobArrays):
+                    logprobs = LogprobArrays.concat(logprobs)
 
                 if resp.type == ResponseType.SUCCESS:
                     token_ids = resp.data['token_ids']

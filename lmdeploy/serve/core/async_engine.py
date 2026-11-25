@@ -17,6 +17,7 @@ from lmdeploy.logger import RequestLogger
 from lmdeploy.messages import (
     EngineOutput,
     GenerationConfig,
+    LogprobArrays,
     PytorchEngineConfig,
     Response,
     ResponseType,
@@ -58,7 +59,7 @@ class GenOut:
     generate_token_len: int
     finish_reason: Literal['stop', 'length', 'error', 'abort'] | None = None
     token_ids: list[int] | None = None
-    logprobs: list[dict[int, float]] | None = None
+    logprobs: list[dict[int, float]] | LogprobArrays | None = None
     logits: Any = None
     last_hidden_state: Any = None
     cache_block_ids: list[int] | None = None  # for disaggregation
