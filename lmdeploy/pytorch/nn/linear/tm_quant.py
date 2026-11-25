@@ -226,6 +226,7 @@ class TmQuantLinear(TmQuantLinearMixin, LinearBase):
         colwise: bool = True,
         is_tp: bool = False,
         all_reduce: bool = True,
+        out_features_local: bool = False,
         layer_type: str = 'attn',
         prefix: str = '',
     ):
@@ -235,7 +236,7 @@ class TmQuantLinear(TmQuantLinearMixin, LinearBase):
         self.bias_flag = bias
         self.init_tp_args(is_tp, all_reduce, colwise, layer_type)
         self.num_shards = getattr(self, 'num_shards', 1)
-        if self.is_tp:
+        if self.is_tp and not out_features_local:
             world_size, rank = self.get_tp_world_rank()
             if colwise:
                 out_features = get_distribute_size(out_features, world_size, rank, align=8)
@@ -348,6 +349,7 @@ class MergedTmQuantLinear(TmQuantLinear):
             device=device,
             colwise=True,
             is_tp=is_tp,
+            out_features_local=True,
             layer_type=layer_type,
             prefix=prefix,
         )
