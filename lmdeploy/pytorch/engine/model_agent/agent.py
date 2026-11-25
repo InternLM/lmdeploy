@@ -19,7 +19,6 @@ import torch.distributed as dist
 from torch.profiler import record_function
 from tqdm.auto import tqdm
 
-from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch.backends import get_backend
 from lmdeploy.pytorch.backends.graph_runner import prefill_preparation_scope
 from lmdeploy.pytorch.config import BackendConfig, CacheConfig, MiscConfig, ModelConfig, SpecDecodeConfig
@@ -685,7 +684,7 @@ class BaseModelAgent:
 
         hidden_states, ret = self.spec_agent.update_main_model_outputs(ret, inputs)
 
-        logits = None if inputs.skip_sampling else self.get_logits(hidden_states)
+        logits = self.get_logits(hidden_states)
         ret['logits'] = logits
         return ret
 
@@ -749,10 +748,6 @@ class BaseModelAgent:
     async def async_sampling_logits(self, logits: torch.Tensor, inputs: ModelInputs,
                                     extra_inputs: ExtraInputs, sampling_inputs: SamplingInputs):
         """Sampling logits."""
-        if inputs.skip_sampling:
-            next_token_ids, extra_inputs = self.agent_strategy.make_dummy_next_token(inputs, logits, extra_inputs)
-            output_token_ids = extra_inputs.output_token_ids if self.spec_agent.is_enabled() else next_token_ids
-            return next_token_ids, None, output_token_ids, extra_inputs
         if self.spec_agent.is_enabled():
             target_logits = getattr(extra_inputs, 'target_logits', None)
             if target_logits is not None and target_logits.device.type == 'npu':
@@ -974,8 +969,6 @@ class BaseModelAgent:
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
         extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
-        if PROFILE_PHASES:
-            self.profiler.mark_step('sampling_and_draft')
 
         if inputs.is_dummy:
             return inputs, extra_inputs, stopping_criteria, None, next_token_ids, None
@@ -1033,8 +1026,6 @@ class BaseModelAgent:
             logger.debug(f'<ForwardTask> rank[{rank}]: synchronize token ids')
 
         extra_inputs = await self.spec_agent.async_model_forward(inputs, extra_inputs, sampling_inputs)
-        if PROFILE_PHASES:
-            self.profiler.mark_step('sampling_and_draft')
 
         if inputs.is_dummy:
             return inputs, next_token_ids, extra_inputs,  None
@@ -1111,9 +1102,6 @@ class BaseModelAgent:
     ):
         """Asyc forward task."""
 
-        if PROFILE_PHASES:
-            preparation_started = time.perf_counter()
-            worker_started_at = time.time()
         dist_ctx = get_dist_manager().current_context()
         dist_config = dist_ctx.dist_config
         rank = self.rank
@@ -1173,8 +1161,6 @@ class BaseModelAgent:
         elif not inputs.is_dummy and inputs.ssm_state_meta is not None:
             raise ValueError('Compact model work requires an owner access identity on every dispatch.')
 
-        if PROFILE_PHASES:
-            dp_started = time.perf_counter()
         if dp > 1:
             # update inputs for dp
             inputs, is_all_sleeping = await self._prepare_dp_v1(inputs)
@@ -1193,8 +1179,6 @@ class BaseModelAgent:
                 logger.debug(f'<ForwardTask> rank[{rank}]: all inputs are dummy, skip forward.')
                 await asyncio.sleep(0.01)
                 return
-        if PROFILE_PHASES:
-            dp_finished = time.perf_counter()
 
         # swap caches
         cache_swapping(self.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
@@ -1202,10 +1186,6 @@ class BaseModelAgent:
             cache_swapping(self.memdecode_agent.cache_engine, swap_in_map=swap_in_map, swap_out_map=swap_out_map)
 
         # inference
-        if PROFILE_PHASES:
-            self.profiler.begin_step(inputs, access_id=ssm_state_access_id, worker_started_at=worker_started_at,
-                                     prepare_ms=(dp_started - preparation_started) * 1000,
-                                     dp_wait_ms=(dp_finished - dp_started) * 1000)
         logger.debug(f'<ForwardTask> rank[{rank}]: model forward. '
                      f'batch_size={inputs.seq_length.size(0)} '
                      f'num_tokens={inputs.input_ids.size(-1)} '
@@ -1226,8 +1206,6 @@ class BaseModelAgent:
             return_logits=return_logits or return_ce_loss,
             cache_inputs=cache_inputs,
         )
-        if PROFILE_PHASES:
-            self.profiler.mark_step('target')
 
         if inputs.is_dummy and not self.spec_agent.is_enabled():
             # skip dummy forward output
@@ -1267,11 +1245,9 @@ class BaseModelAgent:
 
             return
 
-        logits = output['logits']
-        if logits is not None:
-            logits = logits[0]  # [bs, seq, prob] -> [seq, prob]
+        logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
         seq_length = output.get('seq_length', inputs.seq_length)
-        last_logits = self._slice_outs(logits, seq_length) if logits is not None else None
+        last_logits = self._slice_outs(logits, seq_length)
         extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, inputs, output)
         model_metas = output.get('model_metas')
 
@@ -1411,8 +1387,6 @@ class BaseModelAgent:
                     _record_forward_input_stream(forward_inputs, self.stream)
 
                 await self._async_step(**forward_inputs, )
-                if PROFILE_PHASES:
-                    self.profiler.end_step(self.patched_model.execution_mode)
                 if forward_event is not None:
                     forward_event.set()
 
@@ -1445,8 +1419,6 @@ class BaseModelAgent:
         non_blocking = True
         while True:
             forward_inputs = await self._pre_in_que.get()
-            if PROFILE_PHASES:
-                preprocess_started = time.perf_counter()
             forward_inputs_cuda = {}
             forward_inputs_cuda.update(forward_inputs)
             h2d_refs = {
@@ -1464,13 +1436,6 @@ class BaseModelAgent:
                 forward_inputs_cuda[_H2D_TRANSFER_KEY] = _H2DTransfer(h2d_event, h2d_refs)
             logger.debug('preprocessing forward inputs done.')
             self._in_que.put_nowait(forward_inputs_cuda)
-            if PROFILE_PHASES:
-                inputs = forward_inputs['inputs']
-                if inputs is not None and not inputs.is_dummy and not inputs.is_decoding:
-                    carrier = forward_inputs['cache_inputs']
-                    trace_phase('worker_preprocessed', rank=self.rank, dp_rank=self.dist_ctx.dp_rank,
-                                access_id=carrier.ssm_state_access_id if carrier is not None else None,
-                                cpu_ms=(time.perf_counter() - preprocess_started) * 1000)
             if forward_event is not None:
                 forward_event.clear()
 
@@ -1556,12 +1521,6 @@ class BaseModelAgent:
     def set_forward_inputs(self, inputs):
         """Set forward inputs."""
         assert self._pre_in_que is not None, ('Please start backendground task before forward.')
-        if PROFILE_PHASES:
-            model_inputs = inputs['inputs']
-            if model_inputs is not None and not model_inputs.is_dummy and not model_inputs.is_decoding:
-                carrier = inputs['cache_inputs']
-                trace_phase('worker_received', rank=self.rank, dp_rank=self.dist_ctx.dp_rank,
-                            access_id=carrier.ssm_state_access_id if carrier is not None else None)
         self._pre_in_que.put_nowait(inputs)
 
     def _drain_queues(self):

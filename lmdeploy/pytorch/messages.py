@@ -678,7 +678,6 @@ class SchedulerSequence:
     resp_cache: bool = False
     preserve_cache: bool = False
     pd_prompt_tokens: np.ndarray | None = None
-    pd_prefix_length: int = 0
     pd_decode_pending: bool = False
 
     # For logging
@@ -767,19 +766,9 @@ class SchedulerSequence:
         """Valid token ids."""
         return self.history_cache[:self.num_valid_ids]
 
-    @property
-    def cache_identity_ids(self) -> np.ndarray:
-        """Only confirmed tokens can identify a shared MTP successor."""
-        return self.valid_ids
-
-    @property
-    def cache_identity_token_count(self) -> int:
-        return self.num_valid_ids
-
     def prepare_pd_prefill(self) -> None:
         """Keep the complete prompt, including any trailing multimodal span."""
         self.pd_prompt_tokens = self.valid_ids.copy()
-        self.pd_prefix_length = len(self.pd_prompt_tokens)
 
     @property
     def generated_ids(self) -> np.ndarray:
@@ -926,7 +915,7 @@ class SchedulerSequence:
         count = self._seq_meta.prefix_cache_token_lookahead
         if not count:
             return ()
-        return (TokenLookahead(end, tuple(int(x) for x in self.cache_identity_ids[end:end + count])),)
+        return (TokenLookahead(end, tuple(int(x) for x in self.valid_ids[end:end + count])),)
 
     def get_prefix_cache_extra_identity(self, start: int, end: int) -> PrefixCacheExtraIdentity:
         count = self._seq_meta.prefix_cache_token_lookahead

@@ -163,8 +163,7 @@ class ARSpecModelAgentStrategy(ModelAgentStrategy):
     def slice_extra_inputs(self, extra_inputs: ARSpecExtraInputs, model_inputs: ModelInputs,
                            model_outputs: dict[str, torch.Tensor], **kwargs) -> ARSpecExtraInputs:
         """Slice outputs."""
-        logits = model_outputs['logits']
-        target_logits = logits[0] if logits is not None else None
+        target_logits = model_outputs['logits'][0]
         return extra_inputs.clone(
             target_hidden_states=model_outputs.get('hidden_states'),
             target_position_ids=model_outputs.get('position_ids', None),

@@ -5,10 +5,9 @@ import json
 import socket
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from time import perf_counter, time
+from time import time
 from typing import TYPE_CHECKING
 
-from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch.disagg.backend.backend import MIGRATION_BACKENDS
 from lmdeploy.pytorch.disagg.backend.base import MigrationBackendImpl
 from lmdeploy.pytorch.disagg.config import MigrationBackend, MooncakeEngineConfig
@@ -215,7 +214,6 @@ class MooncakeMigrationManagement:
         # An unknown ticket owns native work; dropping it can block with the GIL
         # held. Poll without occupying a submission slot or a native thread while
         # idle, so an unhealthy peer does not prevent healthy transfers.
-        begin = perf_counter()
         try:
             while not ticket.drained:
                 try:
@@ -229,9 +227,6 @@ class MooncakeMigrationManagement:
         result.status = ticket.status.name.lower()
         result.error = '' if result.status == 'completed' else 'Mooncake scatter read failed after draining.'
         self.pending_tickets.remove(ticket)
-        if PROFILE_PHASES:
-            trace_phase('pd_native_drain', transfer_id=assignment.transfer_id, rank=self.rank,
-                        drain_ms=(perf_counter() - begin) * 1000, status=result.status)
         return result
 
     @staticmethod
@@ -247,7 +242,6 @@ class MooncakeMigrationManagement:
                     raise
 
     def _migrate(self, assignment: MigrationAssignment) -> tuple[PDTransferResult, 'ScatterTransferTicket | None']:
-        begin = perf_counter()
         if assignment.deadline and time() >= assignment.deadline:
             return PDTransferResult(transfer_id=assignment.transfer_id, status='failed_drained',
                                     error='PD submission deadline expired before native I/O.'), None
@@ -270,7 +264,6 @@ class MooncakeMigrationManagement:
         result = PDTransferResult(transfer_id=assignment.transfer_id, status='completed')
         if not fragments:
             return result, None
-        prepared = perf_counter()
         if assignment.deadline and time() >= assignment.deadline:
             return PDTransferResult(transfer_id=assignment.transfer_id, status='failed_drained',
                                     error='PD submission deadline expired while preparing addresses.'), None
@@ -301,10 +294,6 @@ class MooncakeMigrationManagement:
         except Exception as error:
             result.status = 'completion_unknown'
             result.error = str(error)
-        if PROFILE_PHASES:
-            trace_phase('pd_native', transfer_id=assignment.transfer_id, rank=self.rank, segments=len(assignment.batch),
-                        bytes=sum(task.length for task in assignment.batch), address_ms=(prepared - begin) * 1000,
-                        native_ms=(perf_counter() - prepared) * 1000, status=result.status)
         return result, ticket
 
 

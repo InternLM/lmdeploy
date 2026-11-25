@@ -18,7 +18,6 @@ def make_export(cached_tokens=0):
                           SequenceMeta(4, strategy=ARSequenceStrategy()))
     seq = scheduler.add_session(1).add_sequence(np.arange(8), preserve_cache=True)
     seq.pd_prompt_tokens = np.arange(8)
-    seq.pd_prefix_length = 8
     seq.cached_tokens = cached_tokens
     scheduler.block_manager.allocate(seq)
     seq.sampling_param.random_seed = 42

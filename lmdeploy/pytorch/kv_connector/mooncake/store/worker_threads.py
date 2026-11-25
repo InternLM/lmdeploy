@@ -10,7 +10,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch.kv_connector.base import RequestId
 from lmdeploy.utils import get_logger
 
@@ -383,31 +382,19 @@ class KVCacheStoreSendingThread(threading.Thread):
             total_bytes,
             (time.perf_counter() - start) * 1000,
         )
-        if PROFILE_PHASES:
-            trace_phase('store_put', rank=self.global_rank, seq_id=request.request_id, save_id=request.save_id,
-                        bytes=total_bytes, keys=len(missing_keys), native_ms=(time.perf_counter() - start) * 1000,
-                        success=not failed)
         return not failed
 
     def _save(self, task: _SaveTask) -> bool:
-        begin = time.perf_counter()
         request = task.request
         entries = self._owned_entries(request)
         keys = [entry.key for entry in entries]
-        prepared = time.perf_counter()
         missing = None
         try:
             missing = self._find_missing(request, keys) if keys else []
         finally:
             # Waiting also on lookup failure keeps completion ordering tied to
             # this model step, which makes lease release deterministic.
-            queried = time.perf_counter()
             task.ready_event.synchronize()
-
-        if PROFILE_PHASES:
-            trace_phase('store_save_ready', rank=self.global_rank, seq_id=request.request_id, save_id=request.save_id,
-                        prepare_ms=(prepared - begin) * 1000, lookup_ms=(queried - prepared) * 1000,
-                        ready_wait_ms=(time.perf_counter() - queried) * 1000, missing_keys=len(missing))
 
         # The query does not touch KV memory and can overlap the forward. The
         # direct GPU read must wait until all preceding compute-stream writes
@@ -652,12 +639,6 @@ class KVCacheStoreRecvingThread(threading.Thread):
             (time.perf_counter() - start) * 1000,
             ready_wait_ms,
         )
-        if PROFILE_PHASES:
-            trace_phase('store_load', rank=self.global_rank, seq_id=request.request_id,
-                        boundary=request.remote_block_count * self.key_metadata.block_size,
-                        state_hash=request.block_hashes[-1].hex() if request.state_destination is not None else None,
-                        bytes=total_bytes, native_ms=(time.perf_counter() - start) * 1000,
-                        ready_wait_ms=ready_wait_ms, success=num_failed == 0)
         return num_failed == 0
 
     def run(self) -> None:

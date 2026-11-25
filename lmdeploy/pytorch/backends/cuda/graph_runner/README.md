@@ -256,11 +256,8 @@ decoder assumption. A future captured batch-shaped operation must either add
 the relevant capacity/layout fact to the descriptor or move that operation
 eager.
 
-The runtime captures every size from 1 to 64 (covering partial cache blocks
-and MTP verification rows in mixed DP steps), then 128, 256, and a fixed 512-token
-stride up to the configured `piecewise_cudagraph_max_tokens` cutoff (including
-the cutoff itself). The short buckets cover prefix-cache hits and PD prompt
-tail replay without padding a single token to 512. All candidate buckets are captured at
+The initial runtime uses a fixed 512-token stride up to the configured
+`piecewise_cudagraph_max_tokens` cutoff. All candidate buckets are captured at
 startup and retained; there is no runtime capture or eviction. The cutoff is
 execution policy, not scheduler or paging capacity.
 
@@ -276,7 +273,7 @@ rejected before boundary installation because its live per-rank splits and
 collectives are not yet represented by the plan. This does not reject the
 default attention-TP groups formed by a DP2/EP4 deployment.
 
-Request-time selection rejects microbatch prefill and live
+Request-time selection rejects microbatch prefill, chunked prefill, and live
 LoRA adapters because the current descriptor does not represent those modes.
 Dynamic extra forward arguments are rejected; immutable scalar-like extras are
 included in the descriptor.
@@ -286,15 +283,6 @@ with the equivalent bucket-shaped eager execution when validating mechanism
 correctness, and separately measure the user-visible numerical and performance
 effect against raw eager execution. The 512-token stride is provisional rather
 than a universal profitability threshold.
-
-GLM-5.3-Flash disables token padding to preserve projection rounding. It only
-replays exact token buckets; other lengths retain eager execution. Start PD
-tuning with a prefill cap matching the prefill chunk size and a small decode
-cap covering prompt-tail batches. Full decode graphs remain enabled separately;
-the prefill cap does not enlarge their capture shapes. With
-`LMDEPLOY_PROFILE_PHASES=1`, `worker_step.graph_mode` reports the target model's
-actual dispatch and `graph_capture` records identify cold captures. Warm the
-transport and representative requests before collecting performance results.
 
 ## Failure And Reset Rules
 

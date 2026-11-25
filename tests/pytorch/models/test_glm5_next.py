@@ -28,7 +28,7 @@ def test_mixed_decode_reuses_prefill_graph_key():
         input_multimodals=None, input_embeddings=None, input_embedding_indexing=None,
         attn_metadata=None, state_offsets=None, is_decoding=False, global_is_decoding=lambda: False,
         enable_microbatch=False, local_adapter_ids=None, is_dummy=False)
-    runtime = StandardDecoderPiecewiseGraphRuntime(model, max_capture_tokens=16)
+    runtime = StandardDecoderPiecewiseGraphRuntime(model, max_capture_tokens=6)
     prefill = model.prepare_inputs_for_generation([], context=context)
     key = runtime.get_piecewise_graph_descriptor(context, prefill)
     assert key is not None

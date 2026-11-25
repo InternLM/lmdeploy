@@ -139,7 +139,8 @@ def test_pd_reuses_prompt_ids_and_preserves_parser_messages(chat_endpoint, migra
     context.async_engine.preprocess = preprocess
     migration = dict(protocol=2, remote_engine_id='prefill', remote_session_id=1, prompt_token_ids=ids,
                      handoff=dict(transfer_id='transfer', engine_epoch='epoch', cache_schema='schema',
-                                  prompt_digest='digest', prompt_token_count=4, valid_token_count=3,
+                                  prompt_digest='digest', prompt_token_count=4, valid_token_count=4,
+                                  first_token_id=95, random_seed=42, random_offset=5,
                                   block_size=64, block_ids=[1]))
     payloads = _post(context, return_token_ids=True,
                      **({'migration_request': migration} if migrating else {}))

@@ -56,8 +56,8 @@ def _cache_config(role='kv_both'):
 
 
 class _Request(SimpleNamespace):
-    cache_identity_ids = property(lambda self: self.all_ids)
-    cache_identity_token_count = property(lambda self: len(self.all_ids))
+    valid_ids = property(lambda self: self.all_ids)
+    num_valid_ids = property(lambda self: len(self.all_ids))
 
 
 def _request(
@@ -1219,7 +1219,7 @@ def test_scheduler_rejects_sliding_window_cache():
         MooncakeStoreScheduler(config)
 
 
-def test_pd_prefill_save_uses_known_withheld_successor():
+def test_pd_prefill_chunk_save_uses_known_prompt_successor():
     cache = replace(_cache_config('kv_producer'), prefix_cache_token_lookahead=1)
     paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache,
                        seq_meta=SequenceMeta(4, strategy=ARSpecSequenceStrategy()))
@@ -1228,5 +1228,5 @@ def test_pd_prefill_save_uses_known_withheld_successor():
     request.prepare_pd_prefill()
     metadata = store.build_connector_meta(_connector_step((request,), (8,), ((0, 1),), ((10, 11),)))
     assert metadata.save_requests[0].block_hashes == build_prefix_block_hashes(range(9), 4, token_lookahead=1)
-    assert request.num_valid_ids == 8
+    assert request.num_valid_ids == 9
     store.shutdown()

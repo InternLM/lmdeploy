@@ -20,9 +20,9 @@ def test_prefill_keeps_complete_prompt_and_cache_identity(length, mtp):
                           SequenceMeta(64, strategy=strategy))
     seq = scheduler.add_session(1).add_sequence(np.arange(length))
     seq.prepare_pd_prefill()
-    assert seq.num_valid_ids == seq.num_token_ids == seq.pd_prefix_length == length
+    assert seq.num_valid_ids == seq.num_token_ids == length
     assert seq.input_end_pos == length
-    assert seq.cache_identity_ids.tolist() == list(range(length))
+    assert seq.valid_ids.tolist() == list(range(length))
     assert seq.num_new_tokens == 0
     if mtp:
         assert seq.get_prefix_cache_token_dependency(length - 1)[0].token_ids == (length - 1,)
@@ -37,7 +37,7 @@ def test_full_prefill_never_splits_a_trailing_image():
     image = MultiModalData(np.ones((32, 4)), 32, 64)
     seq = scheduler.add_session(1).add_sequence(np.arange(64), multimodals={'image': [image]})
     seq.prepare_pd_prefill()
-    assert seq.pd_prefix_length == seq.input_end_pos == 64
+    assert len(seq.pd_prompt_tokens) == seq.input_end_pos == 64
     first = plan_long_context_chunk(seq, 40)
     assert first.chunk_end <= 31
     seq.set_step(first.chunk_end)

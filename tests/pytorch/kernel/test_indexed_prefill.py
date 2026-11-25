@@ -99,11 +99,10 @@ def test_indexed_conv_packed_short_and_internal(dtype, width, with_checkpoint, l
         torch.testing.assert_close(backing[:, layer], before[:, layer], rtol=0, atol=0)
 
 
-@pytest.mark.parametrize('kind,layout', [('gdn', 'dense'), ('gdn', 'packed'),
-                                        ('kda', 'dense'), ('kda', 'packed'),
-                                        ('kda', 'single_token'), ('kda', 'single_token_gva')])
+@pytest.mark.parametrize('kind', ['gdn', 'kda'])
+@pytest.mark.parametrize('packed', [False, True])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
-def test_indexed_full_chunk_pipeline(kind, layout, dtype):
+def test_indexed_full_chunk_pipeline(kind, packed, dtype):
     from fla.ops.gated_delta_rule import chunk_gated_delta_rule
     from fla.ops.kda import chunk_kda
 
@@ -113,17 +112,12 @@ def test_indexed_full_chunk_pipeline(kind, layout, dtype):
     )
 
     torch.manual_seed(912)
-    # Include the PD replay tail and both sides of the 64-token state boundary.
-    packed = layout != 'dense'
+    # Cover short tails and both sides of the 64-token state boundary.
     lengths = [1, 63, 64, 65, 72, 127, 128, 129, 137] if packed else [72, 72]
-    if layout.startswith('single_token'):
-        lengths = [1] * 4
     batch, length = (1, sum(lengths)) if packed else (2, 72)
-    heads, dim = (64 if layout == 'single_token' else 2), 128
-    value_heads = 4 if layout == 'single_token_gva' else heads
-    q, k = [torch.randn(batch, length, heads, dim, device='cuda', dtype=torch.bfloat16) for _ in range(2)]
-    v = torch.randn(batch, length, value_heads, dim, device='cuda', dtype=torch.bfloat16)
-    beta = torch.randn(batch, length, value_heads, device='cuda', dtype=torch.bfloat16)
+    heads, dim = 2, 128
+    q, k, v = [torch.randn(batch, length, heads, dim, device='cuda', dtype=torch.bfloat16) for _ in range(3)]
+    beta = torch.randn(batch, length, heads, device='cuda', dtype=torch.bfloat16)
     options = dict(state_v_first=True)
     if kind == 'gdn':
         q = torch.nn.functional.normalize(q.float(), dim=-1).to(q.dtype)
@@ -132,18 +126,17 @@ def test_indexed_full_chunk_pipeline(kind, layout, dtype):
         g = -torch.rand(batch, length, heads, device='cuda') / 10
         legacy, indexed = chunk_gated_delta_rule, indexed_chunk_gated_delta_rule
     else:
-        g = torch.randn_like(v)
+        g = torch.randn_like(q)
         options.update(use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True,
                        use_beta_sigmoid_in_kernel=True, safe_gate=True, lower_bound=-5.0,
-                       A_log=torch.randn(value_heads, 2, device='cuda')[:, 0],
-                       dt_bias=torch.randn(value_heads * dim, 2, device='cuda')[:, 0])
+                       A_log=torch.zeros(heads, device='cuda'), dt_bias=torch.randn(heads * dim, device='cuda'))
         legacy, indexed = chunk_kda, indexed_chunk_kda
     src = torch.tensor([2] * len(lengths), device='cuda', dtype=torch.int32)
     dst = torch.arange(4, 4 + len(lengths), device='cuda', dtype=torch.int32)
     cp_start = 4 + len(lengths)
     cp = torch.arange(cp_start, cp_start + len(lengths), device='cuda', dtype=torch.int32)
     cp_offsets = torch.tensor([min(64, x) for x in lengths], device='cuda', dtype=torch.int32)
-    backing = torch.randn(cp_start + len(lengths), 3, value_heads, dim, dim, device='cuda', dtype=dtype) / 16
+    backing = torch.randn(cp_start + len(lengths), 3, heads, dim, dim, device='cuda', dtype=dtype) / 16
     pool = backing[:, 1]
     before = backing.clone()
     extra = {}

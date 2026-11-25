@@ -174,7 +174,7 @@ class ModelAgentStrategy(ABC):
     def make_dummy_next_token(self, inputs: 'ModelInputs', logits: torch.Tensor, extra_inputs: ExtraInputs):
         """Make dummy next token for broadcast."""
         with torch.inference_mode():
-            next_token_ids = inputs.input_ids.new_zeros(inputs.seq_length.numel())
+            next_token_ids = inputs.input_ids.new_zeros(logits.size(0))
         return next_token_ids, extra_inputs
 
     @abstractmethod

@@ -76,7 +76,6 @@ class DPForwardInputsMaker:
                                                        device=self.device,
                                                        vocab_size=self.model_config.vocab_size,
                                                        meta=meta)
-        model_inputs.skip_sampling = self.cache_config.role == EngineRole.Prefill
         extra_inputs = self.inputs_strategy.make_dummy_extra_inputs(model_inputs, meta=meta)
         return_logits = self.model_agent.spec_agent.is_enabled()
         forward_inputs = dict(inputs=model_inputs, extra_inputs=extra_inputs, return_logits=return_logits)

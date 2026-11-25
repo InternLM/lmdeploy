@@ -1195,12 +1195,15 @@ def test_mtp_chunk_uses_known_successor_and_final_prefill_uses_sample():
     agent = SpecModelAgent.__new__(SpecModelAgent)
     agent.proposer = _DummyProposer()
     inputs = _model_inputs([10, 11, 12])
+    inputs.is_chunk = True
+    inputs.is_last_chunk = False
     inputs.prefill_next_token_ids = torch.tensor([13])
     extra = _extra([[1, 2], [3, 4], [5, 6]])
     extra.next_token_ids = torch.tensor([99])
     draft, _ = agent._prepare_inputs_from_main(inputs, extra)
     assert draft.input_ids.tolist() == [[11, 12, 13]]
     assert extra.next_token_ids.tolist() == [99]
+    inputs.is_last_chunk = True
     inputs.prefill_next_token_ids = None
     draft, _ = agent._prepare_inputs_from_main(inputs, extra)
     assert draft.input_ids.tolist() == [[11, 12, 99]]

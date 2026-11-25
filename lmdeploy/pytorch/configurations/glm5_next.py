@@ -41,7 +41,7 @@ def update_cache_config(cache_config):
     """Keep the 64-token MLA / 16-entry KPool owner under one allocator
     reference."""
     if cache_config.role != EngineRole.Hybrid and cache_config.migration_backend != MigrationBackend.Mooncake:
-        raise ValueError('GLM-5.3 PD requires Mooncake and a version 2 handoff.')
+        raise ValueError('GLM-5.3 PD requires Mooncake and a full-prompt handoff.')
     if (cache_config.block_size, cache_config.kernel_block_size) != (64, 64):
         get_logger('lmdeploy').warning(
             'GLM-5.3 uses block_size=64 and kernel_block_size=64 '

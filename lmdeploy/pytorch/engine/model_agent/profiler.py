@@ -1,12 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import asyncio
-import time
-from collections import deque
 
 import torch
 from torch.profiler import ProfilerActivity, profile
 
-from lmdeploy.profiling import trace_phase
 from lmdeploy.pytorch.distributed import DistContext
 from lmdeploy.utils import get_logger
 
@@ -32,53 +29,9 @@ class AgentProfiler:
         self.use_gzip = envs.torch_profile_use_gzip
         self._task = None
         self._started = False
-        self._phase_events = deque()
-        self._phase_step = None
-        self._phase_marks = []
-        self._phase_index = 0
         if self.dp > 1 and self.duration < 0 and self.profiler is not None:
             logger.warning('Do not support duration<=0 for dp > 1.')
             self.profiler = None
-
-    def begin_step(self, inputs, *, access_id, worker_started_at, prepare_ms, dp_wait_ms):
-        """Record stream time without adding a synchronization to inference."""
-        start = torch.cuda.Event(enable_timing=True)
-        start.record(self.stream)
-        self._phase_index += 1
-        self._phase_marks = []
-        self._phase_step = (start, time.perf_counter(), dict(
-            rank=self.rank, dp_rank=self.dp_rank, step=self._phase_index, started_at=time.time(),
-            access_id=access_id, worker_started_at=worker_started_at, prepare_ms=prepare_ms, dp_wait_ms=dp_wait_ms,
-            prefill=not inputs.is_decoding, dummy=inputs.is_dummy,
-            skip_sampling=inputs.skip_sampling,
-            batch=inputs.seq_length.numel(), tokens=inputs.input_ids.numel()))
-
-    def mark_step(self, name: str):
-        """Mark a stream boundary inside the current inference step."""
-        event = torch.cuda.Event(enable_timing=True)
-        event.record(self.stream)
-        self._phase_marks.append((name, event))
-
-    def end_step(self, graph_mode: str):
-        """Keep events until their stream work completes; never wait here."""
-        if self._phase_step is not None:
-            start, submitted, fields = self._phase_step
-            end = torch.cuda.Event(enable_timing=True)
-            end.record(self.stream)
-            fields['submit_ms'] = (time.perf_counter() - submitted) * 1000
-            fields['graph_mode'] = graph_mode
-            self._phase_events.append((start, end, fields, self._phase_marks))
-            self._phase_step = None
-        while self._phase_events and self._phase_events[0][1].query():
-            start, end, fields, marks = self._phase_events.popleft()
-            previous = start
-            for name, event in marks:
-                fields[name + '_ms'] = previous.elapsed_time(event)
-                previous = event
-            fields['finish_ms'] = previous.elapsed_time(end)
-            # Stream elapsed time includes kernels, collectives and launch gaps;
-            # it is not a sum of kernel execution times.
-            trace_phase('worker_step', stream_ms=start.elapsed_time(end), **fields)
 
     def _build_profiler(self):
         from lmdeploy.pytorch.devices import is_ascend

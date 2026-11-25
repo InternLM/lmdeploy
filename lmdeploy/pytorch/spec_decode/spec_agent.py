@@ -239,12 +239,12 @@ class SpecModelAgent(BaseSpecModelAgent):
     def _prepare_inputs_from_main(self, model_inputs: ModelInputs, extra_inputs: ExtraInputs):
         """Update inputs from main model inputs."""
         next_token_ids = extra_inputs.next_token_ids
-        if model_inputs.prefill_next_token_ids is not None and model_inputs.prefill_next_token_ids.numel():
+        if model_inputs.is_chunk and not model_inputs.is_last_chunk:
             # Complete the MTP row at the target boundary using the next known
             # prompt token. The chunk planner keeps multimodal spans with their
             # preceding row, so this lookahead has an ordinary token embedding.
-            known = model_inputs.prefill_next_token_ids
-            next_token_ids = torch.where(known >= 0, known, next_token_ids)
+            assert model_inputs.prefill_next_token_ids is not None
+            next_token_ids = model_inputs.prefill_next_token_ids
         last_token_indices = extra_inputs.last_token_indices
         replacement_indices = last_token_indices if model_inputs.is_decoding else None
         input_ids = self._shift_packed_prefill_inputs(
@@ -506,8 +506,8 @@ class SpecModelAgent(BaseSpecModelAgent):
 
         outputs = self._forward_impl(inputs)
         if inputs.dp_meta is None and inputs.is_chunk and not inputs.is_last_chunk:
-            # The next prompt chunk supplies the continuation. DP ranks still
-            # execute matching collectives when another rank finishes prefill.
+            # DP=1 non-last chunks do not consume draft tokens, so skip the
+            # remaining speculative forwards.
             output_draft_ids = inputs.input_ids.new_zeros(inputs.seq_length.size(0), self.num_spec_tokens)
         else:
             # Fork guided processors for draft model.

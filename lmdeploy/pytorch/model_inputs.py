@@ -237,14 +237,12 @@ class ModelInputs:
     dp_meta: DPMeta | None = None
     enable_microbatch: bool = False
     is_dummy: bool = False
-    # A PD prefix only materializes caches; its sampled token is never consumed.
-    skip_sampling: bool = False
     # Runtime SSM state slot ids for each sequence in the batch.
     state_offsets: torch.Tensor | None = None
     target_hidden_states: torch.Tensor | None = None
     target_position_ids: torch.Tensor | None = None
     target_inputs_embeds: torch.Tensor | None = None
-    # Known successor after a chunk or PD prefix; -1 keeps the sampled successor.
+    # Known prompt token immediately after a non-final prefill chunk, per request.
     prefill_next_token_ids: torch.Tensor | None = None
     # Hidden-state positions requiring lm-head projection.
     logits_indices: torch.LongTensor | None = None

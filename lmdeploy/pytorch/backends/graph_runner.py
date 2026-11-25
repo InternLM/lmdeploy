@@ -67,7 +67,6 @@ class GraphRunner:
         self.cache_config = cache_config
         self.backend_config = backend_config
         self._runner_meta = GraphRunnerMeta()
-        self.execution_mode = 'eager'
 
     def __call__(self, **kwargs):
         """Call graph runner forward."""

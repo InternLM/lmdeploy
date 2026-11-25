@@ -25,7 +25,6 @@ def make_transfer(migrate):
     prefill, decode = scheduler(), scheduler()
     source = prefill.add_session(1).add_sequence(np.arange(8), preserve_cache=True)
     source.pd_prompt_tokens = np.arange(8)
-    source.pd_prefix_length = 8
     prefill.block_manager.allocate(source)
     source.sampling_param.random_seed = 42
     source.update_token_ids(np.array([8]), mode=UpdateTokenMode.PREFILL)

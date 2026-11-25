@@ -7,7 +7,6 @@ coordinator that chooses prefill/chunk/decode work, attaches per-forward
 metadata, dispatches it to the executor, and updates local running state.
 """
 import logging
-import time
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -17,7 +16,6 @@ import numpy as np
 import torch
 from torch.profiler import record_function
 
-from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch import envs as _envs
 from lmdeploy.pytorch.compact_state import SSMPrefillMetadata, SSMStateMetadata
 from lmdeploy.pytorch.disagg.config import EngineRole
@@ -1646,8 +1644,6 @@ class InputsMakerAsync:
         return not scheduler.has_ready()
 
     async def _send_next_inputs_impl(self, enable_empty: bool = False):
-        if PROFILE_PHASES:
-            prepare_started = time.perf_counter()
         self.scheduler.resume_completed_migrations()
         prefill = self.do_prefill()
         forward_inputs = self._make_forward_inputs(prefill, enable_empty)
@@ -1670,13 +1666,6 @@ class InputsMakerAsync:
             if snapshot is not None:
                 batch_id, plan = snapshot
                 forward_inputs['cache_inputs'] = replace(carrier, decode_save_plan=plan, decode_save_id=batch_id)
-        if PROFILE_PHASES and inputs is not None and not inputs.is_dummy and not inputs.is_decoding:
-            carrier = forward_inputs['cache_inputs']
-            trace_phase('forward_dispatch', role=self.config.role.name, dp_rank=self.executor.dist_config.dp_rank,
-                        access_id=carrier.ssm_state_access_id if carrier is not None else None,
-                        sessions=[seq.session_id for seq in next_running],
-                        queries=inputs.seq_length.tolist(), histories=inputs.history_lengths.tolist(),
-                        prepare_ms=(time.perf_counter() - prepare_started) * 1000)
         try:
             await self.executor.forward_async(forward_inputs)
         except BaseException:

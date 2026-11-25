@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from lmdeploy.messages import EngineEvent, EventType
-from lmdeploy.profiling import PROFILE_PHASES, trace_phase
 from lmdeploy.pytorch.kv_connector.base import (
     KVConnectorOutput,
     KVConnectorResult,
@@ -187,7 +186,7 @@ class MooncakeStoreScheduler:
         token_len = request.get_prefix_cache_max_candidate_step()
         lookahead = self._cache_config.prefix_cache_token_lookahead
         if lookahead:
-            token_len = min(token_len, request.cache_identity_token_count - lookahead)
+            token_len = min(token_len, request.num_valid_ids - lookahead)
         token_len = request.clamp_prefix_cache_match_step(token_len)
         recompute_blocks = max(0, request.prefix_cache.recompute_overlap.recompute_blocks)
         recompute_tokens = recompute_blocks * block_size
@@ -331,7 +330,7 @@ class MooncakeStoreScheduler:
                     block_extras[block_index] = json.dumps(identity, separators=(',', ':')).encode('utf-8')
 
         tracker.block_hashes = build_prefix_block_hashes(
-            request.cache_identity_ids[:token_len + lookahead],
+            request.valid_ids[:token_len + lookahead],
             block_size,
             extra_identity=adapter_identity,
             previous_hashes=tracker.block_hashes,
@@ -438,7 +437,7 @@ class MooncakeStoreScheduler:
                 # The final prefill's sampled successor is not known yet on
                 # the host. Never key its draft row with an absent or proposed
                 # token; a later save can extend this accepted prefix.
-                full_blocks = min(full_blocks, max(0, request.cache_identity_token_count - lookahead) // block_size)
+                full_blocks = min(full_blocks, max(0, request.num_valid_ids - lookahead) // block_size)
             first_block = self._next_save_block.get(request_id, 0)
             is_decode_save = step_input.is_decode_checkpoint or (
                 self._is_hybrid and self._cache_config.prefix_cache_decode_save_first
@@ -461,7 +460,7 @@ class MooncakeStoreScheduler:
                 if (token_len % alignment != 0
                         or not request.is_prefix_cache_boundary_safe(token_len)):
                     continue
-                if lookahead and token_len + lookahead > request.cache_identity_token_count:
+                if lookahead and token_len + lookahead > request.num_valid_ids:
                     continue
                 if step_input.connector_state_ids[index] <= 0:
                     raise ValueError('hybrid saves require an allocated runtime state slot')
@@ -593,7 +592,7 @@ class MooncakeStoreScheduler:
                     or seq.history_embeddings or not seq.is_prefix_cache_boundary_safe(boundary)):
                 raise ValueError('Compact Store save requires an exact, safe, ordered-readable producer.')
             lookahead = self._cache_config.prefix_cache_token_lookahead
-            full_blocks = min(int(end), seq.cache_identity_token_count - lookahead) // block_size
+            full_blocks = min(int(end), seq.num_valid_ids - lookahead) // block_size
             if boundary // block_size > full_blocks:
                 continue
             request_id = int(seq.seq_id)
@@ -642,11 +641,6 @@ class MooncakeStoreScheduler:
             self._next_save_block[request.request_id] = request.start_block + len(request.block_ids)
             if seq is not None:
                 seq.prefix_cache.decode_store_save_pending = True
-            if PROFILE_PHASES:
-                trace_phase('store_save_scheduled', save_id=request.save_id, seq_id=request.request_id,
-                            decode=seq is not None, input_end=seq.input_end_pos if seq is not None else None,
-                            boundary=request.state.boundary_tokens, start_block=request.start_block,
-                            blocks=len(request.block_ids), state_hash=request.state.boundary_hash.hex())
         self._next_save_id += len(requests)
         return tuple(requests)
 
@@ -809,11 +803,6 @@ class MooncakeStoreScheduler:
             del self._inflight_saves[save_id]
             request = operation.decode_request
             current_turn = request is not None and request.input_end_pos == operation.input_end_pos
-            if PROFILE_PHASES:
-                trace_phase('store_save_finished', save_id=save_id, seq_id=save.request_id,
-                            decode=request is not None, input_end=operation.input_end_pos,
-                            boundary=save.state.boundary_tokens if save.state is not None else None,
-                            success=confirmed and not operation.failed)
             if current_turn:
                 request.prefix_cache.decode_store_save_pending = False
             # Ended requests still own I/O slots, but cannot recreate planning

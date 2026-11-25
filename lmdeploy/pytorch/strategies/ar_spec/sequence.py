@@ -42,10 +42,6 @@ class SchedulerSequenceARSpec(SchedulerSequenceDefault):
     def num_valid_ids(self):
         return self._num_valid_ids
 
-    def prepare_pd_prefill(self) -> None:
-        super().prepare_pd_prefill()
-        self._num_valid_ids = self.pd_prefix_length
-
     @property
     def routed_experts(self) -> np.ndarray:
         if (not self.return_routed_experts) or self.all_routed_experts is None:
