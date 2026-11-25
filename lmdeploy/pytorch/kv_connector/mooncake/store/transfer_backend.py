@@ -242,34 +242,36 @@ class AscendTransferBackend(TransferBackend):
 
         self._store_device = torch.npu.current_device()
         self.local_segment_name = local_hostname
-        ret = store.setup(
-            local_hostname=local_hostname,
-            metadata_server=config.metadata_server,
-            global_segment_size=setup_size,
-            local_buffer_size=0,
-            protocol=config.protocol,
-            rdma_devices=config.device_name,
-            master_server_addr=config.master_server_address,
-        )
-        if ret != 0:
-            return ret
-
+        ready = False
         try:
+            ret = store.setup(
+                local_hostname=local_hostname,
+                metadata_server=config.metadata_server,
+                global_segment_size=setup_size,
+                local_buffer_size=0,
+                protocol=config.protocol,
+                rdma_devices=config.device_name,
+                master_server_addr=config.master_server_address,
+            )
+            if ret != 0:
+                return ret
+
             for offset in range(setup_size, total_size, FABRIC_MAX_SEGMENT_SIZE):
                 size = min(total_size - offset, FABRIC_MAX_SEGMENT_SIZE)
                 result = allocate_segment(size, protocol=config.protocol)
                 if result['ret'] != 0 or result['allocated_size'] != size:
                     raise RuntimeError(f'Failed to mount the {size}-byte Ascend fabric segment at {offset}: '
                                        f'rc={result["ret"]}, allocated_size={result["allocated_size"]}')
-        except BaseException:
-            try:
-                ret = self.close_store(store)
-                if ret not in (None, 0):
-                    logger.warning('Ascend fabric Store cleanup after setup failure returned %s', ret)
-            except Exception:
-                logger.exception('Failed to close Ascend fabric Store after an incomplete setup')
-            raise
-        return 0
+            ready = True
+            return 0
+        finally:
+            if not ready:
+                try:
+                    close_ret = self.close_store(store)
+                    if close_ret not in (None, 0):
+                        logger.warning('Ascend fabric Store cleanup after setup failure returned %s', close_ret)
+                except Exception:
+                    logger.exception('Failed to close Ascend fabric Store after an incomplete setup')
 
     def register_buffer(self, store: Any,
                         registration: MooncakeStoreRegistration) -> int:

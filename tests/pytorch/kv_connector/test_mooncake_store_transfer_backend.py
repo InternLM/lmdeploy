@@ -2,6 +2,7 @@
 import sys
 from contextlib import contextmanager, nullcontext
 from types import ModuleType, SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import torch
@@ -110,6 +111,30 @@ def test_fabric_rejects_missing_split_api_before_setup(ascend_env):
         AscendTransferBackend().setup_store(store, config, '10.0.0.8')
 
     assert store.setup_calls == []
+
+
+def test_fabric_rolls_back_if_sdk_setup_returns_error(ascend_env):
+    store = FakeStore()
+    store.setup = Mock(return_value=-7)
+
+    assert AscendTransferBackend().setup_store(store, make_config(), '10.0.0.8') == -7
+
+    assert store.mount_calls == []
+    assert store.close_calls == 1
+
+
+@pytest.mark.parametrize('close_error', [None, RuntimeError('close failed')])
+def test_fabric_rolls_back_if_sdk_setup_is_interrupted(ascend_env, close_error):
+    store = FakeStore()
+    store.setup = Mock(side_effect=KeyboardInterrupt)
+    store.close = Mock(side_effect=close_error)
+    config = make_config(global_segment_size=16 * 1024**3)
+
+    with pytest.raises(KeyboardInterrupt):
+        AscendTransferBackend().setup_store(store, config, '10.0.0.8')
+
+    assert store.mount_calls == []
+    store.close.assert_called_once_with()
 
 
 @pytest.mark.parametrize('result', [{'ret': -1, 'allocated_size': 0}, {'ret': 0, 'allocated_size': 4 * 1024**3}])
