@@ -54,7 +54,7 @@ def new_ct_normalize_state() -> dict:
     sequence with ``finalize_ct_weights``; a state passed this way does NOT
     validate leftovers at the end of a single stream.
     """
-    return {'staged': {}, 'converted': set()}
+    return {'staged': {}, 'converted': {}}
 
 
 def finalize_ct_weights(state: dict):
@@ -64,6 +64,17 @@ def finalize_ct_weights(state: dict):
                          f'{sorted(state["staged"])}; check the checkpoint integrity.')
 
 
+def _validate_weight_shape_expected(prefix: str, shape_tensor: torch.Tensor, expected: tuple):
+    """Check a ``weight_shape`` record against the unpacked geometry."""
+    try:
+        dims = (int(shape_tensor[0]), int(shape_tensor[1]))
+    except (IndexError, TypeError, ValueError) as e:
+        raise ValueError(f'{prefix}.weight_shape must hold the unpacked [k, n] geometry') from e
+    out_features, k_total = expected
+    if dims not in ((k_total, out_features), (out_features, k_total)):
+        raise ValueError(f'{prefix}: weight_shape {dims} does not match packed weights {expected}')
+
+
 def _validate_weight_shape(prefix: str, shape_tensor: torch.Tensor, packed: torch.Tensor):
     """Reject a ``weight_shape`` record inconsistent with the packed tensor.
 
@@ -71,14 +82,8 @@ def _validate_weight_shape(prefix: str, shape_tensor: torch.Tensor, packed: torc
     orientation varies by exporter, so either dimension order may match the
     packed int32 layout ``[out_features, in_features // 8]``.
     """
-    try:
-        dims = (int(shape_tensor[0]), int(shape_tensor[1]))
-    except (IndexError, TypeError, ValueError) as e:
-        raise ValueError(f'{prefix}.weight_shape must hold the unpacked [k, n] geometry') from e
     out_features, words = packed.shape
-    k_total = words * 8
-    if dims not in ((k_total, out_features), (out_features, k_total)):
-        raise ValueError(f'{prefix}: weight_shape {dims} does not match packed weights {tuple(packed.shape)}')
+    _validate_weight_shape_expected(prefix, shape_tensor, (out_features, words * 8))
 
 
 def normalize_ct_weights(iterator, state: dict | None = None):
@@ -119,7 +124,9 @@ def normalize_ct_weights(iterator, state: dict | None = None):
             if name.endswith('weight_shape'):
                 prefix = name[:-len('weight_shape')]
                 if prefix in converted:
-                    # Metadata trailing a converted module carries nothing new.
+                    # Metadata trailing a converted module must still match
+                    # the geometry recorded at conversion time.
+                    _validate_weight_shape_expected(prefix, tensor, converted[prefix])
                     continue
                 if not owns_state:
                     tensor = tensor.clone()
@@ -150,7 +157,8 @@ def normalize_ct_weights(iterator, state: dict | None = None):
         shard.pop('weight_shape', None)
         out_shard, _ = ct_repack.convert_shard(shard)
         staged.pop(prefix)
-        converted.add(prefix)
+        out_features, words = shard['weight_packed'].shape
+        converted[prefix] = (out_features, words * 8)
         for awq_name, awq_tensor in out_shard.items():
             yield f'{prefix}{awq_name}', awq_tensor
     if owns_state and staged:

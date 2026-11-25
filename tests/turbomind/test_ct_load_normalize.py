@@ -175,7 +175,8 @@ def test_weight_shape_mismatch_raises():
 
 
 def test_weight_shape_after_conversion_is_dropped():
-    """Metadata trailing its converted module carries nothing new."""
+    """Consistent metadata trailing its converted module carries nothing
+    new."""
     n, k = 64, 256
     packed, scale, zero = ct_repack.quantize_ct(torch.randn(n, k))
     tensors = [
@@ -186,6 +187,21 @@ def test_weight_shape_after_conversion_is_dropped():
     ]
     out = dict(normalize_ct_weights(iter(tensors)))
     assert set(out) == {'x.qweight', 'x.scales', 'x.qzeros'}
+
+
+@pytest.mark.parametrize('shape_first', [True, False])
+def test_weight_shape_mismatch_rejected_in_any_order(shape_first):
+    """The same malformed metadata is rejected regardless of key order.
+
+    Sorted checkpoint keys deliver ``weight_shape`` after the packed pair
+    has already converted; the trailing record must still be validated.
+    """
+    packed, scale, zero = ct_repack.quantize_ct(torch.randn(8, 128))
+    bad_shape = ('x.weight_shape', torch.tensor([128, 16], dtype=torch.int64))
+    pair = [('x.weight_packed', packed), ('x.weight_scale', scale), ('x.weight_zero_point', zero)]
+    tensors = [bad_shape, *pair] if shape_first else [*pair, bad_shape]
+    with pytest.raises(ValueError, match='weight_shape'):
+        list(normalize_ct_weights(iter(tensors)))
 
 
 def test_shared_state_clones_staged_tensors():
