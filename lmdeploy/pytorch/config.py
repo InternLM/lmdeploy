@@ -1133,6 +1133,9 @@ class QuantizationConfig:
             if quant_config.get('desc_act'):
                 raise ValueError('Unsupported gptq `desc_act`: act-order reorders groups '
                                  'and the load-time repack assumes identity group order.')
+            if quant_config.get('checkpoint_format', 'gptq') not in ('gptq', 'gptq_v2'):
+                raise ValueError(f'Unsupported gptq `checkpoint_format`: '
+                                 f'{quant_config.get("checkpoint_format")!r}.')
             if quant_dtype is None:
                 quant_dtype = 'bfloat16'
         else:

@@ -124,10 +124,13 @@ class BaseSpecProposer:
         logger.debug('loading weights for draft model.')
         if not empty_init:
             quant_config = model_config.quant_config
+            checkpoint_format = (quant_config.get('checkpoint_format', 'gptq')
+                                 if quant_config is not None else 'gptq')
             load_model_weights(patched_model,
                                model_path,
                                device=self.device,
-                               normalize_quant=quant_config is not None and quant_config.load_normalize())
+                               normalize_quant=quant_config is not None and quant_config.load_normalize(),
+                               checkpoint_format=checkpoint_format)
         self.model = patched_model
         self.target_model = target_model
 

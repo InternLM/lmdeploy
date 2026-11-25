@@ -92,7 +92,10 @@ def _gptq_sym_qzeros(qweight: torch.Tensor, g: int) -> torch.Tensor:
     return torch.full((g, qweight.shape[-1] // 8), 0x77777777, dtype=torch.int32, device=qweight.device)
 
 
-def gptq_dequant(qweight: torch.Tensor, scales: torch.Tensor, qzeros: torch.Tensor) -> torch.Tensor:
+def gptq_dequant(qweight: torch.Tensor,
+                 scales: torch.Tensor,
+                 qzeros: torch.Tensor,
+                 checkpoint_format: str = 'gptq') -> torch.Tensor:
     """Reference dequant of a GPTQ module to float32 [N, K]."""
     validate_gptq_geometry(qweight, scales, qzeros)
     k8, n = qweight.shape
@@ -103,7 +106,8 @@ def gptq_dequant(qweight: torch.Tensor, scales: torch.Tensor, qzeros: torch.Tens
     # Nibble j of word [k8, n] is input channel 8 * k8 + j.
     codes = unpack_u4_lsb(qweight).permute(1, 0, 2).reshape(n, k).float()
     # Stored nibble is zero_point - 1; the kernel semantics add 1 back.
-    zero = unpack_u4_lsb(qzeros).reshape(g, n).float() + 1
+    # gptq_v2 stores the symmetric zero directly, no offset applies.
+    zero = unpack_u4_lsb(qzeros).reshape(g, n).float() + (0 if checkpoint_format == 'gptq_v2' else 1)
     zero = zero.t().repeat_interleave(group, dim=1)
     scale = scales.float().t().repeat_interleave(group, dim=1)
     return (codes - zero) * scale
@@ -158,7 +162,8 @@ def quantize_gptq(w: torch.Tensor, group: int = GROUP_SIZE, sym: bool = True):
 def gptq_to_awq(qweight: torch.Tensor,
                 scales: torch.Tensor,
                 qzeros: torch.Tensor | None = None,
-                verify: bool = False):
+                verify: bool = False,
+                checkpoint_format: str = 'gptq'):
     """Convert the GPTQ tensors of one linear to the AutoAWQ layout.
 
     Returns ``(qweight int32 [K, N // 8], scales float [G, N], qzeros int32
@@ -187,12 +192,16 @@ def gptq_to_awq(qweight: torch.Tensor,
     if qzeros is None:
         awq_qzeros = torch.full((g, n // 8), AWQ_SYMMETRIC_QZEROS_WORD, dtype=torch.int32, device=device)
     else:
-        # Bake the +1 offset into the AWQ word: the AWQ kernels subtract the
-        # unpacked value directly. A zero point of 16 overflows the nibble
-        # and has no AWQ representation, so reject it loudly.
-        zero = unpack_u4_lsb(qzeros).reshape(g, n).to(torch.int32) + 1
+        # gptq v1 stores zero_point - 1, v2 the symmetric zero directly;
+        # bake the format-correct value into the AWQ word. The AWQ kernels
+        # subtract the unpacked value directly. After the offset the zero
+        # point must still fit a nibble: v1 caps the checkpoint zero at 14
+        # (+1 = 15), v2 at 15 directly — a larger zero has no AWQ
+        # representation, so reject it loudly.
+        zero = unpack_u4_lsb(qzeros).reshape(g, n).to(torch.int32) + (0 if checkpoint_format == 'gptq_v2' else 1)
         if bool((zero > 15).any()):
-            raise ValueError('GPTQ zero point exceeds 15 after the +1 offset; '
+            raise ValueError('GPTQ zero point exceeds 15 under the '
+                             f'{checkpoint_format!r} offset; '
                              'the AWQ 4-bit layout cannot represent it')
         zero_view = zero.reshape(g, n // 8, 8)
         awq_qzeros = torch.zeros(g, n // 8, dtype=torch.int32, device=device)
@@ -202,7 +211,10 @@ def gptq_to_awq(qweight: torch.Tensor,
 
     if verify:
         from .ct_repack import awq_dequant
-        ref = gptq_dequant(qweight, scales, qzeros if qzeros is not None else _gptq_sym_qzeros(qweight, g))
+        ref = gptq_dequant(qweight,
+                           scales,
+                           qzeros if qzeros is not None else _gptq_sym_qzeros(qweight, g),
+                           checkpoint_format=checkpoint_format)
         got = awq_dequant(awq_qweight, scales.contiguous(), awq_qzeros)
         err = (ref - got).abs().max().item()
         if err > 1e-3:
@@ -210,7 +222,7 @@ def gptq_to_awq(qweight: torch.Tensor,
     return awq_qweight, scales.contiguous(), awq_qzeros
 
 
-def convert_shard(gptq_shard: dict, verify: bool = False):
+def convert_shard(gptq_shard: dict, verify: bool = False, checkpoint_format: str = 'gptq'):
     """Convert one GPTQ shard dict to the AutoAWQ shard dict.
 
     ``gptq_shard`` maps the bare suffixes ``qweight`` / ``scales`` /
@@ -220,12 +232,15 @@ def convert_shard(gptq_shard: dict, verify: bool = False):
     qweight = gptq_shard['qweight']
     scales = gptq_shard['scales']
     qzeros = gptq_shard.get('qzeros')
-    out = dict(zip(('qweight', 'scales', 'qzeros'), gptq_to_awq(qweight, scales, qzeros)))
+    out = dict(zip(('qweight', 'scales', 'qzeros'), gptq_to_awq(qweight, scales, qzeros,
+                                                               checkpoint_format=checkpoint_format)))
     err = 0.0
     if verify:
         from .ct_repack import awq_dequant
-        ref = gptq_dequant(qweight, scales, qzeros if qzeros is not None else _gptq_sym_qzeros(qweight,
-                                                                                             scales.shape[0]))
+        ref = gptq_dequant(qweight,
+                           scales,
+                           qzeros if qzeros is not None else _gptq_sym_qzeros(qweight, scales.shape[0]),
+                           checkpoint_format=checkpoint_format)
         got = awq_dequant(out['qweight'], out['scales'], out['qzeros'])
         err = (ref - got).abs().max().item()
     return out, err
@@ -239,6 +254,8 @@ def _rewrite_quant_config(config: dict) -> dict:
         quant_config = dict(quant_config)
         quant_config['quant_method'] = 'awq'
         quant_config.pop('desc_act', None)
+        # The output is plain AWQ; the source format marker is stale.
+        quant_config.pop('checkpoint_format', None)
         rewritten['quantization_config'] = quant_config
     return rewritten
 
@@ -260,6 +277,7 @@ def convert_checkpoint(src: str, dst: str, verify: bool = False):
     names = []
     staged: dict[str, dict[str, torch.Tensor]] = {}
     passthrough: dict[str, torch.Tensor] = {}
+    checkpoint_format = 'gptq'
     for fname in sorted(os.listdir(src)):
         spath = os.path.join(src, fname)
         if fname.endswith('.safetensors'):
@@ -277,6 +295,9 @@ def convert_checkpoint(src: str, dst: str, verify: bool = False):
         elif fname == 'config.json':
             with open(spath) as f:
                 config = json.load(f)
+            quant_config = config.get('quantization_config')
+            if isinstance(quant_config, dict):
+                checkpoint_format = quant_config.get('checkpoint_format', 'gptq')
             with open(os.path.join(dst, fname), 'w') as f:
                 json.dump(_rewrite_quant_config(config), f)
         elif fname.endswith('model.safetensors.index.json'):
@@ -288,7 +309,7 @@ def convert_checkpoint(src: str, dst: str, verify: bool = False):
 
     out: dict[str, torch.Tensor] = dict(passthrough)
     for prefix, shard in staged.items():
-        out_shard, shard_err = convert_shard(shard, verify=verify)
+        out_shard, shard_err = convert_shard(shard, verify=verify, checkpoint_format=checkpoint_format)
         err = max(err, shard_err)
         names.append(prefix)
         for suffix, tensor in out_shard.items():

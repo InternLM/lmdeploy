@@ -1590,7 +1590,11 @@ class BaseModelAgent:
         patched_model = build_patched_model(self.model_config, device=device, build_model_ctx=build_model_ctx)
         logger.debug(msg_with_rank(rank, 'loading weights.'))
         if not self.misc_config.empty_init:
-            load_model_weights(patched_model, model_path, device=device, normalize_quant=self._load_normalize())
+            load_model_weights(patched_model,
+                               model_path,
+                               device=device,
+                               normalize_quant=self._load_normalize(),
+                               checkpoint_format=self._gptq_checkpoint_format())
         if adapters is not None:
             logger.debug(msg_with_rank(rank, 'loading adapters.'))
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
@@ -1883,6 +1887,13 @@ class BaseModelAgent:
         quant_config = self.model_config.quant_config
         return quant_config is not None and quant_config.load_normalize()
 
+    def _gptq_checkpoint_format(self) -> str:
+        """Checkpoint format the GPTQ load-time repack must assume."""
+        quant_config = self.model_config.quant_config
+        if quant_config is None:
+            return 'gptq'
+        return quant_config.get('checkpoint_format', 'gptq')
+
     def _renamed_update_weights(self, weights, target):
         """Rename one update stream for ``target``, repacking quant keys."""
         renamed = ModelWeightLoader._rename_weights_iterator(weights, target)
@@ -1898,7 +1909,8 @@ class BaseModelAgent:
             if self._gptq_normalize_state is None:
                 self._gptq_normalize_state = new_gptq_normalize_state()
             renamed = normalize_gptq_weights(
-                normalize_ct_weights(renamed, self._ct_normalize_state), self._gptq_normalize_state)
+                normalize_ct_weights(renamed, self._ct_normalize_state), self._gptq_normalize_state,
+                self._gptq_checkpoint_format())
         return list(renamed)
 
     def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):

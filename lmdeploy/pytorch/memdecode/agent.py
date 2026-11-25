@@ -123,10 +123,13 @@ class MemDecodeAgent:
             )
             if not empty_init:
                 quant_config = self.model_config.quant_config
+                checkpoint_format = (quant_config.get('checkpoint_format', 'gptq')
+                                     if quant_config is not None else 'gptq')
                 load_model_weights(self.model,
                                    self.memdecode_config.memory_model_path,
                                    device=self.device,
-                                   normalize_quant=quant_config is not None and quant_config.load_normalize())
+                                   normalize_quant=quant_config is not None and quant_config.load_normalize(),
+                                   checkpoint_format=checkpoint_format)
 
     def _build_model_context(self, build_model_ctx=None):
         """Build context for memory model."""

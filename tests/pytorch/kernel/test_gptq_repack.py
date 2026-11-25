@@ -158,6 +158,94 @@ def test_zero_overflow_rejected():
 
 
 # ---------------------------------------------------------------------------
+# gptq_v2: the stored zero is the symmetric zero itself, no -1 offset.
+# ---------------------------------------------------------------------------
+
+
+def _pack_u4_words(vals):
+    """Pack the 8 nibbles of ``vals[..., j]`` LSB-first into int32 words."""
+    out = torch.zeros(vals.shape[:-1], dtype=torch.int64)
+    for j in range(8):
+        out |= vals[..., j].to(torch.int64) << (4 * j)
+    return out.to(torch.int32)
+
+
+def _gptq_v2_fixture_zero_codes():
+    """The reviewer's case: 4-bit symmetric K=128, N=8, every code and stored
+    zero is 8, unit scales.
+
+    v2 dequant is zero everywhere.
+    """
+    eights = torch.full((8, ), 8, dtype=torch.int32)
+    qweight = _pack_u4_words(eights.expand(128 // 8, 8, 8))
+    scales = torch.ones(1, 8)
+    qzeros = _pack_u4_words(eights.expand(1, 1, 8))
+    return qweight, scales, qzeros
+
+
+def test_gptq_v2_normalize_path_dequants_to_zero():
+    """V2 zeros pass the full load-time normalize path unshifted."""
+    from lmdeploy.pytorch.weight_loader.model_weight_loader import normalize_gptq_weights
+
+    qweight, scales, qzeros = _gptq_v2_fixture_zero_codes()
+    shard = [('layers.0.qweight', qweight), ('layers.0.scales', scales), ('layers.0.qzeros', qzeros)]
+    out = dict(normalize_gptq_weights(iter(shard), checkpoint_format='gptq_v2'))
+    deq = awq_dequant(out['layers.0.qweight'], out['layers.0.scales'], out['layers.0.qzeros'])
+    assert bool((deq == 0).all()), f'expected zeros, got {deq.abs().max().item()}'
+
+
+def test_gptq_v2_matches_first_principles_dequant():
+    """Converted v2 tensors equal the (code - stored_zero) * scale reference."""
+    n, k = 64, 256
+    w = _make_weight(n, k, seed=9)
+    qweight, scales, qzeros = gptq_repack.quantize_gptq(w, sym=False)
+    # Build v2 qzeros from the v1 fixture: v2 stores zero_point, v1 stores
+    # zero_point - 1, so every stored nibble shifts up by one.
+    codes = gptq_repack.unpack_u4_lsb(qzeros).to(torch.int32) + 1
+    v2_qzeros = torch.zeros_like(qzeros)
+    for j in range(8):
+        v2_qzeros |= codes[..., j] << (4 * j)
+    awq_qw, awq_sc, awq_qz = gptq_repack.gptq_to_awq(qweight, scales, v2_qzeros, checkpoint_format='gptq_v2')
+    got = awq_dequant(awq_qw, awq_sc, awq_qz)
+    # First-principles v2 reference, written against the stored tensors.
+    g, _ = scales.shape
+    group = k // g
+    ref_codes = gptq_repack.unpack_u4_lsb(qweight).permute(1, 0, 2).reshape(n, k).float()
+    ref_zero = gptq_repack.unpack_u4_lsb(v2_qzeros).reshape(g, n).float()
+    ref_zero = ref_zero.t().repeat_interleave(group, dim=1)
+    ref_scale = scales.float().t().repeat_interleave(group, dim=1)
+    ref = (ref_codes - ref_zero) * ref_scale
+    assert bool(((got - ref).abs() == 0).all())
+
+
+def test_gptq_v1_offset_unchanged():
+    """The v1 default still applies the +1 offset."""
+    w = _make_weight(64, 256, seed=10)
+    qweight, scales, qzeros = gptq_repack.quantize_gptq(w, sym=False)
+    ref = gptq_repack.gptq_dequant(qweight, scales, qzeros)
+    awq_qw, awq_sc, awq_qz = gptq_repack.gptq_to_awq(qweight, scales, qzeros)
+    err = (awq_dequant(awq_qw, awq_sc, awq_qz) - ref).abs().max()
+    assert err == 0.0, f'max abs err {err:.3e}'
+
+
+def test_gptq_v2_config_format_reaches_loader():
+    """checkpoint_format='gptq_v2' parses and survives to the loader hop."""
+    from lmdeploy.pytorch.config import QuantizationConfig
+
+    config = QuantizationConfig.from_config(
+        type('Cfg', (), {'quantization_config': {
+            'quant_method': 'gptq', 'bits': 4, 'group_size': 128, 'checkpoint_format': 'gptq_v2'
+        }})())
+    assert config.get('checkpoint_format') == 'gptq_v2'
+    assert config.load_normalize()
+    with pytest.raises(ValueError, match='checkpoint_format'):
+        QuantizationConfig.from_config(
+            type('Cfg', (), {'quantization_config': {
+                'quant_method': 'gptq', 'bits': 4, 'checkpoint_format': 'gptq_v3'
+            }})())
+
+
+# ---------------------------------------------------------------------------
 # normalize_gptq_weights: load-time classification and staging.
 # ---------------------------------------------------------------------------
 

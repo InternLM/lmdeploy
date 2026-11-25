@@ -182,7 +182,7 @@ def new_gptq_normalize_state() -> dict:
     return {'staged': {}, 'converted': set()}
 
 
-def _gptq_convert_one(prefix, shard):
+def _gptq_convert_one(prefix, shard, checkpoint_format='gptq'):
     """Decide the layout of one module and emit canonical AWQ tensors."""
     from lmdeploy.turbomind import gptq_repack
 
@@ -198,12 +198,12 @@ def _gptq_convert_one(prefix, shard):
             if s in shard:
                 yield f'{prefix}{s}', shard[s]
         return
-    out_shard, _ = gptq_repack.convert_shard(shard)
+    out_shard, _ = gptq_repack.convert_shard(shard, checkpoint_format=checkpoint_format)
     for s, t in out_shard.items():
         yield f'{prefix}{s}', t
 
 
-def _gptq_flush_staged(staged, converted, keep):
+def _gptq_flush_staged(staged, converted, keep, checkpoint_format='gptq'):
     """Flush every staged module except ``keep``; raise on strays."""
     for prefix, shard in list(staged.items()):
         if prefix == keep:
@@ -213,10 +213,10 @@ def _gptq_flush_staged(staged, converted, keep):
                              'check the checkpoint integrity.')
         staged.pop(prefix)
         converted.add(prefix)
-        yield from _gptq_convert_one(prefix, shard)
+        yield from _gptq_convert_one(prefix, shard, checkpoint_format)
 
 
-def finalize_gptq_weights(state: dict):
+def finalize_gptq_weights(state: dict, checkpoint_format: str = 'gptq'):
     """Flush staged modules once every stream of the state was consumed.
 
     Mirrors the end-of-stream behavior of a locally owned normalizer:
@@ -225,10 +225,11 @@ def finalize_gptq_weights(state: dict):
     loaded, so this is a generator; consume it fully — consuming is also
     what triggers the stray validation.
     """
-    yield from _gptq_flush_staged(state['staged'], state['converted'], keep=None)
+    yield from _gptq_flush_staged(state['staged'], state['converted'], keep=None,
+                                  checkpoint_format=checkpoint_format)
 
 
-def normalize_gptq_weights(iterator, state: dict | None = None):
+def normalize_gptq_weights(iterator, state: dict | None = None, checkpoint_format: str = 'gptq'):
     """Normalize GPTQ W4A16 tensors to the canonical AWQ layout.
 
     GPTQ and AWQ checkpoints share the ``qweight``/``scales``/``qzeros``
@@ -295,9 +296,9 @@ def normalize_gptq_weights(iterator, state: dict | None = None):
         if len(shard) == len(_GPTQ_SUFFIXES):
             staged.pop(prefix)
             converted.add(prefix)
-            yield from _gptq_convert_one(prefix, shard)
+            yield from _gptq_convert_one(prefix, shard, checkpoint_format)
     if owns_state:
-        yield from _gptq_flush_staged(staged, converted, keep=None)
+        yield from _gptq_flush_staged(staged, converted, keep=None, checkpoint_format=checkpoint_format)
 
 
 def _get_weight_type(model_path: str, use_safetensors: bool = None):
@@ -429,6 +430,7 @@ class ModelWeightLoader:
         model: torch.nn.Module,
         device: torch.device = None,
         normalize_quant: bool = False,
+        checkpoint_format: str = 'gptq',
     ):
         """Load model weights implementation."""
         assert hasattr(model, 'load_weights')
@@ -453,7 +455,7 @@ class ModelWeightLoader:
             weights_iterator = self._get_weights_iterator(path)
             if normalize_quant:
                 weights_iterator = normalize_gptq_weights(
-                    normalize_ct_weights(weights_iterator, ct_state), gptq_state)
+                    normalize_ct_weights(weights_iterator, ct_state), gptq_state, checkpoint_format)
             weights_iterator = self._rename_weights_iterator(weights_iterator, model)
             if len(dummy_prefix) > 0:
                 weights_iterator = self._skip_dummy_iterator(weights_iterator, dummy_prefix)
@@ -461,7 +463,7 @@ class ModelWeightLoader:
         if normalize_quant:
             # Strays raise here; flushed leftovers still feed the model
             # through the same rename/dummy pipeline as the shard streams.
-            leftover = list(finalize_gptq_weights(gptq_state))
+            leftover = list(finalize_gptq_weights(gptq_state, checkpoint_format))
             if leftover:
                 leftover = self._rename_weights_iterator(iter(leftover), model)
                 if len(dummy_prefix) > 0:
@@ -494,9 +496,13 @@ def load_model_weights(model: torch.nn.Module,
                        checkpoint_path: str,
                        prefix: str = None,
                        device: torch.device = None,
-                       normalize_quant: bool = False):
+                       normalize_quant: bool = False,
+                       checkpoint_format: str = 'gptq'):
     """Loading model weights."""
     loader = ModelWeightLoader(checkpoint_path, prefix=prefix)
-    loader.load_model_weights(model, device=device, normalize_quant=normalize_quant)
+    loader.load_model_weights(model,
+                              device=device,
+                              normalize_quant=normalize_quant,
+                              checkpoint_format=checkpoint_format)
     model.eval()
     process_weights_after_loading(model)
