@@ -251,6 +251,31 @@ payload，流式随后发送 `[DONE]`。
 此直接接口要求设置 `max_tokens=0` 并禁用推测解码。TurboMind、DistServe、代理
 `/generate` 以及 OpenAI、Anthropic 和 Responses 协议暂不支持输入 logprob。
 
+### 使用 `/generate` 以平铺数组返回生成 token 的 top-k logprob
+
+使用 `--backend pytorch --logprobs-mode raw_logprobs` 启动服务，在设置了
+`return_logprob` 和 `top_logprobs_num=k` 的 `/generate` 请求中加入
+`"top_logprobs_format": "flat"`。此时 `meta_info.output_top_logprobs` 为 null，
+`meta_info` 改为包含：
+
+- `output_top_logprobs_shape`：`[n, k]`，`n` 为 `output_token_logprobs` 的长度；
+- `output_top_logprobs_ids_b64`：小端 int32 token id 数组的 base64；
+- `output_top_logprobs_b64`：小端 float32 logprob 数组的 base64。
+
+第 `i` 行对应 `output_token_logprobs[i]`，按 logprob 降序列出 top k。采样 token
+没有单独的列（其 logprob 在 `output_token_logprobs` 中）；若它在 top k 之内，也会
+出现在该行中。`output_token_logprobs` 为 null 时这三个字段也为 null。流式时每个分片
+携带其自身 `output_token_logprobs` 对应的行，按顺序拼接即得到完整数组。解码示例：
+`np.frombuffer(base64.b64decode(ids_b64), '<i4').reshape(n, k)`。默认的
+`"top_logprobs_format": "nested"` 仍返回 `output_top_logprobs`。平铺格式需要
+PyTorch 引擎，且不用于输入 logprob（`logprob_start_len`）。
+
+`raw_logprobs` 在温度、惩罚项、bad/stop word 屏蔽、约束解码以及
+top-k/top-p/min-p 过滤之前计算，只有在温度为 1 且以上处理都不启用时才等于实际采样
+分布。数值的精度与 LM head 的 dtype 相同，bf16 模型返回的是经 bf16 舍入的 logprob；
+对于通过 `build_lm_head` 或 `ParallelLMHead` 构建 LM head 的模型，可用
+`--hf-overrides '{"fp32_lm_head": true}'` 以 fp32 计算 LM head。
+
 ### 使用 Java/Golang/Rust
 
 可以使用代码生成工具 [openapi-generator-cli](https://github.com/OpenAPITools/openapi-generator-cli) 将 `http://{server_ip}:{server_port}/openapi.json` 转成 java/rust/golang 客户端。

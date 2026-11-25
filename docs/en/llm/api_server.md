@@ -291,6 +291,45 @@ This direct route requires `max_tokens=0` and speculative decoding disabled.
 Input scoring is not available for TurboMind, DistServe, proxy `/generate`, or
 the OpenAI/Anthropic/Responses schemas.
 
+- return generated-token top-k logprobs as flat arrays from `/generate`
+
+Start the server with `--backend pytorch --logprobs-mode raw_logprobs`, then
+set `top_logprobs_format` to `flat`:
+
+```bash
+curl http://{server_ip}:{server_port}/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "input_ids": [1234, 5678, 9012],
+    "max_tokens": 16,
+    "return_logprob": true,
+    "top_logprobs_num": 128,
+    "top_logprobs_format": "flat"
+  }'
+```
+
+`meta_info.output_top_logprobs` stays null. Instead, `meta_info` carries
+`output_top_logprobs_shape` (`[n, k]`, `n` being the length of
+`output_token_logprobs`), `output_top_logprobs_ids_b64` (base64 of the
+little-endian int32 token ids) and `output_top_logprobs_b64` (base64 of the
+little-endian float32 logprobs). Row `i` belongs to `output_token_logprobs[i]`
+and lists the top k in descending order. The sampled token has no column of its
+own (its logprob is in `output_token_logprobs`); it also appears in its row when
+it ranks within the top k. The three fields are null when `output_token_logprobs` is. Each streamed
+chunk carries the rows of its own `output_token_logprobs`, so concatenating the
+chunks gives the full array. Decode with, for example,
+`np.frombuffer(base64.b64decode(ids_b64), '<i4').reshape(n, k)`.
+The default `"top_logprobs_format": "nested"` keeps `output_top_logprobs`.
+The flat format needs the PyTorch engine and does not apply to input logprobs
+(`logprob_start_len`).
+
+`raw_logprobs` are computed before temperature, penalties, bad/stop-word masks,
+guided decoding, and top-k/top-p/min-p filtering. They are the distribution the
+token was sampled from only at temperature 1 with none of these applied. The
+values have the LM head's dtype, so a bf16 model returns bf16-rounded logprobs;
+`--hf-overrides '{"fp32_lm_head": true}'` computes the head in fp32 for models
+whose LM head is built with `build_lm_head` or `ParallelLMHead`.
+
 ## Launch multiple api servers
 
 Following are two steps to launch multiple api servers through torchrun. Just create a python script with the following codes.

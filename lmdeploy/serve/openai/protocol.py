@@ -5,7 +5,7 @@ import time
 from typing import Any, Literal
 
 import shortuuid
-from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field, SerializeAsAny
 
 
 class ErrorResponse(BaseModel):
@@ -620,6 +620,8 @@ class GenerateReqInput(BaseModel):
     image_data: ImageDataFormat | None = None
     return_logprob: bool | None = None
     top_logprobs_num: int | None = None
+    # 'flat' returns output top logprobs as base64 arrays, see GenerateReqFlatMetaOutput.
+    top_logprobs_format: Literal['nested', 'flat'] = 'nested'
     logprob_start_len: int = Field(default=-1, ge=-1)
     max_tokens: int = 128
     stop: str | list[str] | None = None
@@ -661,11 +663,29 @@ class GenerateReqMetaOutput(BaseModel):
     routed_experts: list[list[list[int]]] | str | None = None  # (num_token, num_layer, topk_expert)
 
 
+class GenerateReqFlatMetaOutput(GenerateReqMetaOutput):
+    """Meta info of a ``top_logprobs_format='flat'`` request.
+
+    With ``top_logprobs_num=k > 0``, the output top-k comes as base64 of
+    little-endian ``[n, k]`` arrays instead of ``output_top_logprobs``. Row
+    ``i`` belongs to entry ``i`` of ``output_token_logprobs`` and lists the k
+    candidates in descending logprob order. The sampled token is not a column
+    of its own (it is in ``output_token_logprobs``); it is also in its row when
+    it ranks within the top k. The fields are null exactly when
+    ``output_token_logprobs`` is. Each streamed chunk carries the rows of its
+    own ``output_token_logprobs``, so concatenating chunks gives the full array.
+    """
+    output_top_logprobs_shape: list[int] | None = None  # [n, k]
+    output_top_logprobs_ids_b64: str | None = None  # int32 '<i4'
+    output_top_logprobs_b64: str | None = None  # float32 '<f4'
+
+
 # /generate output
 class GenerateReqOutput(BaseModel):
     text: str
     output_ids: list[int]
-    meta_info: GenerateReqMetaOutput
+    # SerializeAsAny keeps the fields of GenerateReqFlatMetaOutput.
+    meta_info: SerializeAsAny[GenerateReqMetaOutput]
 
 
 class AbortRequest(BaseModel):
