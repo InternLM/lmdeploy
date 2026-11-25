@@ -71,10 +71,14 @@ def get_local_ip_by_remote() -> str:
         raise ValueError('Can not get local ip')
 
 
-class MooncakeMigrationManagement:
-    """Manages migration for a single connection in Mooncake backend."""
+class MooncakeTransferResources:
+    """Own local PD transport resources for one worker.
 
-    def __init__(self, init_request: DistServeInitRequest, shared: 'MooncakeMigrationManagement | None' = None):
+    The backend creates and closes these resources; peer connections borrow them for the lifetime of the registered
+    cache allocations.
+    """
+
+    def __init__(self, rank: int):
         try:
             from mooncake.engine import TransferEngine
         except ImportError as e:
@@ -82,60 +86,34 @@ class MooncakeMigrationManagement:
                               'https://github.com/kvcache-ai/Mooncake/blob/main/doc/en/build.md '
                               'to run LMDeploy with MooncakeBackend.') from e
 
-        self.rank = init_request.rank
-        self.local_engine_config: MooncakeEngineConfig = init_request.local_engine_config
-        self.remote_engine_config: MooncakeEngineConfig = init_request.remote_engine_config
-        self.local_engine_id = init_request.local_engine_id
-        self.remote_engine_id = init_request.remote_engine_id
-
-        self.engine = shared.engine if shared is not None else TransferEngine()
+        self.engine = TransferEngine()
         self.hostname = get_local_ip_by_remote()
-
-        # Get all RDMA information once during initialization
-        self.ibv_devices = get_rdma_nics()
-
-        self.local_kv_table: dict[str, dict] = shared.local_kv_table if shared is not None else {}
-        self.remote_kv_table: dict[str, dict] = {}
-        self.remote_url: str = ''  # Store remote URL for this connection
-
-        # Initialize the p2p connection
-        if shared is None:
-            self._initialize_p2p(init_request)
-
-        self.port: int = self.engine.get_rpc_port()
-        self.executor = shared.executor if shared is not None else ThreadPoolExecutor(max_workers=2,
-                                                                                     thread_name_prefix='pd-transfer')
-        self.slots = shared.slots if shared is not None else asyncio.Semaphore(2)
-        self.pending_jobs = shared.pending_jobs if shared is not None else set()
-        self.pending_tickets = shared.pending_tickets if shared is not None else set()
-        self.has_drain_ticket = hasattr(self.engine, 'scatter_transfer_sync_read_with_ticket')
-
-    def _initialize_p2p(self, init_request: DistServeInitRequest):
-        """Initialize p2p connection for this specific link."""
+        ibv_devices = get_rdma_nics()
         # TODO: Support more types of metadata_server
         # e.g. "etcd://192.168.0.137:2379"
         metadata_server = 'P2PHANDSHAKE'
-
-        # Default protocol (Currently only RDMA is supported)
         protocol = 'rdma'
-
-        # Get the device name from request
-        if not self.ibv_devices:
+        if not ibv_devices:
             raise RuntimeError('No RDMA devices available')
-
-        device_name = self.ibv_devices[self.rank % len(self.ibv_devices)]
-
-        # Initialize the engine
+        device_name = ibv_devices[rank % len(ibv_devices)]
         result = self.engine.initialize(self.hostname, metadata_server, protocol, device_name)
         if result != 0:
             raise RuntimeError(f'Failed to initialize Mooncake engine: {result}')
 
-        logger.info(f'Mooncake engine initialized for remote_engine_id {self.remote_engine_id} '
-                    f'with hostname {self.hostname}, RPC port: {self.engine.get_rpc_port()}')
+        self.port: int = self.engine.get_rpc_port()
+        self.local_kv_table: dict[str, dict] = {}
+        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='pd-transfer')
+        self.slots = asyncio.Semaphore(2)
+        self.pending_jobs = set()
+        self.pending_tickets = set()
+        self.has_drain_ticket = hasattr(self.engine, 'scatter_transfer_sync_read_with_ticket')
+        self.has_unknown_completion = False
+
+        logger.info(f'Mooncake engine initialized for rank {rank} '
+                    f'with hostname {self.hostname}, RPC port: {self.port}')
 
     def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
-        """Register memory region for this connection."""
-        # Transmit buffer address to int
+        """Register a local allocation once for all peer connections."""
         buffer_addr = register_mr_request.addr
         buffer_length = register_mr_request.length
 
@@ -151,11 +129,11 @@ class MooncakeMigrationManagement:
         self.local_kv_table[mr_key] = info
 
         logger.info(f'Registered memory region with mr_key {mr_key}, '
-                    f'addr: {buffer_addr}, length: {buffer_length} for remote_engine_id {self.remote_engine_id}')
+                    f'addr: {buffer_addr}, length: {buffer_length}')
 
     @property
     def endpoint_info(self) -> dict:
-        """Get endpoint information for this connection."""
+        """Describe the local endpoint and its registered allocations."""
         mr_info = {}
         for mr_key, buffer_info in self.local_kv_table.items():
             mr_info[mr_key] = {
@@ -166,11 +144,34 @@ class MooncakeMigrationManagement:
 
         endpoint_info = {'mr_info': mr_info, 'session_id': f'{self.hostname}:{self.port}'}
 
-        logger.info(f'Generated endpoint info for remote engine {self.remote_engine_id}: '
+        logger.info('Generated local Mooncake endpoint info: '
                     f"session_id={endpoint_info['session_id']}, "
                     f'mr_count={len(mr_info)}')
 
         return endpoint_info
+
+    def close(self):
+        """Unregister allocations only after all peer transfers have
+        drained."""
+        if self.has_unknown_completion or self.pending_jobs or self.pending_tickets:
+            raise RuntimeError('Cannot unregister PD allocations while native completion is unknown.')
+        self.executor.shutdown(wait=True)
+        for info in self.local_kv_table.values():
+            result = self.engine.unregister_memory(info['addr'])
+            if result != 0:
+                raise RuntimeError(f'Failed to unregister PD memory: {result}')
+        self.local_kv_table.clear()
+
+
+class MooncakeMigrationManagement:
+    """Manage one peer connection using the worker's local resources."""
+
+    def __init__(self, init_request: DistServeInitRequest, resources: MooncakeTransferResources):
+        self.resources = resources
+        self.remote_engine_config: MooncakeEngineConfig = init_request.remote_engine_config
+        self.remote_engine_id = init_request.remote_engine_id
+        self.remote_kv_table: dict[str, dict] = {}
+        self.remote_url: str = ''
 
     def connect(self, connect_request: DistServeKVTransferEndpointInfo):
         """Connect to the remote engine."""
@@ -189,26 +190,27 @@ class MooncakeMigrationManagement:
     async def p2p_migrate(self, assignment: MigrationAssignment, async_op: bool = False):
         """Keep the bounded native job alive even if its Python caller
         cancels."""
+        resources = self.resources
         try:
             timeout = max(0, assignment.deadline - time()) if assignment.deadline else None
-            await asyncio.wait_for(self.slots.acquire(), timeout=timeout)
+            await asyncio.wait_for(resources.slots.acquire(), timeout=timeout)
         except asyncio.TimeoutError:
             return PDTransferResult(transfer_id=assignment.transfer_id, status='failed_drained',
                                     error='PD submission deadline expired waiting for a native slot.')
         loop = asyncio.get_running_loop()
         try:
-            future = loop.run_in_executor(self.executor, self._migrate, assignment)
-            self.pending_jobs.add(future)
+            future = loop.run_in_executor(resources.executor, self._migrate, assignment)
+            resources.pending_jobs.add(future)
             try:
                 result, ticket = await self._wait_native(future)
             finally:
-                self.pending_jobs.remove(future)
+                resources.pending_jobs.remove(future)
         finally:
-            self.slots.release()
+            resources.slots.release()
         if ticket is None:
             return result
         if result.status != 'completion_unknown':
-            self.pending_tickets.remove(ticket)
+            resources.pending_tickets.remove(ticket)
             return result
 
         # An unknown ticket owns native work; dropping it can block with the GIL
@@ -220,13 +222,13 @@ class MooncakeMigrationManagement:
                     await asyncio.sleep(0.1)
                 except asyncio.CancelledError:
                     pass
-                await self._wait_native(loop.run_in_executor(self.executor, ticket.drain, 0))
+                await self._wait_native(loop.run_in_executor(resources.executor, ticket.drain, 0))
         except Exception as error:
             result.error = f'Mooncake scatter drain failed: {error}'
             return result
         result.status = ticket.status.name.lower()
         result.error = '' if result.status == 'completed' else 'Mooncake scatter read failed after draining.'
-        self.pending_tickets.remove(ticket)
+        resources.pending_tickets.remove(ticket)
         return result
 
     @staticmethod
@@ -242,6 +244,7 @@ class MooncakeMigrationManagement:
                     raise
 
     def _migrate(self, assignment: MigrationAssignment) -> tuple[PDTransferResult, 'ScatterTransferTicket | None']:
+        resources = self.resources
         if assignment.deadline and time() >= assignment.deadline:
             return PDTransferResult(transfer_id=assignment.transfer_id, status='failed_drained',
                                     error='PD submission deadline expired before native I/O.'), None
@@ -251,12 +254,12 @@ class MooncakeMigrationManagement:
         fragments = {}
         for task in assignment.batch:
             key = str(task.mr_key)
-            local, remote = self.local_kv_table[key], self.remote_kv_table[key]
+            local, remote = resources.local_kv_table[key], self.remote_kv_table[key]
             if (task.source_offset < 0 or task.target_offset < 0 or task.length <= 0
                     or task.source_offset + task.length > local['length']
                     or task.target_offset + task.length > remote['length']):
                 raise ValueError('PD transfer exceeds its registered allocation.')
-            if not self.has_drain_ticket:
+            if not resources.has_drain_ticket:
                 local_addresses.append(local['addr'] + task.source_offset)
                 remote_addresses.append(remote['addr'] + task.target_offset)
                 lengths.append(task.length)
@@ -271,23 +274,23 @@ class MooncakeMigrationManagement:
         # This is the native exception boundary. Once submission may have
         # happened, an exception does not prove that DMA has stopped.
         try:
-            if self.has_drain_ticket:
+            if resources.has_drain_ticket:
                 keys = list(fragments)
-                ticket = self.engine.scatter_transfer_sync_read_with_ticket(
-                    self.remote_url, [self.local_kv_table[k]['addr'] for k in keys],
-                    [self.local_kv_table[k]['length'] for k in keys],
+                ticket = resources.engine.scatter_transfer_sync_read_with_ticket(
+                    self.remote_url, [resources.local_kv_table[k]['addr'] for k in keys],
+                    [resources.local_kv_table[k]['length'] for k in keys],
                     [self.remote_kv_table[k]['addr'] for k in keys],
                     [self.remote_kv_table[k]['length'] for k in keys],
                     [[t.source_offset for t in fragments[k]] for k in keys],
                     [[t.target_offset for t in fragments[k]] for k in keys],
                     [[t.length for t in fragments[k]] for k in keys])
-                self.pending_tickets.add(ticket)
+                resources.pending_tickets.add(ticket)
                 result.status = ticket.status.name.lower()
                 if result.status != 'completed':
                     result.error = f'Mooncake scatter read to {self.remote_url}: {result.status}.'
             else:
-                code = self.engine.batch_transfer_sync_read(self.remote_url, local_addresses, remote_addresses,
-                                                           lengths)
+                code = resources.engine.batch_transfer_sync_read(self.remote_url, local_addresses, remote_addresses,
+                                                                lengths)
                 if code != 0:
                     result.status = 'completion_unknown'
                     result.error = f'Mooncake batch read returned {code}; drain is unknown.'
@@ -299,24 +302,22 @@ class MooncakeMigrationManagement:
 
 @MIGRATION_BACKENDS.register_module(MigrationBackend.Mooncake.name)
 class MooncakeBackend(MigrationBackendImpl):
-    """Mooncake backend that manages multiple migration connections."""
+    """Own worker-local resources and the peer connections that borrow them."""
 
     def __init__(self):
         self.links: dict[str, MooncakeMigrationManagement] = {}
-        self.shared: MooncakeMigrationManagement | None = None
-        self.has_unknown_completion = False
+        self.resources: MooncakeTransferResources | None = None
 
     def p2p_initialize(self, init_request: DistServeInitRequest):
-        link = MooncakeMigrationManagement(init_request, self.shared)
-        self.links[init_request.remote_engine_id] = link
-        if self.shared is None:
-            self.shared = link
+        if self.resources is None:
+            self.resources = MooncakeTransferResources(rank=init_request.rank)
+        self.links[init_request.remote_engine_id] = MooncakeMigrationManagement(init_request, resources=self.resources)
 
     def register_memory_region(self, register_mr_request: DistServeRegisterMRMessage):
-        self.links[register_mr_request.remote_engine_id].register_memory_region(register_mr_request)
+        self.resources.register_memory_region(register_mr_request)
 
-    def endpoint_info(self, remote_engine_id: int, protocol: MigrationProtocol):
-        return self.links[remote_engine_id].endpoint_info
+    def endpoint_info(self, remote_engine_id: str, protocol: MigrationProtocol):
+        return self.resources.endpoint_info
 
     def p2p_connect(self, remote_engine_id: str, connect_request: DistServeKVTransferEndpointInfo):
         self.links[remote_engine_id].connect(connect_request)
@@ -326,23 +327,15 @@ class MooncakeBackend(MigrationBackendImpl):
         if result.status == 'completion_unknown':
             # Block reuse follows the scheduler's bounded quarantine policy.
             # Whole-pool unregistration still requires physical completion.
-            self.has_unknown_completion = True
+            self.resources.has_unknown_completion = True
         return result
 
     def close(self):
-        if self.has_unknown_completion or (self.shared is not None
-                                           and (self.shared.pending_jobs or self.shared.pending_tickets)):
-            raise RuntimeError('Cannot unregister PD allocations while native completion is unknown.')
-        if self.shared is None:
+        if self.resources is None:
             return
-        self.shared.executor.shutdown(wait=True)
-        for info in self.shared.local_kv_table.values():
-            result = self.shared.engine.unregister_memory(info['addr'])
-            if result != 0:
-                raise RuntimeError(f'Failed to unregister PD memory: {result}')
-        self.shared.local_kv_table.clear()
+        self.resources.close()
         self.links.clear()
-        self.shared = None
+        self.resources = None
 
     def store(self, assignment: MigrationAssignment, async_op: bool = False):
         raise NotImplementedError
