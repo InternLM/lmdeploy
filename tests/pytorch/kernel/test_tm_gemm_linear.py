@@ -533,3 +533,79 @@ def test_nn_module_sleep_release_keeps_resident_weights():
     assert torch.equal(module.qweight.data.cpu(), qw.cpu())
     assert torch.equal(module.scales.data.cpu(), sc.cpu())
     assert torch.equal(module.qzeros.data.cpu(), qz.cpu())
+
+
+# ---------------------------------------------------------------------------
+# MLA absorption: DeepseekV2Attention keeps kv_b_proj device-resident.
+# ---------------------------------------------------------------------------
+
+
+def _mla_config():
+    """Tiny AWQ W4A16 DeepSeek-V2 config whose kv_b_proj hits the TM probe."""
+    from lmdeploy.pytorch.config import QuantizationConfig
+
+    class _Config:
+        pass
+
+    cfg = _Config()
+    cfg.q_lora_rank = None
+    cfg.hidden_size = 512
+    cfg.num_attention_heads = 2
+    cfg.qk_rope_head_dim = 64
+    cfg.qk_nope_head_dim = 64
+    cfg.kv_lora_rank = 512
+    cfg.v_head_dim = 64
+    cfg.attention_bias = False
+    cfg.rope_scaling = None
+    cfg.quantization_config = QuantizationConfig(quant_method='awq', bits=4, group_size=128)
+    return cfg
+
+
+@cuda_required
+def test_deepseek_mla_kv_b_proj_absorption_is_device_coherent():
+    """MLA absorption on a real ``DeepseekV2Attention`` runs device-coherent.
+
+    ``get_unquantized_weight`` (the MLA absorption path) feeds an identity
+    matrix built on the first parameter's device into the packed TurboMind
+    channel. If the packed storages took the default CPU-direct route, the
+    identity lands on the host while the packed weight lives on cuda:0 and
+    absorption breaks. kv_b_proj must keep device-resident torch copies so
+    the packed channel and the identity share the execution device.
+    """
+    import lmdeploy.pytorch.models.deepseek_v2 as ds_mod
+    from lmdeploy.pytorch.backends.cuda.awq_modules import AwqLinearW4A16Impl
+    from lmdeploy.pytorch.models.patch import BuildModelContext, build_model_context
+
+    cfg = _mla_config()
+    ctx = BuildModelContext(quant_config=cfg.quantization_config)
+    with build_model_context(ctx):
+        attn = ds_mod.DeepseekV2Attention(cfg, dtype=torch.float16, device=torch.device('cuda'))
+
+    kv_b = attn.kv_b_proj
+    assert type(kv_b).__name__ == 'TmGemmLinear'
+    qw, sc, qz, _ = _random_awq(512, 256, 128, seed=12)
+    assert kv_b.qweight.shape == qw.shape  # local out = 2 * (64 + 64) = 256
+    kv_b.qweight.data.copy_(qw)
+    kv_b.scales.data.copy_(sc)
+    kv_b.qzeros.data.copy_(qz)
+
+    kv_b.update_weights()
+    torch.cuda.synchronize()
+
+    # Absorption: identity -> packed channel -> unquantized W. The trailing
+    # unit dim is the [N,K] shape issue fixed on stack/c4-moe-w4a16 (#5161).
+    weight = kv_b.get_unquantized_weight(torch.float16).squeeze(-1)
+    torch.cuda.synchronize()
+
+    assert kv_b.qweight.device.type == 'cuda', (
+        'kv_b_proj packed storages must stay on the execution device so the '
+        'absorption identity and the packed weight share a device'
+    )
+    assert weight.device.type == 'cuda'
+
+    eye = torch.eye(512, dtype=torch.float16, device='cuda')
+    reference = AwqLinearW4A16Impl(512, 256, 4, 128).forward(eye, qw, sc, qz).squeeze(0).T
+    kl = _softmax_kl(weight.flatten(), reference.flatten())
+    max_abs = (weight.float() - reference.float()).abs().max().item()
+    assert kl <= 1e-2, f'absorbed weight KL vs AWQ Triton reference {kl:.3e}'
+    assert max_abs <= 1.0, f'absorbed weight max abs diff {max_abs:.3e}'
