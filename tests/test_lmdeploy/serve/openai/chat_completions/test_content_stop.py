@@ -18,8 +18,9 @@ from transformers import PreTrainedTokenizerFast
 from lmdeploy.messages import EngineOutput, ResponseType
 from lmdeploy.serve.core.async_engine import AsyncEngine, PreprocessedRequest
 from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
+from lmdeploy.serve.core.content_stop import ChatContentStop
 from lmdeploy.serve.openai.chat_completions import register
-from lmdeploy.serve.openai.protocol import ChatCompletionRequest
+from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage
 from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 from lmdeploy.tokenizer import DetokenizeState, HuggingFaceTokenizer, Tokenizer
 
@@ -335,3 +336,38 @@ def test_unfinished_utf8_surrogate_does_not_emit_early_replacements():
         text, state = tokenizer.detokenize_incrementally(ids[:end], state)
         deltas.append(text)
     assert deltas == ['', '', '\ufffd\ufffdX']
+
+
+def _visible_text(words, deltas, include_stop=False):
+    stop = ChatContentStop(words, include_stop)
+    out = []
+    for index, text in enumerate(deltas):
+        messages = stop.filter_deltas([(DeltaMessage(content=text), False)], final=index == len(deltas) - 1)
+        out += [message.content for message, _ in messages]
+    return ''.join(out), stop.matched
+
+
+@pytest.mark.parametrize('deltas', [['Xabc!'], ['Xa', 'bc!'], ['X', 'abc!']])
+@pytest.mark.parametrize('words', [['abc', 'b'], ['abc', 'bc']])
+def test_overlapping_stops_keep_the_earliest_longest_match(deltas, words):
+    # "bc"/"b" end inside "abc"; cutting at them would split the longer stop.
+    assert _visible_text(words, deltas) == ('X', 'abc')
+
+
+def test_same_start_stop_prefers_the_longer_word():
+    assert _visible_text(['AB', 'ABCD'], ['XABCD']) == ('X', 'ABCD')
+
+
+def test_held_suffix_is_judged_again_when_generation_ends():
+    stop = ChatContentStop(['abc', 'b'], False)
+    out = stop.filter_deltas([(DeltaMessage(content='Xab'), False)], final=False)
+    # "ab" can still grow into "abc" from an earlier position than "b".
+    assert ''.join(message.content or '' for message, _ in out) == 'X'
+    assert stop.matched is None
+    out = stop.filter_deltas([], final=True)
+    assert ''.join(message.content or '' for message, _ in out) == 'a'
+    assert stop.matched == 'b'
+
+
+def test_empty_stop_words_are_ignored():
+    assert ChatContentStop(['', 'END'], False).words == ['END']

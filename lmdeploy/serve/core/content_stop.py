@@ -54,6 +54,7 @@ class ChatContentStop:
     def __init__(self, words: list[str], include_stop: bool,
                  preview_text: Callable[[list[int]], str | None] | None = None,
                  resolve_separator: Callable[[AsyncIterator[int | None]], Awaitable[None]] | None = None):
+        words = [word for word in words if word]
         self.separator_stops = [(word.rstrip('\n'), len(word) - len(word.rstrip('\n')))
                                 for word in words if word.endswith('\n')]
         self.resolve_separator = resolve_separator if self.separator_stops else None
@@ -81,24 +82,39 @@ class ChatContentStop:
         candidate = self.pending + text
         return not any(word in candidate for word in self.words)
 
-    def _consume(self, content: str, can_stop: bool) -> str:
+    def _consume(self, content: str, can_stop: bool, final: bool = False) -> str:
         pending_len = len(self.pending)
         text = self.pending + content
         self.pending = ''
-        best_end = len(text) + 1
+        hold = 0 if final else self._holdback_length(text)
+        best = None
         if can_stop:
             for word in self.words:
-                # A match must end in this delta. A shorter word in pending may
-                # have completed before min_new_tokens while a longer one was open.
-                pos = text.find(word, max(0, pending_len - len(word) + 1))
-                if pos >= 0 and pos + len(word) < best_end:
-                    self.matched = word
-                    best_end = pos + len(word)
-        if self.matched is not None:
-            end = best_end if self.include_stop else best_end - len(self.matched)
+                # A match must end in this delta, unless the stream is over and
+                # the released suffix gets its last chance to match.
+                pos = text.find(word, 0 if final else max(0, pending_len - len(word) + 1))
+                # Defer a match while an earlier position can still grow into a
+                # longer stop; cutting here would split that stop in the output.
+                if pos < 0 or (hold and pos >= len(text) - hold):
+                    continue
+                # Earliest start wins so the cut matches the whole-text search;
+                # the longest word wins when two stops start at the same place.
+                if best is None or (pos, -len(word)) < best[:2]:
+                    best = (pos, -len(word), word)
+        if best is not None:
+            self.matched = best[2]
+            end = best[0] + (len(best[2]) if self.include_stop else 0)
             return text[:end]
+        if final:
+            return text
+        if hold:
+            self.pending = text[-hold:]
+            return text[:-hold]
+        return text
 
-        # Only hold back a suffix that can still complete a stop string.
+    def _holdback_length(self, text: str) -> int:
+        """Length of the longest suffix that can still complete a stop
+        string."""
         keep = 0
         for word in self.words:
             pos = text.find(word[0], max(0, len(text) - len(word) + 1))
@@ -107,10 +123,7 @@ class ChatContentStop:
                     keep = len(text) - pos
                     break
                 pos = text.find(word[0], pos + 1)
-        if keep:
-            self.pending = text[-keep:]
-            return text[:-keep]
-        return text
+        return keep
 
     def filter_deltas(self,
                       deltas: list[tuple[DeltaMessage, bool]],
@@ -134,6 +147,7 @@ class ChatContentStop:
             else:
                 result.append((message, tool_emitted))
         if final and self.pending:
-            result.append((DeltaMessage(content=self.pending), False))
-            self.pending = ''
+            content = self._consume('', can_stop, final=True)
+            if content:
+                result.append((DeltaMessage(content=content), False))
         return result

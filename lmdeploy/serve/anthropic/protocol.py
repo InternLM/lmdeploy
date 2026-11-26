@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import shortuuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -111,7 +111,7 @@ class MessagesRequest(BaseModel):
     )
     max_tokens: int = Field(gt=0)
     system: str | list[ContentBlockParam] | None = None
-    stop_sequences: list[str] | None = None
+    stop_sequences: list[Annotated[str, Field(min_length=1)]] | None = None
     stream: bool = False
     temperature: float | None = None
     top_p: float | None = None

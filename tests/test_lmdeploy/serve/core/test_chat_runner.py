@@ -8,7 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from lmdeploy.serve.core.chat_runner import ChatRunner, ChatRunnerOptions
+from lmdeploy.serve.core.content_stop import ChatContentStop
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
+from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage, DeltaToolCall, ToolCall
 
 
@@ -528,3 +530,95 @@ def test_runner_snapshots_preprocessed_prompt_ids(enabled):
         await runner.close()
 
     asyncio.run(run())
+
+
+class _BaseParser(_Parser):
+    """A parser that does not customize the base streaming/collect hooks."""
+    stream_chunk = BaseResponseParser.stream_chunk
+    parse_complete = BaseResponseParser.parse_complete
+
+
+@pytest.mark.parametrize('stop, words', [
+    ('END', ['END']),
+    (['END', 'STOP_HERE', ''], ['END', 'STOP_HERE']),
+])
+def test_visible_stop_clears_engine_stop_words(stop, words):
+    context = _FakeServerContext(_BaseParser)
+    runner = asyncio.run(ChatRunner.prepare(context, _request(stop=stop),
+                                            ChatRunnerOptions(stop_on_visible_text=True)))
+
+    assert context.async_engine.preprocess_kwargs['gen_config'].stop_words is None
+    assert runner.content_stop.words == words
+    asyncio.run(runner.close())
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_visible_stop_falls_back_to_engine_words_for_custom_parsers(stream):
+    context = _FakeServerContext(_Parser)
+    runner = asyncio.run(ChatRunner.prepare(context, _request(stop='END', stream=stream),
+                                            ChatRunnerOptions(stop_on_visible_text=True)))
+
+    assert runner.content_stop is None
+    assert context.async_engine.preprocess_kwargs['gen_config'].stop_words == ['END']
+
+
+def _engine_output(response, finish_reason=None):
+    return SimpleNamespace(response=response, token_ids=[1] if response else [], input_token_len=3,
+                           generate_token_len=len(response), finish_reason=finish_reason, cached_tokens=0,
+                           logprobs=None, routed_experts=None, cache_block_ids=None)
+
+
+def _stop_runner(outputs, words, include_stop=False):
+    engine = _FakeEngine(outputs)
+    parser = _Parser(_request(stop=words))
+    return ChatRunner(parser.request, parser, SimpleNamespace(min_new_tokens=None), engine.session_mgr.session,
+                      engine.generate(None), engine.session_mgr,
+                      content_stop=ChatContentStop(words, include_stop))
+
+
+def _run_stop_runner(runner, stream):
+    async def run():
+        if stream:
+            chunks = [chunk async for chunk in runner.stream()]
+            return ''.join(chunk.delta_message.content or '' for chunk in chunks), chunks[-1]
+        result = await runner.collect()
+        return result.text or '', result
+
+    return run()
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('include_stop', [False, True])
+def test_visible_stop_spanning_deltas_never_leaks_prefix(stream, include_stop):
+    outputs = [
+        _engine_output('hi\n\nH'),
+        _engine_output('uman:'),
+        _engine_output(' tail that must never reach the client'),
+        _engine_output('', finish_reason='stop'),
+    ]
+    text, result = asyncio.run(_run_stop_runner(_stop_runner(outputs, ['\n\nHuman:'], include_stop), stream))
+
+    assert text == ('hi\n\nHuman:' if include_stop else 'hi')
+    assert result.finish_reason == 'stop'
+    assert result.stop_sequence == '\n\nHuman:'
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_visible_stop_without_match_releases_held_back_suffix(stream):
+    outputs = [_engine_output('hello wor'), _engine_output('ld'), _engine_output('', finish_reason='stop')]
+    text, result = asyncio.run(_run_stop_runner(_stop_runner(outputs, ['END']), stream))
+
+    assert text == 'hello world'
+    assert result.stop_sequence is None
+
+
+@pytest.mark.parametrize('stream', [False, True])
+def test_visible_overlapping_stop_is_cut_at_the_longest_match_in_both_modes(stream):
+    # A reviewer-reproduced split: "b" ends earlier inside "abc" and used to
+    # cut the answer at "Xa" while non-stream kept "X".
+    outputs = [_engine_output('Xabc!'), _engine_output('', finish_reason='stop')]
+    text, result = asyncio.run(_run_stop_runner(_stop_runner(outputs, ['abc', 'b']), stream))
+
+    assert text == 'X'
+    assert result.stop_sequence == 'abc'
+
