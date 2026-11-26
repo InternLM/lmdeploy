@@ -70,6 +70,10 @@ class StateCheckpointLifecycle:
         self._state_manager = state_manager
         self._index = index
         self._snapshot_match_data = snapshot_match_data
+        # Cumulative frozen partial-KV blocks released by evicting a
+        # checkpoint. Only the shared eviction loop counts them, so discarding a
+        # reservation, replacing a checkpoint, or clearing the trie does not.
+        self.num_frozen_blocks_evicted = 0
 
     def prepare_restore_batch(self, seqs: list[SchedulerSequence]) -> CheckpointCopyPlan:
         """Pin selected restores and expose their logical copy pairs."""
@@ -482,7 +486,10 @@ class StateCheckpointLifecycle:
             checkpoint = node.state_checkpoint
             logger.debug('Evict SSM prefix-cache checkpoint: adapter=%s step=%s state_idx=%s block_id=%s',
                          node.adapter_name, checkpoint.step, checkpoint.slot, checkpoint.frozen_block_id)
+            has_frozen_tail = checkpoint.frozen_block_id >= 0
             self.release_checkpoint(node)
+            if has_frozen_tail:
+                self.num_frozen_blocks_evicted += 1
             evicted += 1
         return evicted
 

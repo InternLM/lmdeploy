@@ -176,6 +176,11 @@ class BlockTrie:
         )
         self._kv_lifecycle = KVBlockLifecycle(self.allocator, self._state_checkpoints)
         self.stats = PrefixCacheStats()
+        # Cumulative trie-owned KV leaves freed by eviction. Kept out of
+        # ``PrefixCacheStats`` because that struct is the tentative-match state
+        # compared for equality across scheduling rollbacks, while evictions are
+        # a real, monotonic side effect.
+        self._kv_evicted_blocks = 0
 
     @property
     def leaves(self):
@@ -200,6 +205,11 @@ class BlockTrie:
         self._state_checkpoints.finish_cancelled_forwards_after_worker_drain()
         self.clear()
         self.stats.reset()
+
+    @property
+    def num_evicted_blocks(self) -> int:
+        """Cumulative blocks evicted, including checkpoint-frozen tails."""
+        return self._kv_evicted_blocks + self._state_checkpoints.num_frozen_blocks_evicted
 
     def _record_match_stats(self, seq: SchedulerSequence, query_tokens: int, hit_tokens: int = 0):
         """Record a user-visible prefix-cache match attempt."""
@@ -746,6 +756,11 @@ class BlockTrie:
             return 0
 
         evicted = self._state_checkpoints.evict_frozen_checkpoints(max_num_blocks)
+        kv_evicted = 0
         if evicted < max_num_blocks:
-            evicted += self._kv_lifecycle.evict(max_num_blocks - evicted)
-        return evicted
+            kv_evicted = self._kv_lifecycle.evict(max_num_blocks - evicted)
+        # Every eviction path (KV pressure here, state pressure inside the
+        # checkpoint lifecycle) funnels through the shared eviction loops, so
+        # the counter never sees a release that is not an eviction.
+        self._kv_evicted_blocks += kv_evicted
+        return evicted + kv_evicted
