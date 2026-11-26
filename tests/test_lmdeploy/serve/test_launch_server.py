@@ -59,6 +59,8 @@ def test_dp_launch_respects_visible_gpu_subset(monkeypatch):
 @pytest.fixture
 def launcher(monkeypatch):
     module = importlib.import_module('lmdeploy.serve.openai.launch_server')
+    # Port planning uses mocked workers, independent of the runner's GPU allocation.
+    monkeypatch.delenv('CUDA_VISIBLE_DEVICES', raising=False)
     monkeypatch.setattr(module.mp, 'set_start_method', Mock())
     monkeypatch.setattr(module.signal, 'signal', Mock())
     monkeypatch.setattr(module, 'get_host_ip', lambda: '127.0.0.2')

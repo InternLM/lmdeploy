@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
 from lmdeploy.pytorch.engine.engine import Engine
 from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent
 from tests.pytorch.engine.test_compact_inputs_maker import _finish_store_maker, _store_maker
@@ -190,7 +191,7 @@ def test_shutdown_waits_for_real_shielded_spec_postprocess(monkeypatch, child_fa
         inputs = SimpleNamespace(is_dummy=False, is_decoding=True, ssm_state_meta=object(),
                                  seq_length=torch.tensor([1]), input_ids=torch.tensor([[1]]),
                                  is_chunk=False, is_first_chunk=False, is_last_chunk=False, dp_meta=None)
-        cache = SimpleNamespace(ssm_state_access_id=1, kv_restore_plan=None, kv_save_plan=None)
+        cache = CacheCheckpointInputs(ssm_state_access_id=1)
         manager = SimpleNamespace(current_context=lambda: SimpleNamespace(
             dist_config=SimpleNamespace(attn_tp=2, dp=1)))
         monkeypatch.setattr(module, 'get_dist_manager', lambda: manager)
@@ -198,10 +199,18 @@ def test_shutdown_waits_for_real_shielded_spec_postprocess(monkeypatch, child_fa
         monkeypatch.setattr(torch.cuda, 'synchronize', lambda: events.append('cuda sync'))
         producer = asyncio.create_task(agent._async_step(inputs, extra_inputs=extra, cache_inputs=cache))
         agent.tasks = {producer}
-        await entered.wait()
-        child = agent._postprocess_task
-        drain = asyncio.create_task(agent.drain_for_shutdown())
+        started = asyncio.create_task(entered.wait())
+        tasks = [producer, started]
         try:
+            # Report a failed producer instead of waiting forever for its event.
+            done, _ = await asyncio.wait(tasks, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+            if producer in done:
+                await producer
+            assert started in done, 'Speculative postprocess did not start.'
+            child = agent._postprocess_task
+            assert child is not None
+            drain = asyncio.create_task(agent.drain_for_shutdown())
+            tasks.extend((child, drain))
             for _ in range(20):
                 await asyncio.sleep(0)
             assert producer.cancelled()
@@ -217,8 +226,10 @@ def test_shutdown_waits_for_real_shielded_spec_postprocess(monkeypatch, child_fa
                 assert events == ['spec finished', 'cuda sync', 'connector closed']
         finally:
             resume.set()
-            await asyncio.gather(producer, child, drain, return_exceptions=True)
-    asyncio.run(run())
+            started.cancel()
+            producer.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    asyncio.run(asyncio.wait_for(run(), timeout=10))
 
 
 def test_cancelled_shutdown_does_not_cancel_shielded_producer():

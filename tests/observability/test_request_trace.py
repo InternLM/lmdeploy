@@ -57,7 +57,8 @@ finally:
 def output(tokens=(), timestamp=0, events=(), status='SUCCESS'):
     return NS(token_ids=list(tokens), req_metrics=NS(token_timestamp=timestamp, engine_events=list(events),
                                                    cached_tokens=2), status=status,
-              logprobs=None, logits=None, last_hidden_state=None, routed_experts=None, cache_block_ids=None)
+              logprobs=None, logits=None, last_hidden_state=None, routed_experts=None,
+              cache_block_ids=None, pd_handoff=None)
 
 
 def event(name, timestamp):
@@ -782,7 +783,7 @@ class ReviewedScopeTests(RecordTestCase):
             c.client = NS(lookup=lambda *a, **kw: next(results), discard=discarded.append,
                           submit=submit, queries={})
             calls = []
-            request = NS(seq_id=1, adapter_name=None, all_ids=list(range(12)), engine_events=[],
+            request = NS(seq_id=1, adapter_name=None, valid_ids=list(range(12)), engine_events=[],
                          history_multimodals=NS(empty=lambda: True), history_embeddings=[],
                          num_history_ids=0, num_valid_ids=12,
                          prefix_cache=NS(recompute_overlap=NS(recompute_blocks=0)),

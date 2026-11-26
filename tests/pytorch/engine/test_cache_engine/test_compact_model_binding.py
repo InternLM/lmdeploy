@@ -127,7 +127,7 @@ def test_real_allocation_preserves_model_view_order_and_forbids_payload_conversi
     context = SimpleNamespace(state_caches=engine.state_caches, named_state_caches=engine.named_state_caches,
                               input_ids=None, position_ids=None, attn_metadata=None, input_multimodals=None,
                               input_embeddings=None, input_embedding_indexing=None, state_offsets=None,
-                              is_decoding=False, is_chunk_multimodal=False)
+                              is_decoding=False, global_is_decoding=lambda: False, is_chunk_multimodal=False)
     full_kv = [(object(), object()), (object(), object())]
     if family == 'qwen':
         from lmdeploy.pytorch.models.qwen3_5 import Qwen3_5ForConditionalGeneration
