@@ -50,6 +50,9 @@ ASCEND_FABRIC_MEM_ENV = 'ASCEND_ENABLE_USE_FABRIC_MEM'
 # Fabric segments must be integer multiples of 1GB (vllm-ascend compatibility
 # matrix: fabric_memory allocations are 1GB-granular).
 FABRIC_SEGMENT_GRANULARITY = 1024 ** 3
+# CANN 9.1 with HDK 25.5.6 can deadlock while unmapping a 16 GiB
+# fabric segment. Limit each mapping to the tested 8 GiB size.
+FABRIC_MAX_SEGMENT_SIZE = 8 * FABRIC_SEGMENT_GRANULARITY
 
 
 class TransferBackend:
@@ -163,10 +166,7 @@ class AscendTransferBackend(TransferBackend):
                 f'(got {fabric!r}): cross-process KV transfers need HIXL fabric memory.')
         self._transfer_engine: Any | None = None
         self.use_fabric_mem = True
-        # Keep the Store alive after MooncakeStoreWorker.shutdown() drops its
-        # self.store reference. This is intentionally an ordinary Python
-        # reference, so the backend instance must outlive worker shutdown.
-        self._retained_store: Any | None = None
+        self._store_device: int | None = None
 
     def _get_transfer_engine(self, local_hostname: str, device_name: str) -> Any:
         if self._transfer_engine is not None:
@@ -211,8 +211,8 @@ class AscendTransferBackend(TransferBackend):
         The segment is allocated by the store itself as fabric memory -- a HIXL
         unified address space over the A3 fabric that every process can reach
         directly -- so cross-segment puts and gets no longer need the CANN RTS
-        IPC + HCCL device-memory export that fails on this stack. Matching
-        vllm-ascend's ``MooncakeBackend`` fabric branch exactly:
+        IPC + HCCL device-memory export that fails on this stack. As in
+        vllm-ascend's ``MooncakeBackend`` fabric branch:
 
         * no external engine is injected (``setup`` without ``engine=``);
         * the segment name is the bare hostname, no ``:rpc_port`` suffix;
@@ -231,16 +231,48 @@ class AscendTransferBackend(TransferBackend):
                 f'{ASCEND_FABRIC_MEM_ENV}=1 requires global_segment_size to be '
                 f'an integer multiple of 1GB, got {config.global_segment_size} '
                 'bytes')
+        total_size = config.global_segment_size
+        # SDK setup may downsize its initial allocation under memory pressure.
+        # For split capacity, mount every segment through the exact-size API.
+        setup_size = 0 if total_size > FABRIC_MAX_SEGMENT_SIZE else total_size
+        allocate_segment = getattr(store, 'allocate_and_mount_segment', None)
+        if total_size > setup_size and not callable(allocate_segment):
+            raise RuntimeError('Large Ascend fabric stores require Mooncake allocate_and_mount_segment '
+                               'support to split the configured capacity into separate mappings.')
+
+        self._store_device = torch.npu.current_device()
         self.local_segment_name = local_hostname
-        return store.setup(
-            local_hostname=local_hostname,
-            metadata_server=config.metadata_server,
-            global_segment_size=config.global_segment_size,
-            local_buffer_size=0,
-            protocol=config.protocol,
-            rdma_devices=config.device_name,
-            master_server_addr=config.master_server_address,
-        )
+        ready = False
+        try:
+            ret = store.setup(
+                local_hostname=local_hostname,
+                metadata_server=config.metadata_server,
+                global_segment_size=setup_size,
+                local_buffer_size=0,
+                protocol=config.protocol,
+                rdma_devices=config.device_name,
+                master_server_addr=config.master_server_address,
+            )
+            if ret != 0:
+                return ret
+
+            for offset in range(setup_size, total_size, FABRIC_MAX_SEGMENT_SIZE):
+                size = min(total_size - offset, FABRIC_MAX_SEGMENT_SIZE)
+                # Match SDK setup's memory-location hint. Ascend Direct rejects the empty default.
+                result = allocate_segment(size, protocol=config.protocol, location='*')
+                if result['ret'] != 0 or result['allocated_size'] != size:
+                    raise RuntimeError(f'Failed to mount the {size}-byte Ascend fabric segment at {offset}: '
+                                       f'rc={result["ret"]}, allocated_size={result["allocated_size"]}')
+            ready = True
+            return 0
+        finally:
+            if not ready:
+                try:
+                    close_ret = self.close_store(store)
+                    if close_ret not in (None, 0):
+                        logger.warning('Ascend fabric Store cleanup after setup failure returned %s', close_ret)
+                except Exception:
+                    logger.exception('Failed to close Ascend fabric Store after an incomplete setup')
 
     def register_buffer(self, store: Any,
                         registration: MooncakeStoreRegistration) -> int:
@@ -259,22 +291,15 @@ class AscendTransferBackend(TransferBackend):
     def make_ready_event(self) -> Any:
         return torch.npu.Event()
 
-    def close_store(self, store: Any) -> None:
-        """Retain the Store on this backend instead of destroying it.
-
-        Worker shutdown has already stopped and joined the transfer threads. The backend-owned strong reference keeps
-        the pybind Store/RealClient alive so Mooncake's native atexit handler can tear it down at process exit. Unlike
-        Py_IncRef, this reference is visible to Python and is released if this backend instance is destroyed.
-        """
-        if self._retained_store is not None and self._retained_store is not store:
-            raise RuntimeError('Ascend backend already retains a different Mooncake Store')
-        self._retained_store = store
+    def close_store(self, store: Any) -> Any:
+        """Close after the worker joins its transfer threads, on the Store's
+        NPU device."""
+        with torch.npu.device(self._store_device):
+            return super().close_store(store)
 
     def close(self) -> None:
         # The TransferEngine has no explicit teardown in the mooncake API; dropping
         # the reference lets it be reclaimed when the worker shuts down.
-        # Do not clear _retained_store here: it must remain alive for native
-        # Mooncake atexit cleanup.
         self._transfer_engine = None
 
 
