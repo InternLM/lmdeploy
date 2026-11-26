@@ -863,7 +863,9 @@ class Engine(EngineBase):
 
         if self._engine_loop is not None:
             started = self._engine_loop.forward_started_at
-            if started is not None and time.monotonic() - started >= self.scheduler.pd_coordinator.transfer_timeout:
+            # PD transfer deadlines do not bound Hybrid model execution.
+            if (self.engine_config.role != EngineRole.Hybrid and started is not None
+                    and time.monotonic() - started >= self.scheduler.pd_coordinator.transfer_timeout):
                 return dict(alive=False, message='PyTorch model execution has stopped making progress.',
                             schedule_metrics=None, pd=pd)
             engine_loop_ok, done_tasks = self._health_check_tasks(self._engine_loop.tasks)

@@ -93,7 +93,7 @@ def test_remote_prefill_initializes_decode_with_exact_loaded_state_and_drafts(wi
     assert inputs.ssm_prefill_meta is None
     assert inputs.ssm_source_state_ids.tolist() == [loaded_id]
     assert inputs.ssm_state_meta.output_state_ids.shape == (1, width)
-    assert carrier.pd_import_token_ids == (100,)
+    assert carrier.pd_first_token_ids == (100,)
     assert bank.loaded_input is None and seq.num_new_tokens == 1
     assert seq.sampling_param.random_seed == 42
     assert seq.generated_ids.tolist() == [100]

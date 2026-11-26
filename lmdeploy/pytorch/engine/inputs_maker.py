@@ -380,7 +380,7 @@ class _ForwardInputsTask:
         if imported:
             inputs = maker.create_model_inputs(imported, False)
             delta, maker.running_seqs, _ = maker.create_model_inputs_delta_valid_only()
-            carrier = CacheCheckpointInputs(pd_import_token_ids=tuple(int(seq.generated_ids[0]) for seq in imported))
+            carrier = CacheCheckpointInputs(pd_first_token_ids=tuple(int(seq.generated_ids[0]) for seq in imported))
             self.result.set_work(imported, inputs, delta,
                                  maker.model_agent_strategy.make_extra_inputs(imported, inputs), cache_inputs=carrier)
             for seq in imported:
@@ -1052,7 +1052,8 @@ class InputsMakerAsync:
         if inputs is not None:
             if inputs.ssm_state_meta is not None:
                 raise ValueError('Fresh compact packets must be unbound.')
-            if inputs.is_decoding and carrier.pd_import_token_ids is None:
+            # First-token IDs identify a migrated request's first decode dispatch.
+            if inputs.is_decoding and carrier.pd_first_token_ids is None:
                 raise ValueError('Only migrated requests can initialize fresh decode inputs.')
             if (inputs.state_offsets is None or inputs.state_offsets.device.type != 'cpu'
                     or inputs.state_offsets.tolist() != [bank.auxiliary_id for bank in banks]):

@@ -12,6 +12,7 @@ import torch
 import zmq
 
 from lmdeploy.messages import EngineOutput, ResponseType
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.mp_engine.base import MPEngine
 from lmdeploy.pytorch.engine.mp_engine.base_worker import StreamMailbox, StreamPollResult
 
@@ -35,6 +36,7 @@ def test_engine_worker_health_status_is_synchronous():
     from lmdeploy.pytorch.engine.engine import Engine
     from lmdeploy.pytorch.paging.pd_coordinator import PDCoordinator
     worker.engine = Engine.__new__(Engine)
+    worker.engine.engine_config = SimpleNamespace(role=EngineRole.Decode)
     owner = PDCoordinator(None, None)
     worker.engine.scheduler = SimpleNamespace(pd_coordinator=owner)
     worker.engine.req_manager = SimpleNamespace(is_loop_alive=lambda: True)
@@ -55,6 +57,36 @@ def test_engine_worker_health_status_is_synchronous():
     assert worker.pd_control(request)['status'] == 'CONFLICT'
     request.engine_epoch = owner.epoch
     assert worker.pd_control(request) == {'status': 'SUCCESS'}
+
+
+@pytest.mark.parametrize('role', [EngineRole.Hybrid, EngineRole.Prefill, EngineRole.Decode])
+@pytest.mark.parametrize('elapsed', [None, 179, 180, 181])
+def test_engine_health_forward_timeout_only_applies_to_pd(monkeypatch, role, elapsed):
+    from lmdeploy.pytorch.engine.engine import Engine
+    from lmdeploy.pytorch.paging.pd_coordinator import PDCoordinator
+
+    monkeypatch.setattr('lmdeploy.pytorch.engine.engine.time.monotonic', lambda: 1000)
+    engine = Engine.__new__(Engine)
+    engine.engine_config = SimpleNamespace(role=role)
+    owner = PDCoordinator(None, None)
+    owner.transfer_timeout = 180
+    metrics = object()
+    engine.scheduler = SimpleNamespace(pd_coordinator=owner, schedule_metrics=metrics)
+    engine.req_manager = SimpleNamespace(is_loop_alive=lambda: True)
+    engine._loop_main = None
+    engine._engine_loop = SimpleNamespace(forward_started_at=None if elapsed is None else 1000 - elapsed, tasks=[])
+
+    status = engine.get_local_health_status()
+    expected_alive = role == EngineRole.Hybrid or elapsed is None or elapsed < 180
+    assert status['alive'] is expected_alive
+    assert status['schedule_metrics'] is (metrics if expected_alive else None)
+
+    # Skipping the PD deadline must not hide a stopped inference loop.
+    engine._engine_loop.forward_started_at = None
+    engine._engine_loop.tasks = [SimpleNamespace(done=lambda: True, get_name=lambda: 'MainLoopMain')]
+    status = engine.get_local_health_status()
+    assert not status['alive']
+    assert status['message'] == "PyTorch engine loop task has stopped: ['MainLoopMain']."
 
 
 def _exit_when_released(ready, release, startup_delay):
