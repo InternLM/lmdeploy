@@ -63,6 +63,9 @@ class SchedulerStats:
     external_prefix_cache_hit_rate: float | None = None
     external_prefix_cache_queries: int = 0
     external_prefix_cache_hits: int = 0
+    # Cumulative number of prefix-cache blocks evicted so far (monotonic total;
+    # the Prometheus logger exposes its per-poll delta as evicted_blocks_total).
+    num_evicted_blocks: int = 0
     external_prefix_cache_loaded_tokens: int = 0
     external_prefix_cache_load_failures: int = 0
     external_prefix_cache_save_failures: int = 0
@@ -100,6 +103,7 @@ class SchedulerStats:
                 f'  external_prefix_cache_hit_rate={self.external_prefix_cache_hit_rate},\n'
                 f'  external_prefix_cache_queries={self.external_prefix_cache_queries},\n'
                 f'  external_prefix_cache_hits={self.external_prefix_cache_hits},\n'
+                f'  num_evicted_blocks={self.num_evicted_blocks},\n'
                 f'  external_prefix_cache_loaded_tokens={self.external_prefix_cache_loaded_tokens},\n'
                 f'  external_prefix_cache_load_failures={self.external_prefix_cache_load_failures},\n'
                 f'  external_prefix_cache_save_failures={self.external_prefix_cache_save_failures},\n'
@@ -113,6 +117,7 @@ class SchedulerStats:
         self.external_prefix_cache_hit_rate = scheduled_metrics.external_prefix_cache_hit_rate
         self.external_prefix_cache_queries = scheduled_metrics.external_prefix_cache_queries
         self.external_prefix_cache_hits = scheduled_metrics.external_prefix_cache_hits
+        self.num_evicted_blocks = scheduled_metrics.num_evicted_blocks
         self.external_prefix_cache_loaded_tokens = scheduled_metrics.external_prefix_cache_loaded_tokens
         self.external_prefix_cache_load_failures = scheduled_metrics.external_prefix_cache_load_failures
         self.external_prefix_cache_save_failures = scheduled_metrics.external_prefix_cache_save_failures
