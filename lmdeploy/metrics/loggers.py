@@ -123,6 +123,10 @@ class LoggingStatLogger(StatLoggerBase):
 
         if scheduler_stats.external_prefix_cache_hit_rate is not None:
             log_msg += f'External prefix cache hit rate: {scheduler_stats.external_prefix_cache_hit_rate * 100:.1f}%, '
+            log_msg += ('External KV (loaded tokens/load failures/save failures): '
+                        f'{scheduler_stats.external_prefix_cache_loaded_tokens} / '
+                        f'{scheduler_stats.external_prefix_cache_load_failures} / '
+                        f'{scheduler_stats.external_prefix_cache_save_failures}, ')
 
         if spec_msg is not None:
             log_msg += spec_msg
@@ -215,7 +219,26 @@ class PrometheusStatLogger(StatLoggerBase):
             name='lmdeploy:external_prefix_cache_hits',
             documentation='External prefix-cache hits, in tokens, counted at request admission.',
             labelnames=labelnames).labels(*labelvalues)
-        self._last_external_prefix_cache_counts = (0, 0)
+        self.counter_external_prefix_cache_loaded_tokens = prometheus_client.Counter(
+            name='lmdeploy:external_prefix_cache_loaded_tokens',
+            documentation='External KV tokens published after a successful load on all workers.',
+            labelnames=labelnames).labels(*labelvalues)
+        self.counter_external_prefix_cache_load_failures = prometheus_client.Counter(
+            name='lmdeploy:external_prefix_cache_load_failures',
+            documentation='External KV load operations that failed and triggered local fallback.',
+            labelnames=labelnames).labels(*labelvalues)
+        self.counter_external_prefix_cache_save_failures = prometheus_client.Counter(
+            name='lmdeploy:external_prefix_cache_save_failures',
+            documentation='Completed external KV save operations that failed on at least one worker.',
+            labelnames=labelnames).labels(*labelvalues)
+        self._external_prefix_cache_counters = (
+            self.counter_external_prefix_cache_queries,
+            self.counter_external_prefix_cache_hits,
+            self.counter_external_prefix_cache_loaded_tokens,
+            self.counter_external_prefix_cache_load_failures,
+            self.counter_external_prefix_cache_save_failures,
+        )
+        self._last_external_prefix_cache_counts = (0,) * len(self._external_prefix_cache_counters)
 
         #
         # Counters
@@ -408,16 +431,22 @@ class PrometheusStatLogger(StatLoggerBase):
         self.gauge_prefix_cache_hit_rate.set(stats.prefix_cache_hit_rate)
         if stats.external_prefix_cache_hit_rate is not None:
             self.gauge_external_prefix_cache_hit_rate.set(stats.external_prefix_cache_hit_rate)
-            queries, hits = stats.external_prefix_cache_queries, stats.external_prefix_cache_hits
-            last_queries, last_hits = self._last_external_prefix_cache_counts
+            counts = (
+                stats.external_prefix_cache_queries,
+                stats.external_prefix_cache_hits,
+                stats.external_prefix_cache_loaded_tokens,
+                stats.external_prefix_cache_load_failures,
+                stats.external_prefix_cache_save_failures,
+            )
+            last_counts = self._last_external_prefix_cache_counts
             # Schedule metrics are cumulative snapshots, also read by health
             # probes. Repeated polls must not increment these counters again.
             # If the engine restarts, its new totals begin another counter epoch.
-            if queries < last_queries or hits < last_hits:
-                last_queries, last_hits = 0, 0
-            self.counter_external_prefix_cache_queries.inc(queries - last_queries)
-            self.counter_external_prefix_cache_hits.inc(hits - last_hits)
-            self._last_external_prefix_cache_counts = (queries, hits)
+            if any(count < last for count, last in zip(counts, last_counts, strict=True)):
+                last_counts = (0,) * len(counts)
+            for counter, count, last in zip(self._external_prefix_cache_counters, counts, last_counts, strict=True):
+                counter.inc(count - last)
+            self._last_external_prefix_cache_counts = counts
         self.gauge_scheduler_last_update.set(time.time())
 
     def record_iteration(self, stats: IterationStats) -> None:

@@ -213,8 +213,12 @@ def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary
     assert metrics.external_prefix_cache_queries == 21 - local_tokens
     assert metrics.external_prefix_cache_hits == 16 - local_tokens
     assert metrics.external_prefix_cache_hit_rate == pytest.approx((16 - local_tokens) / (21 - local_tokens))
+    assert metrics.external_prefix_cache_loaded_tokens == 0
 
     scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+    assert scheduler.schedule_metrics.external_prefix_cache_loaded_tokens == 16 - local_tokens
+    scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+    assert scheduler.schedule_metrics.external_prefix_cache_loaded_tokens == 16 - local_tokens
     assert seq.num_history_ids == seq.cached_tokens == 16
     assert scheduler.schedule_metrics.prefix_cache_hit_rate == pytest.approx(local_tokens / 21)
     assert seq.logical_state == load.state_slot
@@ -328,6 +332,7 @@ def test_failed_hybrid_load_waits_for_all_ranks_then_rematches(make_scheduler, r
     aggregator = KVConnectorOutputAggregator(world_size=2)
     first_rank = KVConnectorOutput(finished_receiving={seq.seq_id}, failed_receiving={seq.seq_id})
     scheduler.update_connector_output(aggregator.aggregate([first_rank, None]))
+    assert scheduler.schedule_metrics.external_prefix_cache_load_failures == 0
     assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
     assert seq.logical_state == load.state_slot
     assert list(seq.logical_blocks.get_real_blocks()) == list(original_blocks)
@@ -340,6 +345,8 @@ def test_failed_hybrid_load_waits_for_all_ranks_then_rematches(make_scheduler, r
     # A later successful rank must not erase the earlier failure.
     scheduler.update_connector_output(aggregator.aggregate([
         None, KVConnectorOutput(finished_receiving={seq.seq_id})]))
+    assert scheduler.schedule_metrics.external_prefix_cache_load_failures == 1
+    assert scheduler.schedule_metrics.external_prefix_cache_loaded_tokens == 0
     assert seq.status == MessageStatus.WAITING
     assert seq.num_history_ids == seq.cached_tokens == seq.num_blocks == 0
     assert seq.logical_state == -1
@@ -601,6 +608,8 @@ def test_cancelled_hybrid_load_retains_destinations_until_terminal(make_schedule
     assert scheduler.block_trie.stats.num_hit_tokens == 0
     assert scheduler.schedule_metrics.external_prefix_cache_queries == 21
     assert scheduler.schedule_metrics.external_prefix_cache_hits == 16
+    assert scheduler.schedule_metrics.external_prefix_cache_loaded_tokens == 0
+    assert scheduler.schedule_metrics.external_prefix_cache_load_failures == 0
 
 
 @pytest.mark.parametrize('rejection', ['pending_lookup', 'capacity', 'metadata_binding'])

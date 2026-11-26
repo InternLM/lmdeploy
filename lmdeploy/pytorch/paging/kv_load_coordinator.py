@@ -144,6 +144,8 @@ class KVLoadCoordinator:
         self.sessions = sessions
         self.state_manager = state_manager
         self.prefix_cache_stats = PrefixCacheStats()
+        self.num_loaded_tokens = 0
+        self.num_failed_loads = 0
         # Active load lifecycle. Records survive the LOADING -> READY ->
         # PREFILLING transitions so stop/end and preemption can find the owner.
         self._loads: dict[int, _LoadRecord] = {}
@@ -457,16 +459,18 @@ class KVLoadCoordinator:
             record = self._loads.get(int(result.request_id))
             if record is None or record.phase is not _LoadPhase.LOADING:
                 continue
-            if (record.deferred_cleanup is not _DeferredLoadCleanup.NONE
-                    or not result.success):
+            cancelled = record.deferred_cleanup is not _DeferredLoadCleanup.NONE
+            if cancelled or not result.success:
                 if TRACE_ENABLED:
-                    event = (EventType.KV_LOAD_CANCELLED
-                             if record.deferred_cleanup is not _DeferredLoadCleanup.NONE else EventType.KV_LOAD_FAILED)
+                    event = EventType.KV_LOAD_CANCELLED if cancelled else EventType.KV_LOAD_FAILED
                     record.seq.record_event(event)
                 self._rollback(record)
                 self._finish_cancelled_or_failed(record)
+                if not cancelled:
+                    self.num_failed_loads += 1
             else:
                 self._publish(record)
+                self.num_loaded_tokens += record.remote_step - record.load_start_step
                 if TRACE_ENABLED:
                     record.seq.record_event(EventType.KV_LOAD_FINISHED)
 

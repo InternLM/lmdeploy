@@ -884,6 +884,9 @@ class ScheduleMetrics:
     external_prefix_cache_hit_rate: float | None = None
     external_prefix_cache_queries: int = 0
     external_prefix_cache_hits: int = 0
+    external_prefix_cache_loaded_tokens: int = 0
+    external_prefix_cache_load_failures: int = 0
+    external_prefix_cache_save_failures: int = 0
 
 
 @dataclass

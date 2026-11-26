@@ -69,7 +69,9 @@ def test_logging_stat_logger_separates_local_and_enabled_external_cache(capsys, 
     logger = LoggingStatLogger(dp_rank=2)
     stats = SchedulerStats()
     stats.update_from_schedule_metrics(ScheduleMetrics(
-        prefix_cache_hit_rate=4 / 21, external_prefix_cache_hit_rate=external_hit_rate))
+        prefix_cache_hit_rate=4 / 21, external_prefix_cache_hit_rate=external_hit_rate,
+        external_prefix_cache_loaded_tokens=8, external_prefix_cache_load_failures=1,
+        external_prefix_cache_save_failures=2))
     logger.record_schedule(stats)
     logger.total_generation_tokens = 1
     logger.log()
@@ -79,8 +81,10 @@ def test_logging_stat_logger_separates_local_and_enabled_external_cache(capsys, 
     assert 'Prefix cache hit rate: 19.0%' in output
     if external_hit_rate is None:
         assert 'External prefix cache hit rate' not in output
+        assert 'External KV' not in output
     else:
         assert f'External prefix cache hit rate: {external_hit_rate * 100:.1f}%' in output
+        assert 'External KV (loaded tokens/load failures/save failures): 8 / 1 / 2' in output
 
 
 def test_prometheus_external_cache_counters_use_snapshot_deltas():
@@ -89,13 +93,20 @@ def test_prometheus_external_cache_counters_use_snapshot_deltas():
     labels = {'model_name': 'test-model', 'engine': '2'}
 
     # Reading the same cumulative scheduler snapshot twice must not add tokens.
-    for queries, hits in [(17, 12), (17, 12), (38, 12)]:
+    for queries, hits, loaded, load_failures, save_failures in [
+        (17, 12, 8, 0, 1), (17, 12, 8, 0, 1), (38, 12, 12, 2, 3),
+    ]:
         stats.update_from_schedule_metrics(ScheduleMetrics(
             prefix_cache_hit_rate=4 / 42, external_prefix_cache_queries=queries,
-            external_prefix_cache_hits=hits, external_prefix_cache_hit_rate=hits / queries))
+            external_prefix_cache_hits=hits, external_prefix_cache_hit_rate=hits / queries,
+            external_prefix_cache_loaded_tokens=loaded, external_prefix_cache_load_failures=load_failures,
+            external_prefix_cache_save_failures=save_failures))
         logger.record_schedule(stats)
         assert _get_sample_value('lmdeploy:external_prefix_cache_queries_total', labels) == queries
         assert _get_sample_value('lmdeploy:external_prefix_cache_hits_total', labels) == hits
+        assert _get_sample_value('lmdeploy:external_prefix_cache_loaded_tokens_total', labels) == loaded
+        assert _get_sample_value('lmdeploy:external_prefix_cache_load_failures_total', labels) == load_failures
+        assert _get_sample_value('lmdeploy:external_prefix_cache_save_failures_total', labels) == save_failures
         assert _get_sample_value('lmdeploy:external_prefix_cache_hit_rate', labels) == pytest.approx(hits / queries)
     assert _get_sample_value('lmdeploy:prefix_cache_hit_rate', labels) == pytest.approx(4 / 42)
     exposition = prometheus_client.generate_latest().decode()
@@ -106,10 +117,14 @@ def test_prometheus_external_cache_counters_use_snapshot_deltas():
     # API process's Prometheus counters.
     stats.update_from_schedule_metrics(ScheduleMetrics(
         external_prefix_cache_queries=21, external_prefix_cache_hits=16,
+        external_prefix_cache_loaded_tokens=16, external_prefix_cache_save_failures=1,
         external_prefix_cache_hit_rate=16 / 21))
     logger.record_schedule(stats)
     assert _get_sample_value('lmdeploy:external_prefix_cache_queries_total', labels) == 59
     assert _get_sample_value('lmdeploy:external_prefix_cache_hits_total', labels) == 28
+    assert _get_sample_value('lmdeploy:external_prefix_cache_loaded_tokens_total', labels) == 28
+    assert _get_sample_value('lmdeploy:external_prefix_cache_load_failures_total', labels) == 2
+    assert _get_sample_value('lmdeploy:external_prefix_cache_save_failures_total', labels) == 4
 
 
 def test_zero_token_finish_records_request_reason():

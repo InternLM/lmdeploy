@@ -21,11 +21,18 @@ PyTorch 后端分别统计本地前缀缓存和 Mooncake Store，均沿用当前
 
 新增 Prometheus 指标均带有 `model_name` 和 `engine` 标签：
 
-| 指标                                           | 类型    | 含义                                      |
-| ---------------------------------------------- | ------- | ----------------------------------------- |
-| `lmdeploy:external_prefix_cache_hit_rate`      | Gauge   | 当前引擎累计外部命中率，范围为 0–1        |
-| `lmdeploy:external_prefix_cache_queries_total` | Counter | 累计外部查询 token 数，排除本地采用的前缀 |
-| `lmdeploy:external_prefix_cache_hits_total`    | Counter | 累计外部命中 token 数                     |
+| 指标                                                 | 类型    | 含义                                          |
+| ---------------------------------------------------- | ------- | --------------------------------------------- |
+| `lmdeploy:external_prefix_cache_hit_rate`            | Gauge   | 当前引擎累计外部命中率，范围为 0–1            |
+| `lmdeploy:external_prefix_cache_queries_total`       | Counter | 累计外部查询 token 数，排除本地采用的前缀     |
+| `lmdeploy:external_prefix_cache_hits_total`          | Counter | 累计外部命中 token 数                         |
+| `lmdeploy:external_prefix_cache_loaded_tokens_total` | Counter | 所有 worker 完成 KV 加载后发布的累计 token 数 |
+| `lmdeploy:external_prefix_cache_load_failures_total` | Counter | 加载失败并回退至本地计算的累计次数            |
+| `lmdeploy:external_prefix_cache_save_failures_total` | Counter | 至少一个 worker 写入失败的已完成写入操作数    |
+
+吞吐日志中的 `External KV (loaded tokens/load failures/save failures)` 同时打印以上三个累计传输指标。
+加载 token 数包含块重叠和重试产生的传输。加载失败次数排除已取消的请求。多个 worker
+同时报告失败时，同一写入操作只计一次。
 
 例如，下列 PromQL 按模型汇总各 DP 引擎最近 5 分钟的外部 token 命中率：
 

@@ -42,6 +42,9 @@ class SchedulerStats:
         external_prefix_cache_hit_rate: Cumulative external lookup hit rate; None when disabled.
         external_prefix_cache_queries: Cumulative queried tokens after excluding local prefixes.
         external_prefix_cache_hits: Cumulative externally matched tokens at admission.
+        external_prefix_cache_loaded_tokens: Cumulative external tokens published after a successful load.
+        external_prefix_cache_load_failures: Cumulative failed loads that triggered local fallback.
+        external_prefix_cache_save_failures: Cumulative completed saves with at least one failed worker.
     """
 
     # api server
@@ -60,6 +63,9 @@ class SchedulerStats:
     external_prefix_cache_hit_rate: float | None = None
     external_prefix_cache_queries: int = 0
     external_prefix_cache_hits: int = 0
+    external_prefix_cache_loaded_tokens: int = 0
+    external_prefix_cache_load_failures: int = 0
+    external_prefix_cache_save_failures: int = 0
 
     @property
     def num_failed_reqs(self) -> int:
@@ -94,6 +100,9 @@ class SchedulerStats:
                 f'  external_prefix_cache_hit_rate={self.external_prefix_cache_hit_rate},\n'
                 f'  external_prefix_cache_queries={self.external_prefix_cache_queries},\n'
                 f'  external_prefix_cache_hits={self.external_prefix_cache_hits},\n'
+                f'  external_prefix_cache_loaded_tokens={self.external_prefix_cache_loaded_tokens},\n'
+                f'  external_prefix_cache_load_failures={self.external_prefix_cache_load_failures},\n'
+                f'  external_prefix_cache_save_failures={self.external_prefix_cache_save_failures},\n'
                 ')')
 
     def update_from_schedule_metrics(self, scheduled_metrics: ScheduleMetrics):
@@ -104,6 +113,9 @@ class SchedulerStats:
         self.external_prefix_cache_hit_rate = scheduled_metrics.external_prefix_cache_hit_rate
         self.external_prefix_cache_queries = scheduled_metrics.external_prefix_cache_queries
         self.external_prefix_cache_hits = scheduled_metrics.external_prefix_cache_hits
+        self.external_prefix_cache_loaded_tokens = scheduled_metrics.external_prefix_cache_loaded_tokens
+        self.external_prefix_cache_load_failures = scheduled_metrics.external_prefix_cache_load_failures
+        self.external_prefix_cache_save_failures = scheduled_metrics.external_prefix_cache_save_failures
 
 
 class RequestStats:

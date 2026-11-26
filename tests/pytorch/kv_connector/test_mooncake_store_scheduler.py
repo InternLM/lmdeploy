@@ -14,6 +14,7 @@ from lmdeploy.pytorch.engine.inputs_maker import _ForwardInputsTask
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.kv_connector import (
     KVConnectorOutput,
+    KVConnectorOutputAggregator,
     KVConnectorResult,
     KVConnectorRole,
     KVConnectorStepInput,
@@ -913,14 +914,22 @@ def test_scheduler_builds_incremental_save_operations_and_poll_metadata():
     assert second_save.block_ids == (33, )
     assert second_save.logical_block_ids == (43, )
 
-    result = scheduler.update_connector_output(
-        KVConnectorOutput(completed_save_ids={0, 999}))
+    aggregator = KVConnectorOutputAggregator(world_size=2)
+    first_rank = KVConnectorOutput(completed_save_ids={0, 999}, failed_save_ids={0, 999})
+    result = scheduler.update_connector_output(aggregator.aggregate([first_rank, None]))
+    assert result == KVConnectorResult()
+
+    other_rank = KVConnectorOutput(completed_save_ids={0, 999})
+    result = scheduler.update_connector_output(aggregator.aggregate([None, other_rank]))
     assert result.completed_save_ids == frozenset({0})
+    assert result.num_failed_saves == 1
+    assert scheduler.update_connector_output(first_rank) == KVConnectorResult()
     assert scheduler.build_connector_meta(_connector_step()) is not None
 
     result = scheduler.update_connector_output(
         KVConnectorOutput(completed_save_ids={1}))
     assert result.completed_save_ids == frozenset({1})
+    assert result.num_failed_saves == 0
     assert scheduler.build_connector_meta(_connector_step()) is None
     scheduler.shutdown()
 
