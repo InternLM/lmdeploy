@@ -94,6 +94,7 @@ def test_scheduler_failure_does_not_mask_original_error_or_skip_release():
 def test_worker_drain_awaits_producer_cancellation_before_io_close(dp):
     async def run():
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.model_config = SimpleNamespace(enable_replayssm=False)
         agent.dist_config = SimpleNamespace(dp=dp)
         events = []
         async def producer():
@@ -167,6 +168,7 @@ def test_shutdown_waits_for_real_shielded_spec_postprocess(monkeypatch, child_fa
         async def model_forward(*args, **kwargs):
             return dict(logits=torch.zeros((1, 1, 8)))
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.model_config = SimpleNamespace(enable_replayssm=False)
         agent.rank, agent.need_output = 1, False
         agent._postprocess_task = None
         agent.kv_connector = SimpleNamespace(shutdown=lambda: events.append('connector closed'))
@@ -222,6 +224,7 @@ def test_shutdown_waits_for_real_shielded_spec_postprocess(monkeypatch, child_fa
 def test_cancelled_shutdown_does_not_cancel_shielded_producer():
     async def run():
         agent = BaseModelAgent.__new__(BaseModelAgent)
+        agent.model_config = SimpleNamespace(enable_replayssm=False)
         entered, resume = asyncio.Event(), asyncio.Event()
         async def postprocess():
             entered.set()

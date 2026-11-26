@@ -319,12 +319,11 @@ choice/score 的选项 description 仍是字符串。例如：
 其他消息角色、音频/视频/文件内容块、工具记录、缓存控制和未知字段均返回 422。
 `/v1/systemone` 仅接受 Systemone 协议，混用原生字段与 OpenAI 字段会被拒绝。
 
-OpenAI 格式与 Systemone 格式均将 assistant 答案骨架分词后的 token 数计入 `output_tokens`，
-包括决策标记、不包括聊天模板包装，实际不生成 token。
-`input_tokens` 保留引擎输入计数（含骨架），不额外扣除骨架；`total_tokens` 为输入与输出计数之和。
-这是参考部署仓库的用量统计口径。
-`cached_tokens` 来自引擎。**`cache_write_tokens: 0` 是为兼容 SDK 而设置的未统计占位值，不是缓存写入量的测量结果。**
-推理 token 数为 0。评分器不输出拒答结果。
+`usage.input_tokens` 取引擎统计的输入 token 数，包含答案骨架和视觉 token。评分在预填充阶段完成，`output_tokens` 和 `output_tokens_details.reasoning_tokens` 均为 `0`，`total_tokens` 等于 `input_tokens`。
+
+`input_tokens_details.cached_tokens` 取引擎统计的前缀缓存命中量。`input_tokens_details.cache_write_tokens` 返回 `0`，用作未统计缓存写入量时的 SDK 兼容占位值。
+
+评分器不输出拒答结果。
 两个决策入口的请求结构和模型名校验错误均返回 422，并通过 `detail` 和 `error.details` 指明出错字段。
 资产与评分错误保留各自的状态码，其他 API 路由的错误格式保持不变。
 当前实现支持 [OpenAI Decisions 协议](https://developers.openai.com/api/docs/guides/decisions)的一个子集，不代表完整 API 等价。

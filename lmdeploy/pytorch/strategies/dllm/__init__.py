@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import TYPE_CHECKING
 
-from lmdeploy.pytorch.config import DLLMConfig, ModelConfig
+from lmdeploy.pytorch.config import DLLMConfig, ModelConfig, validate_dcp_dllm_compatibility
 from lmdeploy.pytorch.strategies.base.sequence import SequenceStrategy
 from lmdeploy.utils import get_logger
 
@@ -28,6 +28,7 @@ class DLLMStrategyFactory(StrategyFactoryBase):
 
         # update dllm_block_length
         self.dllm_block_length = self._update_dllm_block_length()
+        validate_dcp_dllm_compatibility(self.model_config, self.dllm_block_length)
 
     def _update_dllm_block_length(self):
         """Update dllm_block_length."""

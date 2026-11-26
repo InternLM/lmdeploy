@@ -30,6 +30,8 @@ def smooth_quant(model: str,
                  download_dir: str = None,
                  trust_remote_code: bool = False):
     try_import_deeplink(device)
+    if device == 'ascend':
+        device = 'npu'
     if quant_dtype == 'fp8':
         quant_dtype = 'float8_e4m3fn'
 

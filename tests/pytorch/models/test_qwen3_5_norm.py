@@ -1,30 +1,34 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-"""Check task-specific and ordinary Qwen3.5 norm loading."""
+"""Check zero-centered norm loading and task-specific Qwen3.5 selection."""
 import importlib
+import sys
+from types import ModuleType
 
 import pytest
 import torch
-from transformers import Qwen3_5Config, Qwen3_5TextConfig
+from transformers import Qwen3_5Config, Qwen3_5TextConfig, Qwen3NextConfig
 
 from lmdeploy.pytorch.config import DistConfig, ModelConfig, QuantizationConfig
+from lmdeploy.pytorch.devices import DeviceContext, get_device_manager
 from lmdeploy.pytorch.model_inputs import BuildModelContext, StepContextManager
 from lmdeploy.pytorch.models.intern_decision import InternDecisionForConditionalGeneration
 from lmdeploy.pytorch.models.patch import build_model_context, build_model_from_hf_config, build_patched_model
 from lmdeploy.pytorch.models.qwen3_5 import Qwen3_5ForConditionalGeneration
-from lmdeploy.pytorch.nn import RMSNorm
+from lmdeploy.pytorch.nn import RMSNorm, RMSNormGated
+
+_TINY_TEXT = dict(
+    hidden_size=128, intermediate_size=256, vocab_size=128,
+    num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
+    head_dim=64, linear_key_head_dim=32, linear_value_head_dim=32,
+    linear_num_key_heads=2, linear_num_value_heads=2,
+    layer_types=['linear_attention', 'full_attention'],
+    num_experts=2, num_experts_per_tok=1, moe_intermediate_size=64,
+    shared_expert_intermediate_size=64,
+)
 
 
 def _tiny_config():
-    text_config = Qwen3_5TextConfig(
-        hidden_size=128, intermediate_size=256, vocab_size=128,
-        num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2,
-        head_dim=64, linear_key_head_dim=32, linear_value_head_dim=32,
-        linear_num_key_heads=2, linear_num_value_heads=2,
-        layer_types=['linear_attention', 'full_attention'],
-        num_experts=2, num_experts_per_tok=1, moe_intermediate_size=64,
-        shared_expert_intermediate_size=64, num_meta_moe_blocks=1, num_blocks=1,
-        mtp_num_hidden_layers=1,
-    )
+    text_config = Qwen3_5TextConfig(**_TINY_TEXT, num_meta_moe_blocks=1, num_blocks=1, mtp_num_hidden_layers=1)
     return Qwen3_5Config(architectures=['Qwen3_5ForConditionalGeneration'], text_config=text_config.to_dict())
 
 
@@ -35,14 +39,15 @@ def _tiny_config():
     'meta_moe.MetaMoeForConditionalGeneration',
     'interns2_mobius.InternS2MobiusForConditionalGeneration',
     'qwen3_5_mtp.Qwen3_5MTPModel',
+    'qwen3_next.Qwen3NextForCausalLM',
 ])
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16, torch.float32])
+@pytest.mark.parametrize('checkpoint_dtype', [torch.bfloat16, torch.float16, torch.float32])
 @torch.inference_mode()
-def test_zero_centered_norm_loading(model_path, dtype):
+def test_offset_weight_norm_loading(model_path, dtype, checkpoint_dtype):
     module_name, class_name = model_path.split('.')
-    is_decision = module_name == 'intern_decision'
     model_class = getattr(importlib.import_module(f'lmdeploy.pytorch.models.{module_name}'), class_name)
-    config = _tiny_config()
+    config = Qwen3NextConfig(**_TINY_TEXT) if module_name == 'qwen3_next' else _tiny_config()
     context = BuildModelContext(language_model_only=True)
     with build_model_context(context):
         model = model_class(config, StepContextManager(context), dtype=dtype, device='cpu')
@@ -52,12 +57,14 @@ def test_zero_centered_norm_loading(model_path, dtype):
     weights = []
     expected = {}
     for name, norm in norms.items():
-        assert norm.weight.dtype == (torch.float32 if is_decision else dtype), name
+        # Zero-centered scales are stored in FP32 regardless of the model dtype.
+        assert norm.weight.dtype == torch.float32, name
         # This offset loses low bits when +1 is evaluated or stored in BF16/FP16.
-        offset = torch.full(norm.weight.shape, 0.24609375, dtype=dtype)
+        offset = torch.full(norm.weight.shape, 0.24609375, dtype=checkpoint_dtype)
         offset[0] = -1.0
+        offset[1] = 0.0001
         offset[-1] = 0.0
-        expected[name] = offset.float() + 1 if is_decision else offset + 1
+        expected[name] = offset.float() + 1
         checkpoint_name = f'{name}.weight'
         if module_name == 'qwen3_5_mtp':
             checkpoint_name = checkpoint_name.replace('model.', 'mtp.', 1)
@@ -66,7 +73,9 @@ def test_zero_centered_norm_loading(model_path, dtype):
     # Gated norms use direct scales; they must not inherit the +1 convention.
     gated = {name: module for name, module in model.named_modules()
              if name.endswith('linear_attn.norm')}
+    assert bool(gated) == (module_name != 'qwen3_5_mtp')
     for name, norm in gated.items():
+        assert isinstance(norm, RMSNormGated)
         assert norm.weight.dtype == dtype
         weights.append((f'{name}.weight', torch.full_like(norm.weight, 0.25)))
     model.load_weights(weights)
@@ -74,6 +83,22 @@ def test_zero_centered_norm_loading(model_path, dtype):
         torch.testing.assert_close(norm.weight, expected[name], rtol=0, atol=0, msg=name)
     for norm in gated.values():
         torch.testing.assert_close(norm.weight, torch.full_like(norm.weight, 0.25), rtol=0, atol=0)
+
+
+def test_ascend_qwen3_5_norms_keep_model_dtype(monkeypatch):
+    if 'torch_npu' not in sys.modules:
+        monkeypatch.setitem(sys.modules, 'torch_npu', ModuleType('torch_npu'))
+    config = _tiny_config()
+    # Full-attention layers exercise Q/K norms without importing NPU GatedDelta kernels.
+    config.text_config.layer_types = ['full_attention'] * config.text_config.num_hidden_layers
+    ctx = BuildModelContext(language_model_only=True)
+    with build_model_context(ctx), get_device_manager().context(DeviceContext('ascend')):
+        model = Qwen3_5ForConditionalGeneration(config, StepContextManager(ctx), dtype=torch.bfloat16, device='cpu')
+
+    norms = [module for module in model.modules() if isinstance(module, RMSNorm)]
+    assert norms
+    for norm in norms:
+        assert norm.weight.dtype == torch.bfloat16
 
 
 @pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float16])
@@ -122,7 +147,8 @@ def test_task_marker_survives_model_config_and_pickle(tmp_path, enabled):
                                  build_model_ctx=BuildModelContext(language_model_only=True))
     expected_class = InternDecisionForConditionalGeneration if enabled else Qwen3_5ForConditionalGeneration
     assert type(model) is expected_class
-    assert model.model.language_model.norm.weight.dtype == (torch.float32 if enabled else torch.bfloat16)
+    # Text norms stay FP32 either way; only the task marker decides the class.
+    assert model.model.language_model.norm.weight.dtype == torch.float32
     # A following ordinary build must not inherit a process-global mapping.
     ordinary = build_model_from_hf_config(config, dtype=torch.bfloat16, device=torch.device('cpu'),
                                           build_model_ctx=BuildModelContext(language_model_only=True))

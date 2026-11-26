@@ -7,12 +7,20 @@ import torch
 
 from lmdeploy.pytorch.backends.cuda.graph_runner.full_graph import CUDASingleGraphRunner
 from lmdeploy.pytorch.backends.cuda.token_dispatcher import DeepEPTokenDispatcherLowLatency
-from lmdeploy.pytorch.kernels.cuda.moe.route_mask import mask_invalid_routes
 
 
-def test_full_graph_rebinds_dummy_and_unpadded_count():
+@pytest.mark.parametrize(('has_dp_meta', 'deepep_enabled'), [(False, True), (True, False), (True, True)])
+def test_full_graph_rebinds_dummy_and_unpadded_count(has_dp_meta, deepep_enabled, monkeypatch):
     """Changing a Python dummy flag must change an already-captured graph."""
-    context = SimpleNamespace(dp_meta=object(), is_dummy=False, moe_valid_token_count=None)
+    import lmdeploy.pytorch.backends.cuda.graph_runner.full_graph as full_graph
+    import lmdeploy.pytorch.model_inputs as inputs
+    from lmdeploy.pytorch.backends.cuda.moe.ep_utils import mask_invalid_tokens
+
+    monkeypatch.setattr(full_graph, 'get_deepep_state', lambda: SimpleNamespace(enabled=lambda: deepep_enabled))
+
+    context = SimpleNamespace(dp_meta=object() if has_dp_meta else None, is_dummy=True, moe_valid_token_count=None)
+    monkeypatch.setattr(inputs, 'get_step_ctx_manager',
+                        lambda: SimpleNamespace(current_context=lambda: context))
     runner = object.__new__(CUDASingleGraphRunner)
     runner._graph = None
     runner._moe_valid_token_count = None
@@ -24,11 +32,12 @@ def test_full_graph_rebinds_dummy_and_unpadded_count():
     routes = original.clone()
     runner._bind_inputs(input_ids=torch.zeros(1, 4, device='cuda', dtype=torch.long))
     count = context.moe_valid_token_count
-    mask_invalid_routes(routes, count)
+    assert count is not None
+    mask_invalid_tokens(routes)
     torch.cuda.synchronize()
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
-        mask_invalid_routes(routes, count)
+        mask_invalid_tokens(routes)
     for dummy, tokens in [(True, 4), (False, 3), (False, 8), (True, 1), (False, 4)]:
         context.is_dummy = dummy
         runner._bind_inputs(input_ids=torch.zeros(1, tokens, device='cuda', dtype=torch.long))
@@ -38,6 +47,28 @@ def test_full_graph_rebinds_dummy_and_unpadded_count():
         expected = original.clone()
         expected[0 if dummy else tokens:] = -1
         torch.testing.assert_close(routes, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('is_dummy', [False, True])
+def test_full_graph_without_dp_or_deepep_skips_route_count(monkeypatch, is_dummy):
+    import lmdeploy.pytorch.backends.cuda.graph_runner.full_graph as full_graph
+
+    context = SimpleNamespace(dp_meta=None, is_dummy=is_dummy, moe_valid_token_count=None)
+    monkeypatch.setattr(full_graph, 'get_deepep_state', lambda: SimpleNamespace(enabled=lambda: False))
+    runner = object.__new__(CUDASingleGraphRunner)
+    runner._graph = None
+    runner._moe_valid_token_count = None
+    runner._ctx_mgr = SimpleNamespace(current_context=lambda: context)
+    runner.meta = SimpleNamespace(device=torch.device('cpu'))
+    runner.model = Mock()
+    runner.model.fill_buffers_cudagraph.return_value = {'padded': True}
+    input_ids = torch.zeros(1, 4, dtype=torch.long)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(torch, 'empty', Mock(side_effect=AssertionError('Unexpected route-count allocation')))
+        assert runner._bind_inputs(input_ids=input_ids) == {'padded': True}
+    assert runner._moe_valid_token_count is None
+    assert context.moe_valid_token_count is None
+    runner.model.update_context_cudagraph.assert_called_once_with(runner.meta, context)
 
 
 @pytest.mark.parametrize('asynchronous', [False, True])

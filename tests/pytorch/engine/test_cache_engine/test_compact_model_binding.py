@@ -244,7 +244,16 @@ def test_indexed_contract_does_not_migrate_other_consumers(monkeypatch, family, 
                 _qwen(5, device=device, family='qwen3_5' if family == 'qwen' else family))
     indexed = device == 'cuda' and family != 'intern_s2_preview'
     assert model.state_cache_is_indexed == indexed
-    assert model.states_shapes[0][0][-1] == (3 if indexed else 9)
-    assert len(model.states_shapes[1][0]) == (4 if indexed else 5)
+    if device == 'ascend' and family != 'glm':
+        # Ascend keeps one convolution/recurrent tensor per delta layer.
+        # Its convolution history is the first dimension, and recurrent state
+        # includes the speculative ring but no shared layer dimension.
+        assert len(model.states_shapes) == 4
+        assert model.states_shapes[0][0] == (9, 1024)
+        assert model.states_shapes[2][0] == (6, 4, 128, 128)
+        assert model.states_shapes[2][1] == torch.float32
+    else:
+        assert model.states_shapes[0][0][-1] == (3 if indexed else 9)
+        assert len(model.states_shapes[1][0]) == (4 if indexed else 5)
     if family != 'glm' and not indexed:
         assert not model.state_cache_specs

@@ -359,12 +359,11 @@ Scores return the probability-weighted mean of zero-based level indices, `confid
 For choices and scores, local `confidence` means the maximum calibrated candidate probability; it does not reproduce
 OpenAI's confidence calibration. This scorer does not emit model refusals.
 
-`usage.input_tokens` is the engine's input token count, including the scoring skeleton. Like Systemone,
-`output_tokens` counts the tokenized assistant skeleton, including decision markers but excluding chat wrappers.
-No tokens are generated. `total_tokens` is the sum of the reported input and output counts; the skeleton is not
-subtracted from `input_tokens`. This follows the reference deployment's usage convention. `input_tokens_details.cached_tokens`
-comes from the engine. **`cache_write_tokens: 0` is an unmeasured compatibility placeholder required by the SDK,
-not a measurement of cache writes.** `output_tokens_details.reasoning_tokens` is zero because no tokens are generated.
+`usage.input_tokens` is the engine's input token count, including the scoring skeleton and any visual tokens.
+Scoring runs during prefill without generation, so `output_tokens` and
+`output_tokens_details.reasoning_tokens` are both zero and `total_tokens` equals `input_tokens`.
+`input_tokens_details.cached_tokens` reports prefix cache hits from the engine.
+`input_tokens_details.cache_write_tokens` returns zero as an SDK compatibility placeholder for unmeasured cache writes.
 
 `model` is required in this protocol and accepts the served model name returned by `/v1/models`,
 `InternLM/<served-name>`, or `internlm/<lowercase-served-name>`.

@@ -596,3 +596,22 @@ def test_named_call_error_is_forwarded_and_siblings_close(chat_endpoint, fake_ra
     assert text.endswith('data: [DONE]\n\n')
     assert closed == set(range(1, n + 1))
     assert context.session_manager.sessions == {}
+
+
+@pytest.mark.parametrize('count', [1, 2, 3])
+def test_handler_forwards_choice_identity_to_preprocess(count, chat_endpoint,
+                                                        fake_raw_request, monkeypatch):
+    endpoint, context = chat_endpoint
+    engine = context.async_engine
+    original = engine.preprocess
+    indices = []
+
+    async def preprocess(*args, **kwargs):
+        indices.append(kwargs.get('trace_choice_index'))
+        assert kwargs['trace_model'] == 'fake-model'
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(engine, 'preprocess', preprocess)
+    response = asyncio.run(endpoint(_request(n=count), fake_raw_request))
+    assert len(response['choices']) == count
+    assert indices == ([None] if count == 1 else list(range(count)))

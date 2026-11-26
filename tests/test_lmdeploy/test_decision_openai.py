@@ -75,8 +75,7 @@ def test_three_types_use_existing_compiler_and_decoder():
     assert score['score'] == pytest.approx(1.3)
     assert [p['value'] for p in score['probabilities']] == [0, 1, 2]
     assert [p['label'] for p in score['probabilities']] == ['Low', 'Medium', 'High']
-    output_tokens = len(compile_row(legacy).messages[-1]['content'].encode('utf-8'))
-    assert result['usage'] == dict(input_tokens=37, output_tokens=output_tokens, total_tokens=37 + output_tokens,
+    assert result['usage'] == dict(input_tokens=37, output_tokens=0, total_tokens=37,
                                   input_tokens_details={'cached_tokens': 11, 'cache_write_tokens': 0},
                                   output_tokens_details={'reasoning_tokens': 0})
 
@@ -397,9 +396,9 @@ def test_http_protocol_dispatch_and_validation(http_service):
     result = client.post('/v1/decisions', json=request())
     assert result.status_code == 200
     assert [a['type'] for a in result.json()['answers']] == ['predicate', 'choice', 'score']
-    assert result.json()['usage']['output_tokens'] > 0
-    assert result.json()['usage']['total_tokens'] == (
-        result.json()['usage']['input_tokens'] + result.json()['usage']['output_tokens'])
+    usage = result.json()['usage']
+    assert usage['output_tokens'] == 0
+    assert usage['total_tokens'] == usage['input_tokens']
     count = len(context.async_engine.requests)
     assert client.post('/v1/systemone', json=request()).status_code == 422
     for change in ({'state': 'ambiguous'}, {'model': 'wrong'}):
@@ -425,5 +424,11 @@ def test_openapi_exposes_separate_protocols(http_service):
     assert decisions == {'$ref': '#/components/schemas/OpenAIDecisionRequest'}
     response = schema['paths']['/v1/decisions']['post']['responses']['200']['content']['application/json']['schema']
     assert response == {'$ref': '#/components/schemas/OpenAIDecisionResponse'}
+    schemas = schema['components']['schemas']
+    usage = schemas['DecisionTokenUsage']['properties']
+    for field, expected in [('input_tokens_details', {'cached_tokens', 'cache_write_tokens'}),
+                            ('output_tokens_details', {'reasoning_tokens'})]:
+        details = schemas[usage[field]['$ref'].rsplit('/', 1)[-1]]
+        assert set(details['properties']) == set(details['required']) == expected
     assert systemone['$ref'].endswith('/SystemoneRequest')
     assert '/v1/jev' not in schema['paths']

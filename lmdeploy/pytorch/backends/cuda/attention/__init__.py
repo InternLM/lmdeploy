@@ -126,6 +126,19 @@ def _build_paged_attention(spec: PagedAttentionBuildSpec) -> TritonAttentionImpl
         logger.debug('Build FlashMLAImpl Attention')
         from .mla import FlashMLAImpl
         return FlashMLAImpl(use_fa3=use_fa3, **common_args)
+
+    from lmdeploy.pytorch.distributed import get_dcp_world_rank
+    if get_dcp_world_rank()[0] > 1:
+        if spec.block_sparse_size != 1:
+            raise ValueError('DCP attention does not support block-sparse attention '
+                             f'(block_sparse_size={spec.block_sparse_size}). Use dcp=1.')
+        if tuple(sliding_window) != (-1, -1):
+            raise ValueError('GQA DCP does not support sliding-window attention '
+                             f'(sliding_window={spec.sliding_window}). Use dcp=1.')
+        if not spec.causal:
+            raise ValueError('GQA DCP does not support non-causal attention (causal=False). Use dcp=1.')
+        from .cp import DCPAttentionImpl
+        return DCPAttentionImpl(use_fa3=enable_fa3, **common_args)
     elif enable_fa3:
         logger.debug('Build FA3Impl Attention')
         from .fa3 import FA3Impl

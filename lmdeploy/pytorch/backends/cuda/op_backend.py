@@ -55,7 +55,7 @@ class CudaOpsBackend(DefaultOpsBackend):
         )
         from ..moe_router import RouterGemmBuildSpec, RouterNoauxTCBuildSpec
         from ..multinomial_sampling import MultinomialSamplingBuildSpec
-        from ..norm import RMSNormBuildSpec
+        from ..norm import RMSNormBuildSpec, RMSNormGatedBuildSpec
         from ..nsa import NSAIndexFP8BuildSpec
         from ..qmodules import LinearW8A8BuildSpec, RMSNormW8A8BuildSpec
         from ..rejection_sampling import RejectionSamplingBuildSpec
@@ -72,6 +72,9 @@ class CudaOpsBackend(DefaultOpsBackend):
         if isinstance(spec, RMSNormBuildSpec):
             from .norm import TritonRMSNormImpl
             return cast(ImplT, TritonRMSNormImpl(spec.hidden_size, spec.eps))
+        if isinstance(spec, RMSNormGatedBuildSpec):
+            from .norm import CudaRMSNormGatedImpl
+            return cast(ImplT, CudaRMSNormGatedImpl(spec.hidden_size, spec.eps, spec.activation))
         if isinstance(spec, RMSNormW8A8BuildSpec):
             from .qmodules import TritonRMSNormW8A8Impl
             return cast(ImplT, TritonRMSNormW8A8Impl(spec.hidden_size, spec.eps, spec.quant_dtype))
@@ -232,13 +235,14 @@ class CudaOpsBackend(DefaultOpsBackend):
         return CudaV4AttentionMetadata
 
     @classmethod
-    def build_communicator(cls, cpu_group, device_group, dist_config):
+    def build_communicator(cls, cpu_group, device_group, dist_config, *, group_name='tp'):
         """Build a CUDA communicator."""
         from .comm.communicator import build_cuda_communicator
         communicator = build_cuda_communicator(
             cpu_group=cpu_group,
             device_group=device_group,
             dist_config=dist_config,
+            group_name=group_name,
         )
         if communicator is not None:
             return communicator
@@ -246,6 +250,7 @@ class CudaOpsBackend(DefaultOpsBackend):
             cpu_group=cpu_group,
             device_group=device_group,
             dist_config=dist_config,
+            group_name=group_name,
         )
 
     @staticmethod

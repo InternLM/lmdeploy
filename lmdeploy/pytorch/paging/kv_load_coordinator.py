@@ -6,7 +6,7 @@ coordinator owns destination admission and bridges connector progress to
 sequence and GPU-block lifetimes without performing worker I/O itself:
 
 1. :meth:`try_load` polls lookup, admits the complete prefill, allocates exact
-   destinations, binds connector metadata, and calls :meth:`start_load`.
+   destinations, prepares paging state, and commits the connector binding.
 2. While workers may write those blocks, the sequence stays in
    ``WAITING_FOR_REMOTE_KVS`` and cannot be evicted or removed.
 3. :meth:`apply_load_results` publishes a successful load. Failed/cancelled
@@ -29,8 +29,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from lmdeploy.messages import EventType
 from lmdeploy.pytorch.kv_connector import KVLoadResult
-from lmdeploy.pytorch.messages import SchedulerSequence, SchedulerSession
+from lmdeploy.pytorch.messages import MessageStatus, SchedulerSequence, SchedulerSession
+from lmdeploy.trace import ENABLED as TRACE_ENABLED
 
 from .block_trie import PrefixCacheStats
 
@@ -50,6 +52,7 @@ class KVLoadAdmission(enum.Enum):
     PENDING = enum.auto()
     FULL_PREFILL_UNAVAILABLE = enum.auto()
     SOFT_BUDGET_UNAVAILABLE = enum.auto()
+    LOAD_STATE_UNAVAILABLE = enum.auto()
     STARTED = enum.auto()
 
 
@@ -341,6 +344,10 @@ class KVLoadCoordinator:
         if not self.can_admit_load(seq, plan.target_blocks):
             seq.kv_token_limit = plan.original_kv_token_limit
             return KVLoadAdmission.SOFT_BUDGET_UNAVAILABLE
+        if (self.state_manager is not None
+                and not self.block_trie.state_checkpoints.make_load_state_available(seq)):
+            seq.kv_token_limit = plan.original_kv_token_limit
+            return KVLoadAdmission.LOAD_STATE_UNAVAILABLE
         return None
 
     def _allocate_and_start_load(
@@ -348,11 +355,17 @@ class KVLoadCoordinator:
         seq: SchedulerSequence,
         plan: _LoadPlan,
     ) -> None:
-        """Allocate destinations, bind them, then transfer paging ownership."""
+        """Allocate destinations and prepare paging before binding the
+        connector."""
         connector = self.connector
         assert connector is not None
         original_num_blocks = seq.num_blocks
         original_state_slot = seq.logical_state
+        request_id = int(seq.seq_id)
+        if request_id in self._loads:
+            raise RuntimeError(f'request {request_id} already has an external KV load')
+        previous_target = self._prefill_targets.get(request_id)
+        previous_status = seq.status
         try:
             # Allocate only the checked remote interval. The unallocated local
             # tail remains represented by the plan's soft target.
@@ -367,20 +380,19 @@ class KVLoadCoordinator:
                 int(block_id)
                 for block_id in block_table[load_start_block:remote_block]
             )
-            connector.update_state_after_alloc(
-                seq,
-                load_block_ids,
-                plan.remote_step - plan.load_start_step,
-            )
-            # From start_load onward, cleanup must retain destinations until
-            # workers report terminal progress or their queues are drained.
-            self.start_load(
-                seq,
-                load_start_step=plan.load_start_step,
-                remote_step=plan.remote_step,
-                target_blocks=plan.target_blocks,
-            )
+            self.start_load(seq, load_start_step=plan.load_start_step,
+                            remote_step=plan.remote_step, target_blocks=plan.target_blocks)
+            # Commit the connector lease last. Until this synchronous call returns,
+            # workers cannot observe the provisional paging state.
+            connector.update_state_after_alloc(seq, load_block_ids, plan.remote_step - plan.load_start_step)
         except Exception:
+            self._loads.pop(request_id, None)
+            if previous_target is None:
+                self._prefill_targets.pop(request_id, None)
+            else:
+                self._prefill_targets[request_id] = previous_target
+            if previous_status == MessageStatus.WAITING and seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS:
+                seq.state.finish_remote_load()
             if seq.num_blocks > original_num_blocks:
                 self.block_manager.truncate(seq, original_num_blocks)
             if self.state_manager is not None and original_state_slot < 0:
@@ -388,6 +400,17 @@ class KVLoadCoordinator:
             seq.kv_token_limit = plan.original_kv_token_limit
             raise
         seq.kv_token_limit = None
+        if self.state_manager is not None:
+            # A tentative local match may have selected an older checkpoint.
+            # Store will fill the runtime slot directly, so no restore copy
+            # may later overwrite it. Keep the restore intact if binding fails.
+            self.block_trie.state_checkpoints.unpin_restore(seq)
+            seq.prefix_cache.restore.clear()
+        # Match vLLM's admission-time counters: the reloaded partial FA block
+        # belongs to the external prefix, and transfer outcomes do not undo a hit.
+        if TRACE_ENABLED:
+            seq.record_event(EventType.KV_LOAD_STARTED, value=plan.remote_step - plan.load_start_step)
+        self.record_cache_query(seq, plan.load_start_step, plan.remote_step - plan.load_start_step)
 
     def start_load(
         self,
@@ -397,21 +420,8 @@ class KVLoadCoordinator:
         remote_step: int,
         target_blocks: int,
     ) -> None:
-        """Take paging ownership after destinations have been allocated.
-
-        :meth:`try_load` first allocates the exact destination range and binds
-        connector metadata. Only then does this method move the sequence out of
-        normal waiting and expose the asynchronous write to cleanup paths.
-        """
+        """Prepare paging ownership before the connector commits its lease."""
         request_id = int(seq.seq_id)
-        if request_id in self._loads:
-            raise RuntimeError(f'request {request_id} already has an external KV load')
-        if self.state_manager is not None:
-            # A tentative local match may have selected an older checkpoint.
-            # Store will fill the runtime slot directly, so no restore copy
-            # may later overwrite it. We do not retain a rollback snapshot.
-            self.block_trie.state_checkpoints.unpin_restore(seq)
-            seq.prefix_cache.restore.clear()
         seq.state.begin_remote_load()
         self.track_prefill(seq, target_blocks=target_blocks)
         match_start_step = seq.prefix_cache.match_start_step
@@ -423,9 +433,6 @@ class KVLoadCoordinator:
             load_start_step=load_start_step,
             remote_step=remote_step,
         )
-        # Match vLLM's admission-time counters: the reloaded partial FA block
-        # belongs to the external prefix, and transfer outcomes do not undo a hit.
-        self.record_cache_query(seq, load_start_step, remote_step - load_start_step)
 
     def is_remote_ready(self, seq: SchedulerSequence) -> bool:
         """Return whether loaded KV is published but prefill is not
@@ -452,6 +459,10 @@ class KVLoadCoordinator:
                 continue
             if (record.deferred_cleanup is not _DeferredLoadCleanup.NONE
                     or not result.success):
+                if TRACE_ENABLED:
+                    event = (EventType.KV_LOAD_CANCELLED
+                             if record.deferred_cleanup is not _DeferredLoadCleanup.NONE else EventType.KV_LOAD_FAILED)
+                    record.seq.record_event(event)
                 self._rollback(record)
                 self._finish_cancelled_or_failed(record)
             else:
@@ -468,6 +479,8 @@ class KVLoadCoordinator:
                     record.seq.all_routed_experts.resize(start)
                     record.seq.append_routed_experts(routes)
                 self._publish(record)
+                if TRACE_ENABLED:
+                    record.seq.record_event(EventType.KV_LOAD_FINISHED)
 
     def _publish(self, record: _LoadRecord) -> None:
         """Publish fully written blocks and return the sequence to waiting.

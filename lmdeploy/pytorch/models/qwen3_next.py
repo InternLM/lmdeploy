@@ -8,10 +8,12 @@ from torch import nn
 from transformers.configuration_utils import PretrainedConfig
 
 import lmdeploy.pytorch.distributed as dist
+from lmdeploy.pytorch.backends.gated_delta_rule import GatedDeltaReplayState, build_gated_delta_replay_state
+from lmdeploy.pytorch.consts import GDN_REPLAY_CURSOR_CACHE_NAME
 from lmdeploy.pytorch.distributed import get_dist_manager, get_tp_world_rank
 from lmdeploy.pytorch.model_inputs import StepContext, StepContextManager
 from lmdeploy.pytorch.nn import ApplyRotaryEmb, Attention, RMSNorm, SiluAndMul, build_rotary_embedding_from_config
-from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta, build_rmsnorm_gated
+from lmdeploy.pytorch.nn.gated_delta import CausalConv1d, GatedDelta, GatedDeltaMeta
 from lmdeploy.pytorch.nn.linear import (
     build_colwise_linear,
     build_merged_colwise_linear,
@@ -20,6 +22,7 @@ from lmdeploy.pytorch.nn.linear import (
     build_rowwise_linear,
 )
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
+from lmdeploy.pytorch.nn.norm import RMSNormGated
 from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader, load_weight
 
 from .utils.cudagraph import CudaGraphMixin
@@ -83,11 +86,11 @@ class Qwen3NextGatedDeltaNet(nn.Module):
         self.make_params(self.num_v_heads, device=device)
         self.A_log_exp = None
 
-        self.norm = build_rmsnorm_gated(self.head_v_dim,
-                                        eps=self.layer_norm_epsilon,
-                                        activation=self.activation,
-                                        dtype=dtype,
-                                        device=device)
+        self.norm = RMSNormGated(self.head_v_dim,
+                                 eps=self.layer_norm_epsilon,
+                                 activation=self.activation,
+                                 dtype=dtype,
+                                 device=device)
         self.out_proj = build_o_proj(self.value_dim,
                                      self.hidden_size,
                                      bias=False,
@@ -146,13 +149,17 @@ class Qwen3NextGatedDeltaNet(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        past_key_value: tuple[torch.Tensor, torch.Tensor],
+        past_key_value: tuple[torch.Tensor, torch.Tensor] | GatedDeltaReplayState,
         gated_delta_meta: GatedDeltaMeta,
     ):
         """forward."""
 
         # load states
-        conv_state, recurrent_state = past_key_value[:2]
+        if isinstance(past_key_value, GatedDeltaReplayState):
+            conv_state = past_key_value if past_key_value.shared_conv_state is not None else past_key_value.conv_state
+            recurrent_state = past_key_value
+        else:
+            conv_state, recurrent_state = past_key_value[:2]
 
         # inputs proj
         projected_states_qkvz = self.in_proj_qkvz(hidden_states)
@@ -251,11 +258,13 @@ class Qwen3NextAttention(nn.Module):
                               config.rms_norm_eps,
                               quant_config=quantization_config,
                               dtype=dtype,
+                              offset_weight=True,
                               device=device)
         self.k_norm = RMSNorm(head_dim,
                               config.rms_norm_eps,
                               quant_config=quantization_config,
                               dtype=dtype,
+                              offset_weight=True,
                               device=device)
 
     def forward(
@@ -471,10 +480,12 @@ class Qwen3NextDecoderLayer(nn.Module):
                                        config.rms_norm_eps,
                                        quant_config=quantization_config,
                                        dtype=dtype,
+                                       offset_weight=True,
                                        device=device)
 
         # build attention layer norm
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size, config.rms_norm_eps, dtype=dtype, offset_weight=True, device=device)
 
     def forward(
         self,
@@ -539,7 +550,7 @@ class Qwen3NextModel(nn.Module):
         ])
 
         # build norm
-        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, device=device)
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps, dtype=dtype, offset_weight=True, device=device)
 
         # build rotary embedding
         self.rotary_emb = build_rotary_embedding_from_config(config)
@@ -657,13 +668,26 @@ class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
         attn_metadata = context.attn_metadata
 
         # make past_key_values
-        state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
-        state_caches = list(zip(state_caches[0], state_caches[1]))
+        replay_enabled = (context.named_state_caches is not None
+                          and GDN_REPLAY_CURSOR_CACHE_NAME in context.named_state_caches)
+        if replay_enabled:
+            buffer_len = self.ctx_mgr.build_ctx.replayssm_buffer_len
+            tmax = self.ctx_mgr.build_ctx.num_spec_tokens + 1
+        else:
+            state_caches = list(cache.transpose(0, 1) for cache in context.state_caches)
+            state_caches = list(zip(state_caches[0], state_caches[1]))
         past_key_values = list(past_key_values)
         new_past_key_values = []
         for layer_type in self.config.layer_types:
             if layer_type == 'linear_attention':
-                new_past_key_values.append(state_caches.pop(0))
+                if replay_enabled:
+                    new_past_key_values.append(
+                        build_gated_delta_replay_state(context.named_state_caches,
+                                                       len(new_past_key_values),
+                                                       buffer_len, tmax,
+                                                       getattr(context, 'replayssm_force_flush', None)))
+                else:
+                    new_past_key_values.append(state_caches.pop(0))
             elif layer_type == 'full_attention':
                 new_past_key_values.append(past_key_values.pop(0))
 
@@ -732,8 +756,6 @@ class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
             down_param = ('.experts.down', f'.experts.{exp_id}.down_proj', exp_id, 'down')
             expert_params_mapping += [gate_param, up_param, down_param]
 
-        rms_norm_keys = ['model.norm', '.input_layernorm', '.post_attention_layernorm', '.q_norm', '.k_norm']
-
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
 
@@ -761,9 +783,5 @@ class Qwen3NextForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                     load_weight(param, loaded_weight, shard_id=shard_id)
                     break
                 else:
-                    for rms_norm_key in rms_norm_keys:
-                        if rms_norm_key in name and 'weight' in name:
-                            loaded_weight = loaded_weight + 1
-                            break
                     param = params_dict[name]
                     load_weight(param, loaded_weight)

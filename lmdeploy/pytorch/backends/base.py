@@ -92,13 +92,14 @@ class OpsBackend(ABC):
         yield
 
     @classmethod
-    def build_communicator(cls, cpu_group, device_group, dist_config):
+    def build_communicator(cls, cpu_group, device_group, dist_config, *, group_name='tp'):
         """Build a device communicator."""
         from .communicator import build_communicator
         return build_communicator(
             cpu_group=cpu_group,
             device_group=device_group,
             dist_config=dist_config,
+            group_name=group_name,
         )
 
     @staticmethod
@@ -117,3 +118,8 @@ class OpsBackend(ABC):
     def support_ray():
         """Support ray."""
         return False
+
+    @staticmethod
+    def build_moe_forward_dptp(gemm_func):
+        from lmdeploy.pytorch.nn.moe.base import MoEForwardDPTP
+        return MoEForwardDPTP(gemm_func)

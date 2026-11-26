@@ -114,7 +114,11 @@ class FlashInferAllReduce:
         """Return the workspace for the input shape and dtype."""
         hidden_dim = input.size(-1)
         if self._workspace is not None:
-            assert self._hidden_dim == hidden_dim and self._dtype == input.dtype
+            # A TP group can serve projections with different widths/dtypes.
+            # Preserve the existing workspace (including captured addresses)
+            # and let incompatible inputs use the process-group fallback.
+            if self._hidden_dim != hidden_dim or self._dtype != input.dtype:
+                return None
             return self._workspace
 
         rank = dist.get_rank(self.group)
@@ -180,11 +184,11 @@ class FlashInferAllReduce:
                 or not weight.is_contiguous()):
             return None
 
-        norm_out = torch.empty_like(input_2d)
-        residual_out = torch.empty_like(residual_2d)
         workspace = self._get_workspace(input_2d)
         if workspace is None:
             return None
+        norm_out = torch.empty_like(input_2d)
+        residual_out = torch.empty_like(residual_2d)
         self._comm.allreduce_fusion(
             input=input_2d,
             workspace=workspace,

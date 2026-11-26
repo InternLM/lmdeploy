@@ -292,8 +292,7 @@ class DecisionParser:
         return {**row, 'questions': questions}, {token: ref for ref, token in tokens.items()}
 
     def prepare_input(self, *, tokenizer, allowed_media_domains=None) -> DecisionInput:
-        """Prepare request-owned data; wire protocols require a tokenizer for
-        usage."""
+        """Prepare the compiled prompt and the Systemone usage count."""
         if tokenizer is None:
             raise ValueError('Decision wire protocols require a tokenizer to prepare input and usage')
         row = (self.request.model_dump(exclude={'model'}, exclude_unset=True) if self.systemone
@@ -325,9 +324,10 @@ class DecisionParser:
         if sentinels or self._image_inputs:
             message = self.compiled.messages[1]
             message['content'] = image_content(message['content'], sentinels, self._images_by_ref)
-        self._assistant_output_tokens = sum(
-            len(tokenizer.encode(message['content'], add_bos=False, add_special_tokens=False))
-            for message in self.compiled.messages if message['role'] == 'assistant')
+        if self.systemone:
+            self._assistant_output_tokens = sum(
+                len(tokenizer.encode(message['content'], add_bos=False, add_special_tokens=False))
+                for message in self.compiled.messages if message['role'] == 'assistant')
         self.candidate_ids = tuple(
             tuple(self.context.symbol_ids[symbol] for symbol in self.compiled.symbols[field])
             for field in self.compiled.fields)
@@ -420,8 +420,8 @@ class DecisionParser:
             results.append(answer)
         return OpenAIDecisionResponse(
             model=model_name, answers=results,
-            usage=dict(input_tokens=output.input_token_len, output_tokens=self._assistant_output_tokens,
-                       total_tokens=output.input_token_len + self._assistant_output_tokens,
+            usage=dict(input_tokens=output.input_token_len, output_tokens=output.generate_token_len,
+                       total_tokens=output.input_token_len + output.generate_token_len,
                        # Cache writes are not exposed by GenOut. Zero is a documented
                        # SDK compatibility placeholder, not a measured write count.
                        input_tokens_details=dict(cached_tokens=output.cached_tokens, cache_write_tokens=0),

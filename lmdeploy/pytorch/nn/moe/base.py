@@ -271,7 +271,8 @@ class FusedMoEBase(nn.Module):
                         moe_type=MoeType.Default,
                     ))['hidden_states']
 
-            self._forward_dptp = MoEForwardDPTP(__gemm_func)
+            from lmdeploy.pytorch.backends import get_backend
+            self._forward_dptp = get_backend().build_moe_forward_dptp(__gemm_func)
         else:
             self._forward_dptp = None
 

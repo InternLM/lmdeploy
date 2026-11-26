@@ -270,6 +270,7 @@ class MooncakeStoreKeyMetadata:
     block_size: int
     kv_head_replica_num: int = 1
     state_schema: str | None = None
+    layout_fingerprint: str = ''
     routed_experts_shape: tuple[int, int] | None = None
 
     def __post_init__(self) -> None:
@@ -296,6 +297,7 @@ def build_store_key(
         raise ValueError(f'block_hash must contain {MOONCAKE_BLOCK_HASH_BYTES} bytes')
 
     prefix = f'{metadata.cache_prefix}@' if metadata.cache_prefix else ''
+    layout = f'@layout:{metadata.layout_fingerprint}' if metadata.layout_fingerprint else ''
     # Compact recovery is one KV+state contract. Legacy keys remain unchanged.
     state_schema = f'@state:{metadata.state_schema}' if metadata.state_schema else ''
     route_schema = ''
@@ -303,7 +305,7 @@ def build_store_key(
         layers, topk = metadata.routed_experts_shape
         route_schema = f'@r3:u16-token-layer-topk-v2:{metadata.block_size}:{layers}:{topk}:tp{metadata.tp_size}'
     return (
-        f'{prefix}{metadata.model_name}'
+        f'{prefix}{metadata.model_name}{layout}'
         f'@tp_rank:{kv_head_rank}'
         f'@group:{group_id}{state_schema}{route_schema}'
         f'@{block_hash.hex()}'
