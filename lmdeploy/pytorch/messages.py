@@ -333,6 +333,10 @@ class SchedulerSession:
             embeddings=input_embeddings,
             mode=UpdateTokenMode.INPUTS,
         )
+        if migration_request is not None and migration_request.handoff is not None and multimodals is None:
+            # Restore before prefix matching or connector lookup; image placeholders alone are not cache identities.
+            seq.prefix_cache.multimodal_spans = list(migration_request.handoff.multimodal_spans)
+            seq.pd_metadata_only = bool(seq.prefix_cache.multimodal_spans)
         status = MessageStatus.WAITING if migration_request is None else MessageStatus.MIGRATION_WAITING
         self._lifecycle.add_sequence(seq, status)
 
@@ -679,6 +683,7 @@ class SchedulerSequence:
     preserve_cache: bool = False
     pd_prompt_tokens: np.ndarray | None = None
     pd_decode_pending: bool = False
+    pd_metadata_only: bool = False
 
     # For logging
     engine_events: list[EngineEvent] = field(default_factory=list)
@@ -1030,7 +1035,9 @@ class SchedulerSequence:
         if multimodals is None:
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
-        if self._seq_meta.enable_prefix_caching or self._seq_meta.enable_mooncake_store:
+        # PD handoffs must bind image content even when prefix reuse is disabled.
+        if (self._seq_meta.enable_prefix_caching or self._seq_meta.enable_mooncake_store
+                or self.preserve_cache or self.migration_request is not None):
             self._update_prefix_cache_spans(multimodals)
         self.history_multimodals.add_inputs(multimodals)
         if self._seq_meta.use_mrope:
@@ -1093,6 +1100,9 @@ class SchedulerSequence:
 
         if num_rope_pos == 0:
             next_pos = 0
+            if (self.migration_request is not None and self.migration_request.handoff is not None
+                    and self.history_multimodals.empty()):
+                next_pos = self.migration_request.handoff.mrope_position_delta or 0
         else:
             next_pos = self.history_mrope_pos_ids[-1].max() + 1
 
@@ -1134,6 +1144,9 @@ class SchedulerSequence:
             pos_ids.append(text_pos_ids[:, None].repeat(3, axis=1))
             pos_ids = np.concatenate(pos_ids, axis=0)
 
+        # Imported prompt positions are never executed. Only their final position anchors future decode positions.
+        if num_rope_pos == 0 and next_pos < 0:
+            np.maximum(pos_ids, 0, out=pos_ids)
         self.history_mrope_pos_ids.append(pos_ids)
 
     def update_token_ids(self,

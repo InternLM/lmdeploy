@@ -548,6 +548,7 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
     loop = EngineLoop.__new__(EngineLoop)
     loop.scheduler = _Scheduler()
     loop.inputs_maker = _InputsMaker()
+    loop.config = EngineLoopConfig(role=EngineRole.Hybrid)
     loop.has_runable_event = RunableEventAsync(loop.scheduler, loop.inputs_maker.has_pending_long_context_chunk)
     loop._sleep_requested = False
 

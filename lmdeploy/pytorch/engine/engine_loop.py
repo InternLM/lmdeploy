@@ -514,6 +514,17 @@ class EngineLoop:
                 outputs[session_id].logits = logit
         return outputs
 
+    def _reject_pd_media_recompute(self):
+        """A metadata-only receive cannot replay its image prompt after
+        preemption."""
+        if self.config.role != EngineRole.Decode:
+            return
+        for seq in list(self.scheduler.waiting):
+            if seq.pd_metadata_only:
+                response_reqs(self.req_manager, seq.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                              err_msg='PD multimodal cache was preempted; retry the request through Prefill.')
+                self.scheduler.end_session(seq.session_id)
+
     async def _main_loop_try_send_next_inputs(self):
         """Try send next inputs."""
         if not self.has_runable_event.has_unfinished():
@@ -521,6 +532,7 @@ class EngineLoop:
         if self._sleep_requested:
             return None, None
 
+        self._reject_pd_media_recompute()
         self.forward_started_at = time.monotonic()
         result = await self.inputs_maker.send_next_inputs()
         self.forward_started_at = None
@@ -530,6 +542,7 @@ class EngineLoop:
         """Prefetch the next batch unless sleep has started."""
         if self._sleep_requested:
             return None, None
+        self._reject_pd_media_recompute()
         result = await self.inputs_maker.prefetch_next_inputs()
         # Refill after selection, while the already queued forward executes.
         self.scheduler.prefetch_kv_lookups()

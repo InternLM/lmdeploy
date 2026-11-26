@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from lmdeploy.messages import GenerationConfig
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.serve.core.async_engine import AsyncEngine, PreprocessedRequest
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
 from lmdeploy.serve.managers import SessionManager
@@ -49,6 +50,24 @@ def test_preprocess_returns_single_use_prepared_request():
         assert request.consumed is False
 
     asyncio.run(_run())
+
+
+def test_pd_prompt_reuse_never_calls_media_processor():
+    class _ForbiddenProcessor:
+
+        async def get_prompt_input(self, **kwargs):
+            pytest.fail('Decode must not render or preprocess the imported prompt')
+
+    async def run():
+        engine = _engine(_ForbiddenProcessor())
+        migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill',
+                                     remote_session_id=1, prompt_text='rendered <image> prompt')
+        request = await engine.preprocess(None, 7, input_ids=[1, 2, 2, 3], do_preprocess=False,
+                                          gen_config=GenerationConfig(max_new_tokens=8, migration_request=migration))
+        assert request.inputs == {'input_ids': [1, 2, 2, 3], 'prompt': 'rendered <image> prompt'}
+        assert request.gen_config.migration_request.prompt_text is None
+
+    asyncio.run(run())
 
 
 def test_preprocess_reports_context_error_and_removes_session():

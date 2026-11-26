@@ -116,15 +116,20 @@ def test_raw_input_ids_have_ids_without_rendered_prompt(chat_endpoint, stream, n
     assert context.session_manager.sessions == {}
 
 
-@pytest.mark.parametrize('migrating', [False, True])
-def test_pd_reuses_prompt_ids_and_preserves_parser_messages(chat_endpoint, migrating):
+@pytest.mark.parametrize('migrating, empty_messages', [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize('image', [False, True])
+def test_pd_reuses_prompt_ids_and_preserves_parser_messages(chat_endpoint, migrating, image, empty_messages):
     _, context = chat_endpoint
     ids = [91, 92, 93, 94]
     original_preprocess = context.async_engine.preprocess
+    messages = [{'role': 'user', 'content': ([{'type': 'text', 'text': 'Hello'},
+                 {'type': 'image_url', 'image_url': {'url': 'http://unreachable/image.png'}}] if image else 'Hello')}]
+    if empty_messages:
+        messages = []
 
     class Parser(context.response_parser_cls):
         def __init__(self, request):
-            assert request.messages == [{'role': 'user', 'content': 'Hello'}]
+            assert request.messages == messages
             super().__init__(request)
 
     async def preprocess(messages, session, **kwargs):
@@ -133,6 +138,8 @@ def test_pd_reuses_prompt_ids_and_preserves_parser_messages(chat_endpoint, migra
         assert kwargs['do_preprocess'] is not migrating
         if migrating:
             assert kwargs['gen_config'].migration_request.prompt_token_ids is None
+            assert kwargs['gen_config'].migration_request.handoff.multimodal_spans == (
+                [(1, 3, 'image', 'hash')] if image else [])
         return await original_preprocess(messages, session, **kwargs)
 
     context.response_parser_cls = Parser
@@ -140,11 +147,37 @@ def test_pd_reuses_prompt_ids_and_preserves_parser_messages(chat_endpoint, migra
     migration = dict(protocol=2, remote_engine_id='prefill', remote_session_id=1, prompt_token_ids=ids,
                      handoff=dict(transfer_id='transfer', engine_epoch='epoch', cache_schema='schema',
                                   prompt_digest='digest', prompt_token_count=4, valid_token_count=4,
+                                  multimodal_spans=[(1, 3, 'image', 'hash')] if image else [],
                                   first_token_id=95, random_seed=42, random_offset=5,
                                   block_size=64, block_ids=[1]))
-    payloads = _post(context, return_token_ids=True,
+    payloads = _post(context, messages=messages, return_token_ids=True,
                      **({'migration_request': migration} if migrating else {}))
     assert payloads[0]['prompt_token_ids'] == (ids if migrating else [101, 102, 103, 104])
+
+
+@pytest.mark.parametrize('invalid', ['missing_prompt_ids', 'old_handoff'])
+def test_invalid_multimodal_handoff_is_rejected_before_preprocessing(chat_endpoint, invalid):
+    _, context = chat_endpoint
+
+    async def preprocess(*args, **kwargs):
+        pytest.fail('Invalid handoffs must not preprocess or fetch media on Decode.')
+
+    context.async_engine.preprocess = preprocess
+    migration = dict(protocol=2, remote_engine_id='prefill', remote_session_id=1,
+                     handoff=dict(transfer_id='transfer', engine_epoch='epoch', cache_schema='schema',
+                                  prompt_digest='digest', prompt_token_count=4, valid_token_count=4,
+                                  multimodal_spans=[(1, 3, 'image', 'hash')], first_token_id=95,
+                                  random_seed=42, random_offset=5, block_size=64, block_ids=[1]))
+    if invalid == 'old_handoff':
+        migration['prompt_token_ids'] = [91, 92, 93, 94]
+        migration['handoff']['version'] = 3
+    app = FastAPI()
+    register(app, context)
+    with TestClient(app) as client:
+        response = client.post('/v1/chat/completions', json=dict(
+            model='fake-model', messages=[], migration_request=migration))
+    assert response.status_code == 400
+    assert ('version' if invalid == 'old_handoff' else 'requires the expanded prompt_token_ids') in response.text
 
 
 @pytest.mark.parametrize('stream', [False, True])

@@ -44,6 +44,14 @@ def test_handoff_requires_full_prompt_and_first_token_progress():
     with pytest.raises(ValueError, match='exactly'):
         PDHandoff(**(fields | dict(block_ids=[3])))
     assert PDHandoff(**(fields | dict(block_ids=[]))).state_ids == [7, 11]
+    for span in [(-1, 4, 'image', 'hash'), (4, 4, 'image', 'hash'), (4, 67, 'image', 'hash'),
+                 (0, 4, 'image', '')]:
+        with pytest.raises(ValueError, match='multimodal spans'):
+            PDHandoff(**(fields | dict(multimodal_spans=[span])))
+    with pytest.raises(ValueError, match='continuation positions'):
+        PDHandoff(**(fields | dict(mrope_position_delta=-66)))
+    with pytest.raises(ValueError):
+        PDHandoff(**(fields | dict(version=3)))
 
 
 def test_engine_info_uses_runtime_attention_tp():

@@ -7,9 +7,11 @@ from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig, SSMStateCapaci
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest, PDControlRequest, PDHandoff
 from lmdeploy.pytorch.disagg.messages import PDTransferResult
 from lmdeploy.pytorch.messages import SequenceMeta, UpdateTokenMode
+from lmdeploy.pytorch.multimodal.data_type import MultiModalData, get_image_mrope_pos_ids
 from lmdeploy.pytorch.paging.pd_coordinator import prompt_digest
 from lmdeploy.pytorch.paging.scheduler import Scheduler
 from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
 
 
 def make_export(cached_tokens=0):
@@ -24,6 +26,70 @@ def make_export(cached_tokens=0):
     seq.update_token_ids(np.array([8]), mode=UpdateTokenMode.PREFILL)
     handoff = scheduler.pd_coordinator.publish(seq, 'schema', [])
     return scheduler, seq, handoff
+
+
+@pytest.mark.parametrize('prefix_cache', [False, True])
+@pytest.mark.parametrize('spans', [[(0, 4)], [(6, 10)], [(12, 16)], [(2, 6), (12, 16)]])
+def test_multimodal_handoff_checks_content_and_resumes_positions(prefix_cache, spans):
+    def make_scheduler():
+        cache = CacheConfig(max_batches=2, block_size=4, num_gpu_blocks=32, num_cpu_blocks=0,
+                            enable_prefix_caching=prefix_cache)
+        return Scheduler(SchedulerConfig(max_batches=2, max_session_len=64), cache,
+                         SequenceMeta(4, strategy=ARSpecSequenceStrategy(), use_mrope=True))
+
+    def images(value=1):
+        grid = torch.tensor([1, 4, 4])
+        return dict(image=[MultiModalData(torch.full((4, 2), value + i), start, end,
+                                         meta=dict(grid_thw=grid), mrope_pos_ids=get_image_mrope_pos_ids(grid))
+                           for i, (start, end) in enumerate(spans)])
+
+    tokens = np.arange(16)
+    for start, end in spans:
+        tokens[start:end] = 1000
+    prefill, decode = make_scheduler(), make_scheduler()
+    source = prefill.add_session(1).add_sequence(tokens, multimodals=images(), preserve_cache=True)
+    source.prepare_pd_prefill()
+    prefill.block_manager.allocate(source)
+    source.sampling_param.random_seed = 42
+    source.update_token_ids(np.array([101]), draft_token_ids=np.array([102, 103]),
+                            model_meta=dict(rope_delta=-2), mode=UpdateTokenMode.PREFILL)
+    handoff = prefill.pd_coordinator.publish(source, 'schema', [], draft_token_ids=[102, 103])
+    handoff = PDHandoff.model_validate_json(handoff.model_dump_json())
+    migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill',
+                                 remote_session_id=1, handoff=handoff)
+    assert handoff.multimodal_spans == source.prefix_cache.multimodal_spans
+    assert handoff.mrope_position_delta < 0
+    for corrupted in ['tokens', 'hash', 'position']:
+        wrong_migration = migration.model_copy(deep=True)
+        wrong_tokens = tokens.copy()
+        if corrupted == 'tokens':
+            wrong_tokens[0] += 1
+        elif corrupted == 'hash':
+            span = wrong_migration.handoff.multimodal_spans[0]
+            wrong_migration.handoff.multimodal_spans[0] = span._replace(content_hash='different-image')
+        else:
+            wrong_migration.handoff.mrope_position_delta += 1
+        wrong = decode.add_session(2).add_sequence(wrong_tokens, migration_request=wrong_migration)
+        with pytest.raises(ValueError, match='does not match'):
+            decode.pd_coordinator.validate_receive(wrong, 'schema')
+        decode.end_session(2)
+
+    target = decode.add_session(3).add_sequence(tokens, migration_request=migration)
+    assert target.history_multimodals.empty() and target.pd_metadata_only
+    assert target.get_prefix_cache_multimodal_identity(0, 16) == source.get_prefix_cache_multimodal_identity(0, 16)
+    decode.pd_coordinator.validate_receive(target, 'schema')
+    assert decode.schedule_migration() == [target]
+    result = PDTransferResult(transfer_id=handoff.transfer_id, status='completed')
+    assert decode.pd_coordinator.finish_receive(target, result) == 'ready'
+    assert target.num_history_ids == len(tokens)
+    assert target.generated_ids.tolist() == [101]
+    assert target.token_ids.tolist() == [101, 102, 103]
+    assert target.get_input_multimodals() == {}
+    assert target.model_meta == source.model_meta
+    np.testing.assert_array_equal(target.mrope_pos_ids, source.mrope_pos_ids)
+    for seq in [source, target]:
+        seq.update_token_ids(np.array([104, 105]), draft_token_ids=np.array([106, 107]), mode=UpdateTokenMode.DECODE)
+    np.testing.assert_array_equal(target.mrope_pos_ids, source.mrope_pos_ids)
 
 
 @pytest.mark.parametrize('cached_tokens', [0, 4])

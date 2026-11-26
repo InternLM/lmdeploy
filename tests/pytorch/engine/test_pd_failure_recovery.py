@@ -188,3 +188,27 @@ def test_receive_completion_wakes_idle_migration_loop_without_spinning():
         await task
 
     asyncio.run(run())
+
+
+def test_preempted_metadata_only_decode_fails_without_replaying_images():
+    async def run():
+        async def migrate(batch):
+            return [PDTransferResult(transfer_id=batch.receives[0].handoff.transfer_id, status='completed')]
+
+        loop, prefill, seq, responses = make_transfer(migrate)
+        seq.pd_metadata_only = True
+        await loop._receive_handoff(seq)
+        await asyncio.gather(*loop._pd_control_tasks)
+        loop.scheduler.schedule_pd_decode()
+        loop.scheduler.preempt_seqs([seq])
+        assert not loop.scheduler.schedule(is_prefill=True).running
+        loop._reject_pd_media_recompute()
+        assert responses == [ResponseType.INTERNAL_ENGINE_ERROR]
+        assert 'retry the request through Prefill' in seq.resp.err_msg
+        assert not loop.scheduler.waiting
+        assert not prefill.pd_coordinator.has_pending()
+        assert loop.scheduler.block_manager.get_num_free_gpu_blocks() == 8
+        replacement = loop.scheduler.add_session(3).add_sequence(np.arange(9))
+        assert loop.scheduler.schedule(is_prefill=True).running == [replacement]
+
+    asyncio.run(run())

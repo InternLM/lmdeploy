@@ -588,7 +588,12 @@ class AsyncEngine:
                 input_ids = prompt_input.get('input_ids')
             else:
                 prompt = None
+                if gen_config is not None and gen_config.migration_request is not None:
+                    prompt = gen_config.migration_request.prompt_text
+                    gen_config.migration_request.prompt_text = None
                 prompt_input = dict(input_ids=input_ids)
+                if prompt is not None:
+                    prompt_input['prompt'] = prompt
 
             if input_ids is None:
                 raise RequestError(ErrorCode.PREPROCESS_FAILED)

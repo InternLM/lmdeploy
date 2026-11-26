@@ -17,8 +17,11 @@ from .compact_state import SSMStateManager, StateAccess
 
 
 def prompt_digest(seq, tokens) -> str:
-    """Bind a handoff to tokens, adapter and multimodal content identity."""
-    identity = (seq.adapter_name, seq.get_prefix_cache_multimodal_identity(0, len(tokens)))
+    """Bind a handoff to tokens, adapter, media identities and continuation
+    positions."""
+    delta = (int(seq.history_mrope_pos_ids[len(tokens) - 1].max()) + 1 - len(tokens)
+             if seq._seq_meta.use_mrope else None)
+    identity = (seq.adapter_name, seq.get_prefix_cache_multimodal_identity(0, len(tokens)), delta)
     digest = hashlib.sha256(np.asarray(tokens, dtype='<i8').tobytes())
     digest.update(json.dumps(identity, default=str, sort_keys=True).encode())
     return digest.hexdigest()
@@ -75,6 +78,7 @@ class PDCoordinator:
         handoff = seq.migration_request.handoff
         if (handoff.cache_schema != cache_schema or handoff.block_size != seq.block_size
                 or handoff.prompt_token_count != seq.num_valid_ids
+                or (handoff.mrope_position_delta is not None) != seq._seq_meta.use_mrope
                 or handoff.prompt_digest != prompt_digest(seq, seq.valid_ids)):
             raise ValueError('PD handoff does not match this prompt or execution schema.')
 
@@ -175,6 +179,9 @@ class PDCoordinator:
                             first_token_id=int(seq.generated_ids[0]), draft_token_ids=list(draft_token_ids),
                             random_seed=seq.sampling_param.random_seed, random_offset=seq.num_valid_ids,
                             first_token_logprobs=first_token_logprobs, model_meta=seq.model_meta,
+                            multimodal_spans=list(seq.get_prefix_cache_multimodal_identity(0, boundary)),
+                            mrope_position_delta=(int(seq.history_mrope_pos_ids[boundary - 1].max()) + 1 - boundary
+                                                  if seq._seq_meta.use_mrope else None),
                             state_ids=state_ids if compact and boundary else [], auxiliary_id=auxiliary,
                             legacy_state_id=legacy)
         access = None

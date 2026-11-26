@@ -101,6 +101,8 @@ PyTorch Mooncake PD 后端默认每个 worker 使用 4 个传输线程，所有 
 export LMDEPLOY_PD_TRANSFER_THREADS=8
 ```
 
+使用 Rust lmdeploy-router 的完整 prefill PD 链路时，仅 Prefill 处理图片。Decode 接收展开后的 prompt token IDs、图片 span 身份和后续位置状态，以及完整的 prompt KV/状态缓存和首个输出 token，不再下载或预处理图片。该链路使用 handoff version 4，需要同时更新 Prefill、Decode 和 router，无需新增部署参数。如果仅有元数据的多模态请求在 Decode 上被抢占，请求会失败，需要经过 Prefill 重试，因为 Decode 没有用于重算的图片数据。
+
 ## 分发策略
 
 代理服务目前的分发策略如下：

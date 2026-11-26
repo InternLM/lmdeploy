@@ -102,6 +102,8 @@ Set `LMDEPLOY_PD_TRANSFER_THREADS` to a positive integer before starting the API
 export LMDEPLOY_PD_TRANSFER_THREADS=8
 ```
 
+With the Rust lmdeploy-router's full-prefill PD path, only Prefill preprocesses media. Decode receives the expanded prompt token IDs, media span identities, and continuation positions, together with the complete prompt KV/state cache and first output token. It does not download or preprocess the images again. This uses handoff version 4; update Prefill, Decode, and the router together. No additional deployment flag is required. If a metadata-only multimodal request is preempted on Decode, it fails and must be retried through Prefill because Decode has no image data for recomputation.
+
 ## Dispatch Strategy
 
 The current distribution strategies of the proxy service are as follows:
