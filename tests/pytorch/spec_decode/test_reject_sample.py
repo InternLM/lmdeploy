@@ -291,10 +291,14 @@ class TestRejectSample:
         for i in range(2):
             assert len(valid[i]) == 1, f'row {i}: expected 1 token, got {valid[i]}'
 
-    def test_request_seed_survives_rng_interference_and_batch_changes(self):
+    @pytest.mark.parametrize('all_accepted', [False, True])
+    def test_request_seed_survives_rng_interference_and_batch_changes(self, all_accepted):
         batch, width, vocab = 16, 4, 32
         logits = torch.linspace(-2, 2, vocab, device=device).expand(batch, width, -1).contiguous()
         drafts = torch.full((batch, width - 1), vocab - 1, device=device, dtype=torch.long)
+        if all_accepted:
+            logits[:, :-1] = -float('inf')
+            logits[:, :-1, vocab - 1] = 0
         rows = torch.arange(batch, device=device)
 
         def sample(indices, seed_delta=0, offset_delta=0):
@@ -308,6 +312,9 @@ class TestRejectSample:
         # Includes the bonus sampler and the strided per-request RNG inputs.
         rng_state = torch.cuda.get_rng_state()
         expected = sample(rows)
+        if all_accepted:
+            assert (expected[1] == 0).all()
+            torch.testing.assert_close(expected[0][:, :-1], drafts)
         assert torch.equal(torch.cuda.get_rng_state(), rng_state)
         torch.rand(4096, device=device)
         for indices in (rows, rows.flip(0), rows[::2], rows[1:2]):
@@ -344,6 +351,24 @@ class TestRejectSample:
         actual = CudaRejectionSamplingImpl().forward(logits, drafts, bonus, **kwargs)
         for result, reference in zip(actual, expected):
             torch.testing.assert_close(result, reference, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize('backend, arch, warp_size', [('cuda', 90, 32), ('hip', 'gfx942', 64)])
+def test_recovery_kernel_compiles(backend, arch, warp_size):
+    import triton
+    from triton.backends.compiler import GPUTarget
+    from triton.compiler import ASTSource
+
+    from lmdeploy.pytorch.kernels.cuda.rejection_sampling import _sample_recovered_tokens_kernel
+
+    signature = dict(
+        partial_scores_ptr='*fp32', partial_tokens_ptr='*i64', num_rejected_tokens_ptr='*i64',
+        draft_token_ids_ptr='*i64', draft_probs_ptr='*fp32', target_probs_ptr='*fp32',
+        random_seeds_ptr='*i64', random_offsets_ptr='*i64', is_greedy_ptr='*i1',
+        seed_stride='i32', offset_stride='i32', num_spec_tokens='i32', vocab_size='i32', num_vocab_blocks='i32')
+    source = ASTSource(_sample_recovered_tokens_kernel, signature,
+                       constexprs=dict(BLOCK_SIZE=1024, NO_DRAFT_PROBS=True))
+    triton.compile(source, target=GPUTarget(backend, arch, warp_size))
 
 
 @pytest.mark.parametrize('backend', ['default', pytest.param('cuda', marks=pytest.mark.skipif(

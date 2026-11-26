@@ -2,7 +2,7 @@
 import torch
 import triton
 import triton.language as tl
-from triton.language.extra.cuda import libdevice
+from triton.language.extra import libdevice
 
 from lmdeploy.pytorch.backends.rejection_sampling import PLACEHOLDER_TOKEN_ID
 
