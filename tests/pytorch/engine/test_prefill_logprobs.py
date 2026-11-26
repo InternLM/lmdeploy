@@ -253,6 +253,7 @@ def test_cancelled_scoring_response_drops_partial_accumulator(monkeypatch):
 @pytest.mark.parametrize('sampling_param', [
     SamplingParam(max_new_tokens=0, logprob_start_len=-1),
     SamplingParam(max_new_tokens=0, num_logprobs=0, logprob_start_len=0),
+    SamplingParam(max_new_tokens=0, num_logprobs=0, logprob_start_len=0, return_routed_experts=True),
 ])
 def test_zero_token_prefill_finishes_without_committing_inert_token(
         sampling_param):
@@ -270,11 +271,12 @@ def test_zero_token_prefill_finishes_without_committing_inert_token(
     state.finish = lambda: setattr(state, 'status', MessageStatus.STOPPED)
     seq.set_state(state)
     seq.update_token_ids(np.array([1, 2, 3]), mode=UpdateTokenMode.INPUTS)
+    routes = torch.arange(6).reshape(3, 1, 2)
     outputs = SimpleNamespace(
         next_token_ids=torch.tensor([99]),
         stopped=torch.tensor([True]),
         model_metas=[{'turn': 1}],
-        all_routed_experts=None,
+        all_routed_experts=routes,
     )
     inputs = SimpleNamespace(seq_length=torch.tensor([3]),
                              is_decoding=False)
@@ -286,3 +288,7 @@ def test_zero_token_prefill_finishes_without_committing_inert_token(
     assert seq.num_token_ids == 0
     assert seq.generated_ids.tolist() == []
     assert seq.model_meta == {'turn': 1}
+    if sampling_param.return_routed_experts:
+        np.testing.assert_array_equal(seq.routed_experts, routes[:-1].numpy())
+    else:
+        assert seq.routed_experts is None

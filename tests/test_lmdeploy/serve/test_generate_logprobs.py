@@ -170,15 +170,18 @@ class _NonemptyEngine:
                  expect_image=False,
                  expected_logprobs=1,
                  logprob_token_ids=None,
-                 logprobs=None):
+                 logprobs=None,
+                 routed_experts=None):
         self.backend_config = PytorchEngineConfig(
-            logprobs_mode='raw_logprobs', role=EngineRole.Hybrid)
+            logprobs_mode='raw_logprobs', role=EngineRole.Hybrid,
+            enable_return_routed_experts=routed_experts is not None)
         self.session_mgr = _SessionManager()
         self.epoch = 1
         self.expect_image = expect_image
         self.expected_logprobs = expected_logprobs
         self.logprob_token_ids = logprob_token_ids or [2, 3]
         self.logprobs = logprobs or [{2: -0.25, 8: -2.0}, {3: -0.5, 9: -3.0}]
+        self.routed_experts = routed_experts
 
     async def preprocess(self, **kwargs):
         if self.expect_image:
@@ -196,6 +199,7 @@ class _NonemptyEngine:
         assert kwargs['gen_config'].max_new_tokens == 0
         assert kwargs['gen_config'].logprob_start_len == 0
         assert kwargs['gen_config'].logprobs == self.expected_logprobs
+        assert kwargs['gen_config'].return_routed_experts is (self.routed_experts is not None)
         return SimpleNamespace(input_token_len=len(self.logprob_token_ids) + 1)
 
     async def generate(self, prepared_request, stream_response=True):
@@ -204,7 +208,7 @@ class _NonemptyEngine:
         yield SimpleNamespace(
             response='',
             token_ids=[],
-            routed_experts=None,
+            routed_experts=self.routed_experts,
             logprob_token_ids=self.logprob_token_ids,
             logprobs=self.logprobs,
             finish_reason='length',
@@ -217,18 +221,21 @@ async def _call_nonempty_route(stream,
                                image_data=None,
                                top_logprobs_num=None,
                                logprob_token_ids=None,
-                               logprobs=None):
+                               logprobs=None,
+                               routed_experts=None):
     engine = _NonemptyEngine(
         expect_image=image_data is not None,
         expected_logprobs=top_logprobs_num or 1,
         logprob_token_ids=logprob_token_ids,
-        logprobs=logprobs)
+        logprobs=logprobs,
+        routed_experts=routed_experts)
     context = _ServerContext(engine.backend_config, async_engine=engine)
     generate = _make_generate(context)
     request = GenerateReqInput(input_ids=[1, 2, 3],
                                image_data=image_data,
                                return_logprob=True,
                                logprob_start_len=0,
+                               return_routed_experts=routed_experts is not None,
                                max_tokens=0,
                                top_logprobs_num=top_logprobs_num,
                                stream=stream)
@@ -307,11 +314,13 @@ def test_generate_keeps_decode_top_logprobs():
 
 
 def test_generate_nonempty_input_logprobs_nonstream():
-    result = asyncio.run(_call_nonempty_route(stream=False))
+    routes = [[[0, 1]], [[2, 3]]]
+    result = asyncio.run(_call_nonempty_route(stream=False, routed_experts=routes))
     assert result.text == ''
     assert result.output_ids == []
     assert result.meta_info.input_token_logprobs == [(-0.25, 2), (-0.5, 3)]
     assert result.meta_info.output_token_logprobs is None
+    assert result.meta_info.routed_experts == routes
 
 
 def test_generate_input_logprobs_allow_image_with_input_ids():
@@ -353,7 +362,8 @@ def test_generate_nonempty_input_top_logprobs_nonstream():
 
 
 def test_generate_nonempty_input_logprobs_stream():
-    body = asyncio.run(_call_nonempty_route(stream=True))
+    body = asyncio.run(_call_nonempty_route(stream=True, routed_experts=[[[0, 1]], [[2, 3]]]))
     assert body.count('"input_token_logprobs":[[-0.25,2],[-0.5,3]]') == 1
+    assert body.count('"routed_experts":[[[0,1]],[[2,3]]]') == 1
     assert body.count('\ndata: ') == 1
     assert body.endswith('data: [DONE]\n\n')

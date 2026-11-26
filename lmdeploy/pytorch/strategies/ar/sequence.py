@@ -149,7 +149,8 @@ class ARSequenceStrategy(SequenceStrategy):
             if update_mode == UpdateTokenMode.PREFILL and msg.sampling_param.max_new_tokens == 0:
                 msg.update_token_ids(np.empty((0,), dtype=np.int64),
                                      model_meta=model_meta,
-                                     mode=UpdateTokenMode.PREFILL)
+                                     mode=UpdateTokenMode.PREFILL,
+                                     routed_experts=routed_experts)
                 msg.finish()
                 continue
 
