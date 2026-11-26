@@ -235,6 +235,8 @@ class RayWorkerWrapper(WorkerWrapperBase):
 class RayExecutor(ExecutorBase):
     """Ray executor."""
 
+    _ep_visible_devices: str | None = None
+
     @staticmethod
     def _get_worker_release_timeout(cache_config: CacheConfig | None) -> float:
         """Allow external buffer registrations to be released before killing
@@ -277,7 +279,11 @@ class RayExecutor(ExecutorBase):
         with get_device_manager().context(device_ctx):
             self._needs_symm_mem_device_setup = False
             if device_type == 'cuda':
-                self._needs_symm_mem_device_setup = _needs_symm_mem_device_setup(dist_config)
+                if (backend_config.specialized_executor and dist_config.dp == dist_config.ep > 1
+                        and dist_config.attn_tp == 1):
+                    self._ep_visible_devices = os.getenv('LMDEPLOY_EP_CUDA_VISIBLE_DEVICES')
+                self._needs_symm_mem_device_setup = bool(self._ep_visible_devices) or _needs_symm_mem_device_setup(
+                    dist_config)
             logger.info('Init ray cluster.')
             attn_tp = dist_config.attn_tp
             self.ray_ctx = RayContext(attn_tp, dp=dist_config.dp, device_type=device_type)
@@ -761,6 +767,8 @@ class RayExecutor(ExecutorBase):
                     # Symmetric-memory IPC needs peer TP GPUs to stay visible.
                     # Keep the inherited visibility and bind each actor below.
                     runtime_env['env_vars']['RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES'] = '1'
+                    if self._ep_visible_devices:
+                        runtime_env['env_vars']['CUDA_VISIBLE_DEVICES'] = self._ep_visible_devices
                 if _envs.ray_nsys_enable:
                     runtime_env = _update_runtime_env_nsys(runtime_env)
                 worker = ray.remote(
@@ -787,7 +795,11 @@ class RayExecutor(ExecutorBase):
         driver_ip = _get_master_addr()
         if device_str == 'cuda':
             self.workers = self._sort_workers(driver_ip, self.workers)
-            if self._needs_symm_mem_device_setup:
+            if self._ep_visible_devices:
+                # The DP frontend owns one actor. Use its ordinal in the shared peer mask.
+                local_device = self._ep_visible_devices.split(',').index(os.environ['CUDA_VISIBLE_DEVICES'])
+                ray.get(self.workers[0].set_device.remote(local_device))
+            elif self._needs_symm_mem_device_setup:
                 # Ray did not narrow CUDA visibility, so select each actor's
                 # placement-group assignment before distributed initialization.
                 bindings = ray.get([

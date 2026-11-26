@@ -58,10 +58,18 @@ def get_host_ip():
 
 def _run_server(gpu_ids: list[int], model_path: str, **kwargs):
     """Launch a server process."""
-    cuda_visible_devices = ','.join([str(_) for _ in gpu_ids])
     os.setpgrp()
-    if len(gpu_ids) > 0:
-        os.environ['CUDA_VISIBLE_DEVICES'] = cuda_visible_devices
+    if gpu_ids:
+        cfg = kwargs.get('backend_config')
+        peers = os.getenv('LMDEPLOY_EP_CUDA_VISIBLE_DEVICES')
+        if (peers and getattr(cfg, 'specialized_executor', None) and cfg.device_type == 'cuda'
+                and cfg.dp == cfg.ep > 1 and cfg.tp == 1):
+            devices = peers.split(',')
+            if len(devices) != cfg.ep or len(set(devices)) != cfg.ep:
+                raise ValueError('Expected one distinct visible device per EP rank.')
+            os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(devices[i] for i in gpu_ids)
+        else:
+            os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(map(str, gpu_ids))
     try:
         serve(model_path, **kwargs)
     except Exception:

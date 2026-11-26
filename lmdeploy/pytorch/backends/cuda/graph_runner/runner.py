@@ -25,8 +25,13 @@ from ...graph_runner import GraphRunner, is_preparing_prefill
 from .full_graph import CUDASingleGraphRunner, build_decode_model_forward
 
 if TYPE_CHECKING:
+    from lmdeploy.pytorch.specialized_execution import DecodePlan, SpecializedExecution
+
     from ..attention import TritonAttentionMetadata
     from .piecewise import PiecewiseGraphManager
+
+
+logger = get_logger('lmdeploy')
 
 
 @functools.lru_cache
@@ -119,6 +124,8 @@ def _destroy_deepep_buffer() -> None:
 
 class CUDAGraphRunner(GraphRunner):
     """Dispatch model forwards among full graph, piecewise graph, and eager."""
+
+    specialized_execution: SpecializedExecution | None = None
 
     def __init__(self, model: torch.nn.Module, model_config: ModelConfig, cache_config: CacheConfig,
                  backend_config: BackendConfig, device: torch.device):
@@ -233,24 +240,31 @@ class CUDAGraphRunner(GraphRunner):
             output = self.model(**kwargs)
             return self.model.make_output_buffers(output)
 
-    def _forward_full_graph(self, **kwargs):
+    def _forward_full_graph(self, plan: DecodePlan | None = None, /, **kwargs):
         """Capture or replay one existing full decode CUDA graph."""
         graph_key = self.get_graph_key(**kwargs)
+        if plan is not None and plan.graph_safe and plan.matches_shape(graph_key[0], graph_key[3]):
+            graph_key += (plan,)
+        else:
+            plan = None
         runner = self._full_graph_runners.get(graph_key)
         if runner is None:
-            return self._capture_full_graph(graph_key, kwargs)
+            forward = (self._get_decode_model_forward() if plan is None else
+                       functools.partial(self.specialized_execution.executor.run, plan))
+            return self._capture_full_graph(graph_key, kwargs, forward)
 
+        if plan is not None:
+            logger.debug('Replaying specialized decode graph %s', plan.name)
         return runner.forward(**kwargs)
 
-    def _capture_full_graph(self, graph_key: tuple, kwargs: dict[str, Any]):
+    def _capture_full_graph(self, graph_key: tuple, kwargs: dict[str, Any], forward: Callable):
         """Capture and publish a full graph for one cache miss."""
-        logger = get_logger('lmdeploy')
         rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
         started = time.perf_counter()
         logger.info('CUDA graph capture begin: model=%s rank=%d key=%s', type(self.model).__name__, rank, graph_key)
         runner = CUDASingleGraphRunner(
             self.model,
-            model_forward=self._get_decode_model_forward(),
+            model_forward=forward,
             max_batches=graph_key[0],
             max_tokens=self._get_max_tokens(graph_key, kwargs['input_ids'], kwargs['attn_metadata'].q_seqlens),
             num_blocks=self.num_blocks,
@@ -274,8 +288,16 @@ class CUDAGraphRunner(GraphRunner):
         step_context = self.ctx_mgr.current_context()
         _update_deepep_mode(step_context)
 
+        plan = None
+        execution = self.specialized_execution
+        if execution is not None and step_context.global_is_decoding():
+            plan = execution.select(step_context, step_context.q_seqlens.numel())
         if self._should_use_full_graph(step_context, kwargs):
-            return self._forward_full_graph(**kwargs)
+            return self._forward_full_graph(plan, **kwargs)
+        if plan is not None:
+            with record_function('forward_specialized'):
+                logger.debug('Running specialized eager decode %s', plan.name)
+                return self.model.make_output_buffers(execution.executor.run(plan, **kwargs))
 
         descriptor = self._get_piecewise_graph_descriptor(step_context, kwargs)
         if descriptor is not None:

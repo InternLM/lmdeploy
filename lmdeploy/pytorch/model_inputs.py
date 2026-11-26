@@ -261,6 +261,8 @@ class ModelInputs:
     ssm_prefill_meta: SSMPrefillMetadata | None = None
     # -1 keeps the cursor, 0 resets to zero state, >0 reads a checkpoint.
     ssm_source_state_ids: torch.Tensor | None = None
+    # One dispatch's cross-rank decision, or the startup warmup plan.
+    specialized_plan: int | None = None
 
     def __post_init__(self):
         ids = self.ssm_source_state_ids
@@ -347,6 +349,8 @@ class ModelInputs:
     def clone(self, **kwargs):
         """Get new ModelInputs with updated fields."""
         out_dict = {f.name: getattr(self, f.name) for f in fields(self)}
+        if kwargs:
+            out_dict['specialized_plan'] = None
         out_dict.update(kwargs)
         return ModelInputs(**out_dict)
 
@@ -412,6 +416,7 @@ class StepContext:
     # Full-graph device scalar: zero for dummy DP steps, otherwise the
     # unpadded token count. Its address stays fixed while replay values change.
     moe_valid_token_count: torch.Tensor | None = None
+    specialized_plan: int | None = None
 
     @classmethod
     def new(
@@ -484,6 +489,7 @@ class StepContext:
             mrope_position_ids=inputs.mrope_pos_ids,
             is_chunk_multimodal=inputs.is_chunk_multimodal,
             is_dummy=inputs.is_dummy,
+            specialized_plan=inputs.specialized_plan,
             is_chunk=inputs.is_chunk,
             is_first_chunk=inputs.is_first_chunk,
             is_last_chunk=inputs.is_last_chunk,

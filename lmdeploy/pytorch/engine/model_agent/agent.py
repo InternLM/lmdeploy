@@ -370,6 +370,9 @@ class BaseModelAgent:
         trust_remote_code (bool): Trust remote code
     """
 
+    _specialized_provider: str | None = None
+    specialized_execution = None
+
     def __init__(
         self,
         model_path: str,
@@ -430,6 +433,7 @@ class BaseModelAgent:
         self.need_output = rank % self.dist_config.attn_tp == 0
 
         self.patched_model = None
+        self._specialized_provider = backend_config.specialized_executor
         self.cache_engine = None
         self.block_cache_plan = None
         self.compact_state_plan = None
@@ -616,6 +620,12 @@ class BaseModelAgent:
                     inputs.dp_meta.dp_is_decoding = True
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} start.')
                 self._forward_impl(inputs)
+                execution = self.specialized_execution
+                if execution is not None and not self.backend_config.eager_mode:
+                    for index, plan in enumerate(execution.plans, start=1):
+                        if plan.graph_safe and plan.matches_shape(inputs.seq_length.numel(), inputs.max_q_seqlen):
+                            # All workers use reserved dummy slots in startup warmup.
+                            self._forward_impl(inputs.clone(specialized_plan=index))
                 torch.cuda.synchronize()
                 logger.debug(f'Warmup decoding num_tokens={num_tokens} done.')
 
@@ -840,17 +850,19 @@ class BaseModelAgent:
             dp_forward_meta.enable_microbatch = enable_microbatch
         group = self.dist_ctx.cpu_group
         device = 'cpu'
-        gathered_meta = DistGatherScalar(
-            dp_forward_meta.values(
-                is_spec_enabled=is_spec_enabled,
-                is_microbatch_enabled=is_microbatch_enabled,
-            ),
-            world_size,
-            device=device,
-            group=group,
-        )
+        values = dp_forward_meta.values(is_spec_enabled=is_spec_enabled, is_microbatch_enabled=is_microbatch_enabled)
+        execution = self.specialized_execution
+        if execution is not None:
+            values.append(execution.propose(inputs, batch_size))
+        gathered = DistGatherScalar(values, world_size, device=device, group=group)
+        columns = (await gathered.async_wait()).cpu()
+        plan = 0
+        if execution is not None:
+            from lmdeploy.pytorch.specialized_execution import agree_on_plan
+            plan = agree_on_plan(columns[:, -1].tolist())
+            columns = columns[:, :-1]
         gathered_meta = GatheredDPForwardMeta.from_values(
-            (await gathered_meta.async_wait()).cpu(),
+            columns,
             is_spec_enabled=is_spec_enabled,
             is_microbatch_enabled=is_microbatch_enabled,
         )
@@ -883,6 +895,8 @@ class BaseModelAgent:
         inputs.build_dp_meta(all_num_tokens)
         inputs.dp_meta.dp_batches = all_batch_sizes
         inputs.dp_meta.dp_is_decoding = global_is_decoding
+        if execution is not None:
+            inputs.specialized_plan = plan if global_is_decoding and not inputs.enable_microbatch else 0
         if is_spec_enabled:
             inputs.dp_meta.dp_draft_num_tokens = gathered_meta.all_draft_num_tokens
         inputs = self.patched_model.update_inputs(inputs)
@@ -1587,6 +1601,26 @@ class BaseModelAgent:
             add_adapters(patched_model, adapters, dtype=self.model_config.dtype, device=device)
         self.patched_model = patched_model
         self.build_model_ctx = build_model_ctx
+        if self._specialized_provider and not self.misc_config.empty_init:
+            self._prepare_specialized_execution(patched_model)
+
+    def _prepare_specialized_execution(self, model):
+        """Prepare target weights before cache sizing, or after an explicit
+        refresh."""
+        speculative = self.spec_agent.is_enabled()
+        if (self.backend_config.device_type != 'cuda' or self.memdecode_agent is not None or self.adapters
+                or self.model_config.enable_replayssm
+                or self.model_config.model_paradigm != ('ar_spec' if speculative else 'ar')
+                or (speculative and (getattr(self.spec_agent, 'method', None) != 'deepseek_mtp'
+                                     or self.spec_agent.num_spec_tokens <= 0))):
+            logger.info('Specialized executor skipped for this device or model configuration.')
+            return
+        from lmdeploy.pytorch.specialized_execution import BuildContext, build_specialized_execution
+        ctx = BuildContext(model, self.model_config, self.cache_config, self.backend_config, self.dist_ctx,
+                           next(model.parameters()).device, self.spec_agent.num_spec_tokens if speculative else 0)
+        self.specialized_execution = build_specialized_execution(self._specialized_provider, ctx)
+        logger.info('Specialized target decode plans: %s',
+                    self.specialized_execution.plans if self.specialized_execution else ())
 
     def build_model(self):
         """Build model api."""
@@ -1643,6 +1677,8 @@ class BaseModelAgent:
                                                             cache_config=self.cache_config,
                                                             backend_config=self.backend_config,
                                                             device=self.device)
+            if self.specialized_execution is not None:
+                self.patched_model.specialized_execution = self.specialized_execution
             self.spec_agent.build_graph_runner()
             if self.memdecode_agent is not None:
                 self.memdecode_agent.build_graph_runner()
@@ -1770,6 +1806,11 @@ class BaseModelAgent:
         with self.all_context():
             self._validate_mtp_parallel_config()
             self._shutdown_kv_connector()
+            if (self.specialized_execution is not None and self.cache_engine is not None
+                    and hasattr(self.patched_model, 'reset')):
+                # Both the ordinary and specialized graphs capture arena addresses.
+                torch.cuda.synchronize()
+                self.patched_model.reset()
             dist_ctx = get_dist_manager().current_context()
             dist_cfg = self.dist_config
             tp = dist_cfg.attn_tp
@@ -1859,8 +1900,14 @@ class BaseModelAgent:
         with self.all_context():
             self._prev_chunk_output = None
             self._prev_chunk_last_logit = None
+            if self.specialized_execution is not None:
+                torch.cuda.synchronize()
             if hasattr(self.patched_model, 'reset'):
                 self.patched_model.reset()
+            if self.specialized_execution is not None:
+                self.patched_model.specialized_execution = None
+                self.specialized_execution.executor.close()
+                self.specialized_execution = None
 
             self.spec_agent.reset_graph_runner()
             if self.memdecode_agent is not None:
@@ -1894,6 +1941,9 @@ class BaseModelAgent:
         # FusedMoE finalization may replace Parameter objects, so captured
         # graphs must not retain pointers to the previous weights.
         self.reset_graph_runner()
+        if self._specialized_provider and not self.state.is_sleeping:
+            self._prepare_specialized_execution(model)
+            self.patched_model.specialized_execution = self.specialized_execution
         # PCG serving never captures missing plans. An active PCG runner must
         # be refreshed here; a sleeping runner has no cache arena and is
         # warmed by KV-cache wakeup instead.
@@ -2233,6 +2283,11 @@ class BaseModelAgent:
                 self._rebuild_models_after_level2_sleep()
 
         if 'kv_cache' in tags:
+            if self._specialized_provider and self.specialized_execution is None:
+                model = self.patched_model.get_model()
+                if next(model.parameters()).device.type == 'cuda':
+                    self._prepare_specialized_execution(model)
+                    self.patched_model.specialized_execution = self.specialized_execution
             self.build_cache_engine()
             self.warmup()
             self.state.is_sleeping = False

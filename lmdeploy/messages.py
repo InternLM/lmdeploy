@@ -566,6 +566,7 @@ class PytorchEngineConfig:
         empty_init: Whether to load the model weights, you should set
             it to True if you want to update weights after create the pipeline
         enable_microbatch: enable microbatch for specified model
+        specialized_executor: Optional module:Class for target decode or MTP verification.
         enable_eplb: enable eplb for specified model
         enable_metrics: enable metrics system
         role: role of engin, options: ['Hybrid', 'Prefill',
@@ -656,6 +657,7 @@ class PytorchEngineConfig:
     kv_transfer_config: KVTransferConfig | dict[str, Any] | None = None
     piecewise_cudagraph_max_tokens: int | None = None
     communication_backend: Literal['nccl', 'auto'] = 'nccl'
+    specialized_executor: str | None = None
 
     def __post_init__(self):
         """Check input validation."""
