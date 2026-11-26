@@ -76,32 +76,34 @@ def test_query_padding_real_cache_write_isolation(monkeypatch, width, inactive, 
     assert query.state_offsets.tolist() == ([-1] * 4 if inactive else [8, -1, -1, -1])
 
 
-@pytest.mark.parametrize('inactive', [False, True])
+@pytest.mark.parametrize(('inactive', 'batch_bound'), [(False, 1), (False, 2), (True, 2)])
+@pytest.mark.parametrize('has_optional_fields', [False, True])
 @pytest.mark.parametrize('graph', [False, True])
 def test_block_query_physical_padding_and_metadata_ownership(
-        monkeypatch, inactive, graph):
+        monkeypatch, inactive, batch_bound, has_optional_fields, graph):
     width = 5  # Cross a kernel-block boundary; Q=N/N+1 layouts are covered below.
     monkeypatch.setattr(
         DPMeta, 'build',
         staticmethod(lambda n, counts: DPMeta(tp_sizes=list(counts),
                                               moe_tp_sizes=list(counts))))
-    plan = BlockDraftStepPlan((2, 1), (True, not inactive), True)
+    plan = BlockDraftStepPlan((batch_bound, 1), (True, not inactive), True)
     meta = DPMeta(tp_sizes=[12, 6],
                   moe_tp_sizes=[12, 6],
-                  dp_batches=[2, 1],
+                  dp_batches=[batch_bound, 1],
                   dp_is_decoding=True,
                   block_plan=plan)
-    inp = ModelInputs(input_ids=torch.arange(width)[None],
+    inp = ModelInputs(input_ids=torch.arange(10, 10 + width)[None],
                       seq_length=torch.tensor([width]),
                       history_lengths=torch.tensor([64]),
                       block_offsets=torch.tensor([[30, 31]]),
                       is_decoding=True,
-                      num_ignored_history=torch.zeros(1, dtype=torch.long),
+                      num_ignored_history=torch.tensor([3]) if has_optional_fields else None,
+                      local_adapter_ids=torch.tensor([7]) if has_optional_fields else None,
                       max_q_seqlen=width,
                       max_kv_seqlen=64 + width,
                       sum_kv_seqlen=64 + width,
                       dp_meta=meta,
-                      state_offsets=torch.tensor([8]),
+                      state_offsets=torch.tensor([8]) if has_optional_fields else None,
                       target_position_ids=torch.arange(64, 64 + width)[None],
                       is_chunk=inactive,
                       is_last_chunk=False)
@@ -121,16 +123,25 @@ def test_block_query_physical_padding_and_metadata_ownership(
     cache = SimpleNamespace(cache_config=SimpleNamespace(
         block_size=8, kernel_block_size=4, num_reserved_gpu_blocks=0))
     out = prepare_query(proposer, inp, cache)
-    bound = 4 if graph else 2
+    bound = 4 if graph else batch_bound
     assert out.input_ids.shape == (1, bound * width)
     assert out.dp_meta.tp_sizes == [bound * width] * 2
     assert out.dp_meta is not meta and meta.tp_sizes == [12, 6]
     assert graph_meta.padding_batch_size == bound
     real = 0 if inactive else 1
-    assert out.state_offsets.tolist() == ([8] if real else
-                                          []) + [-1] * (bound - real)
+    dummy = bound - real
+    assert out.input_ids.reshape(bound, width).tolist() == (
+        [list(range(10, 10 + width))] * real + [[0] + [99] * (width - 1)] * dummy)
+    assert out.target_position_ids.reshape(bound, width).tolist() == (
+        [list(range(64, 64 + width))] * real + [list(range(width))] * dummy)
+    assert out.history_lengths.tolist() == [64] * real + [0] * dummy
+    for name, value, fill in [('num_ignored_history', 3, 0), ('local_adapter_ids', 7, 0), ('state_offsets', 8, -1)]:
+        field = getattr(out, name)
+        if has_optional_fields:
+            assert field.tolist() == [value] * real + [fill] * dummy
+        else:
+            assert field is None
     assert out.block_offsets[real:].count_nonzero() == 0
-    assert out.history_lengths[real:].count_nonzero() == 0
     if real:
         torch.testing.assert_close(out.block_offsets[:real], inp.block_offsets)
 
@@ -391,8 +402,6 @@ def test_low_capacity_block_query_warmup(monkeypatch, method, explicit):
     proposer.num_speculative_tokens = 3
     proposer.specdecode_config = executor.specdecode_config
     proposer._materialize_context = lambda *args: None
-    proposer._configure_context_materialization = lambda *args: None
-    proposer._full_context_materialization = True
     proposer.model = SimpleNamespace(
         backend_config=SimpleNamespace(eager_mode=False), _get_capture_tokens=lambda n: n,
         get_meta=lambda: SimpleNamespace(padding_batch_size=None), update_inputs=lambda x: x)
@@ -412,36 +421,54 @@ def test_low_capacity_block_query_warmup(monkeypatch, method, explicit):
 
 
 @pytest.mark.parametrize('method', ['dflash', 'dspark'])
-@pytest.mark.parametrize('unsupported',
-                         ['architecture', 'microbatch', 'transfer', 'pd'])
-def test_distributed_block_capability_guards_before_model_loading(
-        monkeypatch, method, unsupported):
+@pytest.mark.parametrize('mode',
+                         ['microbatch', 'transfer', 'pd', 'empty', 'none'])
+def test_distributed_block_capability_guards(
+        monkeypatch, method, mode):
+    from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
+    from lmdeploy.pytorch.config import DistConfig, SpecDecodeConfig
+    from lmdeploy.pytorch.disagg.config import EngineRole
+    from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
+
+    resolved = SimpleNamespace()
+    monkeypatch.setattr(SpecDecodeConfig, 'from_config',
+                        lambda **kwargs: resolved)
+    transfer = {'kv_connector': 'MooncakeStoreConnector', 'kv_role': 'kv_both'}
+    engine = PytorchEngineConfig(dp=2,
+                                 ep=2,
+                                 enable_microbatch=mode == 'microbatch',
+                                 kv_transfer_config={'transfer': transfer, 'empty': {}}.get(mode))
+    cache = ConfigBuilder.build_cache_config(engine)
+    if mode == 'pd':
+        cache.role = EngineRole.Prefill
+    args = ('unused', SpeculativeConfig(method=method), engine, cache, DistConfig(dp=2, ep=2))
+    if mode in ('empty', 'none') or (method == 'dspark' and mode == 'transfer'):
+        assert ConfigBuilder.build_specdecode_config(*args) is resolved
+    else:
+        with pytest.raises(ValueError, match='not support'):
+            ConfigBuilder.build_specdecode_config(*args)
+
+
+@pytest.mark.parametrize('role', ['Hybrid', 'Prefill', 'Decode'])
+def test_dspark_single_rank_role_admission(monkeypatch, role):
+    from unittest.mock import Mock
+
     from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
     from lmdeploy.pytorch.config import CacheConfig, DistConfig, SpecDecodeConfig
     from lmdeploy.pytorch.disagg.config import EngineRole
     from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
 
-    arch = 'UnknownDraft' if unsupported == 'architecture' else 'DFlashDraftModel'
-    resolved = SimpleNamespace(model_config=SimpleNamespace(
-        hf_config=SimpleNamespace(architectures=[arch])))
-    monkeypatch.setattr(SpecDecodeConfig, 'from_config',
-                        lambda **kwargs: resolved)
-    engine = PytorchEngineConfig(dp=2,
-                                 ep=2,
-                                 enable_microbatch=unsupported == 'microbatch')
-    cache = CacheConfig(max_batches=8,
-                        block_size=64,
-                        num_cpu_blocks=0,
-                        num_gpu_blocks=128)
-    if unsupported == 'transfer':
-        cache.kv_transfer_config = {}
-    if unsupported == 'pd':
-        cache.role = EngineRole.Prefill
-    with pytest.raises(ValueError, match='not support'):
-        ConfigBuilder.build_specdecode_config('unused',
-                                              SpeculativeConfig(method=method),
-                                              engine, cache,
-                                              DistConfig(dp=2, ep=2))
+    load = Mock()
+    monkeypatch.setattr(SpecDecodeConfig, 'from_config', load)
+    cache = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=16,
+                        role=EngineRole[role])
+    args = ('target', SpeculativeConfig(method='dspark', model='.'), PytorchEngineConfig(), cache, DistConfig())
+    if role == 'Hybrid':
+        assert ConfigBuilder.build_specdecode_config(*args) is load.return_value
+    else:
+        with pytest.raises(ValueError, match='P/D disaggregation'):
+            ConfigBuilder.build_specdecode_config(*args)
+        load.assert_not_called()
 
 
 @pytest.mark.parametrize('method,width', [('dflash', 3), ('dspark', 2), ('dspark', 3)])
@@ -475,7 +502,6 @@ def test_block_producer_consumer_participation_and_output_ownership(monkeypatch,
         proposer = cls.__new__(cls)
         proposer.num_speculative_tokens = 2
         proposer.specdecode_config = SimpleNamespace(mask_token_id=9, dspark=SimpleNamespace(draft_query_len=width))
-        proposer._full_context_materialization = True
         proposer.guided_helper = SimpleNamespace(get_processors=lambda *args: None)
         proposer.model = SimpleNamespace(backend_config=SimpleNamespace(eager_mode=True),
                                          get_meta=lambda: SimpleNamespace(padding_batch_size=0),

@@ -25,22 +25,8 @@ def build_specdecode_config(target_model,
         if speculative_config.method in ('deepseek_mtp', 'qwen3_5_mtp', 'hy3_mtp'):
             draft_dist_config = dist_config
         elif speculative_config.method in ('dflash', 'dspark'):
-            if speculative_config.method == 'dflash':
-                from lmdeploy.pytorch.spec_decode.dflash_utils import (
-                    validate_dflash_dist_config as validate_dist_config,
-                )
-                from lmdeploy.pytorch.spec_decode.dflash_utils import (
-                    validate_dflash_runtime_config as validate_runtime_config,
-                )
-            else:
-                from lmdeploy.pytorch.spec_decode.dspark_utils import (
-                    validate_dspark_dist_config as validate_dist_config,
-                )
-                from lmdeploy.pytorch.spec_decode.dspark_utils import (
-                    validate_dspark_runtime_config as validate_runtime_config,
-                )
-            validate_dist_config(dist_config)
-            validate_runtime_config(cache_config=cache_config, backend_config=engine_config)
+            from lmdeploy.pytorch.spec_decode.dflash_utils import validate_block_draft_dist_config
+            validate_block_draft_dist_config(dist_config, speculative_config.method)
             draft_dist_config = copy.deepcopy(dist_config)
         elif speculative_config.method == 'eagle3' and draft_arch == _EAGLE3_DEEPSEEK_ARCH:
             draft_dist_config = dist_config
@@ -50,6 +36,11 @@ def build_specdecode_config(target_model,
 
     specdecode_config = None
     if speculative_config is not None:
+        if speculative_config.method == 'dspark':
+            if engine_config.empty_init:
+                raise ValueError('DSpark requires checkpoint-loaded draft weights; empty_init is not supported.')
+            if cache_config.role != EngineRole.Hybrid:
+                raise ValueError('DSpark does not support P/D disaggregation: migration omits draft KV.')
         draft_model = speculative_config.model
         if draft_model and not os.path.exists(speculative_config.model):
             draft_model = get_model(draft_model, engine_config.download_dir, engine_config.revision)
@@ -85,9 +76,9 @@ def build_specdecode_config(target_model,
         if dist_config.dp > 1 or dist_config.ep > 1:
             if engine_config.enable_microbatch:
                 raise ValueError('DFlash-family DP/EP does not support microbatch overlap.')
-            if cache_config.kv_transfer_config is not None or cache_config.role != EngineRole.Hybrid:
+            transfer = cache_config.kv_transfer_config
+            dspark_store = speculative_config.method == 'dspark' and cache_config.use_mooncake_store
+            if (transfer is not None and transfer.is_kv_transfer_instance and not dspark_store
+                    or cache_config.role != EngineRole.Hybrid):
                 raise ValueError('DFlash-family DP/EP does not support KV transfer or PD.')
-            arch = specdecode_config.model_config.hf_config.architectures[0]
-            if arch not in ('DFlashDraftModel', 'Qwen3DSparkModel'):
-                raise ValueError(f'DFlash-family DP/EP draft architecture is not supported: {arch}')
     return specdecode_config

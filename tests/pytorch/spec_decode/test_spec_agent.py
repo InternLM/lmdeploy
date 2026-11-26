@@ -280,12 +280,6 @@ def test_guided_serial_bitmask_updates_inference_tensor():
     assert manager.seen_inference_mode == [True, True, True]
     assert manager.accepted == [10, 20, 11, 21]
 
-class _NoForkGuidedHelper:
-
-    def get_processors(self, session_ctx, response_formats):
-        return {0: object()}
-
-
 def test_prepare_inputs_from_main_dp_chunk_uses_lookahead_without_changing_lengths():
     """Target and MTP finish the same prefix on every DP rank."""
     from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
@@ -904,31 +898,20 @@ def _make_dflash_proposer():
     )
 
 
-def test_dflash_proposer_hook_rejects_guided_before_fork():
-    agent = object.__new__(SpecModelAgent)
-    agent.guided_helper = _NoForkGuidedHelper()
-    agent.proposer = _make_dflash_proposer()
-    agent.proposer.guided_helper = agent.guided_helper
-    agent.cache_engine = None
-    agent.rank = 0
-    agent.draft_context = lambda: nullcontext()
+@pytest.mark.parametrize('method', ['dflash', 'dspark'])
+def test_block_draft_rejects_guided_before_scheduling(method):
+    from unittest.mock import Mock
 
-    model_inputs = ModelInputs(
-        input_ids=torch.tensor([[1]]),
-        seq_length=torch.ones(1, dtype=torch.long),
-        history_lengths=torch.zeros(1, dtype=torch.long),
-        block_offsets=torch.ones((1, 1), dtype=torch.int32),
-        is_decoding=False,
-        num_ignored_history=torch.zeros(1, dtype=torch.long),
-        max_q_seqlen=1,
-        max_kv_seqlen=1,
-        sum_kv_seqlen=1,
-    )
-    extra_inputs = ARSpecExtraInputs(next_token_ids=torch.tensor([2]))
-    sampling_inputs = SimpleNamespace(session_ctx=object(), response_formats=object())
+    from lmdeploy.messages import ResponseType
+    from lmdeploy.pytorch.engine.engine import Engine
 
-    with pytest.raises(NotImplementedError, match='DFlash guided decoding'):
-        asyncio.run(agent.async_model_forward(model_inputs, extra_inputs, sampling_inputs))
+    engine = SimpleNamespace(specdecode_config=SimpleNamespace(method=method), scheduler=Mock(),
+                             _response=Mock(), _add_message=Mock())
+    requests = [SimpleNamespace(resp=i, data=dict(session_id=i, sampling_param=SimpleNamespace(response_format=fmt)))
+                for i, fmt in enumerate([None, {'type': 'json_schema'}, {'type': 'text'}])]
+    Engine._on_add_message(engine, requests)
+    engine._add_message.assert_called_once_with([requests[0], requests[2]])
+    assert engine._response.call_args.args == (1, ResponseType.NOT_SUPPORTED)
 
 
 def test_dflash_proposer_hook_materializes_non_last_chunk_without_drafting(monkeypatch):

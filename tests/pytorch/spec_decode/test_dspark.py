@@ -1,5 +1,5 @@
 import asyncio
-from contextlib import nullcontext
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -19,7 +19,6 @@ from lmdeploy.pytorch.models.qwen3_dspark import Qwen3DSparkModel
 from lmdeploy.pytorch.spec_decode.dspark_utils import (
     parse_dspark_config,
     prepare_dspark_hf_config,
-    validate_dspark_runtime_config,
     validate_dspark_target_config,
 )
 from lmdeploy.pytorch.spec_decode.proposers.dspark import DSpark
@@ -119,26 +118,53 @@ def test_parse_native_dense_qwen_dspark_uses_gamma_capacity():
     assert resolved.verify_block_len == 6
 
 
-def test_dspark_v1_accepts_eager_and_cudagraph_runtime():
-    validate_dspark_runtime_config(
-        cache_config=SimpleNamespace(device_type='cuda'),
-        backend_config=SimpleNamespace(device_type='cuda', eager_mode=True))
-    validate_dspark_runtime_config(
-        cache_config=SimpleNamespace(device_type='cuda'),
-        backend_config=SimpleNamespace(device_type='cuda', eager_mode=False))
-
-
 def test_parse_dspark_rejects_capacity_and_bad_layers():
     with pytest.raises(ValueError, match='required=8, capacity=7'):
         parse_dspark_config(_raw_config(block_size=7), 7, target_num_layers=80)
     with pytest.raises(ValueError, match='strictly increasing'):
-        parse_dspark_config(_raw_config(aux_hidden_state_layer_ids=[42, 41]), 5, target_num_layers=43)
+        cfg = prepare_dspark_hf_config(_raw_config(aux_hidden_state_layer_ids=[42, 41]))
+        parse_dspark_config(cfg, 5, target_num_layers=43)
     with pytest.raises(ValueError, match='outside target depth'):
-        parse_dspark_config(_raw_config(aux_hidden_state_layer_ids=[44]), 5, target_num_layers=43)
+        cfg = prepare_dspark_hf_config(_raw_config(aux_hidden_state_layer_ids=[44]))
+        parse_dspark_config(cfg, 5, target_num_layers=43)
+
+
+def test_dspark_rejects_empty_init_before_resolving_checkpoint():
+    from lmdeploy.messages import PytorchEngineConfig, SpeculativeConfig
+    from lmdeploy.pytorch.engine.config_builder import ConfigBuilder
+
+    with pytest.raises(ValueError, match='empty_init'):
+        ConfigBuilder.build_specdecode_config('unused', SpeculativeConfig(method='dspark', model='unused'),
+                                              PytorchEngineConfig(empty_init=True), None, None)
+
+
+@pytest.mark.parametrize('nested,override', [(False, True), (True, True), (True, False)])
+def test_flat_alias_and_effective_aux_ids(monkeypatch, nested, override):
+    from transformers import PretrainedConfig
+
+    backbone = {'target_layer_ids': [1, 3], 'aux_hidden_state_layer_ids': [2, 4]} if nested else None
+    draft = PretrainedConfig(**vars(_raw_config(transformer_layer_config=backbone, speculators_model_type=None)))
+    if not override:
+        del draft.aux_hidden_state_layer_ids
+        del backbone['target_layer_ids']
+        backbone['aux_hidden_state_layer_ids'] = [1, 3]
+    target = PretrainedConfig(num_hidden_layers=80)
+    monkeypatch.setattr('lmdeploy.pytorch.transformers.config_from_pretrained',
+                        lambda model, **_: draft if model == 'draft' else target)
+    monkeypatch.setattr(ModelConfig, 'from_hf_config', lambda config, *args, **kwargs:
+                        SimpleNamespace(hf_config=config, llm_config=config, num_layers=4))
+    overrides = {'aux_hidden_state_layer_ids': [3, 21, 40, 59, 76]}
+    cfg = SpecDecodeConfig.from_config('dspark', 7, 'draft',
+                                       CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=2),
+                                       target_model='target', hf_overrides=overrides if override else None)
+    assert draft.architectures == (['Qwen3DSparkModel'] if nested else ['DSparkDraftModel'])
+    assert cfg.target_layer_ids == ((2, 20, 39, 58, 75) if override else (0, 2))
+    assert tuple(draft.dflash_config['target_layer_ids']) == cfg.target_layer_ids
+    assert overrides == {'aux_hidden_state_layer_ids': [3, 21, 40, 59, 76]}
 
 
 def test_specdecode_config_stores_resolved_dspark_fields(monkeypatch):
-    draft = SimpleNamespace(hf_config=_raw_config(sample_from_anchor=True))
+    draft = SimpleNamespace(hf_config=prepare_dspark_hf_config(_raw_config(sample_from_anchor=True)))
     target = SimpleNamespace(num_layers=4,
                              llm_config=SimpleNamespace(num_hidden_layers=80))
 
@@ -167,6 +193,33 @@ def test_specdecode_config_stores_resolved_dspark_fields(monkeypatch):
     assert draft.hf_config.dspark_sample_from_anchor is True
     assert draft.hf_config.dspark_draft_query_len == 7
     assert draft.hf_config.dspark_num_speculative_tokens == 7
+
+
+@pytest.mark.parametrize('target_hidden,target_vocab,declared,expected_error', [
+    (32, 32, {}, None),
+    (64, 32, {'target_hidden_size': None}, 'hidden-size mismatch'),
+    (64, 32, {'target_hidden_size': 64}, None),
+    (32, 64, {}, 'Markov input vocabulary'),
+    (32, 64, {'target_vocab_size': 64}, 'Markov input vocabulary'),
+])
+def test_raw_dspark_target_dimensions(tmp_path, target_hidden, target_vocab, declared, expected_error):
+    backbone = dict(model_type='qwen3', hidden_size=32, vocab_size=32, intermediate_size=64,
+                    num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2)
+    raw = dict(model_type='qwen3', architectures=['DSparkDraftModel'], transformer_layer_config=backbone,
+               block_size=4, aux_hidden_state_layer_ids=[1, 2], mask_token_id=3, draft_vocab_size=16,
+               markov_rank=4, **declared)
+    target = dict(backbone, architectures=['Qwen3ForCausalLM'], hidden_size=target_hidden, vocab_size=target_vocab)
+    for name, cfg in [('draft', raw), ('target', target)]:
+        (tmp_path / name).mkdir()
+        (tmp_path / name / 'config.json').write_text(json.dumps(cfg))
+    args = dict(method='dspark', num_speculative_tokens=3, model=str(tmp_path / 'draft'),
+                target_model=str(tmp_path / 'target'), dtype='float16',
+                target_cache_cfg=CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=2))
+    if expected_error:
+        with pytest.raises(ValueError, match=expected_error):
+            SpecDecodeConfig.from_config(**args)
+    else:
+        assert SpecDecodeConfig.from_config(**args).dspark.draft_vocab_size == 16
 
 
 def test_specdecode_config_rejects_native_draft_target_hidden_mismatch(
@@ -291,27 +344,12 @@ def test_dspark_context_materialization_layout(cache_kind, dp, ep):
     )
     target_hidden = torch.arange(36, dtype=torch.float32).reshape(1, 18, 2)
     inputs.target_hidden_states = target_hidden
-    if cache_kind == 'pageable':
-        model = Qwen3DSparkModel.__new__(Qwen3DSparkModel)
-        torch.nn.Module.__init__(model)
-    else:
-        model = SimpleNamespace()
-    proposer.model = model
-    cache = SimpleNamespace(cache_config=SimpleNamespace(block_size=64))
-    proposer._materialize_context = lambda *args: None
-    # Exercise actual warmup routing, including wrapped graph-runner models.
-    proposer.model = SimpleNamespace(get_model=lambda: model)
-    if (dp > 1 or ep > 1) and cache_kind != 'pageable':
-        def unexpected_materialization(*args):
-            raise AssertionError('Unsupported geometry must fail before warmup writes any cache.')
-
-        proposer._materialize_context = unexpected_materialization
+    proposer.model = SimpleNamespace(supports_full_context_materialization=cache_kind == 'pageable')
+    if cache_kind == 'unknown':
         with pytest.raises(ValueError, match='validated full-context cache geometry'):
-            proposer.prepare_warmup_forward(inputs, cache)
+            proposer._validate_context_materialization()
         return
-    proposer.prepare_warmup_forward(inputs, cache)
-    full_context = cache_kind == 'pageable'
-    assert proposer._full_context_materialization == full_context
+    proposer._validate_context_materialization()
     extra = SimpleNamespace(
         target_hidden_states=target_hidden,
         num_rejected_tokens=torch.tensor([5, 3, 0]),
@@ -323,23 +361,17 @@ def test_dspark_context_materialization_layout(cache_kind, dp, ep):
             assert func != torch.ops.aten.nonzero.default
             return func(*args, **(kwargs or {}))
 
-    with NoNonzero() if full_context else nullcontext():
+    with NoNonzero():
         context, hidden, lengths, starts = (
             proposer._prepare_context_materialization(inputs, extra))
 
     assert lengths.tolist() == [1, 3, 6]
     assert starts.tolist() == [11, 23, 36]
     assert context.is_decoding is False
-    if full_context:
-        assert context.seq_length.tolist() == [6, 6, 6]
-        assert context.input_ids.data_ptr() == inputs.input_ids.data_ptr()
-        assert hidden.data_ptr() == target_hidden.data_ptr()
-        assert hidden.shape == (18, 2)
-    else:
-        assert context.seq_length.tolist() == [1, 3, 6]
-        indices = torch.tensor([0, 6, 7, 8, 12, 13, 14, 15, 16, 17])
-        torch.testing.assert_close(context.input_ids, inputs.input_ids[:, indices])
-        torch.testing.assert_close(hidden, target_hidden[0, indices])
+    assert context.seq_length.tolist() == [6, 6, 6]
+    assert context.input_ids.data_ptr() == inputs.input_ids.data_ptr()
+    assert hidden.data_ptr() == target_hidden.data_ptr()
+    assert hidden.shape == (18, 2)
     query = proposer._build_query_inputs(
         inputs, lengths, torch.tensor([7, 8, 9]), query_start_positions=starts)
     assert query.history_lengths.tolist() == [11, 23, 36]
@@ -578,3 +610,117 @@ def test_dspark_rejects_v4_draft_and_target(schema):
         prepare_dspark_hf_config(v4)
     with pytest.raises(ValueError, match='does not support DeepSeek-V4 or bundled drafts'):
         validate_dspark_target_config(_raw_config(), v4, None)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('sample_from_anchor', 'false'),
+    ('draft_vocab_size', 0),
+    ('aux_hidden_state_layer_ids', [1.9]),
+    ('mask_token_id', True),
+    ('markov_rank', 2.5),
+])
+def test_dspark_rejects_raw_hf_values_before_coercion(field, value):
+    with pytest.raises(ValueError, match=field):
+        cfg = prepare_dspark_hf_config(_raw_config(**{field: value}))
+        parse_dspark_config(cfg, 3, target_num_layers=80)
+
+
+@pytest.mark.parametrize('method,arch', [('dflash', 'Qwen3DSparkModel'), ('dspark', 'DFlashDraftModel')])
+def test_block_draft_config_checks_device_and_method_architecture(monkeypatch, method, arch):
+    cfg = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=2, device_type='ascend')
+
+    def no_load(*args, **kwargs):
+        pytest.fail('CUDA guard must run before checkpoint config loading')
+
+    monkeypatch.setattr(ModelConfig, 'from_pretrained', no_load)
+    with pytest.raises(ValueError, match='requires CUDA'):
+        SpecDecodeConfig.from_config(method, 3, 'draft', cfg)
+    cfg.device_type = 'cuda'
+    with pytest.raises(ValueError, match='KV-cache quantization'):
+        cfg.quant_policy = 8
+        SpecDecodeConfig.from_config(method, 3, 'draft', cfg)
+    cfg.quant_policy = 0
+    monkeypatch.setattr(ModelConfig, 'from_pretrained',
+                        lambda *args, **kwargs: SimpleNamespace(hf_config=SimpleNamespace(architectures=[arch])))
+    with pytest.raises(ValueError, match='requires draft architecture'):
+        SpecDecodeConfig.from_config(method, 3, 'draft', cfg)
+
+
+@pytest.mark.parametrize('kind,projection', [('gated', 'gate_proj'), ('rnn', 'joint_proj')])
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+def test_dspark_weight_validation_runs_after_all_shards(kind, projection, device):
+    from lmdeploy.pytorch.weight_loader.model_weight_loader import process_weights_after_loading
+
+    if device == 'cuda' and not torch.cuda.is_available():
+        pytest.skip('requires CUDA')
+    # Exercise the real per-shard DSpark loader without allocating an unrelated backbone.
+    model = Qwen3DSparkModel.__new__(Qwen3DSparkModel)
+    torch.nn.Module.__init__(model)
+    model.markov_head = {'gated': GatedMarkovHead, 'rnn': RNNMarkovHead}[kind](8, 4, 2, 4, device=device)
+    model.output_head = torch.nn.Linear(4, 4, bias=False, device=device)
+    model.draft_id_to_target_id = torch.nn.Parameter(
+        torch.zeros(4, dtype=torch.long, device=device), requires_grad=False)
+    model.has_own_output_head = False
+    model._loaded_dspark_weights = set()
+    weights = {n: torch.ones_like(p) for n, p in model.named_parameters()}
+    model.load_weights(item for item in weights.items() if item[0].startswith('markov_head.markov_'))
+    with pytest.raises(ValueError, match=rf'd2t.*{projection}'):
+        process_weights_after_loading(model)
+    model.load_weights([(n, w) for n, w in weights.items() if f'.{projection}.' in n])
+    model.load_weights([('d2t', weights['draft_id_to_target_id']), ('lm_head.weight', weights['output_head.weight'])])
+    process_weights_after_loading(model)
+    model.set_output_head(None)
+    assert model.map_draft_to_target(torch.tensor([0, 2], device=device)).tolist() == [1, 3]
+
+
+@pytest.mark.parametrize('interval,expected', [(1, 12), (16, 96)])
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+def test_dspark_decode_scheduler_covers_query_crossing_page(interval, expected, device):
+    from lmdeploy.pytorch.config import SchedulerConfig
+    from lmdeploy.pytorch.messages import SequenceMeta
+    from lmdeploy.pytorch.paging.scheduler import Scheduler
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+    from lmdeploy.pytorch.strategies.ar_spec.engine import ARSpecEngineStrategy
+
+    if device == 'cuda' and not torch.cuda.is_available():
+        pytest.skip('requires CUDA')
+    cfg = CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=8)
+    scfg = SchedulerConfig(max_batches=1, max_session_len=256, max_request_output_len=128,
+                           prefill_interval=interval, eviction_type='recompute')
+    strategy = ARSpecEngineStrategy(scfg, cfg, num_spec_tokens=5)
+    scheduler = Scheduler(scfg, cfg, SequenceMeta(64, strategy=ARSequenceStrategy()))
+    seq = scheduler.add_session(0).add_sequence(list(range(53)))
+    assert scheduler.schedule(is_prefill=True).running == [seq]
+    scheduler.activate_seqs([seq])
+    assert seq.num_blocks == 1
+    required = strategy.get_num_required_tokens()
+    prealloc = strategy.get_prealloc_size(True)
+    assert (required, prealloc) == (12, expected)
+    assert scheduler.schedule_running([seq], required, prealloc) == [True]
+    assert seq.num_blocks >= 2
+    blocks = torch.as_tensor(scheduler.get_block_tables([seq])[0], device=device).unsqueeze(0)
+    lengths = torch.tensor([6], device=device)
+    inputs = ModelInputs(
+        input_ids=torch.zeros((1, 6), dtype=torch.long, device=device),
+        seq_length=lengths, history_lengths=torch.tensor([53], device=device),
+        block_offsets=blocks, is_decoding=True, num_ignored_history=torch.zeros_like(lengths),
+        max_q_seqlen=6, max_kv_seqlen=59, sum_kv_seqlen=59)
+    proposer = DSpark(SimpleNamespace(mask_token_id=99, target_layer_ids=(1,),
+                                     num_speculative_tokens=5, model_config=None,
+                                     dspark=SimpleNamespace(draft_query_len=6)), device=device)
+    query = proposer._build_query_inputs(inputs, lengths, torch.tensor([1], device=device))
+    assert query.target_position_ids.tolist() == [list(range(59, 65))]
+    if device == 'cuda':
+        from lmdeploy.pytorch.kernels.cuda import fill_kv_cache
+
+        keys = torch.arange(1, 7, dtype=torch.float16, device=device)[:, None, None].expand(-1, 1, 32).contiguous()
+        target = torch.full((8, 64, 1, 32), -1, dtype=keys.dtype, device=device)
+        draft = torch.full_like(target, -2)
+        start = torch.zeros_like(lengths)
+        fill_kv_cache(keys, None, target, None, start, lengths, inputs.history_lengths + lengths, 6, blocks)
+        fill_kv_cache(keys, None, draft, None, start, lengths, query.history_lengths + lengths, 6, query.block_offsets)
+        p0, p1 = blocks[0, :2].tolist()
+        assert target[p0, 53:59, 0, 0].tolist() == list(range(1, 7))
+        assert target[p1, 0, 0, 0].item() == -1
+        assert draft[p0, 58:64, 0, 0].tolist() == [-2, 1, 2, 3, 4, 5]
+        assert draft[p1, :2, 0, 0].tolist() == [6, -2]

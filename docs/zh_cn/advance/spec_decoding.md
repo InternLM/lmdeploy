@@ -184,6 +184,8 @@ lmdeploy serve api_server Qwen/Qwen3.5-35B-A3B \
 DSpark 默认启用 CUDA Graph，支持 DP/EP 并行推理。
 Qwen3.5 搭配 `Qwen3DSparkModel` 草稿模型时，还支持 attention TP=1 下的本地前缀缓存，
 可与 DP/EP 组合使用。
+
+DSpark 支持在 EP > 1 时使用 Mooncake Store。
 设置 `enable_prefix_caching=True`（或 `--enable-prefix-caching`）可复用对齐的
 prefill checkpoint，通过 `prefix_cache_state_budget` 预留额外的 checkpoint 容量。
 

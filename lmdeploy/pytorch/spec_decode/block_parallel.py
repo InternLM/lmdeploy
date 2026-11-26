@@ -7,6 +7,7 @@ in a host collective.
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 
 from ..model_inputs import DPMeta, ModelInputs
 
@@ -85,23 +86,16 @@ def prepare_query(proposer, inputs: ModelInputs, cache_engine) -> ModelInputs:
         block_offsets[:real, :inputs.block_offsets.
                       size(1)] = inputs.block_offsets
 
-    def pad_rows(value, shape, fill=0):
-        if value is None:
-            return None
-        out = value.new_full(shape, fill)
-        if real:
-            out[:real] = value
-        return out
-
-    ids = inputs.input_ids.new_full((bound, width),
-                                    proposer.specdecode_config.mask_token_id)
-    ids[:, 0] = 0
-    if real:
-        ids[:real] = inputs.input_ids.reshape(batch, width)
+    row_pad = (0, bound - real)
+    ids = F.pad(inputs.input_ids.reshape(batch, width)[:real],
+                (0, 0, *row_pad), value=proposer.specdecode_config.mask_token_id)
+    ids[real:, 0] = 0
     positions = torch.arange(width, device=device).expand(bound, width).clone()
     if real:
         positions[:real] = inputs.target_position_ids.reshape(batch, width)
-    history = pad_rows(inputs.history_lengths, (bound, ))
+    ignored_history = inputs.num_ignored_history
+    state_offsets = inputs.state_offsets
+    adapter_ids = inputs.local_adapter_ids
     meta = DPMeta.build(bound * width,
                         [bound * width] * len(source_meta.dp_batches))
     meta.dp_batches = [bound] * len(source_meta.dp_batches)
@@ -110,11 +104,11 @@ def prepare_query(proposer, inputs: ModelInputs, cache_engine) -> ModelInputs:
     out = inputs.clone(
         input_ids=ids.reshape(1, -1),
         seq_length=inputs.seq_length.new_full((bound, ), width),
-        history_lengths=history,
+        history_lengths=F.pad(inputs.history_lengths[:real], row_pad),
         block_offsets=block_offsets,
-        num_ignored_history=pad_rows(inputs.num_ignored_history, (bound, )),
-        state_offsets=pad_rows(inputs.state_offsets, (bound, ), -1),
-        local_adapter_ids=pad_rows(inputs.local_adapter_ids, (bound, )),
+        num_ignored_history=F.pad(ignored_history[:real], row_pad) if ignored_history is not None else None,
+        state_offsets=F.pad(state_offsets[:real], row_pad, value=-1) if state_offsets is not None else None,
+        local_adapter_ids=F.pad(adapter_ids[:real], row_pad) if adapter_ids is not None else None,
         target_position_ids=positions.reshape(1, -1),
         mrope_pos_ids=None,
         model_metas=None,

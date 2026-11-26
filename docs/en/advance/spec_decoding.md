@@ -188,6 +188,8 @@ lmdeploy serve api_server Qwen/Qwen3.5-35B-A3B \
 DSpark enables CUDA Graph by default and supports DP/EP parallel inference.
 Qwen3.5 with a `Qwen3DSparkModel` draft also supports local prefix caching
 with attention TP=1, including DP/EP.
+
+DSpark supports Mooncake Store with EP > 1.
 Set `enable_prefix_caching=True` (or `--enable-prefix-caching`) to reuse
 aligned prefill checkpoints, and use
 `prefix_cache_state_budget` to reserve additional checkpoint capacity.

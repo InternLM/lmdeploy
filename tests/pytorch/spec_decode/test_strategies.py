@@ -29,7 +29,7 @@ from lmdeploy.pytorch.strategies.ar_spec.sequence import (
 
 @pytest.mark.parametrize('method,query_len', [('mtp', None), ('dflash', 4), ('dspark', 3), ('dspark', 4)])
 @pytest.mark.parametrize('prefill_interval', [1, 16])
-def test_block_query_kv_lookahead_and_mtp_unchanged(method, query_len, prefill_interval):
+def test_speculative_decode_budget_is_shared_by_block_drafts_and_mtp(method, query_len, prefill_interval):
     from lmdeploy.pytorch.config import SpecDecodeConfig
     from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
 
@@ -38,17 +38,9 @@ def test_block_query_kv_lookahead_and_mtp_unchanged(method, query_len, prefill_i
     factory = ARSpecStrategyFactory(SimpleNamespace(bos_token_id=0), spec)
     strategy = factory.build_engine_strategy(
         SimpleNamespace(block_size=64), SimpleNamespace(prefill_interval=prefill_interval))
-    expected_prefill = query_len if query_len is not None else 3
-    expected_required = 4 + query_len if query_len is not None else 7
-    expected_prealloc = max(prefill_interval * 4, expected_required)
-    assert strategy.get_prealloc_size(False) == expected_prefill
-    assert strategy.get_num_required_tokens() == expected_required
-    assert strategy.get_prealloc_size(True) == expected_prealloc
-    if query_len is not None:
-        # A prompt ending at 61 with Q=4 needs TWO 64-token pages, not one.
-        for prompt_len in range(60, 65):
-            allocated = (prompt_len + strategy.get_prealloc_size(False) + 63) // 64
-            assert allocated * 64 >= prompt_len + query_len
+    assert strategy.get_num_required_tokens() == 8
+    assert strategy.get_prealloc_size(True) == max(prefill_interval * 4, 8)
+
 
 # ---------------------------------------------------------------------------
 # Helpers

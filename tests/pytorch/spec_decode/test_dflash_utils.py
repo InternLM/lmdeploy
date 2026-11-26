@@ -24,9 +24,8 @@ from lmdeploy.pytorch.models.qwen3_dflash import (
 )
 from lmdeploy.pytorch.spec_decode.dflash_utils import (
     parse_dflash_config,
-    validate_dflash_cache_config,
-    validate_dflash_dist_config,
-    validate_dflash_runtime_config,
+    validate_block_draft_cache_config,
+    validate_block_draft_dist_config,
 )
 from lmdeploy.pytorch.spec_decode.proposers.dflash import DFlash
 
@@ -358,29 +357,19 @@ def test_parse_dflash_config_rejects_non_default_scheduler_patterns():
 
 def test_validate_dflash_dist_allows_dp_ep_rejects_eplb():
     for config in (DistConfig(tp=2), DistConfig(dp=2, tp=2), DistConfig(ep=2), DistConfig(dp=2, ep=2)):
-        validate_dflash_dist_config(config)
+        validate_block_draft_dist_config(config, 'dflash')
     with pytest.raises(ValueError, match='EPLB'):
-        validate_dflash_dist_config(DistConfig(dp=2, ep=2, enable_eplb=True))
+        validate_block_draft_dist_config(DistConfig(dp=2, ep=2, enable_eplb=True), 'dflash')
 
 
 def test_validate_dflash_cache_rejects_prefix_cache_and_kv_quant():
-    validate_dflash_cache_config(SimpleNamespace(enable_prefix_caching=False, quant_policy=0))
+    validate_block_draft_cache_config(SimpleNamespace(enable_prefix_caching=False, quant_policy=0), 'dflash')
 
     with pytest.raises(ValueError, match='prefix-cache'):
-        validate_dflash_cache_config(SimpleNamespace(enable_prefix_caching=True, quant_policy=0))
+        validate_block_draft_cache_config(SimpleNamespace(enable_prefix_caching=True, quant_policy=0), 'dflash')
 
     with pytest.raises(ValueError, match='KV-cache quantization'):
-        validate_dflash_cache_config(SimpleNamespace(enable_prefix_caching=False, quant_policy=8))
-
-
-def test_validate_dflash_runtime_rejects_non_cuda_and_allows_cudagraph():
-    validate_dflash_runtime_config(cache_config=SimpleNamespace(device_type='cuda'),
-                                   backend_config=SimpleNamespace(device_type='cuda', eager_mode=True))
-    validate_dflash_runtime_config(cache_config=SimpleNamespace(device_type='cuda'),
-                                   backend_config=SimpleNamespace(device_type='cuda', eager_mode=False))
-
-    with pytest.raises(ValueError, match='requires CUDA'):
-        validate_dflash_runtime_config(cache_config=SimpleNamespace(device_type='ascend'))
+        validate_block_draft_cache_config(SimpleNamespace(enable_prefix_caching=False, quant_policy=8), 'dflash')
 
 
 @pytest.mark.parametrize('model_cls', [Qwen3ForCausalLM, Qwen3_5ForConditionalGeneration])

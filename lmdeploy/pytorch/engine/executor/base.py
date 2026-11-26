@@ -77,13 +77,16 @@ class ExecutorBase:
         self._validate_compact_state_config()
         from lmdeploy.pytorch.spec_decode.dspark_utils import validate_dspark_prefix_config
         validate_dspark_prefix_config(model_config, cache_config, dist_config, specdecode_config)
-        needs_state_checkpoints = (
-            cache_config.use_mooncake_store
-            or (cache_config.enable_prefix_caching
-                and (cache_config.prefix_cache_decode_save_first
-                     or cache_config.prefix_cache_decode_state_interval > 0))
-        ) and bool(model_config.states_shapes)
-        if specdecode_config is not None and needs_state_checkpoints:
+        store = cache_config.use_mooncake_store
+        # CacheConfig.states_shapes is bound later; use the resolved target here.
+        decode_checkpoints = (
+            (cache_config.enable_prefix_caching or (store and cache_config.kv_transfer_config.is_kv_producer))
+            and (cache_config.prefix_cache_decode_save_first or cache_config.prefix_cache_decode_state_interval > 0))
+        needs_state_checkpoints = (store or decode_checkpoints) and bool(model_config.states_shapes)
+        dspark_store = store and specdecode_config is not None and specdecode_config.method == 'dspark'
+        if dspark_store and needs_state_checkpoints and decode_checkpoints:
+            raise ValueError('DSpark supports prefill Store checkpoints, not decode checkpoints.')
+        if specdecode_config is not None and needs_state_checkpoints and not dspark_store:
             supported_mtp = (specdecode_config.method == 'qwen3_5_mtp'
                              or (specdecode_config.method == 'deepseek_mtp'
                                  and model_config.hf_config.model_type == 'glm5_next'))
@@ -122,7 +125,8 @@ class ExecutorBase:
             raise NotImplementedError('Compact state requires an adapted CUDA Qwen3.5/GLM5.3 AR/MTP target.')
         if cache.role != EngineRole.Hybrid or self.misc_config.memdecode_config is not None:
             raise NotImplementedError('Compact state does not support PD/MemDecode.')
-        if cache.kv_transfer_config is not None and not cache.use_mooncake_store:
+        if (cache.kv_transfer_config is not None and cache.kv_transfer_config.is_kv_transfer_instance
+                and not cache.use_mooncake_store):
             raise NotImplementedError('Compact state supports only the Mooncake Store connector.')
         if cache.num_cpu_blocks > 0:
             raise ValueError('Compact state does not support CPU KV paging.')
@@ -135,11 +139,7 @@ class ExecutorBase:
             if (spec.model_config.states_shapes
                     or (spec.cache_config is not None and spec.cache_config.compact_state_capacity is not None)):
                 raise NotImplementedError('Compact state requires a stateless draft without its own compact pool.')
-            if block_draft:
-                supported_arch = 'DFlashDraftModel' if spec.method == 'dflash' else 'Qwen3DSparkModel'
-                if spec.model_config.hf_config.architectures != [supported_arch]:
-                    raise NotImplementedError('Compact state requires a supported stateless block draft.')
-            elif spec.method != expected_method or spec.model_config.num_layers != 1:
+            if not block_draft and (spec.method != expected_method or spec.model_config.num_layers != 1):
                 raise NotImplementedError('Compact state requires the matching stateless single-layer MTP draft.')
         width = 1 if spec is None else 1 + spec.num_speculative_tokens
         expected = SSMStateCapacity.from_cache_config(cache, width, runtime_is_auxiliary=model.enable_replayssm)

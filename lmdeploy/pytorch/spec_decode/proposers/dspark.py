@@ -28,39 +28,32 @@ class DSpark(DFlash):
     # Inherit DFlash.propose so deterministic DSpark tokens use the common
     # one-hot rejection path for both greedy and non-greedy target sampling.
 
-    # Opt in only after warmup has checked the allocated draft cache geometry.
-    _full_context_materialization = False
-
     def build_model(self, empty_init: bool, target_model: torch.nn.Module = None,
                     build_model_ctx=None):
         """Build the draft and attach target embeddings and a shareable output
         head."""
-        self._full_context_materialization = False
         if target_model is None:
             raise RuntimeError('DSpark requires the target model for shared modules.')
         BaseSpecProposer.build_model(self,
                                      empty_init,
                                      target_model=target_model,
                                      build_model_ctx=build_model_ctx)
-        if not hasattr(self.model, 'set_input_embeddings'):
-            raise RuntimeError('DSpark draft model must implement set_input_embeddings().')
+        self._validate_context_materialization()
         self.model.set_input_embeddings(target_model.get_input_embeddings())
         output_head = getattr(target_model, 'head', None)
         if output_head is None:
             output_head = getattr(target_model, 'lm_head', None)
-        if output_head is None or not hasattr(self.model, 'set_output_head'):
-            raise RuntimeError('DSpark draft/target models do not expose a shareable output head.')
         self.model.set_output_head(output_head)
         logger.info('Using target embeddings and output head for DSpark draft.')
 
     @property
     def draft_query_len(self) -> int:
         """Return the fixed query width resolved from the checkpoint layout."""
-        config = self.specdecode_config.dspark
-        query_len = None if config is None else config.draft_query_len
-        if query_len is None:
-            raise RuntimeError('DSpark draft query length was not resolved during config parsing.')
-        return int(query_len)
+        return self.specdecode_config.dspark.draft_query_len
+
+    def _validate_context_materialization(self):
+        if not getattr(self.model, 'supports_full_context_materialization', False):
+            raise ValueError('DSpark requires a validated full-context cache geometry.')
 
     def get_warmup_plan(self,
                         max_batches: int,
@@ -86,24 +79,6 @@ class DSpark(DFlash):
                                         target_hidden_size=target_hidden_size)
                      for batch_size in capture_batch_sizes)
         return ProposalWarmupPlan(tuple(cases))
-
-    def _configure_context_materialization(self, cache_engine: CacheEngine):
-        """Select the fixed-layout path using host metadata, never GPU
-        values."""
-        model = self._draft_model()
-        enabled = bool(getattr(model, 'supports_full_context_materialization', False))
-        dist_config = getattr(self.specdecode_config, 'dist_config', None)
-        if dist_config is not None and (dist_config.dp > 1 or dist_config.ep > 1) and not enabled:
-            # Reject before the FIRST warmup materialization, not only when
-            # decode later attempts the accepted-prefix compaction fallback.
-            raise ValueError('DSpark DP/EP requires a validated full-context cache geometry.')
-        self._full_context_materialization = enabled
-
-    def prepare_warmup_forward(self, inputs: ModelInputs, cache_engine: CacheEngine) -> ModelInputs | None:
-        """Validate allocated context-cache geometry before preparing warmup
-        inputs."""
-        self._configure_context_materialization(cache_engine)
-        return super().prepare_warmup_forward(inputs, cache_engine)
 
     def _build_query_inputs(self,
                             model_inputs: ModelInputs,
@@ -134,57 +109,12 @@ class DSpark(DFlash):
             target_inputs_embeds=None,
         )
 
-    def _prepare_context_materialization(
-            self, model_inputs: ModelInputs,
-            extra_inputs: ARSpecExtraInputs):
-        """Keep physical context layout separate from committed logical
-        lengths.
-
-        Pageable draft KV can hold the full verifier block. The next query starts at the committed prefix, hiding
-        rejected tails without boolean indexing/nonzero and its host synchronization. Other layouts retain accepted-
-        prefix compaction.
-        """
-        if not model_inputs.is_decoding or self._full_context_materialization:
-            return super()._prepare_context_materialization(
-                model_inputs, extra_inputs)
-
-        if model_inputs.dp_meta is not None:
-            raise ValueError('DSpark DP requires a validated full-context cache geometry.')
-        target_hidden = self._flatten_target_hidden(extra_inputs)
-        context_lengths = self._context_lengths(model_inputs, extra_inputs)
-        query_start_positions = self._query_start_positions(
-            model_inputs, context_lengths)
-        batch_size = context_lengths.numel()
-        query_width = model_inputs.max_q_seqlen
-        keep = (torch.arange(query_width,
-                             device=context_lengths.device).unsqueeze(0)
-                < context_lengths.unsqueeze(1))
-        input_ids = model_inputs.input_ids.reshape(
-            batch_size, query_width)[keep].unsqueeze(0)
-        hidden_width = target_hidden.size(-1)
-        target_hidden = target_hidden.reshape(
-            batch_size, query_width, hidden_width)[keep]
-
-        context_inputs = model_inputs.clone(
-            input_ids=input_ids,
-            seq_length=context_lengths,
-            target_hidden_states=None,
-            target_position_ids=None,
-            target_inputs_embeds=None,
-            is_decoding=False,
-        )
-        return (context_inputs, target_hidden, context_lengths,
-                query_start_positions)
-
     async def propose_block(self,
                             model_inputs: ModelInputs,
                             extra_inputs: ARSpecExtraInputs,
-                            cache_engine: CacheEngine,
-                            guided_processors: dict | None = None):
+                            cache_engine: CacheEngine):
         """Materialize context and return owned proposal IDs with DP padding
         removed."""
-        if guided_processors:
-            raise NotImplementedError('DSpark guided decoding is not implemented in V1.')
         if cache_engine is None:
             raise RuntimeError('DSpark requires a draft cache engine.')
         if extra_inputs.next_token_ids is None:

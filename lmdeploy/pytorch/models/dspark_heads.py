@@ -18,9 +18,7 @@ class VanillaMarkovHead(nn.Module):
     def __init__(self, vocab_size: int, draft_vocab_size: int, markov_rank: int,
                  dtype=None, device=None):
         super().__init__()
-        if markov_rank <= 0:
-            raise ValueError(f'DSpark markov_rank must be positive, got {markov_rank}.')
-        self.markov_rank = int(markov_rank)
+        self.markov_rank = markov_rank
         self.markov_w1 = ParallelEmbedding(vocab_size,
                                            self.markov_rank,
                                            padding_idx=None,

@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 from lmdeploy.pytorch.config import DistConfig, SSMStateCapacity
-from lmdeploy.pytorch.spec_decode.dspark_utils import validate_dspark_cache_config
 from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
 from tests.pytorch.engine.test_compact_allocation_selection import _configs, _executor
 from tests.pytorch.paging.test_block_trie.test_compact_checkpoint import _environment, _sequence, _submit
@@ -26,7 +25,6 @@ def _prefix_configs(budget=2):
 def test_dspark_prefix_admission(budget):
     model, cache, spec = _prefix_configs(budget)
     capacity = cache.compact_state_capacity
-    validate_dspark_cache_config(cache)
     executor = _executor(model, cache, spec)
     assert executor.cache_config.enable_prefix_caching
     assert cache.compact_state_capacity is capacity
@@ -34,7 +32,47 @@ def test_dspark_prefix_admission(budget):
     assert not spec.cache_config.enable_prefix_caching
 
 
-@pytest.mark.parametrize('case', ['family', 'compact', 'indexed', 'gdn', 'attn_tp', 'draft', 'replay'])
+@pytest.mark.parametrize('local_prefix', [False, True])
+@pytest.mark.parametrize('enabled', [False, True])
+def test_dspark_compact_store_admission(local_prefix, enabled):
+    from lmdeploy.messages import KVTransferConfig
+
+    model, cache, spec = _prefix_configs()
+    spec.model_config.num_layers = 6  # External DSpark, not a single-layer MTP head.
+    cache.enable_prefix_caching = local_prefix
+    cache.kv_transfer_config = (KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role='kv_both')
+                                if enabled else KVTransferConfig())
+    cache.num_state_caches = None  # Recompute the default with the selected connector.
+    cache.compact_state_capacity = SSMStateCapacity.from_cache_config(cache, 4)
+    executor = _executor(model, cache, spec)
+    assert executor.cache_config.use_mooncake_store == enabled
+    assert executor.cache_config.enable_prefix_caching == local_prefix
+    assert executor.cache_config.prefix_cache_token_lookahead == 0
+
+
+@pytest.mark.parametrize('option,value', [('prefix_cache_decode_save_first', True),
+                                         ('prefix_cache_decode_state_interval', 64)])
+@pytest.mark.parametrize('role,local_prefix,rejected', [
+    ('kv_producer', False, True), ('kv_both', True, True),
+    ('kv_consumer', False, False), ('kv_consumer', True, True),
+])
+def test_dspark_store_decode_checkpoint_admission(option, value, role, local_prefix, rejected):
+    from lmdeploy.messages import KVTransferConfig
+
+    model, cache, spec = _prefix_configs()
+    cache.enable_prefix_caching = local_prefix
+    cache.kv_transfer_config = KVTransferConfig(kv_connector='MooncakeStoreConnector', kv_role=role)
+    cache.num_state_caches = None
+    cache.compact_state_capacity = SSMStateCapacity.from_cache_config(cache, 4)
+    setattr(cache, option, value)
+    if rejected:
+        with pytest.raises(ValueError, match='not decode checkpoints'):
+            _executor(model, cache, spec)
+    else:
+        _executor(model, cache, spec)
+
+
+@pytest.mark.parametrize('case', ['family', 'compact', 'indexed', 'gdn', 'attn_tp', 'replay'])
 def test_dspark_prefix_rejects_unqualified_pairs(case):
     model, cache, spec = _prefix_configs()
     if case == 'family':
@@ -45,8 +83,6 @@ def test_dspark_prefix_rejects_unqualified_pairs(case):
         model.state_cache_is_indexed = False
     elif case == 'gdn':
         model.is_gated_delta = False
-    elif case == 'draft':
-        spec.model_config.hf_config.architectures = ['DFlashDraftModel']
     elif case == 'replay':
         model.enable_replayssm = True
         cache.compact_state_capacity = SSMStateCapacity.from_cache_config(cache, 4, runtime_is_auxiliary=True)
@@ -60,17 +96,16 @@ def test_dspark_prefix_rejects_unqualified_pairs(case):
             _executor(model, cache, spec)
 
 
-@pytest.mark.parametrize('method,shift,recompute,lookahead', [
-    ('dspark', 0, 0, 3), ('dflash', 0, 1, 4), ('qwen3_5_mtp', 1, 1, 3)])
-def test_dspark_prefix_strategy_contract(method, shift, recompute, lookahead):
+@pytest.mark.parametrize('method,shift,recompute', [
+    ('dspark', 0, 0), ('dflash', 0, 1), ('qwen3_5_mtp', 1, 1)])
+def test_dspark_prefix_strategy_contract(method, shift, recompute):
     factory = ARSpecStrategyFactory(SimpleNamespace(bos_token_id=0), SimpleNamespace(
         method=method, num_speculative_tokens=3, dspark=SimpleNamespace(draft_query_len=3)))
     strategy = factory.build_sequence_strategy()
     assert strategy.prefill_input_shift == shift
     assert strategy.recompute_blocks == recompute
     engine = factory.build_engine_strategy(None, SimpleNamespace(prefill_interval=1))
-    assert engine.draft_kv_lookahead == lookahead
-    assert engine.get_num_required_tokens() == 4 + lookahead
+    assert engine.get_num_required_tokens() == 8
 
 
 @pytest.mark.parametrize('length,diverge,private_end', [(1160, 1024, 1024), (1200, 1152, 1152),
@@ -141,5 +176,5 @@ def test_dspark_prefix_real_input_packet(budget):
     assert packet['inputs'].history_lengths.tolist() == [expected]
     assert packet['inputs'].seq_length.tolist() == [1088 - expected]
     assert reader.prefix_cache.recompute_overlap.recompute_blocks == 0
-    assert maker.engine_strategy.get_prealloc_size(False) == 3
+    assert maker.engine_strategy.get_prealloc_size(True) >= 8
     assert producer.session_id not in scheduler.sessions

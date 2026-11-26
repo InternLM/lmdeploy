@@ -709,6 +709,10 @@ class ModelConfig:
         hf_config = config_from_pretrained(pretrained_model_name_or_path, trust_remote_code=trust_remote_code)
         if is_draft_model and spec_method == 'dspark':
             from lmdeploy.pytorch.spec_decode.dspark_utils import prepare_dspark_hf_config
+            # Normalize the effective 1-based IDs, not the stale checkpoint IDs.
+            if hf_overrides and 'aux_hidden_state_layer_ids' in hf_overrides:
+                hf_overrides = hf_overrides.copy()
+                hf_config.aux_hidden_state_layer_ids = hf_overrides.pop('aux_hidden_state_layer_ids')
             hf_config = prepare_dspark_hf_config(hf_config)
         if getattr(hf_config, 'model_type', None) in ['phi3']:
             # phi3 + trust_remote_code leads to error when tp.
@@ -966,6 +970,14 @@ class SpecDecodeConfig:
     ):
         if method == 'dspark' and not model:
             raise ValueError('DSpark requires an explicit external draft model; bundled drafts are not supported.')
+        block_draft_archs = {'dflash': (['DFlashDraftModel'],),
+                             'dspark': (['Qwen3DSparkModel'], ['DSparkDraftModel'])}.get(method)
+        if block_draft_archs is not None:
+            if target_cache_cfg.device_type != 'cuda':
+                raise ValueError(f'{method} requires CUDA for draft context KV materialization; '
+                                 f'got device_type={target_cache_cfg.device_type!r}.')
+            from lmdeploy.pytorch.spec_decode.dflash_utils import validate_block_draft_cache_config
+            validate_block_draft_cache_config(target_cache_cfg, method)
         draft_model = model or target_model
         dist_config = dist_config or DistConfig()
         model_config = ModelConfig.from_pretrained(draft_model,
@@ -979,17 +991,14 @@ class SpecDecodeConfig:
                                                    hf_overrides=hf_overrides,
                                                    device_type=target_cache_cfg.device_type,
                                                    )
+        if block_draft_archs is not None and model_config.hf_config.architectures not in block_draft_archs:
+            raise ValueError(f'{method} requires draft architecture {block_draft_archs}; '
+                             f'got {model_config.hf_config.architectures!r}.')
         target_layer_ids = None
         mask_token_id = None
         dspark_config = None
         if method == 'dflash':
-            from lmdeploy.pytorch.spec_decode.dflash_utils import (
-                parse_dflash_config,
-                validate_dflash_cache_config,
-                validate_dflash_runtime_config,
-            )
-            validate_dflash_cache_config(target_cache_cfg)
-            validate_dflash_runtime_config(cache_config=target_cache_cfg)
+            from lmdeploy.pytorch.spec_decode.dflash_utils import parse_dflash_config
             if target_model is None:
                 raise ValueError('DFlash requires an explicit target_model for checkpoint compatibility checks.')
             target_model_config = ModelConfig.from_pretrained(
@@ -1019,12 +1028,8 @@ class SpecDecodeConfig:
         elif method == 'dspark':
             from lmdeploy.pytorch.spec_decode.dspark_utils import (
                 parse_dspark_config,
-                validate_dspark_cache_config,
-                validate_dspark_runtime_config,
                 validate_dspark_target_config,
             )
-            validate_dspark_cache_config(target_cache_cfg)
-            validate_dspark_runtime_config(cache_config=target_cache_cfg)
             if target_model is None:
                 raise ValueError('DSpark requires an explicit target_model for checkpoint compatibility checks.')
             target_model_config = ModelConfig.from_pretrained(

@@ -268,11 +268,8 @@ class DFlash(BaseSpecProposer):
         model_inputs: ModelInputs,
         extra_inputs: ARSpecExtraInputs,
         cache_engine: CacheEngine,
-        guided_processors: dict | None = None,
     ):
         """Run a one-shot DFlash draft proposal."""
-        if guided_processors:
-            raise NotImplementedError('DFlash guided decoding is not implemented yet.')
         if cache_engine is None:
             raise RuntimeError('DFlash requires a draft cache engine for context K/V materialization.')
         if extra_inputs.next_token_ids is None:
@@ -308,12 +305,6 @@ class DFlash(BaseSpecProposer):
         """Produce all DFlash draft tokens in one block proposal."""
         if proposal_ctx is None:
             raise RuntimeError('DFlash requires ProposalContext with a draft cache engine.')
-        orig_processors = self.guided_helper.get_processors(
-            sampling_inputs.session_ctx if sampling_inputs else None,
-            sampling_inputs.response_formats if sampling_inputs else None)
-        if orig_processors:
-            raise NotImplementedError('DFlash guided decoding is not implemented yet.')
-
         plan = model_inputs.dp_meta.block_plan if model_inputs.dp_meta is not None else None
         skip_query = (not plan.run_query if plan is not None else
                       model_inputs.is_chunk and not model_inputs.is_last_chunk)

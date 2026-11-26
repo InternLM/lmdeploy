@@ -86,7 +86,7 @@ def test_speculative_dcp_layout_guard(monkeypatch, tmp_path, dcp, method, arch):
                   cache_config=CacheConfig(max_batches=1, block_size=64, num_cpu_blocks=0, num_gpu_blocks=8),
                   dist_config=dist_config)
     if incompatible:
-        with pytest.raises(ValueError, match=r'(DFlash|DSpark|draft_arch=Eagle3LlamaForCausalLM).*dcp=1'):
+        with pytest.raises(ValueError, match=r'(dflash|dspark|draft_arch=Eagle3LlamaForCausalLM).*dcp=1'):
             ConfigBuilder.build_specdecode_config(**kwargs)
         build_draft.assert_not_called()
     else:

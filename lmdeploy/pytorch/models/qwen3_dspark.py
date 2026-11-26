@@ -36,7 +36,7 @@ class Qwen3DSparkModel(DFlashDraftModel):
         # it and rely on the target head.  Always construct the checkpoint
         # shape so the loader can accept either form, then replace a missing
         # full-vocabulary head with the target module in ``set_output_head``.
-        self.output_head: nn.Module | None = ParallelLMHead(
+        self.output_head: nn.Module = ParallelLMHead(
             self.draft_vocab_size,
             config.hidden_size,
             bias=False,
@@ -44,6 +44,7 @@ class Qwen3DSparkModel(DFlashDraftModel):
             device=device,
             is_tp=False)
         self.has_own_output_head = False
+        self._loaded_dspark_weights: set[str] = set()
         if self.draft_vocab_size != int(config.vocab_size):
             self.draft_id_to_target_id = nn.Parameter(
                 torch.zeros(self.draft_vocab_size,
@@ -53,19 +54,18 @@ class Qwen3DSparkModel(DFlashDraftModel):
         else:
             self.register_parameter('draft_id_to_target_id', None)
 
-    def set_output_head(self, output_head: nn.Module):
+    def set_output_head(self, output_head: nn.Module | None):
         """Share the full-vocabulary target head when the draft omits one."""
         if self.has_own_output_head:
             return
         if self.draft_vocab_size != int(self.config.vocab_size):
             raise RuntimeError('Reduced-vocabulary DSpark checkpoint is missing lm_head.weight.')
-        if output_head is not None:
-            self.output_head = output_head
+        if output_head is None:
+            raise RuntimeError('DSpark requires a target output head when the draft omits lm_head.weight.')
+        self.output_head = output_head
 
     def compute_base_logits(self, hidden_states: torch.Tensor):
         """Project draft hidden states to logits before Markov correction."""
-        if self.output_head is None:
-            raise RuntimeError('DSpark draft model requires a shared or checkpoint output head.')
         return self.output_head(hidden_states)
 
     def init_sequential_state(self, batch_size: int, dtype: torch.dtype,
@@ -127,11 +127,13 @@ class Qwen3DSparkModel(DFlashDraftModel):
             if 'd2t' in name:
                 if self.draft_id_to_target_id is not None:
                     load_weight(self.draft_id_to_target_id, loaded_weight)
+                    self._loaded_dspark_weights.add('d2t')
                 continue
             if name.startswith('markov_head.'):
                 load_weight(own_params[name], loaded_weight)
+                self._loaded_dspark_weights.add(name)
                 continue
-            if name == 'lm_head.weight' and self.output_head is not None:
+            if name == 'lm_head.weight':
                 load_weight(self.output_head.weight, loaded_weight)
                 self.has_own_output_head = True
                 continue
@@ -139,5 +141,18 @@ class Qwen3DSparkModel(DFlashDraftModel):
         super().load_weights(backbone_weights)
 
 
-# Raw Speculators and transformed vLLM configs use different architecture names.
+    def process_weights_after_loading(self):
+        """Check DSpark-specific weights once all checkpoint shards are
+        loaded."""
+        required = {f'markov_head.{name}' for name, _ in self.markov_head.named_parameters()}
+        if self.draft_id_to_target_id is not None:
+            required.add('d2t')
+            if not self.has_own_output_head:
+                required.add('lm_head.weight')
+        missing = required - self._loaded_dspark_weights
+        if missing:
+            raise ValueError(f'DSpark checkpoint is missing required weights: {", ".join(sorted(missing))}.')
+
+
+# Raw Speculators checkpoints use this architecture alias.
 DSparkDraftModel = Qwen3DSparkModel
