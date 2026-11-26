@@ -584,13 +584,14 @@ class AdditionalIntegrationTests(RecordTestCase):
         path = SOURCE / 'lmdeploy/pytorch/paging/kv_load_coordinator.py'
         tree = ast.parse(path.read_text())
         coordinator = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'KVLoadCoordinator')
-        methods = ('_allocate_and_start_load', 'start_load', 'apply_load_results')
+        methods = ('__init__', '_allocate_and_start_load', 'start_load', 'apply_load_results')
         coordinator.body = [n for n in coordinator.body if getattr(n, 'name', '') in methods]
         helper_names = ('_LoadPhase', '_DeferredLoadCleanup', '_LoadRecord')
         helpers = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name in helper_names]
         module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')], level=0)]
                            + helpers + [coordinator], type_ignores=[])
         names = dict(enum=enum, dataclass=dataclasses.dataclass, __name__=__name__, TRACE_ENABLED=True,
+                     PrefixCacheStats=NS,
                      EventType=NS(KV_LOAD_STARTED='start', KV_LOAD_FINISHED='end',
                                   KV_LOAD_FAILED='fail', KV_LOAD_CANCELLED='cancel'))
         exec(compile(ast.fix_missing_locations(module), str(path), 'exec'), names)
@@ -601,12 +602,13 @@ class AdditionalIntegrationTests(RecordTestCase):
                      state=NS(begin_remote_load=lambda: None),
                      prefix_cache=NS(match_start_step=-1), num_history_ids=0,
                      record_event=lambda event_type, **kw: calls.append(event_type))
-            c = names['KVLoadCoordinator']()
-            c._loads = {}
-            c._prefill_targets = {}
-            c.block_manager = NS(allocate=lambda seq: None, get_block_table=lambda seq: [0])
-            c.connector = NS(update_state_after_alloc=lambda *args: calls.append('bind'))
-            c.state_manager = None
+            c = names['KVLoadCoordinator'](
+                lookup_enabled=True,
+                connector=NS(update_state_after_alloc=lambda *args: calls.append('bind')),
+                block_manager=NS(allocate=lambda seq: None, get_block_table=lambda seq: [0]),
+                block_trie=NS(),
+                sessions={},
+            )
             c.record_cache_query = lambda *a: None
             c.track_prefill = lambda *a, **kw: None
             c._publish = lambda record: None
