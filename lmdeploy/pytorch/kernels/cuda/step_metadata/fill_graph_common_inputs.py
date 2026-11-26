@@ -102,9 +102,8 @@ def _fill_graph_common_inputs_kernel(
         cu_q = tl.cumsum(q_len, 0)
         cu_k = tl.cumsum(kv_len, 0)
         last_real_q = real & (q_offsets == q_batch_size - 1)
-        tl.device_assert(cu_q == num_tokens,
-                         'q_seqlens do not sum to num_tokens',
-                         mask=last_real_q)
+        tl.device_assert(~last_real_q | (cu_q == num_tokens),
+                         'q_seqlens do not sum to num_tokens')
         first = q_offsets == 0
         tl.store(cu_seqlens + q_offsets * cu_col_stride, 0, mask=first)
         tl.store(cu_seqlens + cu_row_stride + q_offsets * cu_col_stride,
