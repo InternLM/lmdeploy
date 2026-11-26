@@ -99,6 +99,15 @@ class ChatRunner:
         consumption."""
         options = options or ChatRunnerOptions()
         parser_cls = server_context.response_parser_cls
+        if request.thinking is not None and request.enable_thinking is None:
+            # The parser and the chat template both read `enable_thinking`; map
+            # the OpenAI-style `thinking` object once, before either is built.
+            request = request.model_copy(update={
+                'chat_template_kwargs': {
+                    'enable_thinking': request.thinking.type != 'disabled',
+                    **(request.chat_template_kwargs or {}),
+                }
+            })
 
         try:
             if isinstance(request.tool_choice, ToolChoice):

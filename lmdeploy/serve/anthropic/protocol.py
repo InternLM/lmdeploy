@@ -10,6 +10,8 @@ import shortuuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core import PydanticCustomError
 
+from lmdeploy.serve.openai.protocol import ThinkingConfig
+
 RoutedExperts = list[list[list[int]]] | str | None
 MessageStopReason = Literal['end_turn', 'max_tokens', 'stop_sequence', 'tool_use', 'parse_error']
 LOCAL_THINKING_SIGNATURE = 'lmdeploy-local'
@@ -92,13 +94,6 @@ class ToolChoiceToolParam(BaseModel):
 
 
 ToolChoiceParam = ToolChoiceAutoParam | ToolChoiceAnyParam | ToolChoiceToolParam
-
-
-class ThinkingConfig(BaseModel):
-    """Thinking mode; separate ``budget_tokens`` enforcement is unsupported."""
-
-    type: Literal['enabled', 'disabled', 'adaptive']
-    budget_tokens: int | None = Field(default=None, gt=0)
 
 
 class MessagesRequest(BaseModel):

@@ -622,3 +622,21 @@ def test_visible_overlapping_stop_is_cut_at_the_longest_match_in_both_modes(stre
     assert text == 'X'
     assert result.stop_sequence == 'abc'
 
+
+@pytest.mark.parametrize('kwargs, expected', [
+    ({'thinking': {'type': 'enabled'}}, {'enable_thinking': True}),
+    ({'thinking': {'type': 'adaptive'}}, {'enable_thinking': True}),
+    ({'thinking': {'type': 'disabled'}}, {'enable_thinking': False}),
+    ({'thinking': {'type': 'enabled'}, 'enable_thinking': False}, {'enable_thinking': False}),
+    ({'thinking': {'type': 'disabled'}, 'chat_template_kwargs': {'enable_thinking': True}},
+     {'enable_thinking': True}),
+])
+def test_thinking_reaches_parser_and_template_as_enable_thinking(kwargs, expected):
+    context = _FakeServerContext(_Parser)
+    runner = asyncio.run(ChatRunner.prepare(context, _request(**kwargs)))
+
+    assert context.async_engine.preprocess_kwargs['chat_template_kwargs'] == expected
+    if 'enable_thinking' not in kwargs and 'chat_template_kwargs' not in kwargs:
+        # The parser is built from the same normalized request.
+        assert runner.request.chat_template_kwargs == expected
+    asyncio.run(runner.close())
