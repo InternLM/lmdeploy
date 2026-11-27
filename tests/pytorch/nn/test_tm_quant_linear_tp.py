@@ -111,6 +111,44 @@ class TestMergedTpPartitionedOnce:
         assert module.weight_packed.shape == (128, 128)
 
 
+class TestBlockedCtFp8MergedTp1:
+    """Blocked FP8 scales section by ceil(N_i/128), not by total N: the merged
+    loader splits scale rows per projection, so even TP=1 loading fails if
+    allocation and packing count blocks over the fused sum."""
+
+    def _make_scale(self, rows, base):
+        return (torch.arange(rows * 4, dtype=torch.bfloat16).reshape(rows, 4) + base)
+
+    def test_gate_up_blocked_tp1(self, monkeypatch):
+        """Two projections, the first ending inside a block: scale rows
+        [ceil(200/128), ceil(128/128)] = [2, 1], loaded independently."""
+        _patch_rank_ctx(monkeypatch, tp=1, rank=0)
+        module = MergedTmQuantLinear(512, [200, 128], lane='ct_fp8', bias=False, fp8_blocked=True,
+                                     device=torch.device('cpu'), is_tp=False)
+        assert module.weight_scale.shape == (3, 4)
+        for shard_id, (n, rows, base) in zip((0, 1), ((200, 2, 1), (128, 1, 100))):
+            module.weight_loader(module.weight, torch.randn(n, 512).to(torch.float8_e4m3fn), shard_id)
+            module.weight_loader(module.weight_scale, self._make_scale(rows, base), shard_id)
+        assert module.weight_scale[:, 0].tolist() == [1.0, 5.0, 100.0]
+        _, scales, _, _ = module._lane_shards()
+        assert [tuple(s.shape) for s in scales] == [(2, 4), (1, 4)]
+
+    def test_qkv_blocked_tp1(self, monkeypatch):
+        """Fused QKV at TP=1: q/k/v scale sections [2, 1, 1] load each through
+        the merged loader without the split-by-channel mismatch."""
+        _patch_rank_ctx(monkeypatch, tp=1, rank=0)
+        module = QKVTmQuantLinear(512, 4, 2, 64, 64, lane='ct_fp8', bias=False, fp8_blocked=True,
+                                  device=torch.device('cpu'), is_tp=False)
+        assert list(module.all_out_features) == [256, 128, 128]
+        assert module.weight_scale.shape == (4, 4)
+        for shard_id, (n, rows, base) in zip(('q', 'k', 'v'), ((256, 2, 1), (128, 1, 100), (128, 1, 200))):
+            module.weight_loader(module.weight, torch.randn(n, 512).to(torch.float8_e4m3fn), shard_id)
+            module.weight_loader(module.weight_scale, self._make_scale(rows, base), shard_id)
+        assert module.weight_scale[:, 0].tolist() == [1.0, 5.0, 100.0, 200.0]
+        _, scales, _, _ = module._lane_shards()
+        assert [tuple(s.shape) for s in scales] == [(2, 4), (1, 4), (1, 4)]
+
+
 def _quantize(w_dense: torch.Tensor):
     """Minimal NVFP4 checkpoint bundle: codes packed two-per-byte, e4m3
     block scales, per-tensor global scale."""

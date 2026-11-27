@@ -29,25 +29,64 @@ def validate_replayssm_config(buffer_len: int, num_spec_tokens: int) -> None:
                          f'L={buffer_len}, Tmax={tmax}.')
 
 
+def _resolve_ct_fp8_layout(weights: Mapping[str, Any]) -> tuple[int, int | None, bool, str]:
+    """Resolve a compressed-tensors float-quantized FP8 weight layout.
+
+    Returns ``(bits, group_size_or_None, blocked, ct_format)``. Two layouts
+    are served: per-channel (``strategy == 'channel'`` with no group) and
+    the canonical llm-compressor blocked output (``strategy == 'block'``
+    with ``block_structure == [128, 128]`` and a null ``group_size``; the
+    ground truth is e.g. RedHatAI/Qwen3-0.6B-FP8-BLOCK, whose
+    ``.weight_scale`` is bf16 ``[ceil(N/128), ceil(K/128)]`` N-first and
+    ``.weight`` is e4m3 ``[N, K]``). The legacy ``group``/``tensor_group``
+    128 spellings keep working. Shared by the PT engine parser and the
+    TurboMind converter so the two cannot drift.
+    """
+    ct_format = 'float-quantized'
+    if weights.get('num_bits') != 8:
+        raise ValueError(f'Unsupported float-quantized `num_bits`: expected 8, got {weights.get("num_bits")!r}.')
+    strategy = weights.get('strategy')
+    group_size = weights.get('group_size')
+    if strategy == 'channel':
+        if group_size is not None:
+            raise ValueError(f'Unsupported float-quantized layout: strategy `channel` requires no '
+                             f'group_size, got {group_size!r}.')
+        return 8, None, False, ct_format
+    if strategy == 'block':
+        block_structure = weights.get('block_structure')
+        if block_structure != [128, 128]:
+            raise ValueError(f'Unsupported compressed-tensors FP8 block structure: {block_structure!r}. '
+                             'Only [128, 128] is supported.')
+        return 8, None, True, ct_format
+    if strategy in ('tensor_group', 'group') and group_size == 128:
+        return 8, 128, True, ct_format
+    raise ValueError(f'Unsupported float-quantized weights layout: strategy={strategy!r}, '
+                     f'group_size={group_size!r}. Supported: channel (no group), block [128, 128], '
+                     'or group/tensor_group 128.')
+
+
 def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
     """Parse the compressed-tensors metadata needed by the inference backend.
 
     Returns ``(bits, group_size, ignored_layers, ct_format)``. The
     ``pack-quantized`` branch keeps its historical W4A16 validation; the
-    ``nvfp4-pack-quantized`` branch validates the weight-only float layout
-    served through the TurboMind channel.
+    ``nvfp4-pack-quantized`` and ``float-quantized`` branches validate the
+    weight-only float layouts served through the TurboMind channel.
     """
     ct_format = quant_config.get('format')
-    if ct_format not in ('pack-quantized', 'nvfp4-pack-quantized'):
+    if ct_format not in ('pack-quantized', 'nvfp4-pack-quantized', 'float-quantized'):
         raise ValueError(f'Unsupported compressed-tensors `format`: {ct_format!r}. '
-                         'Supported formats: pack-quantized, nvfp4-pack-quantized.')
+                         'Supported formats: pack-quantized, nvfp4-pack-quantized, float-quantized.')
     if quant_config.get('quantization_status') != 'compressed':
         raise ValueError('Compressed-tensors checkpoint must have `compressed` status.')
 
     config_groups = quant_config.get('config_groups')
-    if not isinstance(config_groups, Mapping) or set(config_groups) != {'group_0'}:
-        raise ValueError('Compressed-tensors config must contain exactly `config_groups.group_0`.')
-    group = config_groups['group_0']
+    if not isinstance(config_groups, Mapping) or len(config_groups) != 1:
+        raise ValueError('Compressed-tensors config must contain exactly one `config_groups` entry.')
+    # Group keys differ across tools: 'group_0' (compressed-tensors
+    # reference) vs 'config_group_0' (e.g. Ornith). Take the only entry,
+    # mirroring the TurboMind converter's fallback.
+    group = config_groups.get('group_0') or config_groups[sorted(config_groups)[0]]
     if not isinstance(group, Mapping) or group.get('targets') != ['Linear']:
         raise ValueError('Compressed-tensors `group_0` must target `Linear`.')
 
@@ -63,14 +102,15 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
         _validate_pack_quantized_group(group, weights)
         return weights['num_bits'], weights['group_size'], ignored_layers, ct_format
 
-    # The nvfp4 lane is weight-only: activation quantization metadata may
+    # Both float lanes are weight-only: activation quantization metadata may
     # describe dynamic input quantization (applied inside the kernel), but a
     # static input scheme or any output scheme has no serving path.
     input_activations = group.get('input_activations')
     if input_activations is not None:
         if input_activations.get('dynamic') is not True:
-            raise ValueError('Compressed-tensors float formats support only dynamic input '
-                             'activation quantization; static scales are not supported.')
+            raise ValueError('Compressed-tensors float formats support only dynamic (per-token) input '
+                             'activation quantization; static per-tensor W8A8 input scales are '
+                             'unsupported and rejected here.')
     if group.get('output_activations') is not None:
         raise ValueError('Compressed-tensors output activation quantization is not supported.')
 
@@ -96,8 +136,10 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
                                  f'got {weights.get(key)!r}.')
         return 4, 16, ignored_layers, ct_format
 
-    raise ValueError(f'Unsupported compressed-tensors float format: {ct_format!r}. '
-                     'Supported: nvfp4-pack-quantized.')
+    # float-quantized FP8 weights: per-channel, 128x128 blocked, or the
+    # legacy group-128 spellings -- resolved by the shared layout helper.
+    bits, group_size, _blocked, _ct = _resolve_ct_fp8_layout(weights)
+    return bits, group_size, ignored_layers, ct_format
 
 
 def _validate_pack_quantized_group(group: Mapping[str, Any], weights: Mapping[str, Any]):
@@ -1175,6 +1217,15 @@ class QuantizationConfig:
                 raise TypeError(f'Unsupported fp8 fmt: {fmt}')
         elif quant_method == 'compressed-tensors':
             bits, group_size, ignored_layers, ct_format = _parse_compressed_tensors_config(quant_config)
+            if ct_format == 'float-quantized':
+                _ct_weights = quant_config['config_groups']
+                _ct_weights = _ct_weights.get('group_0') or _ct_weights[sorted(_ct_weights)[0]]
+                _, _, ct_fp8_blocked, _ = _resolve_ct_fp8_layout(_ct_weights['weights'])
+                # The canonical blocked checkpoints carry a null group_size;
+                # surface blocked-ness through weight_block_size so the PT
+                # dispatch does not misroute them to the per-channel lane.
+                if ct_fp8_blocked and weight_block_size is None:
+                    weight_block_size = (128, 128)
         elif quant_method == 'gptq':
             # GPTQ dense linears load through the AWQ family: the load-time
             # repack absorbs pack axis, nibble order, and zero point offset
@@ -1259,13 +1310,15 @@ class QuantizationConfig:
                 # skipped. Checkpoints with ignore rules must pass prefixes.
                 if self.ct_format == 'nvfp4-pack-quantized':
                     return 'nvfp4'
+                if self.ct_format == 'float-quantized':
+                    return 'ct_fp8'
                 if self.group_size == 128:
                     return 'awq'
                 return self.quant_method
-            if module_kind == 'moe' and self.ct_format == 'nvfp4-pack-quantized':
-                # Grouped expert routes consume the nvfp4 format through
-                # the TurboMind grouped channel.
-                return 'nvfp4'
+            if module_kind == 'moe' and self.ct_format in ('nvfp4-pack-quantized', 'float-quantized'):
+                # Grouped expert routes consume the same float formats
+                # through the TurboMind grouped channel.
+                return 'nvfp4' if self.ct_format == 'nvfp4-pack-quantized' else 'ct_fp8'
             return self.quant_method
         if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
             quant_method = None
