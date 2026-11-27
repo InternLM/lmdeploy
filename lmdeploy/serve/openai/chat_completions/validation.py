@@ -14,6 +14,12 @@ def check_request(request: ChatCompletionRequest,
                   server_context,
                   json_request: dict | None = None) -> str:
     """Validate chat-completion options and fan-out compatibility."""
+    if json_request is not None:
+        extra_body = json_request.get('extra_body')
+        if ('thinking_output_mode' in json_request or
+                isinstance(extra_body, dict) and 'thinking_output_mode' in extra_body):
+            return ('thinking_output_mode is not supported. '
+                    'Use chat_template_kwargs.enable_thinking to control thinking instead.')
     engine_config = server_context.engine_config
     session_manager = server_context.session_manager
     try:
