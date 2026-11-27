@@ -301,6 +301,7 @@ def _fwd_grouped_split_quant_kernel(
     stride_od: tl.constexpr,
     stride_boffb,
     kv_group_num: tl.constexpr,
+    seq_len: tl.constexpr,
     window_size: tl.constexpr,
     head_size: tl.constexpr,
     head_size_v: tl.constexpr,
@@ -323,18 +324,24 @@ def _fwd_grouped_split_quant_kernel(
         stride_d: stride of head size dim
     """
     cur_batch = tl.program_id(2)
-    cur_kv_head = tl.program_id(0)
+    tile_id = tl.program_id(0)
     split_k_id = tl.program_id(1)
 
-    if BLOCK_H < kv_group_num:
-        HEAD_PER_CTA: tl.constexpr = BLOCK_H
-    else:
-        HEAD_PER_CTA: tl.constexpr = kv_group_num
-    cur_head = cur_kv_head * HEAD_PER_CTA + tl.arange(0, BLOCK_H)
-    mask_h = cur_head < cur_kv_head * HEAD_PER_CTA + HEAD_PER_CTA
+    # One CTA covers (kv head, query token) pairs for a single request. Mirror
+    # the unquantized kernel's tiling so every query token gets its own scratch
+    # row; using cur_batch for both the request and the token makes all tokens
+    # of a request alias row 0 and leaves the rest of the scratch unwritten.
+    HEADS_PER_REQ: tl.constexpr = kv_group_num * seq_len
+    TILES_PER_GROUP: tl.constexpr = tl.cdiv(HEADS_PER_REQ, BLOCK_H)
+    subtile_id = tile_id % TILES_PER_GROUP
+    cur_kv_head = tile_id // TILES_PER_GROUP
+    offs_h = subtile_id * BLOCK_H + tl.arange(0, BLOCK_H)
+    cur_head = cur_kv_head * kv_group_num + offs_h % kv_group_num
+    cur_token = cur_batch * seq_len + offs_h // kv_group_num
+
+    mask_h = cur_head < cur_kv_head * kv_group_num + kv_group_num
+    mask_h = mask_h & (cur_token < cur_batch * seq_len + seq_len)
     mask_h = mask_h & (cur_head < num_heads_q)
-    if BLOCK_H < kv_group_num:
-        cur_kv_head = (cur_kv_head * HEAD_PER_CTA) // kv_group_num
 
     q_seqlen = 1
     kv_seqlen = tl.load(cache_seqlens_ptr + cur_batch)
@@ -360,7 +367,7 @@ def _fwd_grouped_split_quant_kernel(
     off_ksz = (cur_kv_head * stride_kszh + offs_dsz[:, None] * stride_kszd + offs_n[None, :] * stride_kszbs)
     off_vsz = (cur_kv_head * stride_vszh + offs_dsz[None, :] * stride_vszd + offs_n[:, None] * stride_vszbs)
 
-    off_q = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :] * stride_qd)
+    off_q = (cur_token[:, None] * stride_qbs + cur_head[:, None] * stride_qh + offs_d[None, :] * stride_qd)
     q = tl.load(q_ptr + off_q, mask=mask_h[:, None] & mask_d[None, :], other=0)
 
     ksz_ptrs = KScalesZeros + off_ksz
@@ -370,7 +377,7 @@ def _fwd_grouped_split_quant_kernel(
         offs_d1 = BLOCK_DMODEL + tl.arange(0, BLOCK_DMODEL1)
         mask_d1 = offs_d1 < head_size
         offs_d1 = offs_d1 % head_size
-        off_q1 = (cur_batch * stride_qbs + cur_head[:, None] * stride_qh + offs_d1[None, :] * stride_qd)
+        off_q1 = (cur_token[:, None] * stride_qbs + cur_head[:, None] * stride_qh + offs_d1[None, :] * stride_qd)
         q1 = tl.load(q_ptr + off_q1, mask=mask_h[:, None] & mask_d1[None, :], other=0)
         off_k1 = (cur_kv_head * stride_kh + offs_d1[:, None] * stride_kd + offs_n[None, :] * stride_kbs)
 
@@ -557,16 +564,16 @@ def _fwd_grouped_split_quant_kernel(
 
     # initialize pointers to output
     if loop_end > loop_start:
-        off_acc = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
+        off_acc = (cur_token[:, None] * stride_obs + split_k_id * stride_ok + cur_head[:, None] * stride_oh +
                    offs_dv[None, :] * stride_od)
         tl.store(acc_out_ptr + off_acc, acc, mask=mask_h[:, None] & mask_dv[None, :])
 
     if quant_policy == Q_POLICY_INT4:
-        off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 2)
+        off_meta = (cur_token * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 2)
     elif quant_policy == Q_POLICY_TURBO:
-        off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 4)
+        off_meta = (cur_token * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v * 4)
     else:
-        off_meta = (cur_batch * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
+        off_meta = (cur_token * stride_obs + split_k_id * stride_ok + cur_head * stride_oh + head_size_v)
     tl.store(acc_out_ptr + off_meta, m_i, mask=mask_h)
     tl.store(acc_out_ptr + off_meta + 1, l_i, mask=mask_h)
 
@@ -992,6 +999,7 @@ def flash_attn_with_kvcache(
                                               stride_od=acc.stride(-1),
                                               stride_boffb=page_table.stride(0),
                                               kv_group_num=kv_group_num,
+                                              seq_len=seq_len,
                                               window_size=window_size,
                                               head_size=Lq,
                                               head_size_v=Lv,
