@@ -1,10 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import ctypes
+import gc
 import json
 import sys
 import threading
+import weakref
+from contextlib import nullcontext
 from dataclasses import replace
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -14,10 +17,12 @@ from lmdeploy.messages import KVTransferConfig
 from lmdeploy.pytorch.config import CacheConfig
 from lmdeploy.pytorch.engine.cache_engine import StateCacheEngine
 from lmdeploy.pytorch.engine.cache_inputs import CacheCheckpointInputs
-from lmdeploy.pytorch.engine.model_agent.agent import _save_cache_checkpoint
+from lmdeploy.pytorch.engine.model_agent.agent import BaseModelAgent, _save_cache_checkpoint
 from lmdeploy.pytorch.kv_connector import KVCachePool, KVConnectorOutput
+from lmdeploy.pytorch.kv_connector.base import KVConnectorRole
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker as worker_module
 from lmdeploy.pytorch.kv_connector.mooncake.store import worker_threads as worker_threads_module
+from lmdeploy.pytorch.kv_connector.mooncake.store.connector import MooncakeStoreConnector
 from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
     DEFAULT_GLOBAL_SEGMENT_SIZE,
     DEFAULT_LOCAL_BUFFER_SIZE,
@@ -1107,6 +1112,86 @@ def test_shutdown_is_idempotent_and_propagates_close_error(tmp_path):
 
     assert store.close_calls == 1
     assert worker.store is None
+
+
+def test_agent_drains_and_closes_fabric_store(tmp_path, monkeypatch, patch_worker_runtime):
+    finalized = []
+    shutdown_order = []
+    put_started = threading.Event()
+    allow_put = threading.Event()
+    shutdown_started = threading.Event()
+
+    def put():
+        put_started.set()
+        assert allow_put.wait(timeout=10)
+        shutdown_order.append('put')
+
+    def close_lookup():
+        shutdown_order.append('lookup')
+        shutdown_started.set()
+
+    class Cyclic:
+
+        def __init__(self):
+            self.self_ref = self
+
+        def __del__(self):
+            finalized.append('cyclic')
+
+    class FabricStore(FakeStore):
+
+        def setup(self, **kwargs):
+            self.setup_calls.append(kwargs)
+            return 0
+
+        def close(self):
+            shutdown_order.append('store')
+            return super().close()
+
+    # Created before shutdown: gc.freeze() used to make it uncollectable forever.
+    cycle = Cyclic()
+    del cycle
+
+    monkeypatch.setenv('ASCEND_ENABLE_USE_FABRIC_MEM', '1')
+    monkeypatch.setitem(sys.modules, 'torch_npu', ModuleType('torch_npu'))
+    npu = SimpleNamespace(current_device=lambda: 0, device=lambda _: nullcontext(), Event=FakeCudaEvent)
+    monkeypatch.setattr(torch, 'npu', npu, raising=False)
+    monkeypatch.setattr(worker_module, '_load_mooncake_store_factory', lambda: lambda: FabricStore(put_callback=put))
+    path = write_store_config(tmp_path, protocol='ascend', global_segment_size='8GB')
+    config = make_cache_config(path, role='kv_producer')
+    config.kv_transfer_config.kv_connector_extra_config['device_backend'] = 'ascend'
+    owner = SimpleNamespace(kv_connector=MooncakeStoreConnector(KVConnectorRole.WORKER, config))
+    worker = owner.kv_connector.connector_worker
+    store_ref = weakref.ref(worker.store)
+    worker.register_kv_caches({'kv': FakeTensor(0x1000, size=64)})
+    worker.lookup_server = SimpleNamespace(close=close_lookup)
+    sender = worker.kv_send_thread
+    request = MooncakeStoreSaveRequest(save_id=1, request_id=2, start_block=0, block_ids=(0,),
+                                       logical_block_ids=(1,), block_hashes=build_prefix_block_hashes(range(64), 64))
+    worker.start_save_kv(MooncakeStoreConnectorMetadata(save_requests=(request,)))
+
+    shutdown = threading.Thread(target=BaseModelAgent._shutdown_kv_connector, args=(owner,), daemon=True)
+    shutdown.start()
+    try:
+        assert put_started.wait(timeout=10)
+        assert shutdown_started.wait(timeout=10)
+        assert shutdown_order == ['lookup']
+    finally:
+        allow_put.set()
+        shutdown.join(timeout=10)
+
+    assert not shutdown.is_alive()
+    assert not sender.is_alive()
+    assert owner.kv_connector is None
+    assert shutdown_order == ['lookup', 'put', 'store']
+    assert worker.get_finished() == KVConnectorOutput(completed_save_ids={1})
+    messages = [message for _, message in patch_worker_runtime.messages]
+    assert any('interaction after: operation=close' in message for message in messages)
+
+    del worker, sender
+    gc.collect()
+    assert store_ref() is None
+    assert finalized == ['cyclic'], 'unrelated cycles must stay collectable'
 
 
 class BytesStore(FakeStore):
