@@ -21,5 +21,6 @@ def register(router: APIRouter, server_context) -> None:
             model_cards.append(
                 ModelCard(id=model_name,
                           root=model_name,
+                          max_model_len=server_context.async_engine.session_len,
                           permission=[ModelPermission()]))
         return ModelList(data=model_cards)

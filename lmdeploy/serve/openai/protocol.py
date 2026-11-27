@@ -5,7 +5,15 @@ import time
 from typing import Any, Literal
 
 import shortuuid
-from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
+from pydantic import (
+    AliasChoices,
+    AliasPath,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 
 class ErrorResponse(BaseModel):
@@ -42,6 +50,17 @@ class ModelCard(BaseModel):
     root: str | None = None
     parent: str | None = None
     permission: list[ModelPermission] = []
+    max_model_len: int | None = Field(default=None,
+                                     description='Maximum context length supported by the serving engine.')
+
+    @model_serializer(mode='wrap')
+    def serialize_model_card(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        # Proxy cards and independently constructed cards may not know the limit.
+        # Omit only this new field, preserving existing nullable fields.
+        if self.max_model_len is None:
+            data.pop('max_model_len', None)
+        return data
 
 
 class ModelList(BaseModel):
