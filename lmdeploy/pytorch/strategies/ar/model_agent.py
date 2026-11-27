@@ -101,7 +101,8 @@ class ARModelAgentStrategy(ModelAgentStrategy):
 
     def make_stopping_criteria(self, seqs: SeqList) -> ARStoppingCriteria:
         """Create stopping criteria."""
-        num_appendable = [seq.sampling_param.max_new_tokens - seq.num_new_tokens for seq in seqs]
+        num_appendable = [1 if seq.pd_prompt_tokens is not None else
+                          seq.sampling_param.max_new_tokens - seq.num_new_tokens for seq in seqs]
         num_appendable = torch.tensor(num_appendable)
         return ARStoppingCriteria(num_appendable_ids=num_appendable)
 

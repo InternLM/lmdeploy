@@ -1898,9 +1898,11 @@ class Glm5NextForConditionalGeneration(DeepseekV32ForCausalLM, PiecewiseCudaGrap
                     vision_groups=vision_groups,
                     vision_prompt_order=vision_prompt_order,
                     multimodal_mask=multimodal_mask,
+                    # Mixed DP decode reuses the global prefill graph. Its output
+                    # contract must match the plan captured during prefill warmup.
                     return_input_embeds=(
                         self.ctx_mgr.build_ctx.num_spec_tokens > 0
-                        and not context.is_decoding))
+                        and not context.global_is_decoding()))
 
     @staticmethod
     def _layer_idx(name: str) -> int | None:

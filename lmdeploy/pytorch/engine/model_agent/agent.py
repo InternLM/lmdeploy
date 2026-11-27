@@ -129,6 +129,7 @@ class BatchedOutputs:
     kv_connector_output: KVConnectorOutput | None = None
     decode_checkpoint_mask: torch.Tensor | None = None
     ssm_state_access_id: int | None = None
+    pd_state_ids: torch.Tensor | None = None
 
     @classmethod
     def connector_only(cls, output: KVConnectorOutput | None) -> 'BatchedOutputs':
@@ -431,6 +432,7 @@ class BaseModelAgent:
 
         self.patched_model = None
         self.cache_engine = None
+        self.pd_runtime = None
         self.block_cache_plan = None
         self.compact_state_plan = None
         # Exact target/draft bytes used when cache capacity was calculated.
@@ -544,11 +546,6 @@ class BaseModelAgent:
         inputs = self.inputs_strategy.make_dummy(batch_size, is_decoding=False, device='cuda',
                                                  vocab_size=self.model_config.vocab_size,
                                                  max_q_seqlen=max_q_seqlen, meta=self.make_dummy_meta)
-        if inputs.ssm_state_meta is not None:
-            from lmdeploy.pytorch.compact_state import SSMPrefillMetadata
-            # Dummy lengths are host-known; never read device lengths back.
-            prefill = SSMPrefillMetadata.from_lengths([max_q_seqlen] * batch_size, [0] * batch_size)
-            inputs.ssm_prefill_meta = prefill.to_device(inputs.input_ids.device)
         return inputs
 
     def _warmup_prefill(self) -> None:
@@ -1151,7 +1148,6 @@ class BaseModelAgent:
                 inputs,
                 delta,
             )
-
         if ssm_state_access_id is not None:
             if inputs.is_dummy or inputs.ssm_state_meta is None:
                 raise ValueError('Compact access identity requires real compact model inputs.')
@@ -1244,7 +1240,7 @@ class BaseModelAgent:
 
         logits = output['logits'][0]  # [bs, seq, prob] -> [seq, prob]
         seq_length = output.get('seq_length', inputs.seq_length)
-        last_logits = self._slice_outs(logits, seq_length)  # [bs, 1, prob] -> [bs, prob]
+        last_logits = self._slice_outs(logits, seq_length)
         extra_inputs = self.agent_strategy.slice_extra_inputs(extra_inputs, inputs, output)
         model_metas = output.get('model_metas')
 
@@ -1318,11 +1314,16 @@ class BaseModelAgent:
         # connector output together; other TP ranks emit a connector-only
         # envelope so the executor can wait for all-rank completion.
         connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
-        if batched_output is None and (connector_output is not None or ssm_state_access_id is not None):
+        pd_export = cache_inputs is not None and cache_inputs.pd_export
+        if batched_output is None and (connector_output is not None or ssm_state_access_id is not None or pd_export):
             batched_output = BatchedOutputs(next_token_ids=None, stopped=None)
         if batched_output is not None:
             batched_output.kv_connector_output = connector_output
             batched_output.ssm_state_access_id = ssm_state_access_id
+            if pd_export:
+                ids = (inputs.ssm_state_meta.output_state_ids[:, 0] if inputs.ssm_state_meta is not None
+                       else torch.empty(0, dtype=torch.long, device=self.device))
+                batched_output.pd_state_ids = ids.unsqueeze(0)
             if ssm_state_access_id is None:
                 self._push_output(batched_output)
 
@@ -1682,12 +1683,17 @@ class BaseModelAgent:
         self.kv_connector.shutdown()
         self.kv_connector = None
 
+    def _close_pd_runtime(self):
+        if self.pd_runtime is not None:
+            self.pd_runtime.close()
+            self.pd_runtime = None
+
     def _validate_mtp_parallel_config(self) -> None:
-        """Validate the target and MTP topology used by Mooncake Store."""
+        """Validate target and draft shards used by Store and PD."""
         transfer_config = self.cache_config.kv_transfer_config
-        if (transfer_config is None
+        if (self.cache_config.role == EngineRole.Hybrid and (transfer_config is None
                 or transfer_config.kv_connector != 'MooncakeStoreConnector'
-                or not transfer_config.is_kv_transfer_instance):
+                or not transfer_config.is_kv_transfer_instance)):
             return
 
         specdecode_config = self.spec_agent.specdecode_config
@@ -1710,7 +1716,7 @@ class BaseModelAgent:
         )
         if target_parallel != mtp_parallel:
             raise ValueError(
-                'Mooncake Store requires target and MTP parallel configs to match: '
+                'Mooncake cache transfer requires target and MTP parallel configs to match: '
                 f'target=(attn_tp={target_parallel[0]}, dp={target_parallel[1]}, '
                 f'ep={target_parallel[2]}, world_size={target_parallel[3]}), '
                 f'mtp=(attn_tp={mtp_parallel[0]}, dp={mtp_parallel[1]}, '
@@ -1770,6 +1776,7 @@ class BaseModelAgent:
         with self.all_context():
             self._validate_mtp_parallel_config()
             self._shutdown_kv_connector()
+            self._close_pd_runtime()
             dist_ctx = get_dist_manager().current_context()
             dist_cfg = self.dist_config
             tp = dist_cfg.attn_tp
@@ -1798,6 +1805,12 @@ class BaseModelAgent:
                 self.make_dummy_meta.compact_bank_width = plan.capacity.bank_width
                 self.make_dummy_meta.compact_auxiliary_runtime = plan.capacity.runtime_is_auxiliary
             self.spec_agent.build_cache_engine(self.cache_stream)
+            from lmdeploy.pytorch.disagg.config import MigrationBackend
+            if self.cache_config.migration_backend == MigrationBackend.Mooncake:
+                from lmdeploy.pytorch.disagg.runtime import PDWorkerRuntime
+                self.pd_runtime = PDWorkerRuntime(self.cache_engine, self.spec_agent.cache_engine,
+                                                  self.state_cache_engine, self.model_config, self.dist_config,
+                                                  self.spec_agent.specdecode_config)
             schema = self._get_compact_store_schema()
 
             self.kv_connector = build_kv_connector(
@@ -2173,7 +2186,9 @@ class BaseModelAgent:
         # Stop producers of GPU work and wait for queued work before closing the
         # connector threads that still reference registered cache addresses.
         self.shutdown_kv_connector()
+        self._close_pd_runtime()
         self.cache_engine = None
+        self.pd_runtime = None
         self.state_cache_engine = None
         self.reset_graph_runner()
         self.patched_model.get_model().to(device=device, non_blocking=True)
@@ -2243,6 +2258,7 @@ class BaseModelAgent:
     def release(self):
         """release."""
         self._shutdown_kv_connector()
+        self._close_pd_runtime()
         self.reset_graph_runner()
         if self._checkpoint_engine_zmq_ctx is not None:
             self._checkpoint_engine_zmq_ctx.destroy(linger=0)
@@ -2251,6 +2267,7 @@ class BaseModelAgent:
             self.memdecode_agent.release()
         self.patched_model = None
         self.cache_engine = None
+        self.pd_runtime = None
         self.block_cache_plan = None
         self.state_cache_engine = None
         self.compact_state_plan = None

@@ -319,7 +319,7 @@ class MooncakeStoreScheduler:
 
         block_extras = {}
         lookahead = self._cache_config.prefix_cache_token_lookahead
-        if not request.history_multimodals.empty():
+        if request.prefix_cache.multimodal_spans:
             for block_index in range(len(tracker.block_hashes), num_blocks):
                 start = block_index * block_size
                 end = start + block_size
@@ -330,7 +330,7 @@ class MooncakeStoreScheduler:
                     block_extras[block_index] = json.dumps(identity, separators=(',', ':')).encode('utf-8')
 
         tracker.block_hashes = build_prefix_block_hashes(
-            request.all_ids[:token_len + lookahead],
+            request.valid_ids[:token_len + lookahead],
             block_size,
             extra_identity=adapter_identity,
             previous_hashes=tracker.block_hashes,

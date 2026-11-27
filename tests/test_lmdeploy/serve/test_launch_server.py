@@ -2,6 +2,7 @@
 import importlib
 import signal
 import socket
+from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
@@ -41,9 +42,25 @@ def test_dead_frontend_still_terminates_orphaned_group(monkeypatch):
     killpg.assert_called_once_with(123, signal.SIGTERM)
 
 
+def test_dp_launch_respects_visible_gpu_subset(monkeypatch):
+    import importlib
+    module = importlib.import_module('lmdeploy.serve.openai.launch_server')
+    process = Mock(return_value=Mock(exitcode=0))
+    monkeypatch.setenv('CUDA_VISIBLE_DEVICES', '4,5,6,7')
+    monkeypatch.setattr(module.mp, 'Process', process)
+    monkeypatch.setattr(module.mp, 'set_start_method', Mock())
+    monkeypatch.setattr(module.signal, 'signal', Mock())
+    monkeypatch.setattr(module, 'get_host_ip', lambda: '127.0.0.1')
+    monkeypatch.setattr(module, 'is_port_available', lambda *_: True)
+    module.launch_server(1, 0, 'model', SimpleNamespace(dp=4, tp=1, ep=4), server_port=19500)
+    assert [call.kwargs['args'][0] for call in process.call_args_list] == [['4'], ['5'], ['6'], ['7']]
+
+
 @pytest.fixture
 def launcher(monkeypatch):
     module = importlib.import_module('lmdeploy.serve.openai.launch_server')
+    # Port planning uses mocked workers, independent of the runner's GPU allocation.
+    monkeypatch.delenv('CUDA_VISIBLE_DEVICES', raising=False)
     monkeypatch.setattr(module.mp, 'set_start_method', Mock())
     monkeypatch.setattr(module.signal, 'signal', Mock())
     monkeypatch.setattr(module, 'get_host_ip', lambda: '127.0.0.2')

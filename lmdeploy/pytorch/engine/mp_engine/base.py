@@ -111,6 +111,12 @@ class MPEngine(EngineBase):
         """Init rdma link."""
         return self._collective_rpc('p2p_initialize', conn_request)
 
+    def get_pd_engine_info(self):
+        return self._collective_rpc('get_pd_engine_info')
+
+    def pd_control(self, request):
+        return self._collective_rpc('pd_control', request)
+
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         """rdma_connect."""
         return self._collective_rpc('p2p_connect', conn_request)
@@ -137,6 +143,9 @@ class MPEngineInstance(EngineInstanceBase):
 
     async def trim_routed_experts(self, key: str, num_rows: int) -> str:
         return await self.engine._collective_rpc_async('trim_routed_experts', key, num_rows)
+
+    async def async_resume_multimodal(self, session_id: int, seq_id: int, inputs: dict):
+        return await self.engine._collective_rpc_async('instance_resume_multimodal', session_id, seq_id, inputs)
 
     async def async_end(self, session_id: int):
         """End the given session."""

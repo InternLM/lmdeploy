@@ -22,10 +22,10 @@ FAST_HADAMARD_TRANSFORM_VERSION=v1.1.0.post2
 if [[ "${CUDA_VERSION_SHORT}" = "cu130" ]]; then
     export CPLUS_INCLUDE_PATH="/usr/local/cuda/include/cccl":${CPLUS_INCLUDE_PATH}
     pip install nvidia-nvshmem-cu13==3.4.5
-    pip install mooncake-transfer-engine-cuda13==0.3.12.post1
+    pip install mooncake-transfer-engine-cuda13==0.3.14
 else
     pip install nvidia-nvshmem-cu12==3.4.5
-    pip install mooncake-transfer-engine==0.3.12.post1
+    pip install mooncake-transfer-engine==0.3.14
 fi
 pip wheel -v --no-build-isolation --no-deps -w /wheels "git+https://github.com/deepseek-ai/DeepEP.git@${DEEP_EP_VERSION}"
 

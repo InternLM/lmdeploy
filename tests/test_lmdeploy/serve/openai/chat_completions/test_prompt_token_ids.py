@@ -116,6 +116,70 @@ def test_raw_input_ids_have_ids_without_rendered_prompt(chat_endpoint, stream, n
     assert context.session_manager.sessions == {}
 
 
+@pytest.mark.parametrize('migrating, empty_messages', [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize('image', [False, True])
+def test_pd_reuses_prompt_ids_and_preserves_parser_messages(chat_endpoint, migrating, image, empty_messages):
+    _, context = chat_endpoint
+    ids = [91, 92, 93, 94]
+    original_preprocess = context.async_engine.preprocess
+    messages = [{'role': 'user', 'content': ([{'type': 'text', 'text': 'Hello'},
+                 {'type': 'image_url', 'image_url': {'url': 'http://unreachable/image.png'}}] if image else 'Hello')}]
+    if empty_messages:
+        messages = []
+
+    class Parser(context.response_parser_cls):
+        def __init__(self, request):
+            assert request.messages == messages
+            super().__init__(request)
+
+    async def preprocess(messages, session, **kwargs):
+        assert (messages is None) is (migrating and not image)
+        assert kwargs['input_ids'] == (ids if migrating else None)
+        assert kwargs['do_preprocess'] is (not migrating or image)
+        if migrating:
+            assert kwargs['gen_config'].migration_request.prompt_token_ids is None
+            assert kwargs['gen_config'].migration_request.handoff.multimodal_spans == (
+                [(1, 3, 'image', 'hash')] if image else [])
+        return await original_preprocess(messages, session, **kwargs)
+
+    context.response_parser_cls = Parser
+    context.async_engine.preprocess = preprocess
+    migration = dict(protocol=2, remote_engine_id='prefill', remote_session_id=1, prompt_token_ids=ids,
+                     handoff=dict(transfer_id='transfer', engine_epoch='epoch', cache_schema='schema',
+                                  prompt_digest='digest', prompt_token_count=4, valid_token_count=4,
+                                  multimodal_spans=[(1, 3, 'image', 'hash')] if image else [],
+                                  first_token_id=95, random_seed=42, random_offset=5,
+                                  block_size=64, block_ids=[1]))
+    payloads = _post(context, messages=messages, return_token_ids=True,
+                     **({'migration_request': migration} if migrating else {}))
+    assert payloads[0]['prompt_token_ids'] == (ids if migrating else [101, 102, 103, 104])
+
+
+@pytest.mark.parametrize('invalid', ['missing_prompt_ids', 'old_handoff'])
+def test_invalid_multimodal_handoff_is_rejected_before_preprocessing(chat_endpoint, invalid):
+    _, context = chat_endpoint
+
+    async def preprocess(*args, **kwargs):
+        pytest.fail('Invalid handoffs must not preprocess or fetch media on Decode.')
+
+    context.async_engine.preprocess = preprocess
+    migration = dict(protocol=2, remote_engine_id='prefill', remote_session_id=1,
+                     handoff=dict(transfer_id='transfer', engine_epoch='epoch', cache_schema='schema',
+                                  prompt_digest='digest', prompt_token_count=4, valid_token_count=4,
+                                  multimodal_spans=[(1, 3, 'image', 'hash')], first_token_id=95,
+                                  random_seed=42, random_offset=5, block_size=64, block_ids=[1]))
+    if invalid == 'old_handoff':
+        migration['prompt_token_ids'] = [91, 92, 93, 94]
+        migration['handoff']['version'] = 3
+    app = FastAPI()
+    register(app, context)
+    with TestClient(app) as client:
+        response = client.post('/v1/chat/completions', json=dict(
+            model='fake-model', messages=[], migration_request=migration))
+    assert response.status_code == 400
+    assert ('version' if invalid == 'old_handoff' else 'requires the expanded prompt_token_ids') in response.text
+
+
 @pytest.mark.parametrize('stream', [False, True])
 def test_prompt_ids_preserve_buffered_output_ids_and_logprobs(chat_endpoint, stream, monkeypatch):
     _, context = chat_endpoint
@@ -147,7 +211,7 @@ def test_prompt_ids_preserve_buffered_output_ids_and_logprobs(chat_endpoint, str
             yield SimpleNamespace(response=text, token_ids=ids, input_token_len=4,
                                   generate_token_len=3, finish_reason='stop' if not ids else None,
                                   logprobs=[{token_id: -0.1} for token_id in ids], cached_tokens=0,
-                                  routed_experts=None, cache_block_ids=None)
+                                  routed_experts=None, cache_block_ids=None, pd_handoff=None)
 
     engine.generate = generate
     payloads = _post(context, stream=stream, return_token_ids=True, return_logprob=True,
@@ -178,7 +242,8 @@ def test_prompt_ids_survive_empty_terminal_output(chat_endpoint, stream, n):
         # A stop token may be filtered before the first visible output.
         yield SimpleNamespace(response='', token_ids=[], input_token_len=4,
                               generate_token_len=0, finish_reason='stop',
-                              logprobs=None, cached_tokens=0, routed_experts=None, cache_block_ids=None)
+                              logprobs=None, cached_tokens=0, routed_experts=None,
+                              cache_block_ids=None, pd_handoff=None)
 
     context.async_engine.generate = generate
     payloads = _post(context, stream=stream, n=n, return_token_ids=True,

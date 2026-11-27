@@ -145,6 +145,9 @@ class StateBase:
     def finish_remote_load(self):
         raise NotImplementedError(f'finish_remote_load not implemented for state {self.status}')
 
+    def begin_multimodal_load(self):
+        raise NotImplementedError(f'begin_multimodal_load not implemented for state {self.status}')
+
 
 class WaitingState(StateBase):
     """State for waiting sequences."""
@@ -161,6 +164,19 @@ class WaitingState(StateBase):
     def begin_remote_load(self):
         """Protect allocated destinations until every TP rank completes."""
         self.to_state(RemoteLoadingState)
+
+    def begin_multimodal_load(self):
+        self.release_paging_resources()
+        self.to_state(MultimodalLoadingState)
+
+
+class MultimodalLoadingState(StateBase):
+    """Wait for frontend preprocessing without retaining GPU paging
+    resources."""
+    status = MessageStatus.WAITING_FOR_MULTIMODALS
+
+    def activate(self):
+        self.to_state(WaitingState)
 
 
 class RemoteLoadingState(StateBase):
@@ -248,7 +264,7 @@ class MigrationDoneState(StateBase):
     status = MessageStatus.MIGRATION_DONE
 
     def activate(self):
-        self.to_state(WaitingState)
+        self.to_state(ReadyState if self.seq.pd_decode_pending else WaitingState)
 
     def finish(self):
         self.to_state(WaitingState)

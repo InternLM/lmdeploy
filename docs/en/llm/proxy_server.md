@@ -95,6 +95,15 @@ LMDeploy currently supports two serving strategies:
 - Hybrid: Does not distinguish between Prefill and Decoding instances, following the traditional inference deployment mode.
 - DistServe: Separates Prefill and Decoding instances, deploying them on different service nodes to achieve more flexible and efficient resource scheduling and scalability.
 
+The PyTorch Mooncake PD backend defaults to 4 transfer threads per worker. All peers share the thread pool and the same number of submission slots.
+Set `LMDEPLOY_PD_TRANSFER_THREADS` to a positive integer before starting the API server to override this count. The setting is also forwarded to Ray workers. For example:
+
+```shell
+export LMDEPLOY_PD_TRANSFER_THREADS=8
+```
+
+With the Rust lmdeploy-router's full-prefill PD path, Prefill processes images and transfers the complete prompt KV/state cache, first output token, expanded token IDs, media identities, and continuation positions. Decode retains the original multimodal request without downloading or preprocessing images during normal decode. If preemption requires local recomputation, Decode asynchronously loads and preprocesses the media, verifies its content and positions against Prefill, and resumes the original request. The materialized inputs remain available until the request ends, including for subsequent recomputations. Image URLs/paths must remain accessible and unchanged until the first recomputation; base64 images are retained with the request. The handoff does not transfer images or vision embeddings. This uses handoff version 4; update Prefill, Decode, and the router together. No additional deployment flag is required.
+
 ## Dispatch Strategy
 
 The current distribution strategies of the proxy service are as follows:

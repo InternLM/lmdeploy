@@ -185,6 +185,12 @@ class EngineWorkerBase:
         """Init rdma link."""
         return self.engine.p2p_initialize(conn_request)
 
+    def get_pd_engine_info(self):
+        return self.engine.get_pd_engine_info()
+
+    def pd_control(self, request):
+        return self.engine.pd_control(request)
+
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         """rdma_connect."""
         return self.engine.p2p_connect(conn_request)
@@ -244,6 +250,12 @@ class EngineWorkerBase:
     async def instance_async_end(self, session_id: int):
         """End the given session."""
         return await self.instance_pool.async_end(session_id)
+
+    async def instance_resume_multimodal(self, session_id: int, seq_id: int, inputs: dict):
+        # Streaming requests may occupy every pooled instance while waiting for media.
+        # A short-lived control sender must not wait for one of those requests to finish.
+        instance = self.engine.create_instance()
+        return await instance.async_resume_multimodal(session_id, seq_id, inputs)
 
     async def instance_async_cancel(self, session_id: int):
         """Stop current streaming inference."""

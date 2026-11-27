@@ -11,8 +11,9 @@ import torch
 from torch.profiler import record_function
 
 from lmdeploy.messages import RequestMetrics
-from lmdeploy.pytorch.disagg.config import EngineRole
-from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
+from lmdeploy.pytorch.disagg.config import PD_RENEW_INTERVAL, EngineRole
+from lmdeploy.pytorch.disagg.conn.protocol import PDControlRequest
+from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch, PDTransferResult
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
 from lmdeploy.pytorch.utils import cancel_async_tasks, wait_for_async_tasks
 from lmdeploy.trace import ENABLED as TRACE_ENABLED
@@ -136,6 +137,10 @@ class EngineLoop:
         self.inputs_maker = inputs_maker
         self.config = config
         self.engine_conn = engine_conn
+        self._pd_receive_tasks: set[asyncio.Task] = set()
+        self._pd_native_jobs: set[asyncio.Task] = set()
+        self._pd_control_tasks: set[asyncio.Task] = set()
+        self.forward_started_at: float | None = None
 
         # tasks and control events
         self.tasks: set[asyncio.Task] = set()
@@ -169,6 +174,46 @@ class EngineLoop:
             await self.req_manager.step()
             self.scheduler.prefetch_kv_lookups()
             self.has_runable_event.set()
+
+    async def pd_maintenance_loop(self):
+        while not self.stop_event.is_set():
+            owner = self.scheduler.pd_coordinator
+            for sequence in owner.expire_exports(time.monotonic()):
+                logger.warning('PD export for session %s expired without a receiver release.', sequence.session_id)
+                self.scheduler.end_session(sequence.session_id)
+            notifications, owner.notifications = owner.notifications, []
+            for peer, request in notifications:
+                self._queue_pd_control(peer, request)
+            await asyncio.sleep(1)
+
+    def _queue_pd_control(self, peer, request):
+        task = asyncio.create_task(self._send_pd_control(peer, request))
+        self._pd_control_tasks.add(task)
+        task.add_done_callback(self._pd_control_tasks.discard)
+
+    async def _send_pd_control(self, peer, request):
+        """Retry terminal notifications without blocking inference or
+        expiry."""
+        deadline = time.monotonic() + self.scheduler.pd_coordinator.release_timeout
+        while not self.stop_event.is_set():
+            try:
+                await self.engine_conn.control(peer, request)
+                return
+            except ValueError as error:
+                logger.warning('PD %s acknowledgment rejected: %s', request.transfer_id, error)
+                return
+            except (asyncio.TimeoutError, KeyError, ConnectionError) as error:
+                logger.warning('PD %s %s acknowledgment failed: %s', request.transfer_id, request.action, error)
+            if time.monotonic() >= deadline:
+                return
+            await asyncio.sleep(5)
+
+    def _pd_native_done(self, job):
+        self._pd_native_jobs.discard(job)
+        if not job.cancelled():
+            # A job may outlive its timed-out transaction. Its late result must
+            # not re-enter paging or release a newer request's allocations.
+            job.exception()
 
     async def drain_for_sleep(self):
         """Pause scheduling after the current forward step drains."""
@@ -282,9 +327,11 @@ class EngineLoop:
                       data=dict(token_ids=out.token_ids,
                                 logits=out.logits,
                                 cache_block_ids=out.cache_block_ids,
+                                pd_handoff=out.pd_handoff,
                                 req_metrics=out.req_metrics,
                                 routed_experts=out.routed_experts,
                                 logprobs=logprobs,
+                                input_multimodals_request=out.input_multimodals_request,
                                 ce_loss=out.ce_loss))
 
     @staticmethod
@@ -439,10 +486,13 @@ class EngineLoop:
                 spec_info = dict(num_draft_tokens=num_draft_tokens, num_accepted_tokens=num_accepted_tokens.item())
             if TRACE_ENABLED and len(token_ids) and not msg.resp.first_token_timestamp:
                 msg.resp.first_token_timestamp = new_token_timestamp
+            cached_tokens = msg.cached_tokens
+            if msg.remote_prefill_cached_tokens is not None:
+                cached_tokens = msg.remote_prefill_cached_tokens
             req_metrics = RequestMetrics(new_token_timestamp,
                                          msg.engine_events,
                                          spec_info=spec_info,
-                                         cached_tokens=msg.cached_tokens,
+                                         cached_tokens=cached_tokens,
                                          first_token_timestamp=msg.resp.first_token_timestamp)
             out = InferOutput(session_id=session_id,
                               resp=msg.resp,
@@ -465,6 +515,22 @@ class EngineLoop:
                 outputs[session_id].logits = logit
         return outputs
 
+    def _request_pd_media_recompute(self):
+        """Ask the frontend to materialize media only when an import needs
+        replay."""
+        if self.config.role != EngineRole.Decode:
+            return
+        for seq in self.scheduler.take_multimodal_requests():
+            logger.info('PD multimodal recompute requested: session=%s seq=%s generated=%s',
+                        seq.session_id, seq.seq_id, seq.num_new_tokens)
+            # Queue after earlier decode outputs so coalescing preserves their tokens and logprobs.
+            output = InferOutput(session_id=seq.session_id, resp=seq.resp,
+                                 token_ids=seq.generated_ids.copy(), input_multimodals_request=seq.seq_id,
+                                 req_metrics=RequestMetrics(time.time(), seq.engine_events,
+                                                            cached_tokens=seq.remote_prefill_cached_tokens))
+            self.resp_queue.put_nowait({seq.session_id: output})
+        self.has_runable_event.set()
+
     async def _main_loop_try_send_next_inputs(self):
         """Try send next inputs."""
         if not self.has_runable_event.has_unfinished():
@@ -472,13 +538,18 @@ class EngineLoop:
         if self._sleep_requested:
             return None, None
 
-        return await self.inputs_maker.send_next_inputs()
+        self.forward_started_at = time.monotonic()
+        result = await self.inputs_maker.send_next_inputs()
+        self.forward_started_at = None
+        self._request_pd_media_recompute()
+        return result
 
     async def _prefetch_next_inputs(self):
         """Prefetch the next batch unless sleep has started."""
         if self._sleep_requested:
             return None, None
         result = await self.inputs_maker.prefetch_next_inputs()
+        self._request_pd_media_recompute()
         # Refill after selection, while the already queued forward executes.
         self.scheduler.prefetch_kv_lookups()
         return result
@@ -486,6 +557,8 @@ class EngineLoop:
     async def _wait_for_schedulable_prefill(self):
         """Yield briefly for lookup I/O or back off for cache pressure."""
         scheduler = self.scheduler
+        if not self.has_runable_event.has_unfinished():
+            return
         if scheduler.last_schedule_had_pending_lookup:
             # A pending remote lookup is normal transient I/O, not cache
             # exhaustion. Poll promptly without emitting the misleading cache
@@ -523,6 +596,7 @@ class EngineLoop:
         forward_inputs: dict[str, Any],
     ):
         """Get outputs and prefetch."""
+        self.forward_started_at = time.monotonic()
         model_inputs = forward_inputs['inputs']
         delta = forward_inputs['delta']
         cache_inputs = forward_inputs['cache_inputs']
@@ -581,6 +655,17 @@ class EngineLoop:
         elif has_model_work:
             self.state_checkpoints.unpin_saves(running)
         step_outputs = self._finish_forward_output(out, running, model_inputs, delta)
+        if step_outputs and out.pd_state_ids is not None:
+            for index, seq in enumerate(running):
+                response = step_outputs.get(seq.session_id)
+                if response is not None and response.finish and seq.pd_prompt_tokens is not None:
+                    ids = out.pd_state_ids[:, index].tolist() if out.pd_state_ids.numel() else []
+                    drafts = (out.extra_outputs.draft_token_ids[index].tolist()
+                              if self.config.num_speculative_tokens else [])
+                    handoff = self.scheduler.pd_coordinator.publish(
+                        seq, self.engine_conn.cache_schema, ids,
+                        draft_token_ids=drafts, first_token_logprobs=response.logprobs)
+                    response.pd_handoff = handoff.model_dump()
         if cache_inputs is not None and cache_inputs.decode_save_id is not None:
             self.scheduler.decode_checkpoints.finish(
                 cache_inputs.decode_save_id, out.decode_checkpoint_mask if out is not None else None)
@@ -588,6 +673,7 @@ class EngineLoop:
             self.resp_queue.put_nowait(step_outputs)
         # out might come from shared memory, need to explicitly delete to release memory in time
         del out
+        self.forward_started_at = None
 
         return forward_inputs, next_running
 
@@ -698,12 +784,121 @@ class EngineLoop:
 
     async def _migration_loop_process_ready(self, migration_ready: 'SeqList'):
         """Process migration ready."""
-        await self._migration_loop_migrate(migration_ready)
+        legacy = []
+        for seq in migration_ready:
+            if seq.migration_request.handoff is None:
+                legacy.append(seq)
+            else:
+                task = asyncio.create_task(self._receive_handoff(seq))
+                self._pd_receive_tasks.add(task)
+                task.add_done_callback(self._pd_receive_tasks.discard)
+        if legacy:
+            await self._migration_loop_migrate(legacy)
 
-        # generate output
-        with self.scheduler.seqs_migration_activation(migration_ready):
-            await self._migration_loop_get_outputs(migration_ready)
+            with self.scheduler.seqs_migration_activation(legacy):
+                await self._migration_loop_get_outputs(legacy)
         self.has_runable_event.set()
+
+    async def _receive_handoff(self, seq):
+        owner = self.scheduler.pd_coordinator
+        receive = owner.receives[seq.seq_id]
+        request = receive.request
+        handoff = request.handoff
+        control = dict(transfer_id=handoff.transfer_id, engine_epoch=handoff.engine_epoch,
+                       receiver_epoch=owner.epoch, receiver_engine_id=self.engine_conn.local_engine_id)
+        seq.state.activate()
+        result = PDTransferResult(transfer_id=handoff.transfer_id, status='failed_drained')
+        job = None
+        claim_attempted = False
+        try:
+            if not receive.quarantined:
+                claim_attempted = True
+                await self.engine_conn.control(request.remote_engine_id, PDControlRequest(action='claim', **control))
+                if not receive.quarantined:
+                    if handoff.valid_token_count:
+                        batch = MigrationExecutionBatch(protocol=seq.migration_request.protocol, receives=[request])
+                        job = asyncio.create_task(self.executor.migrate(batch))
+                        self._pd_native_jobs.add(job)
+                        job.add_done_callback(self._pd_native_done)
+                        result.status = 'completion_unknown'
+                    else:
+                        result.status = 'completed'
+        except Exception as error:
+            result.error = str(error)
+
+        reported = False
+        renewed = time.monotonic()
+        while True:
+            if job is not None and job.done():
+                try:
+                    result, = job.result()
+                except (Exception, asyncio.CancelledError) as error:
+                    result = PDTransferResult(transfer_id=handoff.transfer_id, status='completion_unknown',
+                                              error=str(error))
+                job = None
+            if job is None:
+                action = owner.finish_receive(seq, result)
+                if action != 'quarantined':
+                    break
+            if not receive.quarantined and time.time() >= request.deadline:
+                owner.quarantine_receive(seq, 'PD transfer exceeded its progress deadline.')
+            if receive.quarantined:
+                if not reported:
+                    response_reqs(self.req_manager, seq.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                                  err_msg=receive.error)
+                    reported = True
+                    self._queue_pd_control(request.remote_engine_id,
+                                           PDControlRequest(action='revoke', reason=receive.error, **control))
+                    logger.warning('PD %s isolated for at most %.0f seconds: %s',
+                                   handoff.transfer_id, owner.release_timeout, receive.error)
+                if owner.expire_receive(seq, handoff.transfer_id, time.monotonic()):
+                    logger.warning('PD %s forced release after %.0f seconds without completion proof.',
+                                   handoff.transfer_id, owner.release_timeout)
+                    action = receive.cancelled or 'error'
+                    break
+            elif time.monotonic() - renewed >= PD_RENEW_INTERVAL:
+                try:
+                    await self.engine_conn.control(request.remote_engine_id,
+                                                   PDControlRequest(action='claim', **control))
+                except (ValueError, asyncio.TimeoutError, KeyError, ConnectionError) as error:
+                    owner.quarantine_receive(seq, f'Prefill lease renewal failed: {error}')
+                renewed = time.monotonic()
+            if job is not None:
+                await asyncio.wait([job], timeout=1)
+            else:
+                await asyncio.sleep(1)
+
+        self._queue_pd_control(request.remote_engine_id,
+                               PDControlRequest(action='release' if claim_attempted else 'revoke', **control))
+        if action == 'ready':
+            # Publish only completed immutable full blocks. The exact loaded
+            # recurrent state is a one-shot input, never an invented checkpoint.
+            self.scheduler.block_trie.allocate(seq, token_limit=handoff.valid_token_count)
+            seq.state.deactivate()
+            finished = (seq.sampling_param.max_new_tokens <= 1
+                        or handoff.first_token_id in seq.sampling_param.stop_words)
+            output = InferOutput(session_id=seq.session_id, resp=seq.resp, finish=finished,
+                                 token_ids=seq.generated_ids.copy(), logprobs=handoff.first_token_logprobs,
+                                 req_metrics=RequestMetrics(time.time(), seq.engine_events,
+                                                            cached_tokens=seq.remote_prefill_cached_tokens))
+            self.resp_queue.put_nowait({seq.session_id: output})
+            if finished:
+                seq.pd_decode_pending = False
+                seq.state.stop()
+            self.has_runable_event.set()
+            self.migration_event.set()
+            return
+        if action == 'stale':
+            return
+        if not reported:
+            response_reqs(self.req_manager, seq.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                          err_msg=result.error or receive.error or f'PD receive {action}')
+        if action == 'stop':
+            seq.state.release_paging_resources()
+            seq.state.stop()
+        else:
+            self.scheduler.end_session(seq.session_id)
+        self.migration_event.set()
 
     async def migration_loop(self):
         """Async loop migration."""
@@ -716,6 +911,9 @@ class EngineLoop:
 
             migration_ready = self.scheduler.schedule_migration()
             if not migration_ready and not self.scheduler.has_migration_waiting():
+                # Receive completion also signals this event. Consume that
+                # notification before waiting, otherwise an idle loop spins.
+                self.migration_event.clear()
                 await self.migration_event.wait()
             elif migration_ready:
                 self.migration_event.clear()
@@ -740,6 +938,7 @@ class EngineLoop:
         if self.config.role != EngineRole.Hybrid:
             logger.info('Starting async task MigrationLoop.')
             self.tasks.add(event_loop.create_task(self.migration_loop(), name='MainLoopMigration'))
+            self.tasks.add(event_loop.create_task(self.pd_maintenance_loop(), name='PDExportExpiry'))
 
         for task in self.tasks:
             task.add_done_callback(self.tasks.discard)
@@ -776,7 +975,7 @@ class EngineLoop:
 
     def cancel(self):
         """Cancel all loops."""
-        for task in self.tasks:
+        for task in self.tasks | self._pd_receive_tasks | self._pd_control_tasks:
             if not task.done():
                 task.cancel()
         self.tasks.clear()

@@ -239,6 +239,7 @@ def test_prompt_cache_usage_is_counted_once(chat_endpoint, fake_raw_request):
                     cached_tokens=index,
                     routed_experts=None,
                     cache_block_ids=None,
+                    pd_handoff=None,
                 )
 
             return generate()
@@ -280,6 +281,7 @@ def test_streaming_multiple_choices_preserves_each_inner_parser(
                         cached_tokens=0,
                         routed_experts=None,
                         cache_block_ids=None,
+                        pd_handoff=None,
                     )
                 yield SimpleNamespace(
                     response='',
@@ -291,6 +293,7 @@ def test_streaming_multiple_choices_preserves_each_inner_parser(
                     cached_tokens=0,
                     routed_experts=None,
                     cache_block_ids=None,
+                    pd_handoff=None,
                 )
 
             return generate()
@@ -520,6 +523,7 @@ def test_stream_usage_is_omitted_when_a_choice_has_no_usage(
                     cached_tokens=0,
                     routed_experts=None,
                     cache_block_ids=None,
+                    pd_handoff=None,
                 )
 
             return generate()

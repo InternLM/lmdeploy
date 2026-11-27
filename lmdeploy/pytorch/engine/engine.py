@@ -4,6 +4,7 @@ import ctypes
 import gc
 import os
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -56,6 +57,7 @@ class InferOutput:
     # send cache blocks back for migration in Disaggregated LLM Serving
     # when Prefill Engine is Done.
     cache_block_ids: list[int] = None
+    pd_handoff: dict | None = None
 
     # for logging
     req_metrics: RequestMetrics = None
@@ -65,6 +67,7 @@ class InferOutput:
 
     # summed, unnormalized cross-entropy (NLL) of the input prompt
     ce_loss: float = None
+    input_multimodals_request: int | None = None
 
 
 def _build_seq_meta(model_config: ModelConfig, cache_config: CacheConfig, seq_strategy: Any, sampling_strategy: Any):
@@ -320,6 +323,7 @@ class Engine(EngineBase):
         req_manager.bind_func(RequestType.STOP_SESSION, self._on_stop_session)
         req_manager.bind_func(RequestType.END_SESSION, self._on_end_session)
         req_manager.bind_func(RequestType.ADD_MESSAGE, self._on_add_message)
+        req_manager.bind_func(RequestType.RESUME_MULTIMODAL, self._on_resume_multimodal)
         return req_manager
 
     def _response(self, resp: Response, resp_type: ResponseType, data: Any = None, err_msg: str = ''):
@@ -420,7 +424,8 @@ class Engine(EngineBase):
             if session is not None:
                 msgs = list(session.sequences.values())
                 if len(msgs) > 0 and msgs[0].preserve_cache:
-                    msgs[0].finish()
+                    if not self.scheduler.pd_coordinator.holds(msgs[0]):
+                        msgs[0].finish()
                 else:
                     self.end_session(session_id)
                 resp_type = ResponseType.SUCCESS
@@ -467,6 +472,29 @@ class Engine(EngineBase):
         if len(valid_reqs) > 0:
             self._add_message(valid_reqs)
 
+    def _on_resume_multimodal(self, reqs: list[Request], **kwargs):
+        """Install deferred PD media on the original sequence, then allow local
+        recomputation."""
+        for req in reqs:
+            data = req.data
+            session = self.scheduler.get_session(data['session_id'])
+            seq = session.sequences.get(data['seq_id']) if session is not None else None
+            if seq is None or seq.status != MessageStatus.WAITING_FOR_MULTIMODALS:
+                self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
+                continue
+            try:
+                result = self.input_processor.preprocess_input(data['input_ids'], data['multimodal'])
+                seq.restore_pd_multimodals(result.input_ids, result.input_multimodals)
+            except (ValueError, RuntimeError) as error:
+                self._response(seq.resp, ResponseType.INTERNAL_ENGINE_ERROR, err_msg=str(error))
+                self.scheduler.end_session(seq.session_id)
+                self._response(req.resp, ResponseType.INTERNAL_ENGINE_ERROR, err_msg=str(error))
+                continue
+            seq.state.activate()
+            logger.info('PD multimodal recompute ready: session=%s seq=%s generated=%s',
+                        seq.session_id, seq.seq_id, seq.num_new_tokens)
+            self._response(req.resp, ResponseType.SUCCESS)
+
     def _add_message(self, reqs: list[Request]):
 
         def __update_max_new_tokens(msg):
@@ -475,7 +503,7 @@ class Engine(EngineBase):
             sampling_param = msg.sampling_param
             max_new_tokens = sampling_param.max_new_tokens
             num_all_tokens = msg.num_valid_ids
-            if self.engine_config.role == EngineRole.Prefill:
+            if self.engine_config.role == EngineRole.Prefill and msg.pd_prompt_tokens is None:
                 sampling_param.max_new_tokens = 1
             elif max_new_tokens + num_all_tokens > max_session_len:
                 logger.warning(
@@ -504,7 +532,30 @@ class Engine(EngineBase):
                                   resp_cache=req.data.get('with_cache'),
                                   preserve_cache=req.data.get('preserve_cache'))
                 msg = next(iter(sess.sequences.values()))
+                if req.data.get('pd_prefill'):
+                    if sampling_param.max_new_tokens == 0:
+                        scheduler.end_session(session_id)
+                        self._response(req.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                                       err_msg='PD handoff requires at least one generated token.')
+                        continue
+                    if (self.engine_config.role != EngineRole.Prefill or not msg.preserve_cache
+                            or not self.engine_conn.cache_schema):
+                        scheduler.end_session(session_id)
+                        self._response(req.resp, ResponseType.INTERNAL_ENGINE_ERROR,
+                                       err_msg='pd_prefill requires a preserving Prefill request and v2 handshake.')
+                        continue
+                    msg.prepare_pd_prefill()
                 if migration_request:
+                    if migration_request.handoff is not None:
+                        try:
+                            scheduler.pd_coordinator.validate_receive(msg, self.engine_conn.cache_schema)
+                            num_drafts = self.engine_strategy.get_num_decode_tokens() - 1
+                            if len(migration_request.handoff.draft_token_ids) != num_drafts:
+                                raise ValueError('PD draft count does not match the decode strategy.')
+                        except (ValueError, RuntimeError) as error:
+                            scheduler.end_session(session_id)
+                            self._response(req.resp, ResponseType.INTERNAL_ENGINE_ERROR, err_msg=str(error))
+                            continue
                     self.migration_event.set()
             else:
                 msg = next(iter(sess.sequences.values()))
@@ -537,6 +588,24 @@ class Engine(EngineBase):
     def p2p_initialize(self, init_request: DistServeInitRequest):
         return self.engine_conn.p2p_initialize(init_request)
 
+    def get_pd_engine_info(self):
+        from lmdeploy.pytorch.disagg.config import DistServeEngineConfig, MigrationBackend
+        cache, dist = self.cache_config, self.dist_config
+        return DistServeEngineConfig(
+            tp_size=dist.attn_tp, dp_size=dist.dp, ep_size=dist.ep, pp_size=None, dp_rank=dist.dp_rank,
+            block_size=cache.block_size, num_cpu_blocks=cache.num_cpu_blocks, num_gpu_blocks=cache.num_gpu_blocks,
+            engine_epoch=self.scheduler.pd_coordinator.epoch,
+            protocol_version=2 if cache.migration_backend == MigrationBackend.Mooncake else 1).model_dump()
+
+    def pd_control(self, request):
+        # Expected control conflicts must survive MP RPC, which otherwise
+        # flattens remote exceptions and loses their HTTP status mapping.
+        try:
+            self.engine_conn.apply_control(request)
+        except ValueError as error:
+            return dict(status='CONFLICT', error=str(error))
+        return dict(status='SUCCESS')
+
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         return self.engine_conn.p2p_connect(conn_request)
 
@@ -545,6 +614,7 @@ class Engine(EngineBase):
 
     def _loop_finally(self):
         """Finally process for dist."""
+        self.scheduler.pd_coordinator.require_drained()
         logger.info('Cleanup executor.')
         self.migration_event = None
         try:
@@ -640,8 +710,10 @@ class Engine(EngineBase):
             logger.info('PyTorch engine loop drained for sleep.')
         # cancel all remain sessions
         self._cancel_and_end_all_sessions()
+        self.scheduler.pd_coordinator.require_drained()
         await self.executor.sleep(level)
         self.scheduler.reset_cache_after_worker_drain()
+        self.engine_conn.reset()
         if self._engine_loop is not None:
             self._engine_loop.reset_runtime_state()
         logger.info('PyTorch engine entered sleep: level=%s, sleeping_tags=%s.', level, sorted(self._sleeping_tags))
@@ -697,10 +769,12 @@ class Engine(EngineBase):
                 try:
                     if engine_loop is not None:
                         engine_loop.stop()
-                    if (self.cache_config.compact_state_capacity is not None
+                    if (self.scheduler.pd_coordinator.has_pending()
+                            or self.cache_config.compact_state_capacity is not None
                             and self.cache_config.use_mooncake_store):
                         self._block_new_inputs()
                         self._cancel_and_end_all_sessions()
+                        self.scheduler.pd_coordinator.require_drained()
                         await self.executor.drain_for_shutdown()
                         self.scheduler.finish_kv_transfers_after_worker_drain()
                 except BaseException:
@@ -800,6 +874,7 @@ class Engine(EngineBase):
         Scheduler metrics alone can still be readable after runtime failure, so this also checks Engine-owned loop tasks
         before returning metrics.
         """
+        pd = self.scheduler.pd_coordinator.snapshot()
         if not self.req_manager.is_loop_alive():
             return dict(alive=False,
                         message='PyTorch engine request loop is not alive.',
@@ -812,6 +887,12 @@ class Engine(EngineBase):
                             schedule_metrics=None)
 
         if self._engine_loop is not None:
+            started = self._engine_loop.forward_started_at
+            # PD transfer deadlines do not bound Hybrid model execution.
+            if (self.engine_config.role != EngineRole.Hybrid and started is not None
+                    and time.monotonic() - started >= self.scheduler.pd_coordinator.transfer_timeout):
+                return dict(alive=False, message='PyTorch model execution has stopped making progress.',
+                            schedule_metrics=None, pd=pd)
             engine_loop_ok, done_tasks = self._health_check_tasks(self._engine_loop.tasks)
             if not engine_loop_ok:
                 return dict(alive=False,
@@ -820,7 +901,7 @@ class Engine(EngineBase):
 
         return dict(alive=True,
                     message='PyTorch engine is healthy.',
-                    schedule_metrics=self.get_schedule_metrics())
+                    schedule_metrics=self.get_schedule_metrics(), pd=pd)
 
     async def get_health_status(self) -> dict:
         """Get backend health status."""

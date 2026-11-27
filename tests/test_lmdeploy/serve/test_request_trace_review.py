@@ -47,7 +47,8 @@ def test_native_coalescing_preserves_first_token_and_request_reset(monkeypatch, 
     response = Response(ResponseType.SUCCESS, 1, asyncio.Event())
     msg = NS(status=MessageStatus.RUNNING, num_token_ids=1, generated_ids=[1],
              session_id=1, resp=response, resp_cache=False, sampling_param=NS(num_logprobs=0),
-             cached_tokens=0, engine_events=[], routed_experts=None, return_ce_loss=False, return_logits=False)
+             cached_tokens=0, remote_prefill_cached_tokens=None, engine_events=[], routed_experts=None,
+             return_ce_loss=False, return_logits=False)
     batch = NS(logits=None, all_routed_experts=None, ce_loss=None, logprobs=None,
                stop_pos=None, new_token_timestamp=10.0)
     first = loop._make_infer_outputs(batch, [msg], None, None)[1]

@@ -21,7 +21,7 @@ from lmdeploy.pytorch.consts import (
     GDN_REPLAY_RAW_K_CACHE_NAME,
     GDN_REPLAY_RAW_V_CACHE_NAME,
 )
-from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.disagg.conn.protocol import DistServeInitRequest, DistServeKVTransferEndpointInfo
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.utils import get_logger
@@ -118,8 +118,10 @@ class ExecutorBase:
         if (self.device_type != 'cuda' or model.model_paradigm not in ('ar', 'ar_spec')
                 or not model.state_cache_is_indexed):
             raise NotImplementedError('Compact state requires an adapted CUDA Qwen3.5/GLM5.3 AR/MTP target.')
-        if cache.role != EngineRole.Hybrid or self.misc_config.memdecode_config is not None:
-            raise NotImplementedError('Compact state does not support PD/MemDecode.')
+        if self.misc_config.memdecode_config is not None:
+            raise NotImplementedError('Compact state does not support MemDecode.')
+        if cache.role != EngineRole.Hybrid and cache.migration_backend != MigrationBackend.Mooncake:
+            raise NotImplementedError('Compact PD requires the Mooncake migration backend.')
         if cache.kv_transfer_config is not None and not cache.use_mooncake_store:
             raise NotImplementedError('Compact state supports only the Mooncake Store connector.')
         if cache.num_cpu_blocks > 0:
@@ -157,7 +159,8 @@ class ExecutorBase:
             logger.warning('Sliding window prefix caching is not supported.')
             self.cache_config.enable_prefix_caching = False
             return
-        if self.cache_config.role != EngineRole.Hybrid:
+        if (self.cache_config.role != EngineRole.Hybrid
+                and self.cache_config.migration_backend != MigrationBackend.Mooncake):
             logger.warning('PD prefix caching is not supported.')
             self.cache_config.enable_prefix_caching = False
 

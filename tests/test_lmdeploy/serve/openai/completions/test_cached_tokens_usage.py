@@ -66,6 +66,7 @@ class _AsyncEngine:
                                   finish_reason='length',
                                   logprobs=None,
                                   cache_block_ids=[],
+                                  pd_handoff=None,
                                   input_token_len=input_token_len,
                                   generate_token_len=len(token_ids),
                                   cached_tokens=cached_tokens)

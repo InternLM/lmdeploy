@@ -16,7 +16,7 @@ from lmdeploy.pytorch.config import (
     SSMStateCapacity,
     StateCacheSpec,
 )
-from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.pytorch.engine.executor.base import ExecutorBase, _WorkerCachePlanSizes
 from lmdeploy.pytorch.engine.executor.mp_executor import MPExecutor
 from lmdeploy.pytorch.engine.model_agent import agent as agent_module
@@ -44,6 +44,18 @@ def _executor(model, cache, spec=None, **kwargs):
     return ExecutorBase('unused', model, cache, BackendConfig(), DistConfig(), MiscConfig(),
                          specdecode_config=spec, **kwargs)
 
+
+@pytest.mark.parametrize('role', [EngineRole.Prefill, EngineRole.Decode])
+@pytest.mark.parametrize('width', [1, 6])
+def test_compact_mooncake_pd_keeps_prefix_caching(monkeypatch, role, width):
+    model, cache, spec = _configs(width, 'glm5_next')
+    cache.role, cache.migration_backend = role, MigrationBackend.Mooncake
+    cache.enable_prefix_caching = True
+    cache.compact_state_capacity = None
+    _build_from_factory(monkeypatch, model, cache, spec)
+    assert cache.enable_prefix_caching
+    assert cache.compact_state_capacity.bank_width == (1 if role == EngineRole.Prefill else width)
+    assert cache.compact_state_capacity.request_capacity == 3
 
 @pytest.mark.parametrize('family', ['qwen3_5', 'glm5_next'])
 @pytest.mark.parametrize('width', [1, 6])
@@ -86,6 +98,7 @@ def test_worker_retains_exact_plan_for_sizing_real_allocation_and_dummy(
     assert cache.num_state_caches == 4  # max_batches+2 unchanged
     assert cache.compact_state_capacity.request_capacity == 3
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.pd_runtime = None
     agent.all_context = nullcontext
     agent.rank, agent.device = 0, 'cuda'
     agent.dist_config = DistConfig()
@@ -308,6 +321,7 @@ def test_stateless_worker_build_allocates_no_state_ids_or_compact_schema(monkeyp
     _executor(model, cache)
     assert cache.compact_state_capacity is None
     agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.pd_runtime = None
     agent.all_context = nullcontext
     agent.rank, agent.device = 0, 'cuda'
     agent.dist_config = DistConfig()

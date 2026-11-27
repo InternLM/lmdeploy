@@ -189,6 +189,7 @@ class MessageStatus(enum.Enum):
 
     WAITING = enum.auto()
     WAITING_FOR_REMOTE_KVS = enum.auto()
+    WAITING_FOR_MULTIMODALS = enum.auto()
     READY = enum.auto()
     STOPPED = enum.auto()
     RUNNING = enum.auto()
@@ -333,6 +334,10 @@ class SchedulerSession:
             embeddings=input_embeddings,
             mode=UpdateTokenMode.INPUTS,
         )
+        if migration_request is not None and migration_request.handoff is not None and multimodals is None:
+            # Restore before prefix matching or connector lookup; image placeholders alone are not cache identities.
+            seq.prefix_cache.multimodal_spans = list(migration_request.handoff.multimodal_spans)
+            seq.pd_metadata_only = bool(seq.prefix_cache.multimodal_spans)
         status = MessageStatus.WAITING if migration_request is None else MessageStatus.MIGRATION_WAITING
         self._lifecycle.add_sequence(seq, status)
 
@@ -677,6 +682,9 @@ class SchedulerSequence:
     migration_request: None | MigrationRequest = None
     resp_cache: bool = False
     preserve_cache: bool = False
+    pd_prompt_tokens: np.ndarray | None = None
+    pd_decode_pending: bool = False
+    pd_metadata_only: bool = False
 
     # For logging
     engine_events: list[EngineEvent] = field(default_factory=list)
@@ -696,6 +704,8 @@ class SchedulerSequence:
 
     # Prefix-cache tokens accepted by the scheduler that are present in the current request prompt.
     cached_tokens: int = 0
+    # API usage follows P's cache reuse; D's local paging statistics stay separate.
+    remote_prefill_cached_tokens: int | None = None
 
     def __post_init__(self):
         """Post init."""
@@ -761,6 +771,10 @@ class SchedulerSequence:
     def valid_ids(self) -> np.ndarray:
         """Valid token ids."""
         return self.history_cache[:self.num_valid_ids]
+
+    def prepare_pd_prefill(self) -> None:
+        """Keep the complete prompt, including any trailing multimodal span."""
+        self.pd_prompt_tokens = self.valid_ids.copy()
 
     @property
     def generated_ids(self) -> np.ndarray:
@@ -907,7 +921,7 @@ class SchedulerSequence:
         count = self._seq_meta.prefix_cache_token_lookahead
         if not count:
             return ()
-        return (TokenLookahead(end, tuple(int(x) for x in self.history_cache[end:end + count])),)
+        return (TokenLookahead(end, tuple(int(x) for x in self.valid_ids[end:end + count])),)
 
     def get_prefix_cache_extra_identity(self, start: int, end: int) -> PrefixCacheExtraIdentity:
         count = self._seq_meta.prefix_cache_token_lookahead
@@ -1022,15 +1036,42 @@ class SchedulerSequence:
         if multimodals is None:
             return
         multimodals = HistoryMultiModals.update_multimodals(multimodals, self.num_valid_ids)
-        if self._seq_meta.enable_prefix_caching or self._seq_meta.enable_mooncake_store:
-            self._update_prefix_cache_spans(multimodals)
+        # PD handoffs must bind image content even when prefix reuse is disabled.
+        if (self._seq_meta.enable_prefix_caching or self._seq_meta.enable_mooncake_store
+                or self.preserve_cache or self.migration_request is not None):
+            self.prefix_cache.multimodal_spans.extend(self._make_multimodal_spans(multimodals))
         self.history_multimodals.add_inputs(multimodals)
         if self._seq_meta.use_mrope:
             # Rebuild at the input boundary: old draft positions may overlap a new image.
             self.history_mrope_pos_ids.resize(0)
 
-    def _update_prefix_cache_spans(self, multimodals: MultiModalInputs):
-        """Record multimodal span identities for future trie keying."""
+    def restore_pd_multimodals(self, token_ids, multimodals: MultiModalInputs):
+        """Attach the original prompt's media without appending a new turn or
+        resetting sampling."""
+        prompt_len = self.input_end_pos
+        if not np.array_equal(token_ids, self.valid_ids[:prompt_len]) or not multimodals:
+            raise ValueError('PD recompute inputs do not match the original prompt.')
+        expected_spans = self.prefix_cache.multimodal_spans
+        expected_delta = (int(self.history_mrope_pos_ids[prompt_len - 1].max()) + 1 - prompt_len
+                          if self._seq_meta.use_mrope else None)
+        actual_spans = self._make_multimodal_spans(multimodals)
+        if sorted(actual_spans) != sorted(expected_spans):
+            raise ValueError('PD recompute image content does not match Prefill.')
+        self.history_multimodals = HistoryMultiModals(multimodals)
+        if self._seq_meta.use_mrope:
+            self.history_mrope_pos_ids.resize(0)
+            self._update_mrope_pos_ids()
+            actual_delta = int(self.history_mrope_pos_ids[prompt_len - 1].max()) + 1 - prompt_len
+            if actual_delta != expected_delta:
+                raise ValueError('PD recompute positions do not match Prefill.')
+        self.pd_metadata_only = False
+        self.pd_decode_pending = False
+
+    @staticmethod
+    def _make_multimodal_spans(multimodals: MultiModalInputs):
+        """Describe media independently for cache keys and deferred-input
+        validation."""
+        spans = []
         for modal_datas in multimodals.values():
             for modal_data in modal_datas:
                 modality = modal_data.modality
@@ -1043,11 +1084,12 @@ class SchedulerSequence:
                     # defensive correctness if a processor omits it.
                     content_hash = make_multimodal_content_hash(modal_data.data, modal_data.meta,
                                                                 modal_data.mrope_pos_ids)
-                self.prefix_cache.multimodal_spans.append(
+                spans.append(
                     MultimodalSpan(start=modal_data.start,
                                    end=modal_data.end,
                                    modality=str(modality),
                                    content_hash=str(content_hash)))
+        return spans
 
     def _index_prefix_cache_spans(self):
         """Build the lazy block -> multimodal identity index.
@@ -1085,6 +1127,9 @@ class SchedulerSequence:
 
         if num_rope_pos == 0:
             next_pos = 0
+            if (self.migration_request is not None and self.migration_request.handoff is not None
+                    and self.history_multimodals.empty()):
+                next_pos = self.migration_request.handoff.mrope_position_delta or 0
         else:
             next_pos = self.history_mrope_pos_ids[-1].max() + 1
 
@@ -1126,6 +1171,9 @@ class SchedulerSequence:
             pos_ids.append(text_pos_ids[:, None].repeat(3, axis=1))
             pos_ids = np.concatenate(pos_ids, axis=0)
 
+        # Imported prompt positions are never executed. Only their final position anchors future decode positions.
+        if num_rope_pos == 0 and next_pos < 0:
+            np.maximum(pos_ids, 0, out=pos_ids)
         self.history_mrope_pos_ids.append(pos_ids)
 
     def update_token_ids(self,

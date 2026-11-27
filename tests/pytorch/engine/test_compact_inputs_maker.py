@@ -58,6 +58,49 @@ def _maker(width=4, budget=256, requests=2, *, prefix=False, block_size=16, chec
         config=config, compact_state_manager=scheduler.state_manager if compact else None)
 
 
+@pytest.mark.parametrize('width', [1, 6])
+def test_remote_prefill_initializes_decode_with_exact_loaded_state_and_drafts(width):
+    from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest, PDHandoff
+    from lmdeploy.pytorch.disagg.messages import PDTransferResult
+    from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
+
+    maker = _maker(width, requests=1, prefix=True, checkpoint_budget=1)
+    maker.config.role = EngineRole.Decode
+    if width > 1:
+        maker.scheduler.seq_meta.strategy = ARSpecSequenceStrategy()
+    handoff = PDHandoff(transfer_id='transfer', engine_epoch='prefill', cache_schema='model', prompt_digest='digest',
+                        prompt_token_count=32, valid_token_count=32, first_token_id=100,
+                        draft_token_ids=list(range(101, 100 + width)), random_seed=42, random_offset=33,
+                        block_size=16, block_ids=[10, 11], state_ids=[7], auxiliary_id=1)
+    migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill', remote_session_id=1,
+                                 handoff=handoff)
+    seq = maker.scheduler.add_session(1).add_sequence(list(range(32)), migration_request=migration)
+    assert maker.scheduler.schedule_migration() == [seq]
+    seq.state.activate()
+    owner = maker.compact_state_manager
+    bank = owner.bank_for(seq)
+    loaded_id = bank.unit_ids[0]
+    assert maker.scheduler.pd_coordinator.finish_receive(
+        seq, PDTransferResult(transfer_id='transfer', status='completed')) == 'ready'
+    seq.state.deactivate()
+
+    packet = maker._make_forward_inputs(False)
+    inputs, carrier = packet['inputs'], packet['cache_inputs']
+    assert inputs.is_decoding and not inputs.is_chunk
+    assert inputs.input_ids.tolist() == [list(range(100, 100 + width))]
+    assert inputs.history_lengths.tolist() == [32]
+    assert inputs.seq_length.tolist() == [width]
+    assert inputs.ssm_prefill_meta is None
+    assert inputs.ssm_source_state_ids.tolist() == [loaded_id]
+    assert inputs.ssm_state_meta.output_state_ids.shape == (1, width)
+    assert carrier.pd_first_token_ids == (100,)
+    assert bank.loaded_input is None and seq.num_new_tokens == 1
+    assert seq.sampling_param.random_seed == 42
+    assert seq.generated_ids.tolist() == [100]
+    assert not maker.scheduler.migration_done
+    owner.acknowledge(carrier.ssm_state_access_id)
+
+
 @pytest.mark.parametrize('width', [1, 4, 6])
 def test_real_prefill_and_decode_have_distinct_owner_tickets_and_held_snapshots(width):
     maker = _maker(width)
@@ -1289,6 +1332,7 @@ def test_engine_sleep_keeps_compact_holds_until_successful_worker_drain(failure)
 
     engine._engine_loop = SimpleNamespace(drain_for_sleep=scheduling_drain,
                                           reset_runtime_state=lambda: events.append('reset-runtime'))
+    engine.engine_conn = SimpleNamespace(reset=lambda: None)
     engine.executor = SimpleNamespace(sleep=worker_drain)
     if failure:
         with pytest.raises(RuntimeError, match='injected worker'):
@@ -1326,6 +1370,7 @@ def test_compact_sleep_reset_waits_for_both_real_device_events(slow_rank):
         pass
 
     engine._engine_loop = SimpleNamespace(drain_for_sleep=schedule_paused, reset_runtime_state=lambda: None)
+    engine.engine_conn = SimpleNamespace(reset=lambda: None)
 
     async def scenario():
         fast_finished = asyncio.Event()

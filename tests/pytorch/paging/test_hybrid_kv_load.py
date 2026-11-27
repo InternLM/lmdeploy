@@ -65,6 +65,28 @@ def _publish_local_checkpoint(scheduler, step):
     return checkpoint
 
 
+@pytest.mark.parametrize('apc', [False, True])
+def test_metadata_only_pd_replay_defers_store_lookup_until_media_is_restored(make_scheduler, apc):
+    scheduler, connector = make_scheduler(remote_hit=16, apc=apc)
+    images = {'image': [MultiModalData(torch.tensor([1]), start=4, end=8)]}
+    seq = scheduler.add_session(1).add_sequence(range(21))
+    seq.prefix_cache.multimodal_spans = seq._make_multimodal_spans(images)
+    seq.pd_metadata_only = True
+
+    scheduler.prefetch_kv_lookups()
+    assert not connector.client.queries
+    assert scheduler.schedule(is_prefill=True).running == []
+    connector.client.lookup.assert_not_called()
+    assert scheduler.take_multimodal_requests() == [seq]
+    assert seq.num_blocks == seq.num_history_ids == 0
+
+    seq.restore_pd_multimodals(range(21), images)
+    seq.state.activate()
+    assert scheduler.schedule(is_prefill=True).running == []
+    connector.client.lookup.assert_called_once()
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+
+
 def test_lookup_prefetch_bounds_waiting_window_without_acquiring_paging_resources(make_scheduler):
     scheduler, connector = make_scheduler(max_batches=2, remote_hit=0)
     del connector.client.lookup  # Use the real submit/consume lifecycle.

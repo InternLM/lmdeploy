@@ -58,6 +58,7 @@ def test_actual_spec_step_uses_consumed_count_including_target_token(width):
     # All rejected draft tokens still consume the initial target token.
     rejected = torch.tensor([0, width - 1, (width - 1) // 2], device='cuda')
     extras = SimpleNamespace(num_rejected_tokens=rejected,
+                             output_token_ids=None,
                              output_draft_token_ids=torch.zeros(3, width - 1, device='cuda', dtype=torch.long))
     runtime = SSMStateCursor(1100)
     steps = ARSpecStepInputs(_num_spec_tokens=width - 1, ssm_state_cursor=runtime)

@@ -3,6 +3,10 @@ import enum
 
 from pydantic import BaseModel
 
+PD_TRANSFER_TIMEOUT = 180.0
+PD_RELEASE_TIMEOUT = 300.0
+PD_RENEW_INTERVAL = 30.0
+
 
 class ServingStrategy(enum.Enum):
     """Serving Strategy.
@@ -106,6 +110,8 @@ class DistServeEngineConfig(BaseModel):
     block_size: int
     num_cpu_blocks: int
     num_gpu_blocks: int
+    engine_epoch: str = ''
+    protocol_version: int = 1
 
 
 class MooncakeEngineConfig(DistServeEngineConfig):

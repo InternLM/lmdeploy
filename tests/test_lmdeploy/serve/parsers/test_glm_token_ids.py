@@ -214,7 +214,7 @@ def test_named_call_cannot_complete_with_only_literal_tokens(vocabulary, stream,
         for text, part, final in native_chunks(v, ids, 1):
             yield SimpleNamespace(response=text, token_ids=part, finish_reason='stop' if final else None,
                                    input_token_len=1, generate_token_len=len(ids), cached_tokens=0,
-                                   logprobs=None, routed_experts=None, cache_block_ids=None)
+                                   logprobs=None, routed_experts=None, cache_block_ids=None, pd_handoff=None)
 
     async def run():
         runner = ChatRunner(parser.request, parser, config, object(), generate(),
@@ -292,7 +292,7 @@ def test_named_grammar_preserves_literal_arguments(vocabulary, named_grammar_con
         for text, part, final in native_chunks(v, ids, 1):
             yield SimpleNamespace(response=text, token_ids=part, finish_reason='stop' if final else None,
                                    input_token_len=1, generate_token_len=len(ids), cached_tokens=0,
-                                   logprobs=None, routed_experts=None, cache_block_ids=None)
+                                   logprobs=None, routed_experts=None, cache_block_ids=None, pd_handoff=None)
 
     async def run():
         runner = ChatRunner(parser.request, parser, config, object(), generate(),
@@ -377,7 +377,7 @@ def test_named_constrained_value_rejects_control_token(
         for text, part, final in native_chunks(v, ordinary, 1):
             yield SimpleNamespace(response=text, token_ids=part, finish_reason='stop' if final else None,
                                    input_token_len=1, generate_token_len=len(ordinary), cached_tokens=0,
-                                   logprobs=None, routed_experts=None, cache_block_ids=None)
+                                   logprobs=None, routed_experts=None, cache_block_ids=None, pd_handoff=None)
 
     async def run():
         runner = ChatRunner(parser.request, parser, GenerationConfig(), object(), generate(),
@@ -410,7 +410,7 @@ def test_named_mask_policy_does_not_change_shared_compiler(vocabulary, named_gra
     prefix = _named_xml_ids(v, 'left')[:-2]
     # The real manager must use the compiler policy for each named request.
     for session_id in (1, 2):
-        matcher = manager.get_processor(session_id, 1, response_format)
+        matcher = manager.get_or_create_processor(session_id, 1, response_format)
         assert all(matcher.accept_token(token_id) for token_id in prefix)
         mask = manager.allocate_batched_bitmap(1)
         manager.fill_bitmap(matcher, mask, 0)
@@ -422,7 +422,7 @@ def test_named_mask_policy_does_not_change_shared_compiler(vocabulary, named_gra
         manager.remove_processor(session_id)
     # Untagged output retains its original text semantics, including tokens
     # whose spelling happens to be a protocol marker.
-    matcher = manager.get_processor(3, 1, {'type': 'regex_schema', 'regex_schema': 'left</arg_value>right'})
+    matcher = manager.get_or_create_processor(3, 1, {'type': 'regex_schema', 'regex_schema': 'left</arg_value>right'})
     ids = v.enc('left') + v.ctl('</arg_value>') + v.enc('right') + v.ctl('<|endoftext|>')
     assert all(matcher.accept_token(token_id) for token_id in ids)
     assert manager.tokenizer_info.decoded_vocab == vocab_before

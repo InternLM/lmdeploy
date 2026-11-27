@@ -223,6 +223,7 @@ class GenerationConfig:
     # for disaggregation
     with_cache: bool = False
     preserve_cache: bool = False
+    pd_prefill: bool = False
     migration_request: MigrationRequest | None = None
 
     # router replay
@@ -926,9 +927,12 @@ class EngineOutput:
     logits: torch.Tensor = None
     last_hidden_state: torch.Tensor = None
     cache_block_ids: list[int] | None = None
+    pd_handoff: dict | None = None
     req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
     ce_loss: float = None
+    # Internal request to materialize a PD prompt for this sequence before recomputation.
+    input_multimodals_request: int | None = None
 
 
 @dataclass

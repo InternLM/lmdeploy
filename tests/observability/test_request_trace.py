@@ -57,7 +57,8 @@ finally:
 def output(tokens=(), timestamp=0, events=(), status='SUCCESS'):
     return NS(token_ids=list(tokens), req_metrics=NS(token_timestamp=timestamp, engine_events=list(events),
                                                    cached_tokens=2), status=status,
-              logprobs=None, logits=None, last_hidden_state=None, routed_experts=None, cache_block_ids=None)
+              logprobs=None, logits=None, last_hidden_state=None, routed_experts=None,
+              cache_block_ids=None, pd_handoff=None, input_multimodals_request=None)
 
 
 def event(name, timestamp):
@@ -369,7 +370,7 @@ def load_engine():
     path = SOURCE / 'lmdeploy/serve/core/async_engine.py'
     tree = ast.parse(path.read_text())
     engine = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'AsyncEngine')
-    methods = ('generate', 'safe_run', '_request_error_from_status')
+    methods = ('generate', 'safe_run', '_stream_with_multimodal_recompute', '_request_error_from_status')
     engine.body = [n for n in engine.body if getattr(n, 'name', '') in methods]
     nodes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name in ('GenOut', 'PreprocessedRequest')]
     module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')], level=0)]
@@ -782,7 +783,7 @@ class ReviewedScopeTests(RecordTestCase):
             c.client = NS(lookup=lambda *a, **kw: next(results), discard=discarded.append,
                           submit=submit, queries={})
             calls = []
-            request = NS(seq_id=1, adapter_name=None, all_ids=list(range(12)), engine_events=[],
+            request = NS(seq_id=1, adapter_name=None, valid_ids=list(range(12)), engine_events=[],
                          history_multimodals=NS(empty=lambda: True), history_embeddings=[],
                          num_history_ids=0, num_valid_ids=12,
                          prefix_cache=NS(recompute_overlap=NS(recompute_blocks=0)),

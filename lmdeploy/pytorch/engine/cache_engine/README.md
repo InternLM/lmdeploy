@@ -338,6 +338,8 @@ one private destination; protected capacity credits guarantee promotion to the
 full bank when decode is scheduled. Shared checkpoints and in-flight Store
 reads remain outside that writable bank. An already promoted bank is retained
 across later prefills while its submitted accesses still require it.
+Dedicated Prefill workers use `W = 1`, including with MTP enabled: they publish
+one final state per chunk and never verify draft tokens or promote to decode.
 
 This is phase-specific **unit-ID leasing**, not per-request GPU allocation:
 the owning pool is allocated up front with `1 + R * W + B + S` units, including

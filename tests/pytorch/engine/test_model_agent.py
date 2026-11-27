@@ -2210,6 +2210,7 @@ class TestModelAgentWakeup:
         model_agent.dist_config = SimpleNamespace(dp=1)
         model_agent.memdecode_agent = None
         model_agent.kv_connector = None
+        model_agent.pd_runtime = None
         model_agent.cache_engine = object()
         model_agent.state_cache_engine = object()
         model_agent.patched_model = _PatchedModel()
@@ -2430,6 +2431,7 @@ class TestMemDecodeModelAgentLifecycle:
         agent.dist_config = SimpleNamespace(dp=1)
         agent.patched_model = object()
         agent.kv_connector = None
+        agent.pd_runtime = None
         agent.cache_engine = object()
         agent.state_cache_engine = object()
         agent._checkpoint_engine_zmq_ctx = None

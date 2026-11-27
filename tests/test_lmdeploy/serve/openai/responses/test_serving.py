@@ -45,7 +45,7 @@ def test_trace_keeps_oversized_terminal_response_success(responses_endpoint, mon
         async def outputs():
             yield SimpleNamespace(response='x' * (1150 * 1024), token_ids=[1], input_token_len=1,
                                   generate_token_len=1, finish_reason='stop', cached_tokens=0,
-                                  logprobs=None, routed_experts=None, cache_block_ids=None)
+                                  logprobs=None, routed_experts=None, cache_block_ids=None, pd_handoff=None)
         return outputs()
 
     context.async_engine.generate = generate

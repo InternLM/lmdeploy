@@ -56,6 +56,7 @@ class _FakeEngine:
                 }],
                 routed_experts=[[1]],
                 cache_block_ids=['cache'],
+                pd_handoff=None,
             )
         ]
         self.session_mgr = _FakeSessionManager()
@@ -263,6 +264,8 @@ def test_runner_rejects_required_tool_choice_for_unsupported_response_parser():
 
 def test_runner_stream_chunks_preserve_metadata():
     context = _FakeServerContext(_Parser)
+    handoff = {'version': 2, 'transfer_id': 'export', 'block_ids': [], 'state_ids': [7]}
+    context.async_engine.outputs[0].pd_handoff = handoff
 
     async def _run():
         chat_runner = await ChatRunner.prepare(
@@ -279,8 +282,22 @@ def test_runner_stream_chunks_preserve_metadata():
     assert chunks[0].logprobs == [{1: -0.1}]
     assert chunks[0].routed_experts == [[1]]
     assert chunks[0].reasoning_tokens == 2
+    assert chunks[0].pd_handoff == handoff
     assert context.async_engine.generator_closed is True
     assert context.session_manager.removed == [context.session_manager.session]
+
+
+def test_runner_collect_preserves_empty_replay_handoff():
+    context = _FakeServerContext(_Parser)
+    output = context.async_engine.outputs[0]
+    output.response, output.token_ids, output.generate_token_len = '', [], 0
+    output.pd_handoff = {'version': 2, 'valid_token_count': 0, 'block_ids': []}
+
+    async def run():
+        runner = await ChatRunner.prepare(context, _request())
+        return await runner.collect()
+
+    assert asyncio.run(run()).pd_handoff == output.pd_handoff
 
 
 @pytest.mark.parametrize('stream', [False, True])
@@ -428,7 +445,7 @@ def test_runner_preserves_empty_batches_and_final_boundary(stream):
     outputs = [SimpleNamespace(response=text, token_ids=ids, finish_reason='stop' if final else None,
                                input_token_len=3, generate_token_len=4, cached_tokens=0,
                                logprobs=[{i: -0.1} for i in ids], routed_experts=None,
-                               cache_block_ids=None) for text, ids, final in rows]
+                               cache_block_ids=None, pd_handoff=None) for text, ids, final in rows]
     engine = _FakeEngine(outputs)
     parser = StrictParser(_request(return_token_ids=True))
 

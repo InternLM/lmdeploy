@@ -41,6 +41,7 @@ class FakeAsyncEngine:
                 logprobs=None,
                 routed_experts=None,
                 cache_block_ids=None,
+                pd_handoff=None,
             )
 
         return _generator()

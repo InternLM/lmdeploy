@@ -29,7 +29,7 @@ from lmdeploy.pytorch.kv_connector.mooncake.store.data import (
 from lmdeploy.pytorch.kv_connector.mooncake.store.scheduler import MooncakeStoreScheduler
 from lmdeploy.pytorch.kv_connector.mooncake.store.worker import MooncakeStoreWorker
 from lmdeploy.pytorch.long_context import get_last_prefill_save_step, plan_long_context_chunk
-from lmdeploy.pytorch.messages import MessageStatus, SequenceMeta, UpdateTokenMode
+from lmdeploy.pytorch.messages import HistoryMultiModals, MessageStatus, SequenceMeta, UpdateTokenMode
 from lmdeploy.pytorch.model_inputs import ModelInputs
 from lmdeploy.pytorch.multimodal.data_type import MultiModalData
 from lmdeploy.pytorch.paging.scheduler import Scheduler
@@ -55,6 +55,11 @@ def _cache_config(role='kv_both'):
     )
 
 
+class _Request(SimpleNamespace):
+    valid_ids = property(lambda self: self.all_ids)
+    num_valid_ids = property(lambda self: len(self.all_ids))
+
+
 def _request(
     token_ids,
     *,
@@ -63,14 +68,14 @@ def _request(
     multimodal=False,
     embeddings=False,
 ):
-    return SimpleNamespace(
+    return _Request(
         seq_id=seq_id,
         num_history_ids=0,
         adapter_name=adapter_name,
         all_ids=np.asarray(token_ids, dtype=np.int64),
         history_multimodals=SimpleNamespace(empty=lambda: not multimodal),
         history_embeddings=[object()] if embeddings else [],
-        prefix_cache=SimpleNamespace(recompute_overlap=PrefixRecomputeOverlap()),
+        prefix_cache=SimpleNamespace(recompute_overlap=PrefixRecomputeOverlap(), multimodal_spans=()),
         clamp_prefix_cache_match_step=lambda step: step,
         get_prefix_cache_max_candidate_step=lambda: len(token_ids) - 1,
         get_prefix_cache_max_match_step=lambda: (len(token_ids) - 1) // 4 * 4,
@@ -396,7 +401,8 @@ def test_hybrid_lookup_rejects_invalid_state_boundary_without_clamping(remote_hi
 @pytest.mark.parametrize('modality', [Modality.IMAGE, Modality.VIDEO])
 @pytest.mark.parametrize('lookahead', [0, 1])
 @pytest.mark.parametrize('local_prefix_cache', [False, True])
-def test_fa_multimodal_save_hashes_include_mtp_lookahead(modality, lookahead, local_prefix_cache):
+@pytest.mark.parametrize('metadata_only', [False, True])
+def test_fa_multimodal_save_hashes_include_mtp_lookahead(modality, lookahead, local_prefix_cache, metadata_only):
     cache_config = replace(_cache_config('kv_producer'), enable_prefix_caching=local_prefix_cache,
                            prefix_cache_block_aligned=True, prefix_cache_token_lookahead=lookahead)
     paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache_config,
@@ -413,6 +419,9 @@ def test_fa_multimodal_save_hashes_include_mtp_lookahead(modality, lookahead, lo
         request = paging.add_session(request_id).add_sequence(
             [*range(16), next_token], multimodals={modality.value: [media]})
         assert request.prefix_cache.multimodal_spans
+        if metadata_only:
+            request.history_multimodals = HistoryMultiModals()
+            request.pd_metadata_only = True
         local_identities.append(request.get_prefix_cache_extra_identity(12, 16))
         prefix = store._get_request_block_hashes(request, request.seq_id, 8, 4)
         metadata = store.build_connector_meta(_connector_step(
@@ -1212,3 +1221,16 @@ def test_scheduler_rejects_sliding_window_cache():
 
     with pytest.raises(ValueError, match='sliding-window'):
         MooncakeStoreScheduler(config)
+
+
+def test_pd_prefill_chunk_save_uses_known_prompt_successor():
+    cache = replace(_cache_config('kv_producer'), prefix_cache_token_lookahead=1)
+    paging = Scheduler(SchedulerConfig(max_batches=1, max_session_len=64), cache,
+                       seq_meta=SequenceMeta(4, strategy=ARSpecSequenceStrategy()))
+    store = MooncakeStoreScheduler(cache)
+    request = paging.add_session(0).add_sequence(range(9))
+    request.prepare_pd_prefill()
+    metadata = store.build_connector_meta(_connector_step((request,), (8,), ((0, 1),), ((10, 11),)))
+    assert metadata.save_requests[0].block_hashes == build_prefix_block_hashes(range(9), 4, token_lookahead=1)
+    assert request.num_valid_ids == 9
+    store.shutdown()

@@ -245,6 +245,11 @@ def register(router: APIRouter, server_context) -> None:
         migration_request = json_request.pop('migration_request', None)
         with_cache = json_request.pop('with_cache', False)
         preserve_cache = json_request.pop('preserve_cache', False)
+        pd_prefill = json_request.pop('pd_prefill', False)
+        if (pd_prefill or migration_request) and (request.n != 1 or
+                isinstance(request.prompt, list) and len(request.prompt) != 1):
+            return create_error_response(HTTPStatus.BAD_REQUEST,
+                                         'PD requests require one prompt and n=1.')
         if migration_request:
             migration_request = MigrationRequest.model_validate(
                 migration_request)
@@ -273,6 +278,7 @@ def register(router: APIRouter, server_context) -> None:
             migration_request=migration_request,
             with_cache=with_cache,
             preserve_cache=preserve_cache,
+            pd_prefill=pd_prefill,
         )
         prepared_requests = await asyncio.gather(*[
             server_context.async_engine.preprocess(prompt,
@@ -371,6 +377,7 @@ def register(router: APIRouter, server_context) -> None:
                             response_json['cache_session_id'] = sessions[gen_index].session_id
                             response_json['cache_block_ids'] = res.cache_block_ids
                             response_json['remote_token_ids'] = res.token_ids
+                            response_json['pd_handoff'] = res.pd_handoff
                         yield trace_frame(f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n', response_json)
             except RequestError as e:
                 error_payload = {'error': request_error_payload(e)}
@@ -400,11 +407,12 @@ def register(router: APIRouter, server_context) -> None:
         choices = [None] * len(generators)
         cache_block_ids = []
         remote_token_ids = []
+        pd_handoff = None
         counters = _build_reasoning_counters(_resolve_reasoning_tags(server_context),
                                              prepared_requests)
 
         async def _inner_call(i, generator, session, counter=None):
-            nonlocal cache_block_ids, remote_token_ids, cached_tokens
+            nonlocal cache_block_ids, remote_token_ids, cached_tokens, pd_handoff
             final_logprobs = []
             final_token_ids = []
             final_res = None
@@ -426,6 +434,7 @@ def register(router: APIRouter, server_context) -> None:
                         text += res.response
                         cache_block_ids.append(res.cache_block_ids)
                         remote_token_ids.append(res.token_ids)
+                        pd_handoff = res.pd_handoff
                         if res.token_ids:
                             final_token_ids.extend(res.token_ids)
                         if res.logprobs:
@@ -444,7 +453,7 @@ def register(router: APIRouter, server_context) -> None:
 
             if with_cache:
                 cache_block_ids = cache_block_ids[0]
-                remote_token_ids = [remote_token_ids[0][-1]]
+                remote_token_ids = remote_token_ids[-1][-1:] if remote_token_ids else []
 
             total_tokens = sum(
                 [final_res.input_token_len, final_res.generate_token_len])
@@ -481,5 +490,6 @@ def register(router: APIRouter, server_context) -> None:
             response['cache_session_id'] = sessions[0].session_id
             response['cache_block_ids'] = cache_block_ids
             response['remote_token_ids'] = remote_token_ids
+            response['pd_handoff'] = pd_handoff
 
         return response

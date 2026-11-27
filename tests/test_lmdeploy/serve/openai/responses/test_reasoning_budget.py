@@ -64,6 +64,7 @@ def test_low_budget_responses(responses_endpoint, hf_media_template, sse_payload
                 logprobs=None,
                 routed_experts=None,
                 cache_block_ids=None,
+                pd_handoff=None,
             )
         return results()
 
@@ -136,7 +137,7 @@ def test_responses_reasoning_tool_round_trip(
                 tokens += len(ids)
                 yield SimpleNamespace(response=text, token_ids=ids, input_token_len=10,
                                       generate_token_len=tokens, finish_reason=finish, cached_tokens=0,
-                                      logprobs=None, routed_experts=None, cache_block_ids=None)
+                                      logprobs=None, routed_experts=None, cache_block_ids=None, pd_handoff=None)
         return results()
 
     context.response_parser_cls = Parser
@@ -149,7 +150,7 @@ def test_responses_reasoning_tool_round_trip(
                    tools=[{'type': 'function', 'name': 'get_status'}])
     with TestClient(app) as client:
         response = client.post('/v1/responses', json=payload)
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         if stream:
             events = sse_payloads([response.text])
             assert events[-1]['type'] == 'response.completed'
@@ -188,7 +189,7 @@ def test_responses_reasoning_tool_round_trip(
         assert call['name'] == 'get_status'
         tool_result = {'type': 'function_call_output', 'call_id': call['call_id'], 'output': 'READY'}
         follow_up = client.post('/v1/responses', json={**payload, 'input': [user, *output, tool_result]})
-        assert follow_up.status_code == 200
+        assert follow_up.status_code == 200, follow_up.text
 
     messages = context.async_engine.prompt
     assert [message['role'] for message in messages] == ['user', 'assistant', 'tool']

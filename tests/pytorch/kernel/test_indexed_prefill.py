@@ -112,7 +112,8 @@ def test_indexed_full_chunk_pipeline(kind, packed, dtype):
     )
 
     torch.manual_seed(912)
-    lengths = [1, 72, 137] if packed else [72, 72]
+    # Cover short tails and both sides of the 64-token state boundary.
+    lengths = [1, 63, 64, 65, 72, 127, 128, 129, 137] if packed else [72, 72]
     batch, length = (1, sum(lengths)) if packed else (2, 72)
     heads, dim = 2, 128
     q, k, v = [torch.randn(batch, length, heads, dim, device='cuda', dtype=torch.bfloat16) for _ in range(3)]
@@ -132,9 +133,10 @@ def test_indexed_full_chunk_pipeline(kind, packed, dtype):
         legacy, indexed = chunk_kda, indexed_chunk_kda
     src = torch.tensor([2] * len(lengths), device='cuda', dtype=torch.int32)
     dst = torch.arange(4, 4 + len(lengths), device='cuda', dtype=torch.int32)
-    cp = torch.arange(8, 8 + len(lengths), device='cuda', dtype=torch.int32)
+    cp_start = 4 + len(lengths)
+    cp = torch.arange(cp_start, cp_start + len(lengths), device='cuda', dtype=torch.int32)
     cp_offsets = torch.tensor([min(64, x) for x in lengths], device='cuda', dtype=torch.int32)
-    backing = torch.randn(12, 3, heads, dim, dim, device='cuda', dtype=dtype) / 16
+    backing = torch.randn(cp_start + len(lengths), 3, heads, dim, dim, device='cuda', dtype=dtype) / 16
     pool = backing[:, 1]
     before = backing.clone()
     extra = {}

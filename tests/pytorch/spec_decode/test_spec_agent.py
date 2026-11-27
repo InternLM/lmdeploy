@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
 from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
@@ -525,13 +526,20 @@ def test_non_qwen35_mtp_builds_draft_dist_context(monkeypatch, backend):
     assert draft_dist_config.communication_backend == backend
 
 
-def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
+@pytest.mark.parametrize('pd_prefill', [False, True])
+def test_only_nonfinal_local_chunks_skip_draft_generation(pd_prefill, monkeypatch):
     """DP=1 non-last chunks should keep the local shortcut."""
     from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
 
     inputs, extra_inputs = _make_non_last_chunk_inputs()
 
     agent = object.__new__(SpecModelAgent)
+    agent.cache_config = SimpleNamespace(role=EngineRole.Hybrid)
+    if pd_prefill:
+        agent.cache_config.role = EngineRole.Prefill
+        inputs.dp_meta = DPMeta(dp_batches=[2, 2])
+        inputs.is_last_chunk = True
+    monkeypatch.setattr(DPMeta, 'build', staticmethod(lambda *args: DPMeta(dp_batches=[2, 2])))
     agent.num_spec_tokens = 3
     agent.rank = 0
     agent.proposer = _DummyProposer()
@@ -547,11 +555,12 @@ def test_async_model_forward_dp1_non_last_chunk_skips_remaining_spec_forwards():
 
     output = asyncio.run(agent._async_autoregressive_model_forward(inputs, extra_inputs, sampling_inputs=None))
 
-    expected = torch.zeros((2, 3), dtype=torch.long)
+    expected = (torch.tensor([[0, 1, 2], [0, 1, 2]]) if pd_prefill else
+                torch.zeros((2, 3), dtype=torch.long))
     torch.testing.assert_close(output.output_draft_token_ids, expected)
-    assert forward_calls == 1
-    assert agent.proposer.get_outputs_calls == 0
-    assert agent.proposer.update_inputs_decoding_calls == 0
+    assert forward_calls == (3 if pd_prefill else 1)
+    assert agent.proposer.get_outputs_calls == (3 if pd_prefill else 0)
+    assert agent.proposer.update_inputs_decoding_calls == int(pd_prefill)
 
 
 def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
@@ -568,7 +577,7 @@ def test_async_model_forward_dp_non_last_chunk_pads_block_offsets(monkeypatch):
     agent.rank = 0
     agent.proposer = _DummyProposer()
     agent.guided_helper = GuidedSpecHelper()
-    agent.cache_config = SimpleNamespace(kernel_block_size=1, num_reserved_gpu_blocks=1)
+    agent.cache_config = SimpleNamespace(kernel_block_size=1, num_reserved_gpu_blocks=1, role=EngineRole.Hybrid)
     forward_calls = 0
     forwarded_inputs = []
 
@@ -619,6 +628,7 @@ def test_async_model_forward_transitions_dp_global_phase_in_draft_loop(
     inputs.is_dummy = is_dummy
     inputs.is_decoding = local_decode
     agent = object.__new__(SpecModelAgent)
+    agent.cache_config = SimpleNamespace(role=EngineRole.Hybrid)
     agent.num_spec_tokens = num_spec_tokens
     agent.rank = 0
     agent.proposer = _DummyProposer()
@@ -1179,3 +1189,21 @@ def test_multimodal_mtp_chunks_match_full_prefill_kv_and_outputs(store_enabled, 
     assert torch.equal(logits.argmax(-1), expected_logits.argmax(-1))
     assert target.visual.encoded_tokens == sum(end - start for start, end in spans if start >= history)
     scheduler.shutdown()
+
+
+def test_mtp_chunk_uses_known_successor_and_final_prefill_uses_sample():
+    agent = SpecModelAgent.__new__(SpecModelAgent)
+    agent.proposer = _DummyProposer()
+    inputs = _model_inputs([10, 11, 12])
+    inputs.is_chunk = True
+    inputs.is_last_chunk = False
+    inputs.prefill_next_token_ids = torch.tensor([13])
+    extra = _extra([[1, 2], [3, 4], [5, 6]])
+    extra.next_token_ids = torch.tensor([99])
+    draft, _ = agent._prepare_inputs_from_main(inputs, extra)
+    assert draft.input_ids.tolist() == [[11, 12, 13]]
+    assert extra.next_token_ids.tolist() == [99]
+    inputs.is_last_chunk = True
+    inputs.prefill_next_token_ids = None
+    draft, _ = agent._prepare_inputs_from_main(inputs, extra)
+    assert draft.input_ids.tolist() == [[11, 12, 99]]

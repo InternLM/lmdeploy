@@ -193,6 +193,9 @@ class _FakeScheduler:
     def resume_completed_migrations(self):
         pass
 
+    def schedule_pd_decode(self):
+        return []
+
     def schedule(self,
                  is_prefill: bool,
                  prealloc_size: int,
@@ -545,6 +548,7 @@ def test_engine_loop_treats_pending_long_context_chunk_as_runnable():
     loop = EngineLoop.__new__(EngineLoop)
     loop.scheduler = _Scheduler()
     loop.inputs_maker = _InputsMaker()
+    loop.config = EngineLoopConfig(role=EngineRole.Hybrid)
     loop.has_runable_event = RunableEventAsync(loop.scheduler, loop.inputs_maker.has_pending_long_context_chunk)
     loop._sleep_requested = False
 
@@ -603,6 +607,38 @@ def test_inputs_maker_resumes_completed_migrations_before_selecting_work(method_
         'forward_async',
         'tick',
     ]
+
+
+@pytest.mark.parametrize('second', ['pd', 'ordinary', 'logits', 'logprobs'])
+def test_pd_prefill_marks_final_forward_for_export(second):
+    from unittest.mock import AsyncMock, Mock
+
+    from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+    from lmdeploy.pytorch.paging.scheduler import Scheduler
+    from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+
+    cache = CacheConfig(max_batches=2, block_size=4, num_gpu_blocks=8, num_cpu_blocks=0)
+    scheduler = Scheduler(SchedulerConfig(max_batches=2, max_session_len=32), cache,
+                          SequenceMeta(4, strategy=ARSequenceStrategy()))
+    seqs = [scheduler.add_session(i).add_sequence(np.arange(8)) for i in range(2)]
+    for seq in seqs:
+        seq.pd_prompt_tokens = np.arange(8)
+    if second == 'ordinary':
+        seqs[1].pd_prompt_tokens = None
+    elif second == 'logits':
+        seqs[1].sampling_param.out_logits = True
+    elif second == 'logprobs':
+        seqs[1].sampling_param.num_logprobs = 1
+    inputs = SimpleNamespace(is_dummy=False, is_decoding=False, is_chunk=False)
+    maker = InputsMakerAsync.__new__(InputsMakerAsync)
+    maker.config = SimpleNamespace(enable_decode_checkpoints=False)
+    maker.scheduler = scheduler
+    maker.executor = SimpleNamespace(forward_async=AsyncMock())
+    maker.do_prefill = lambda: True
+    maker._make_forward_inputs = Mock(return_value=dict(
+        running=seqs, inputs=inputs, delta=None, cache_inputs=None))
+    asyncio.run(maker.send_next_inputs())
+    assert maker.forward_inputs['cache_inputs'].pd_export
 
 
 def test_inputs_maker_attaches_decode_snapshot_to_normal_forward():
@@ -687,6 +723,7 @@ def test_engine_loop_uses_short_yield_only_for_pending_lookup(monkeypatch):
     scheduler = _Scheduler()
     loop = EngineLoop.__new__(EngineLoop)
     loop.scheduler = scheduler
+    loop.has_runable_event = SimpleNamespace(has_unfinished=lambda: True)
     monkeypatch.setattr(engine_loop_module.asyncio, 'sleep', record_sleep)
 
     asyncio.run(loop._wait_for_schedulable_prefill())
@@ -697,6 +734,9 @@ def test_engine_loop_uses_short_yield_only_for_pending_lookup(monkeypatch):
     asyncio.run(loop._wait_for_schedulable_prefill())
     assert sleeps == [0.001, 0.1]
     assert scheduler.reads == 1
+    loop.has_runable_event = SimpleNamespace(has_unfinished=lambda: False)
+    asyncio.run(loop._wait_for_schedulable_prefill())
+    assert sleeps == [0.001, 0.1]
 
 
 def test_engine_loop_reset_runtime_state_delegates_to_inputs_maker():
@@ -1717,6 +1757,17 @@ def test_normal_prefill_can_update_running_while_long_chunker_is_active():
     assert maker.running_seqs == [short_seq]
     assert maker.long_context_chunker.enabled()
     assert maker.long_context_chunker.next_step == 0
+
+
+def test_pd_prefill_advances_long_chunks_without_entering_decode():
+    seq = _DummySeq(history_ids=0, token_ids=1024, all_multimodals={}, input_multimodals={})
+    maker = _make_policy_maker(seq)
+    maker.config.role = EngineRole.Prefill
+    maker.update_running_seqs([seq], SimpleNamespace(is_chunk=True, max_q_seqlen=512))
+    assert seq.num_history_ids == 512
+    assert maker.running_seqs == []
+    maker.update_running_seqs([seq], _fake_model_inputs())
+    assert maker.running_seqs == []
 
 
 def test_scoring_prefill_never_enters_decode_running_set():

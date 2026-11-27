@@ -1,0 +1,283 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+import asyncio
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+from lmdeploy.messages import ResponseType
+from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest, PDControlRequest
+from lmdeploy.pytorch.disagg.messages import PDTransferResult
+from lmdeploy.pytorch.engine.engine_loop import EngineLoop, EngineLoopConfig
+from lmdeploy.pytorch.messages import SequenceMeta, UpdateTokenMode
+from lmdeploy.pytorch.paging.scheduler import Scheduler
+from lmdeploy.pytorch.strategies.ar.sequence import ARSequenceStrategy
+
+
+def make_transfer(migrate, logprobs=None):
+    def scheduler():
+        return Scheduler(SchedulerConfig(max_batches=2, max_session_len=32),
+                         CacheConfig(max_batches=2, block_size=4, num_gpu_blocks=8, num_cpu_blocks=0),
+                         SequenceMeta(4, strategy=ARSequenceStrategy()))
+
+    prefill, decode = scheduler(), scheduler()
+    source = prefill.add_session(1).add_sequence(np.arange(8), preserve_cache=True)
+    source.pd_prompt_tokens = np.arange(8)
+    prefill.block_manager.allocate(source)
+    source.sampling_param.random_seed = 42
+    source.update_token_ids(np.array([8]), mode=UpdateTokenMode.PREFILL)
+    handoff = prefill.pd_coordinator.publish(source, 'schema', [], first_token_logprobs=logprobs)
+    handoff = type(handoff).model_validate_json(handoff.model_dump_json())
+    migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill',
+                                 remote_session_id=1, handoff=handoff)
+    target = decode.add_session(2).add_sequence(np.arange(8), migration_request=migration)
+    target.resp = SimpleNamespace(type=ResponseType.SUCCESS, data=None, is_done=False)
+    assert decode.schedule_migration() == [target]
+
+    async def control(peer, request):
+        sequence = prefill.pd_coordinator.control(request)
+        if sequence is not None:
+            prefill.end_session(sequence.session_id)
+
+    responses = []
+    loop = EngineLoop(
+        req_manager=SimpleNamespace(response=lambda resp: responses.append(resp.type)), scheduler=decode,
+        state_checkpoints=decode.state_checkpoints, executor=SimpleNamespace(migrate=migrate),
+        seq_strategy=ARSequenceStrategy(),
+        inputs_maker=SimpleNamespace(has_pending_long_context_chunk=lambda: False),
+        config=EngineLoopConfig(role=EngineRole.Decode),
+        engine_conn=SimpleNamespace(local_engine_id='decode', control=control))
+    return loop, prefill, target, responses
+
+
+@pytest.mark.parametrize('max_new_tokens', [1, 2])
+def test_received_first_token_logprobs_use_normal_response_assembly(max_new_tokens):
+    async def run():
+        async def migrate(batch):
+            return [PDTransferResult(transfer_id=batch.receives[0].handoff.transfer_id, status='completed')]
+
+        loop, _, seq, _ = make_transfer(migrate, [[[-0.2, -0.2, -1.7], [8, 8, 9]]])
+        seq.sampling_param.max_new_tokens = max_new_tokens
+        seq.resp.data = None
+        await loop._receive_handoff(seq)
+        await asyncio.gather(*loop._pd_control_tasks)
+        output = loop.resp_queue.get_nowait()[seq.session_id]
+        assert output.token_ids.tolist() == [8]
+        assert output.finish == (max_new_tokens == 1)
+        loop._update_logprobs([output])
+        assert seq.resp.data['logprobs'] == [{8: -0.2, 9: -1.7}]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('force', [False, True])
+def test_cancelled_receive_late_completion_cannot_release_reused_blocks(force):
+    async def run():
+        started = asyncio.Event()
+        completion = asyncio.get_running_loop().create_future()
+
+        async def migrate(batch):
+            started.set()
+            await completion
+            return [PDTransferResult(transfer_id=batch.receives[0].handoff.transfer_id, status='completed')]
+
+        loop, prefill, seq, responses = make_transfer(migrate)
+        owner = loop.scheduler.pd_coordinator
+        task = asyncio.create_task(loop._receive_handoff(seq))
+        await asyncio.wait_for(started.wait(), 2)
+        transfer_id = seq.migration_request.handoff.transfer_id
+        owner.control(PDControlRequest(action='abort', transfer_id=transfer_id,
+                                       engine_epoch=prefill.pd_coordinator.epoch, receiver_epoch=owner.epoch,
+                                       reason='Prefill cancelled'))
+        if force:
+            owner.release_timeout = 0
+        else:
+            completion.set_result(None)
+        await asyncio.wait_for(task, 3)
+        await asyncio.gather(*loop._pd_control_tasks)
+        assert responses == [ResponseType.INTERNAL_ENGINE_ERROR]
+        assert owner.snapshot()['forced_releases'] == int(force)
+        assert not owner.has_pending() and not prefill.pd_coordinator.has_pending()
+        assert loop.scheduler.block_manager.get_num_free_gpu_blocks() == 8
+        assert prefill.block_manager.get_num_free_gpu_blocks() == 8
+
+        replacement = loop.scheduler.add_session(3).add_sequence(np.arange(9))
+        loop.scheduler.block_manager.allocate(replacement)
+        free = loop.scheduler.block_manager.get_num_free_gpu_blocks()
+        if force:
+            assert loop._pd_native_jobs
+            completion.set_result(None)
+            await asyncio.gather(*loop._pd_native_jobs)
+        assert loop.scheduler.get_session(3) is not None
+        assert loop.scheduler.block_manager.get_num_free_gpu_blocks() == free
+        assert owner.finish_receive(seq, PDTransferResult(transfer_id=transfer_id, status='completed')) == 'stale'
+
+    asyncio.run(run())
+
+
+def test_unknown_native_result_expires_without_stopping_decode():
+    async def run():
+        async def migrate(batch):
+            return [PDTransferResult(transfer_id=batch.receives[0].handoff.transfer_id,
+                                     status='completion_unknown', error='native failed')]
+
+        loop, prefill, seq, responses = make_transfer(migrate)
+        loop.scheduler.pd_coordinator.release_timeout = 0
+        await asyncio.wait_for(loop._receive_handoff(seq), 2)
+        await asyncio.gather(*loop._pd_control_tasks)
+        assert responses == [ResponseType.INTERNAL_ENGINE_ERROR]
+        assert not loop.stop_event.is_set()
+        assert loop.scheduler.pd_coordinator.snapshot()['quarantined'] == 0
+        assert not prefill.pd_coordinator.has_pending()
+        replacement = loop.scheduler.add_session(3).add_sequence(np.arange(9))
+        assert loop.scheduler.schedule(is_prefill=True).running == [replacement]
+
+    asyncio.run(run())
+
+
+def test_prefill_abort_before_submission_returns_reason_without_native_io():
+    async def run():
+        submissions = []
+
+        async def migrate(batch):
+            submissions.append(batch)
+
+        loop, prefill, seq, responses = make_transfer(migrate)
+        owner = loop.scheduler.pd_coordinator
+        handoff = seq.migration_request.handoff
+        owner.control(PDControlRequest(action='abort', transfer_id=handoff.transfer_id,
+                                       engine_epoch=handoff.engine_epoch, receiver_epoch=owner.epoch,
+                                       reason='Prefill admission failed'))
+        await loop._receive_handoff(seq)
+        await asyncio.gather(*loop._pd_control_tasks)
+        assert not submissions
+        assert responses == [ResponseType.INTERNAL_ENGINE_ERROR]
+        assert seq.resp.err_msg == 'Prefill admission failed'
+        assert not owner.has_pending() and not prefill.pd_coordinator.has_pending()
+
+    asyncio.run(run())
+
+
+def test_receive_completion_wakes_idle_migration_loop_without_spinning():
+    async def run():
+        loop = object.__new__(EngineLoop)
+        loop.stop_event = asyncio.Event()
+        loop.migration_event = asyncio.Event()
+        loop._sleep_requested = False
+        polls = []
+
+        def schedule():
+            polls.append(None)
+            # Bound the regression itself: a busy loop cannot service asyncio timeouts.
+            if len(polls) == 4:
+                loop.stop_event.set()
+            return []
+
+        loop.scheduler = SimpleNamespace(schedule_migration=schedule, has_migration_waiting=lambda: False)
+        loop.migration_event.set()
+        task = asyncio.create_task(loop.migration_loop())
+        await asyncio.sleep(0)
+        assert len(polls) == 1 and not task.done()
+        loop.migration_event.set()
+        await asyncio.sleep(0)
+        assert len(polls) == 2 and not task.done()
+        loop.stop_event.set()
+        loop.migration_event.set()
+        await task
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('prefetch', [False, True])
+def test_preempted_metadata_only_decode_waits_for_media_without_holding_blocks(prefetch):
+    async def run():
+        async def migrate(batch):
+            return [PDTransferResult(transfer_id=batch.receives[0].handoff.transfer_id, status='completed')]
+
+        loop, prefill, seq, responses = make_transfer(migrate)
+        from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+        seq.prefix_cache.multimodal_spans = seq._make_multimodal_spans(
+            dict(image=[MultiModalData(data=[], start=2, end=6, content_hash='pixels')]))
+        seq.pd_metadata_only = True
+        await loop._receive_handoff(seq)
+        await asyncio.gather(*loop._pd_control_tasks)
+        loop.scheduler.schedule_pd_decode()
+        loop.scheduler.preempt_seqs([seq])
+        seq.state.release_paging_resources()
+
+        async def schedule_inputs():
+            assert not loop.scheduler.schedule(is_prefill=True).running
+            return None, None
+
+        loop.inputs_maker = SimpleNamespace(send_next_inputs=schedule_inputs, prefetch_next_inputs=schedule_inputs)
+        send_inputs = loop._prefetch_next_inputs if prefetch else loop._main_loop_try_send_next_inputs
+        assert await send_inputs() == (None, None)
+        assert responses == []
+        from lmdeploy.pytorch.messages import MessageStatus
+        assert seq.status == MessageStatus.WAITING_FOR_MULTIMODALS
+        first = loop.resp_queue.get_nowait()[seq.session_id]
+        assert first.input_multimodals_request is None
+        output = loop.resp_queue.get_nowait()[seq.session_id]
+        assert output.input_multimodals_request == seq.seq_id
+        assert output.token_ids.tolist() == [8]
+        loop._request_pd_media_recompute()
+        assert loop.resp_queue.empty()
+        loop._send_resps([first, output])
+        assert responses == [ResponseType.SUCCESS]
+        assert seq.resp.data['input_multimodals_request'] == seq.seq_id
+        assert not loop.scheduler.waiting
+        assert not prefill.pd_coordinator.has_pending()
+        assert loop.scheduler.block_manager.get_num_free_gpu_blocks() == 8
+        replacement = loop.scheduler.add_session(3).add_sequence(np.arange(9))
+        assert loop.scheduler.schedule(is_prefill=True).running == [replacement]
+
+    asyncio.run(run())
+
+
+def test_deferred_media_resume_validates_sequence_and_survives_a_second_preemption():
+    from lmdeploy.pytorch.engine.engine import Engine
+    from lmdeploy.pytorch.engine.input_process import PreprocessInputResult
+    from lmdeploy.pytorch.engine.request import Request, RequestType
+    from lmdeploy.pytorch.messages import MessageStatus
+    from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+
+    async def run():
+        async def migrate(batch):
+            return [PDTransferResult(transfer_id=batch.receives[0].handoff.transfer_id, status='completed')]
+
+        loop, _, seq, _ = make_transfer(migrate)
+        images = dict(image=[MultiModalData(data=[], start=2, end=6, content_hash='pixels')])
+        seq.prefix_cache.multimodal_spans = seq._make_multimodal_spans(images)
+        seq.pd_metadata_only = True
+        await loop._receive_handoff(seq)
+        await asyncio.gather(*loop._pd_control_tasks)
+        loop.scheduler.schedule_pd_decode()
+        loop.scheduler.preempt_seqs([seq])
+        seq.state.release_paging_resources()
+        assert not loop.scheduler.schedule(is_prefill=True).running
+        loop._request_pd_media_recompute()
+        engine = Engine.__new__(Engine)
+        engine.scheduler = loop.scheduler
+        engine.req_manager = loop.req_manager
+        engine.input_processor = SimpleNamespace(preprocess_input=lambda ids, mm: PreprocessInputResult(ids, mm))
+        resp = SimpleNamespace(type=ResponseType.SUCCESS)
+        req = Request(RequestType.RESUME_MULTIMODAL,
+                      sender_id=0, resp=resp, data=dict(session_id=seq.session_id, seq_id=seq.seq_id,
+                                                      input_ids=np.arange(8), multimodal=images))
+        engine._on_resume_multimodal([req])
+        assert resp.type == ResponseType.SUCCESS and seq.status == MessageStatus.WAITING
+        assert seq.generated_ids.tolist() == [8] and seq.num_new_tokens == 1
+        assert not seq.pd_metadata_only and seq.get_input_multimodals() == images
+        assert loop.scheduler.schedule(is_prefill=True).running == [seq]
+        loop.scheduler.activate_seqs([seq])
+        loop.scheduler.preempt_seqs([seq])
+        assert loop.scheduler.schedule(is_prefill=True).running == [seq]
+        loop.scheduler.end_session(seq.session_id)
+        replacement = loop.scheduler.add_session(seq.session_id).add_sequence(np.arange(8))
+        engine._on_resume_multimodal([req])
+        assert resp.type == ResponseType.SESSION_NOT_EXIST
+        assert replacement.history_multimodals.empty()
+
+    asyncio.run(run())

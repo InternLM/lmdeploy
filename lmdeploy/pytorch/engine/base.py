@@ -23,6 +23,12 @@ class EngineBase:
         """Init rdma link."""
         raise NotImplementedError('This method is not implemented.')
 
+    def get_pd_engine_info(self):
+        raise NotImplementedError('This method is not implemented.')
+
+    def pd_control(self, request):
+        raise NotImplementedError('This method is not implemented.')
+
     def p2p_connect(self, conn_request: DistServeConnectionRequest):
         """rdma_connect."""
         raise NotImplementedError('This method is not implemented.')
@@ -45,6 +51,10 @@ class EngineBase:
 
 
 class EngineInstanceBase:
+
+    async def async_resume_multimodal(self, session_id: int, seq_id: int, inputs: dict):
+        """Supply the original media for a preempted PD request."""
+        raise NotImplementedError('This method is not implemented.')
 
     async def async_end(self, session_id: int):
         """End the given session."""

@@ -77,6 +77,7 @@ def prefill():
             engine._on_end_session([SimpleNamespace(data={'session_id': sid, 'response': False})])
             yield SimpleNamespace(response='ok', token_ids=[1], input_token_len=2, generate_token_len=1,
                                   finish_reason='stop', logprobs=None, cache_block_ids=[0], cached_tokens=0,
+                                  pd_handoff=None,
                                   routed_experts=None)
 
     context = ServerContext()

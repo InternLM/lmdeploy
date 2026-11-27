@@ -76,6 +76,8 @@ def _expand_sampling_inputs(sampling_inputs: SamplingInputs, num_tokens: int) ->
                 # reproducible but distinct random sampling
                 arange = torch.arange(num_tokens, device=v.device)
                 v = v + arange.repeat(sampling_inputs.batch_size)
+            elif k == 'num_ignore_eos':
+                v = v - torch.arange(num_tokens, device=v.device).repeat(sampling_inputs.batch_size)
         elif k in _SCALAR_FIELDS or k in _GLOBAL_FIELDS:
             pass
         elif isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] == sampling_inputs.batch_size:

@@ -8,6 +8,7 @@ from http import HTTPStatus
 
 import shortuuid
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
 from lmdeploy.serve.core.chat_runner import (
@@ -134,6 +135,20 @@ def register(router: APIRouter, server_context) -> None:
         - **frequency_penalty** (replaced with repetition_penalty)
         """
         json_request = await raw_request.json()
+        migration_request = json_request.get('migration_request')
+        if migration_request:
+            try:
+                migration_request = MigrationRequest.model_validate(migration_request)
+            except ValueError as error:
+                return create_error_response(HTTPStatus.BAD_REQUEST, str(error))
+            if (migration_request.handoff is not None and migration_request.handoff.multimodal_spans
+                    and migration_request.prompt_token_ids is None):
+                return create_error_response(HTTPStatus.BAD_REQUEST,
+                                             'Multimodal PD requires the expanded prompt_token_ids from Prefill.')
+            if (migration_request.handoff is not None and migration_request.prompt_token_ids is not None
+                    and not request.messages and request.image_data is None):
+                # Validate processed raw-ID requests without requiring their original media payload.
+                request = request.model_copy(update=dict(input_ids=migration_request.prompt_token_ids, image_data=None))
         error_check_ret = validate_request(
             request,
             server_context,
@@ -178,12 +193,18 @@ def register(router: APIRouter, server_context) -> None:
                     })
                 resolved_input_ids = None  # image_data conversion takes over
 
-        migration_request = json_request.pop('migration_request', None)
+        json_request.pop('migration_request', None)
         with_cache = json_request.pop('with_cache', False)
         preserve_cache = json_request.pop('preserve_cache', False)
+        pd_prefill = json_request.pop('pd_prefill', False)
         if migration_request:
-            migration_request = MigrationRequest.model_validate(
-                migration_request)
+            if migration_request.handoff is not None and migration_request.prompt_token_ids is not None:
+                # Keep messages/tools for response parsing, but reuse P's exact
+                # tokenization. The engine verifies the handoff prompt digest.
+                resolved_input_ids = migration_request.prompt_token_ids
+                # IDs now belong to the input; do not copy them again with the
+                # generation config or send a duplicate through engine RPC.
+                migration_request.prompt_token_ids = None
 
         model_name = request.model
         adapter_name = None
@@ -218,6 +239,7 @@ def register(router: APIRouter, server_context) -> None:
                         migration_request=migration_request,
                         with_cache=with_cache,
                         preserve_cache=preserve_cache,
+                        pd_prefill=pd_prefill,
                     ),
                 ),
             )
@@ -317,6 +339,7 @@ def register(router: APIRouter, server_context) -> None:
                         response_json['cache_session_id'] = chat_runner.session.session_id
                         response_json['cache_block_ids'] = chunk.cache_block_ids
                         response_json['remote_token_ids'] = chunk.token_ids
+                        response_json['pd_handoff'] = chunk.pd_handoff
                     yield trace_frame(f'data: {json.dumps(response_json, ensure_ascii=False)}\n\n', response_json)
                 if final_usage is not None:
                     yield trace_frame(f'data: {create_stream_usage_response_json(final_usage)}\n\n')
@@ -379,7 +402,7 @@ def register(router: APIRouter, server_context) -> None:
 
         if with_cache:
             cache_block_ids = res.cache_block_ids[0]
-            remote_token_ids = [res.remote_token_ids[0][-1]]
+            remote_token_ids = res.remote_token_ids[-1][-1:] if res.remote_token_ids else []
 
         usage = UsageInfo.build(
             prompt_tokens=res.input_token_len,
@@ -404,5 +427,10 @@ def register(router: APIRouter, server_context) -> None:
             response['cache_session_id'] = chat_runner.session.session_id
             response['cache_block_ids'] = cache_block_ids
             response['remote_token_ids'] = remote_token_ids
+            response['pd_handoff'] = res.pd_handoff
 
+        if pd_prefill:
+            # model_dump already produced JSON-compatible values. Avoid
+            # FastAPI walking every prompt token again in jsonable_encoder.
+            return JSONResponse(response)
         return response

@@ -210,6 +210,12 @@ class CacheConfig:
     def __post_init__(self):
         """Post init."""
         assert self.dcp >= 1, 'invalid dcp'
+        if self.migration_backend == MigrationBackend.Mooncake:
+            if self.dcp != 1 or self.num_cpu_blocks:
+                raise ValueError('Mooncake PD requires DCP=1 and GPU-only cache allocation.')
+            if (self.role == EngineRole.Decode and self.use_mooncake_store
+                    and self.kv_transfer_config.kv_role != 'kv_producer'):
+                raise ValueError('Mooncake PD decode Store must use kv_producer.')
         assert self.prefix_cache_state_budget >= 0, 'invalid prefix_cache_state_budget'
         assert self.prefix_cache_decode_state_interval >= 0, 'invalid prefix_cache_decode_state_interval'
         assert self.prefill_save_alignment > 0, 'invalid prefill_save_alignment'
@@ -518,6 +524,10 @@ class SSMStateCapacity:
                           runtime_is_auxiliary: bool = False) -> 'SSMStateCapacity':
         """Normalize default state slots and derive capacity for a stateful
         target."""
+        # Prefill publishes one final state per chunk and never verifies draft
+        # tokens. Its MTP model still runs the prefix, but needs no candidate bank.
+        if cache.role == EngineRole.Prefill:
+            max_update_tokens = 1
         # CacheConfig.states_shapes is populated later than executor selection.
         store_budget = (cache.mooncake_state_save_slots
                         if cache.use_mooncake_store and cache.kv_transfer_config.is_kv_producer else 0)

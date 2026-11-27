@@ -130,7 +130,7 @@ class _ImageEngine:
         async def generate():
             yield SimpleNamespace(response='ok', token_ids=[1], input_token_len=1, generate_token_len=1,
                                   finish_reason='stop', cached_tokens=0, logprobs=None, routed_experts=None,
-                                  cache_block_ids=None)
+                                  cache_block_ids=None, pd_handoff=None)
 
         return generate()
 

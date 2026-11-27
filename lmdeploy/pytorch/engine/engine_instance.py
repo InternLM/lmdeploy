@@ -190,6 +190,13 @@ class EngineInstance(EngineInstanceBase):
         """
         return try_add_session(self.req_sender, session_id)
 
+    async def async_resume_multimodal(self, session_id: int, seq_id: int, inputs: dict):
+        resp = await self.req_sender.async_send(RequestType.RESUME_MULTIMODAL,
+                                               dict(session_id=session_id, seq_id=seq_id,
+                                                    input_ids=inputs['input_ids'], multimodal=inputs['multimodal']))
+        if resp.type == ResponseType.INTERNAL_ENGINE_ERROR:
+            raise ValueError(resp.err_msg)
+
     async def async_stream_infer(self,
                                  session_id: int,
                                  input_ids: list[int],
@@ -237,6 +244,7 @@ class EngineInstance(EngineInstanceBase):
                 migration_request=gen_config.migration_request,
                 with_cache=gen_config.with_cache,
                 preserve_cache=gen_config.preserve_cache,
+                pd_prefill=gen_config.pd_prefill,
             )
             logger.debug(f'session[{session_id}] add message: num_input_ids={len(input_ids)}.')
             resp = self.req_sender.send_async(RequestType.ADD_MESSAGE, msg)
@@ -251,6 +259,7 @@ class EngineInstance(EngineInstanceBase):
                 resp = await self.req_sender.async_recv(resp, wait_main=True)
 
                 cache_block_ids = resp.data.get('cache_block_ids', None) if resp.data else None
+                pd_handoff = resp.data.get('pd_handoff') if resp.data else None
                 req_metrics = resp.data.get('req_metrics', None) if resp.data else None
                 logprobs = resp.data.pop('logprobs', None) if resp.data else None
 
@@ -260,7 +269,9 @@ class EngineInstance(EngineInstanceBase):
                     logger.debug(f'session[{session_id}] success: num_out_ids={num_ids}.')
                     yield EngineOutput(resp.type,
                                        token_ids[output_offset:].tolist(),
+                                       input_multimodals_request=resp.data.get('input_multimodals_request'),
                                        cache_block_ids=cache_block_ids,
+                                       pd_handoff=pd_handoff,
                                        req_metrics=req_metrics,
                                        logprobs=logprobs)
                     output_offset = len(token_ids)
@@ -288,6 +299,7 @@ class EngineInstance(EngineInstanceBase):
                                        token_ids,
                                        logits=logits,
                                        cache_block_ids=cache_block_ids,
+                                       pd_handoff=pd_handoff,
                                        req_metrics=req_metrics,
                                        routed_experts=routed_experts,
                                        logprobs=logprobs,

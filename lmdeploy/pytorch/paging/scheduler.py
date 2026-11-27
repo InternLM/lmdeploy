@@ -25,6 +25,7 @@ from .decode_checkpoint import DecodeCheckpointCoordinator
 from .eviction_helper import build_eviction_helper
 from .kv_load_coordinator import KVLoadCoordinator
 from .kv_save_coordinator import KVSaveCoordinator
+from .pd_coordinator import PDCoordinator
 from .prefill_scheduler import (
     _PrefillScheduler,
     _PrefillTurnPolicy,
@@ -181,6 +182,7 @@ class Scheduler:
             block_manager=self.block_manager, block_trie=self.block_trie, state_manager=self.state_manager,
             connector=kv_connector, save_coordinator=self.kv_save_coordinator)
 
+        self.pd_coordinator = PDCoordinator(self.block_manager, self.state_manager)
         self.scheduler_tick = 0
 
     def tick(self):
@@ -193,6 +195,7 @@ class Scheduler:
         Engine shutdown normally drains worker queues first. Clearing scheduler ownership here makes repeated shutdown
         harmless and prevents any later scheduling path from starting new external work.
         """
+        self.pd_coordinator.require_drained()
         connector = self.kv_connector
         # Fail closed before dropping paging records if compact Store still
         # owns a destination. Shutdown is not itself a worker-drain proof.
@@ -308,9 +311,16 @@ class Scheduler:
             key=lambda seq: seq.arrive_time,
         )
 
-        max_batches = self.scheduler_config.max_batches - self.num_ready() - self.num_running()
+        occupied = sum(self.seq_manager.num_sequences(status) for status in (
+            MessageStatus.READY, MessageStatus.RUNNING, MessageStatus.MIGRATION_READY,
+            MessageStatus.MIGRATION_RUNNING, MessageStatus.MIGRATION_DONE))
+        max_batches = self.scheduler_config.max_batches - occupied
         while migration_waiting and len(migration_ready) < max_batches:
             seq = migration_waiting.pop(0)
+            handoff = seq.migration_request.handoff
+            # Reserve the target verification and draft tail before pinning a
+            # receive, so a full prompt cannot strand D without decode space.
+            prealloc_size = 2 * len(handoff.draft_token_ids) + 1 if handoff is not None else 0
             prefix_match = None
             if self.block_trie.enabled:
                 prefix_match = _TentativePrefixMatch(
@@ -320,7 +330,7 @@ class Scheduler:
                     is_ssm=self.is_ssm,
                     preserve_existing_state=False,
                 )
-                prefix_match.match()
+                prefix_match.match(pd_boundary=handoff.valid_token_count if handoff is not None else None)
             evictable = list(
                 chain(
                     reversed(self.hanging),
@@ -329,14 +339,18 @@ class Scheduler:
             if not self.eviction_helper.try_make_capacity_for(
                 seq,
                 evictable,
-                0,
+                prealloc_size,
             ):
                 if prefix_match is not None:
                     prefix_match.rollback('migration capacity admission failed')
                 break
 
             # allocate session memory
-            self.block_manager.allocate(seq)
+            self.block_manager.allocate(seq, prealloc_size)
+            if self.is_ssm:
+                self.state_manager.allocate(seq)
+            if handoff is not None:
+                self.pd_coordinator.prepare_receive(seq)
             self.block_trie.finalize_match(seq)
             if prefix_match is not None:
                 prefix_match.commit()
@@ -356,8 +370,15 @@ class Scheduler:
         waiting = self.seq_manager.get_sequences(MessageStatus.WAITING).values()
         candidates = list(islice(waiting, self.scheduler_config.max_batches))
         self.kv_connector.prefetch_lookups([
-            seq for seq in candidates if not self.kv_load_coordinator.is_remote_ready(seq)
+            seq for seq in candidates
+            if not seq.pd_metadata_only and not self.kv_load_coordinator.is_remote_ready(seq)
         ])
+
+    def take_multimodal_requests(self) -> SeqList:
+        """Drain admission's media requests, dropping cancelled sequences."""
+        pending = self._prefill_scheduler.multimodal_requests
+        self._prefill_scheduler.multimodal_requests = []
+        return [seq for seq in pending if seq.status == MessageStatus.WAITING_FOR_MULTIMODALS]
 
     def schedule(self,
                  is_prefill: bool,
@@ -443,6 +464,8 @@ class Scheduler:
                 connector.cancel_lookup(seq.seq_id)
             # An active load may still write GPU memory. Defer the state change
             # until all ranks terminate instead of making its blocks evictable.
+            if self.pd_coordinator.defer_end(seq, stop=True):
+                continue
             if self.kv_load_coordinator.defer_stop_if_loading(seq):
                 continue
             seq.state.stop()
@@ -463,6 +486,8 @@ class Scheduler:
                 connector.cancel_lookup(seq.seq_id)
             # Session removal also frees sequence blocks, so it must be deferred
             # while a worker may still address an in-flight load destination.
+            if self.pd_coordinator.defer_end(seq):
+                continue
             if self.kv_load_coordinator.defer_end_if_loading(seq):
                 continue
             # stop session so it won't get scheduled again
@@ -595,6 +620,7 @@ class Scheduler:
         Ended external loads and save leases must release their references first. Remote Store objects are not
         invalidated; future requests may restore them through the normal lookup/load completion protocol.
         """
+        self.pd_coordinator.require_drained()
         self.finish_kv_transfers_after_worker_drain()
         if self.sessions:
             raise RuntimeError('Cannot reset cache before all sessions have ended.')
@@ -602,6 +628,7 @@ class Scheduler:
             self.block_trie.reset_compact_after_worker_drain()
         else:
             self.block_trie.clear()
+        self.pd_coordinator.reset()
 
     def get_block_tables(self, seqs: SeqList):
         """Get block tables for the sequences."""
@@ -654,7 +681,19 @@ class Scheduler:
     def resume_completed_migrations(self):
         """Move completed migration sequences back to the waiting queue."""
         for seq in self.migration_done:
+            if not seq.pd_decode_pending:
+                seq.state.activate()
+
+    def schedule_pd_decode(self):
+        """Admit complete remote prefills directly to their first decode."""
+        running = [seq for seq in self.migration_done if seq.pd_decode_pending]
+        for seq in running:
             seq.state.activate()
+            seq.state.activate()
+            if isinstance(self.state_manager, SSMStateManager):
+                if not self.state_manager.promote_to_decode(self.state_manager.bank_for(seq)):
+                    raise RuntimeError('PD receive lost its reserved decode state capacity.')
+        return running
 
     def _get_request_cache_usage(self, total_blocks: int):
         """Return GPU KV blocks referenced by requests, counted once."""

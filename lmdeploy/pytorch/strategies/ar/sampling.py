@@ -69,7 +69,7 @@ class ARSamplingStrategy(SamplingStrategy):
         min_p = [None] * batch_size
         bad_words = [None] * batch_size
         stop_words = [None] * batch_size
-        random_seeds = [np.random.randint(0xffffffff)] * batch_size
+        random_seeds = [None] * batch_size
         random_offsets = [None] * batch_size
         response_formats = [None] * batch_size
         logits_processors = [None] * batch_size
@@ -90,13 +90,12 @@ class ARSamplingStrategy(SamplingStrategy):
                 min_p[idx] = param.min_p
                 random_offsets[idx] = seq.num_valid_ids
                 response_formats[idx] = param.response_format
-                if param.random_seed is not None:
-                    random_seeds[idx] = param.random_seed & 0xffffffff
+                if param.random_seed is None:
+                    param.random_seed = int(np.random.randint(0xffffffff))
+                random_seeds[idx] = param.random_seed & 0xffffffff
 
                 bw = param.bad_words
                 sw = param.stop_words
-                if (not param.ignore_eos and seq.num_new_tokens < param.min_new_tokens):
-                    bw = bw + sw
                 bad_words[idx] = bw
                 stop_words[idx] = sw
                 logits_processors[idx] = param.logits_processors
@@ -189,6 +188,10 @@ class ARSamplingStrategy(SamplingStrategy):
             'session_id': seq.session.session_id,
             'seq_id': seq.seq_id,
         } for seq in seqs]
+        for ctx, seq in zip(session_ctx, seqs):
+            if seq.sampling_param.response_format is not None and seq.num_new_tokens:
+                # PD has accepted y1 before the local grammar matcher exists; receive metadata is already released.
+                ctx['initial_token_id'] = int(seq.generated_ids[0])
 
         # repetition ngram
         max_repetition_ngram_size = max(repetition_ngram_sizes)

@@ -28,13 +28,14 @@ from .model_inputs import get_model_inputs_next_decoding, index_select_model_inp
 def step_sampling_delta(sampling_delta: SamplingInputsDelta,
                          next_token_ids: torch.Tensor,
                          random_offset_step: int | torch.Tensor = 1) -> SamplingInputsDelta:
-    """Advance sampling delta for one decode step."""
-    sampling_delta.num_ignore_eos = sampling_delta.num_ignore_eos - 1
+    """Advance the request's counter by committed outputs, never draft
+    width."""
+    sampling_delta.num_ignore_eos = sampling_delta.num_ignore_eos - random_offset_step
     if sampling_delta.random_offsets is not None:
         sampling_delta.random_offsets += random_offset_step
     all_ids = sampling_delta.all_ids
     if all_ids is not None:
-        sampling_delta.all_ids = torch.cat([all_ids, next_token_ids[:, None]], 1)
+        sampling_delta.all_ids = torch.cat([all_ids, next_token_ids.reshape(all_ids.size(0), -1)], 1)
     return sampling_delta
 
 
@@ -127,8 +128,13 @@ class ARStepInputs(StepInputs):
     ):
         """Add prefill result into accumulated decode state."""
         # convert prefill inputs → first decode step
-        inputs = get_model_inputs_next_decoding(
-            inputs, next_token_ids, max_q_seqlen=1, model_metas=model_metas, ssm_state_cursor=self.ssm_state_cursor)
+        if inputs.is_decoding:
+            # A migrated request's first forward is already decode.
+            inputs = inputs.step(next_token_ids, inputs.seq_length, ssm_state_cursor=self.ssm_state_cursor)
+            inputs.model_metas = model_metas
+        else:
+            inputs = get_model_inputs_next_decoding(
+                inputs, next_token_ids, max_q_seqlen=1, model_metas=model_metas, ssm_state_cursor=self.ssm_state_cursor)
 
         # advance sampling state
         stopping_criteria = stopping_criteria.clone()

@@ -22,7 +22,7 @@ from lmdeploy.pytorch.consts import (
     GLM5_KPOOL_TAIL_K_STATE,
     GLM5_KPOOL_TAIL_SCORE_STATE,
 )
-from lmdeploy.pytorch.disagg.config import EngineRole
+from lmdeploy.pytorch.disagg.config import EngineRole, MigrationBackend
 from lmdeploy.utils import get_logger
 
 from .builder import AutoModelConfigBuilder
@@ -40,8 +40,8 @@ _GLM5_FULL_LAYER_TYPES = frozenset({
 def update_cache_config(cache_config):
     """Keep the 64-token MLA / 16-entry KPool owner under one allocator
     reference."""
-    if cache_config.role != EngineRole.Hybrid:
-        raise ValueError('GLM-5.3 logical64/kernel64 cache does not support PD migration.')
+    if cache_config.role != EngineRole.Hybrid and cache_config.migration_backend != MigrationBackend.Mooncake:
+        raise ValueError('GLM-5.3 PD requires Mooncake and a full-prompt handoff.')
     if (cache_config.block_size, cache_config.kernel_block_size) != (64, 64):
         get_logger('lmdeploy').warning(
             'GLM-5.3 uses block_size=64 and kernel_block_size=64 '

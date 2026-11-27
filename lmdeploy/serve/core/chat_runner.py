@@ -44,6 +44,7 @@ class ChatStreamChunk:
     cached_tokens: int
     routed_experts: Any = None
     cache_block_ids: list[int] | None = None
+    pd_handoff: dict | None = None
     reasoning_tokens: int | None = None
     is_last_delta: bool = True
     stop_sequence: str | None = None
@@ -65,6 +66,7 @@ class ChatResult:
     routed_experts: Any = None
     cache_block_ids: list[Any] = field(default_factory=list)
     remote_token_ids: list[Any] = field(default_factory=list)
+    pd_handoff: dict | None = None
     reasoning_tokens: int | None = None
     stop_sequence: str | None = None
 
@@ -137,6 +139,11 @@ class ChatRunner:
             adapter_name = parsed_request.model
 
         engine_messages = None if options.input_ids is not None else parsed_request.messages
+        do_preprocess = options.do_preprocess
+        migration = gen_config.migration_request
+        if migration is not None and migration.handoff is not None and migration.handoff.multimodal_spans:
+            engine_messages = parsed_request.messages
+            do_preprocess = True
         session = server_context.create_session(parsed_request.session_id)
         try:
             preprocessed = await server_context.async_engine.preprocess(
@@ -145,7 +152,7 @@ class ChatRunner:
                 gen_config=gen_config,
                 tools=parsed_request.tools,
                 reasoning_effort=parsed_request.reasoning_effort,
-                do_preprocess=options.do_preprocess,
+                do_preprocess=do_preprocess,
                 adapter_name=adapter_name,
                 trace_model=parsed_request.model,
                 chat_template_kwargs=_chat_template_kwargs_from_request(parsed_request),
@@ -283,6 +290,7 @@ class ChatRunner:
                         cached_tokens=res.cached_tokens,
                         routed_experts=res.routed_experts if finish_reason is not None else None,
                         cache_block_ids=res.cache_block_ids,
+                        pd_handoff=res.pd_handoff,
                         reasoning_tokens=self.response_parser.reasoning_tokens,
                         is_last_delta=is_last_delta,
                         stop_sequence=stop_sequence if is_last_delta else None,
@@ -404,6 +412,7 @@ class ChatRunner:
             routed_experts=final_res.routed_experts,
             cache_block_ids=cache_block_ids,
             remote_token_ids=remote_token_ids,
+            pd_handoff=final_res.pd_handoff,
             reasoning_tokens=self.response_parser.reasoning_tokens,
             stop_sequence=getattr(final_res, 'stop_sequence', None),
         )

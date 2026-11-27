@@ -127,6 +127,9 @@ with set_envs():
     # executor
     executor_backend = os.getenv('LMDEPLOY_EXECUTOR_BACKEND', None)
 
+    # PD transfer - passed to Ray workers
+    os.getenv('LMDEPLOY_PD_TRANSFER_THREADS', None)
+
     # torch profiler
     torch_profile_cpu = env_to_bool('LMDEPLOY_PROFILE_CPU', False)
     torch_profile_cuda = env_to_bool('LMDEPLOY_PROFILE_CUDA', False)
