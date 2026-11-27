@@ -110,10 +110,10 @@ def _update_torch_dtype(config: 'ModelConfig', dtype: str, device_type: str = 'a
     """
     quantization_config = getattr(config.hf_config, 'quantization_config', dict())
     quant_method = quantization_config.get('quant_method', None)
-    if quant_method == 'awq':
+    if quant_method in ('awq', 'gptq'):
         # The W4A16 linear modules are fp16. A bf16 model dtype would make
         # the residual stream dtype-mismatch the quantized linears.
-        logger.debug('set torch_dtype to float16 for awq.')
+        logger.debug(f'set torch_dtype to float16 for {quant_method}.')
         config.hf_config.torch_dtype = 'float16'
         config.dtype = torch.float16
         return config
@@ -1122,6 +1122,22 @@ class QuantizationConfig:
                 raise TypeError(f'Unsupported fp8 fmt: {fmt}')
         elif quant_method == 'compressed-tensors':
             bits, group_size, ignored_layers = _parse_compressed_tensors_config(quant_config)
+        elif quant_method == 'gptq':
+            # GPTQ dense linears load through the AWQ family: the load-time
+            # repack absorbs pack axis, nibble order, and zero point offset
+            # (see normalize_gptq_weights and gptq_repack).
+            bits = quant_config.get('bits', 4)
+            group_size = quant_config.get('group_size', 128)
+            if bits != 4:
+                raise ValueError(f'Unsupported gptq `bits`: expected 4, got {bits!r}.')
+            if quant_config.get('desc_act'):
+                raise ValueError('Unsupported gptq `desc_act`: act-order reorders groups '
+                                 'and the load-time repack assumes identity group order.')
+            if quant_config.get('checkpoint_format', 'gptq') not in ('gptq', 'gptq_v2'):
+                raise ValueError(f'Unsupported gptq `checkpoint_format`: '
+                                 f'{quant_config.get("checkpoint_format")!r}.')
+            if quant_dtype is None:
+                quant_dtype = 'bfloat16'
         else:
             raise TypeError(f'Unsupported quant method: {quant_method}')
 
@@ -1157,6 +1173,19 @@ class QuantizationConfig:
         if self.quant_method == 'modelslim':
             from lmdeploy.pytorch.backends.ascend.modelslim import get_modelslim_quant_method
             return get_modelslim_quant_method(self, prefix, module_kind)
+        if self.quant_method == 'gptq':
+            if module_kind == 'norm':
+                return None
+            # GPTQ streams normalize to canonical AWQ at load time (dense
+            # linears and expert tensors alike — the loader's suffix filter
+            # covers expert prefixes), so both kinds load through the AWQ
+            # family and its routes.
+            if self.ignored_layers and not prefix:
+                raise ValueError('gptq dispatch requires a non-empty canonical module '
+                                 'prefix when the checkpoint carries ignore rules')
+            if self.ignored_layers and any(prefix in layer for layer in self.ignored_layers):
+                return None
+            return 'awq'
         if self.quant_method == 'compressed-tensors':
             if module_kind == 'norm':
                 return None
@@ -1188,6 +1217,17 @@ class QuantizationConfig:
         is_ignore = any([prefix in layer_name for layer_name in self.ignored_layers])
         quant_method = None if is_ignore else self.quant_method
         return quant_method
+
+    def load_normalize(self) -> bool:
+        """Whether weight streams need load-time quant repack.
+
+        Group-128 compressed-tensors checkpoints and gptq checkpoints normalize to the canonical AWQ layout (see
+        normalize_ct_weights and normalize_gptq_weights); group-32 packed ct keys (MoE experts) are consumed raw and
+        must pass through untouched.
+        """
+        if self.quant_method == 'gptq':
+            return True
+        return self.quant_method == 'compressed-tensors' and self.group_size == 128
 
     def get(self, key, default=None):
         """Get extra key from hf quant config."""
