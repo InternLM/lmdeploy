@@ -16,6 +16,7 @@ from lmdeploy.pytorch.nn.linear import build_merged_colwise_linear, build_qkv_pr
 from lmdeploy.pytorch.nn.moe import SoftmaxTopK, build_fused_moe
 from lmdeploy.pytorch.weight_loader.model_weight_loader import load_weight
 
+from .patch import add_prefix
 from .utils.cudagraph import CudaGraphMixin
 from .utils.model import DeployModelMixinV1, build_embedding
 
@@ -116,7 +117,8 @@ class Qwen2MoeMLP(nn.Module):
                  dtype: torch.dtype = None,
                  device: torch.device = None,
                  is_tp: bool = True,
-                 all_reduce: bool = True):
+                 all_reduce: bool = True,
+                 prefix: str = ''):
         super().__init__()
         quantization_config = getattr(config, 'quantization_config', None)
         if intermediate_size is None:
@@ -130,6 +132,7 @@ class Qwen2MoeMLP(nn.Module):
             device=device,
             quant_config=quantization_config,
             is_tp=is_tp,
+            prefix=add_prefix('gate_up_proj', prefix),
         )
 
         # silu and mul
@@ -143,7 +146,8 @@ class Qwen2MoeMLP(nn.Module):
                                               dtype=dtype,
                                               device=device,
                                               is_tp=is_tp,
-                                              all_reduce=all_reduce)
+                                              all_reduce=all_reduce,
+                                              prefix=add_prefix('down_proj', prefix))
 
     def forward(self, x):
         """forward."""
@@ -159,8 +163,10 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
                  config: PretrainedConfig,
                  layer_idx: int,
                  dtype: torch.dtype = None,
-                 device: torch.device = None):
+                 device: torch.device = None,
+                 prefix: str = ''):
         super().__init__()
+        quantization_config = getattr(config, 'quantization_config', None)
         self.layer_idx = layer_idx
         self.hidden_dim = config.hidden_size
         self.ffn_dim = config.moe_intermediate_size
@@ -191,7 +197,9 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
             renormalize=self.renormalize,
             dtype=dtype,
             device=device,
+            quant_config=quantization_config,
             all_reduce=False,
+            prefix=add_prefix('experts', prefix),
         )
 
         intermediate_size = config.shared_expert_intermediate_size
@@ -202,6 +210,7 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
             device=device,
             is_tp=True,
             all_reduce=False,
+            prefix=add_prefix('shared_expert', prefix),
         )
         self.shared_expert_gate = build_rowwise_linear(config.hidden_size,
                                                        1,
@@ -231,7 +240,12 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
 
         shared_states = self.shared_expert(hidden_states)
         shared_states = F.sigmoid(self.shared_expert_gate(hidden_states)) * shared_states
-        out_states += shared_states
+        # The quantized W4A16 linears return [1, m, n] for 2D input (both the
+        # AWQ and TurboMind GEMM impls promote, per their "always 3D"
+        # contract) while the fused experts stay [m, n]; normalize the add so
+        # the shape no longer depends on which backend impl the selector
+        # picked.
+        out_states += shared_states.reshape(out_states.shape)
         out_states = out_states.reshape(batch_size, sequence_length, -1)
 
         if self._all_reduce:
@@ -258,9 +272,17 @@ class Qwen2MoeDecoderLayer(nn.Module):
         # build MLP
         if (layer_idx not in config.mlp_only_layers) and (config.num_experts
                                                           > 0) and ((layer_idx + 1) % config.decoder_sparse_step == 0):
-            self.mlp = Qwen2MoeSparseMoeBlock(config, layer_idx=layer_idx, dtype=dtype, device=device)
+            self.mlp = Qwen2MoeSparseMoeBlock(config,
+                                              layer_idx=layer_idx,
+                                              dtype=dtype,
+                                              device=device,
+                                              prefix=f'model.layers.{layer_idx}.mlp')
         else:
-            self.mlp = Qwen2MoeMLP(config, intermediate_size=config.intermediate_size, dtype=dtype, device=device)
+            self.mlp = Qwen2MoeMLP(config,
+                                   intermediate_size=config.intermediate_size,
+                                   dtype=dtype,
+                                   device=device,
+                                   prefix=f'model.layers.{layer_idx}.mlp')
 
         # build input layer norm
         self.input_layernorm = RMSNorm(config.hidden_size,
@@ -497,6 +519,17 @@ class Qwen2MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                 continue
             if self.config.tie_word_embeddings and 'lm_head.weight' in name:
                 continue
+            if (('.experts.' in name or 'shared_expert' in name)
+                    and name.endswith('.bias')):
+                # GPTQ checkpoints emit bias tensors even for the bias-free
+                # expert linears (e.g. Qwen1.5-MoE-A2.7B-GPTQ-Int4); dropping
+                # a verified-zero bias is numerically exact, a non-zero one
+                # has no destination parameter and must fail loudly.
+                if loaded_weight.abs().max() != 0:
+                    raise ValueError(
+                        f'non-zero expert bias has no destination parameter: '
+                        f'{name}')
+                continue
 
             if '.experts' in name:
                 self._load_weight_experts(name, loaded_weight, params_dict, expert_params_mapping=expert_params_mapping)
@@ -509,5 +542,12 @@ class Qwen2MoeForCausalLM(nn.Module, DeployModelMixinV1, CudaGraphMixin):
                     load_weight(param, loaded_weight, shard_id=shard_id)
                     break
                 else:
-                    param = params_dict[name]
+                    param = params_dict.get(name)
+                    if param is None:
+                        if name.endswith('.bias') and loaded_weight.abs().max() == 0:
+                            # Verified-zero bias with no destination parameter
+                            # (GPTQ artifact, e.g. self_attn.o_proj.bias);
+                            # dropping it is numerically exact.
+                            continue
+                        raise KeyError(name)
                     load_weight(param, loaded_weight)
