@@ -78,6 +78,8 @@ class SamplingParam:
     logprob_start_len: int = -1
     # Token IDs whose scores must be returned regardless of top-k selection.
     logprob_extra_token_ids: tuple[int, ...] | None = None
+    # 'dict' or 'array', see GenerationConfig.logprobs_format.
+    logprobs_format: str = 'dict'
     return_routed_experts: bool = False
 
     # ngram
@@ -178,6 +180,7 @@ class SamplingParam:
             logprob_start_len=gen_config.logprob_start_len,
             logprob_extra_token_ids=(tuple(gen_config.logprob_extra_token_ids)
                                if gen_config.logprob_extra_token_ids is not None else None),
+            logprobs_format=gen_config.logprobs_format,
             return_routed_experts=gen_config.return_routed_experts,
             repetition_ngram_size=repetition_ngram_size,
             repetition_ngram_threshold=repetition_ngram_threshold,

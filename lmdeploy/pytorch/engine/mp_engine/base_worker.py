@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from lmdeploy.messages import EngineOutput, ResponseType
+from lmdeploy.messages import EngineOutput, LogprobArrays, ResponseType
 from lmdeploy.pytorch.disagg.conn.protocol import (
     DistServeConnectionRequest,
     DistServeDropConnectionRequest,
@@ -274,7 +274,11 @@ class EngineOutputGather:
         if result.logprobs is not None:
             if output.logprobs is None:
                 output.logprobs = []
-            output.logprobs.extend(result.logprobs)
+            if isinstance(result.logprobs, LogprobArrays):
+                # Collect parts; pop() concatenates them once.
+                output.logprobs.append(result.logprobs)
+            else:
+                output.logprobs.extend(result.logprobs)
 
     def pop(self, stream_id, result):
         if not isinstance(result, EngineOutput):
@@ -284,6 +288,8 @@ class EngineOutputGather:
             return result
         result.token_ids = output.token_ids or []
         result.logprobs = output.logprobs
+        if result.logprobs and isinstance(result.logprobs[0], LogprobArrays):
+            result.logprobs = LogprobArrays.concat(result.logprobs)
         return result
 
     def discard(self, stream_id):

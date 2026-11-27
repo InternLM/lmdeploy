@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch.profiler import record_function
 
-from lmdeploy.messages import RequestMetrics
+from lmdeploy.messages import LogprobArrays, RequestMetrics
 from lmdeploy.pytorch.disagg.config import EngineRole
 from lmdeploy.pytorch.disagg.messages import MigrationExecutionBatch
 from lmdeploy.pytorch.messages import MessageStatus, UpdateTokenMode
@@ -296,10 +296,13 @@ class EngineLoop:
 
             if out.resp.data is None:
                 out.resp.data = dict()
-            out.resp.data.setdefault('logprobs', [])
+            logprobs = out.resp.data.setdefault('logprobs', [])
+            if isinstance(cur_logprobs, LogprobArrays):
+                # Parts stay arrays; the receiver concatenates what it pops.
+                logprobs.append(cur_logprobs)
+                continue
             # logprobs to dict
             cur_logprobs = [dict(zip(indices, vals)) for vals, indices in cur_logprobs]
-            logprobs = out.resp.data['logprobs']
             logprobs.extend(cur_logprobs)
 
     def _send_resps(self, step_outputs: list[InferOutput]):
@@ -348,11 +351,11 @@ class EngineLoop:
             return logit
 
         def __get_logprobs(logprobs, stop_positions, batch_size: int):
-            """Get valid logprobs."""
+            """Get the valid (vals, indices) rows of each sequence."""
             if logprobs is None:
                 return [None for _ in range(batch_size)]
             num_decode_tokens = logprobs.indices.shape[0] // batch_size
-            results = [[] for _ in range(batch_size)]
+            results = [None for _ in range(batch_size)]
             range_tensor = torch.arange(num_decode_tokens, device=logprobs.indices.device)
 
             for idx in range(batch_size):
@@ -363,9 +366,7 @@ class EngineLoop:
                 # only apply when stopped
                 if stop_pos > -1:
                     mask = torch.logical_and(mask, stop_pos >= range_tensor)
-                indices = logprobs.indices[start:end][mask].tolist()
-                vals = logprobs.vals[start:end][mask].tolist()
-                results[idx] = list(zip(vals, indices))
+                results[idx] = (logprobs.vals[start:end][mask], logprobs.indices[start:end][mask])
             return results
 
         logits = batched_outputs.logits
@@ -426,8 +427,14 @@ class EngineLoop:
             num_logprobs = msg.sampling_param.num_logprobs
             cur_logprobs = None
             if logprobs is not None and num_logprobs > 0:
-                cur_logprobs = list([_dat[:num_logprobs + 1] for _dat in vals_indices]
-                                    for vals_indices in all_logprobs[idx])
+                # The batch computes max_num_logprobs columns; keep this request's.
+                vals, indices = all_logprobs[idx]
+                vals = vals[:, :num_logprobs + 1]
+                indices = indices[:, :num_logprobs + 1]
+                if msg.sampling_param.logprobs_format == 'array':
+                    cur_logprobs = LogprobArrays(vals=vals.float().numpy(), ids=indices.numpy())
+                else:
+                    cur_logprobs = list(zip(vals.tolist(), indices.tolist()))
             if input_logprobs is not None:
                 cur_logprobs = input_logprobs
 
