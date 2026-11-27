@@ -1872,7 +1872,14 @@ class BaseModelAgent:
 
     def _load_updated_weight_bucket(self, weights: list[tuple[str, torch.Tensor]], op_name: str):
         """Load one externally supplied bucket into the target and draft
-        models."""
+        models.
+
+        The initial load runs under ``torch.inference_mode()`` and its
+        parameter storages are inference tensors; a hot update runs outside
+        that mode, where mutating them is illegal. Wrap the loader writes in
+        the same mode so the update lands regardless of which engine flow
+        created the storages.
+        """
         model = self.patched_model.get_model() if self.patched_model is not None else None
         spec_model = self.spec_agent.get_model()
         main_weights, draft_weights = self._split_updated_weights(weights)
@@ -1882,7 +1889,8 @@ class BaseModelAgent:
                 continue
             renamed = list(ModelWeightLoader._rename_weights_iterator(target_weights, target))
             logger.info(f'{op_name}: {tag}_num_tensors={len(renamed)}')
-            target.load_weights(iter(renamed))
+            with torch.inference_mode():
+                target.load_weights(iter(renamed))
 
     def _finalize_updated_weights(self):
         """Finalize module-specific weights and invalidate captured graphs."""
@@ -2056,12 +2064,12 @@ class BaseModelAgent:
                     self._update_params_ipc_event.record()
 
             if request.finished:
-                for m in filter(None, [model, spec_model]):
-                    process_weights_after_loading(m)
-
-                    torch.cuda.synchronize()
-                    self._update_params_ipc_event = None
-                    self._update_params_ipc_tensor = None
+                # TurboMind repacking closes the native allocations that
+                # captured graphs still reference, so graphs must be dropped
+                # and recaptured before the next replay.
+                self._finalize_updated_weights()
+                self._update_params_ipc_event = None
+                self._update_params_ipc_tensor = None
 
             torch.cuda.empty_cache()
 
@@ -2162,6 +2170,32 @@ class BaseModelAgent:
             return False, msg
 
     @torch.inference_mode()
+    def _tm_sleep_release(self):
+        """Release TurboMind-packed native handles before the model moves.
+
+        The packed weight is not a registered tensor, so ``Module.to``
+        cannot move or free it. Layers spill their torch weights here so
+        ``_tm_sleep_wakeup`` can re-pack them after the model returns to
+        the device.
+        """
+        model = self.patched_model.get_model()
+        spec_model = self.spec_agent.get_model()
+        for target in filter(None, [model, spec_model]):
+            for mod in target.modules():
+                hook = getattr(mod, 'sleep_release', None)
+                if hook is not None:
+                    hook()
+
+    def _tm_sleep_wakeup(self):
+        """Restore and re-pack TurboMind weights after the model is back."""
+        model = self.patched_model.get_model()
+        spec_model = self.spec_agent.get_model()
+        for target in filter(None, [model, spec_model]):
+            for mod in target.modules():
+                hook = getattr(mod, 'sleep_wakeup', None)
+                if hook is not None:
+                    hook()
+
     async def sleep(self, level: int = 1):
         """Sleep."""
         if self.memdecode_agent is not None:
@@ -2176,6 +2210,7 @@ class BaseModelAgent:
         self.cache_engine = None
         self.state_cache_engine = None
         self.reset_graph_runner()
+        self._tm_sleep_release()
         self.patched_model.get_model().to(device=device, non_blocking=True)
 
         spec_model = self.spec_agent.get_model()
@@ -2228,6 +2263,7 @@ class BaseModelAgent:
                 self.patched_model.get_model().to(torch.cuda.current_device())
                 if spec_model is not None:
                     spec_model.to(torch.cuda.current_device())
+                self._tm_sleep_wakeup()
             else:
                 # user should update weights after wakeup
                 self._rebuild_models_after_level2_sleep()
