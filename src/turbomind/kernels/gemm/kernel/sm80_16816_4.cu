@@ -5,6 +5,7 @@
 #include "src/turbomind/kernels/gemm/convert.cuh"
 #include "src/turbomind/kernels/gemm/kernel/geometry.h"
 #include "src/turbomind/kernels/gemm/kernel/mxfp4.h"
+#include "src/turbomind/kernels/gemm/kernel/nvfp4.h"
 #include "src/turbomind/kernels/gemm/kernel/u4.h"
 #include "src/turbomind/kernels/gemm/registrar.h"
 #include "src/turbomind/kernels/gemm/types.h"
@@ -40,11 +41,22 @@ void pack_u4(LinearWeight& linear, cudaStream_t stream)
 constexpr auto mxfp4_packer =
     pack_mxfp4<Arch<80>, kColMajor, HMMA_16816 | OPERAND_A | 1, kColMajor, HMMA_16816 | OPERAND_U | 1>;
 
+constexpr auto nvfp4_packer =
+    pack_nvfp4<Arch<80>, kColMajor, HMMA_16816 | OPERAND_A | 1, kColMajor, HMMA_16816 | OPERAND_U | 1>;
+
 const Family u4_d_32{16, 140, kHalf, kHalf, 32, 8, 1, 1, true, false, supports_u4<32, kHalf>, pack_u4<32, false>};
 const Family u4_g_32{17, 139, kHalf, kHalf, 32, 8, 1, 1, true, true, supports_u4<32, kHalf>, pack_u4<32, true>};
 const Family u4_d_128{18, 190, kHalf, kHalf, 128, 8, 1, 1, true, false, supports_u4<128, kHalf>, pack_u4<128, false>};
 const Family u4_g_128{19, 189, kHalf, kHalf, 128, 8, 1, 1, true, true, supports_u4<128, kHalf>, pack_u4<128, true>};
 const Family mxfp4{20, 200, kBfloat16, kBfloat16, 32, 8, 1, 1, true, true, supports_mxfp4, mxfp4_packer};
+
+// NVFP4: E2M1 weights + per-group-16 scales, consumed natively on SM80+: raw
+// e4m3 scales are widened to fp16 (exact) by the bridge and the per-tensor
+// global scale reaches the GEMM epilogue, which multiplies the output by it.
+// fp16 compute: the fragment dequant reads uint16 scales as half.
+// Reuses the MXFP4 kernel tiling list (same packed-A orientation, dense and
+// grouped), with align_k tightened from 32 to the NVFP4 group size 16.
+const Family nvfp4{40, 201, kHalf, kHalf, 16, 8, 1, 1, true, true, supports_nvfp4, nvfp4_packer};
 
 // NVCC requires defaults on the template-template parameter.
 template<template<class Config_,
@@ -160,6 +172,7 @@ using U4_G_32  = Config_U4_g<Sm80, half, 32>;
 using U4_D_128 = Config_U4_d<Sm80, half, 128>;
 using U4_G_128 = Config_U4_g<Sm80, half, 128>;
 using MXFP4    = Config_MXF4<Sm80, bfloat16_t>;
+using NVFP4    = Config_NVFP4<Sm80, half>;
 
 Registrar reg[]{
     {u4_d_32, register_u4_d<U4_D_32::Type>},
@@ -167,6 +180,10 @@ Registrar reg[]{
     {u4_d_128, register_u4_d<U4_D_128::Type>},
     {u4_g_128, register_u4_g<U4_G_128::Type>},
     {mxfp4, register_mxfp4<MXFP4::Type>},
+    // NVFP4 reuses the MXFP4 tiling list: identical packed-A E2M1 orientation,
+    // covering the full decode (small M) / prefill (large M) range, dense and
+    // grouped.
+    {nvfp4, register_mxfp4<NVFP4::Type>},
 };
 }  // namespace
 

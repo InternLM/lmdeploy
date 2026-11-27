@@ -54,6 +54,7 @@ def _build_linear(fmt: WeightFormat, available: dict[str, Tensor]) -> Linear:
         tensors['zeros'] = fmt.synthesize_zeros(tensors['scales'])
     if 'zeros' in tensors:
         tensors['zeros'] = tensors['zeros'].to(tensors['scales'].dtype)
+    tensors = fmt.finalize(tensors)
     return Linear(tensors=tensors, weight_format=fmt)
 
 
@@ -105,14 +106,20 @@ def dequant_mixed(*linears: Linear | None, dtype: torch.dtype) -> tuple[Linear |
 # Linear-level transform decorators
 # ---------------------------------------------------------------------------
 
+# Kinds carrying one scalar for the whole linear (the GEMM epilogue's global
+# scale): no output/input dimension, so dimension transforms must bypass them.
+_PER_TENSOR_KINDS = frozenset({'global_scale'})
+
 
 def transform_output_dim(fn):
     """Decorator that lifts a tensor-level transform to Linear-level.
 
     For output-dim operations: 1-D tensors (bias) are unsqueezed to 2-D
-    before calling *fn*, then squeezed back.  Convention: args that are
-    ``Linear`` instances are treated as tensor inputs; all other args pass
-    through unchanged.  Return type is detected at runtime:
+    before calling *fn*, then squeezed back. Per-tensor kinds (a single
+    scalar with no output dimension, e.g. ``global_scale``) bypass the
+    transform and duplicate into every output bucket. Convention: args that
+    are ``Linear`` instances are treated as tensor inputs; all other args
+    pass through unchanged. Return type is detected at runtime:
     ``Tensor`` -> single ``Linear``, ``tuple`` -> tuple of ``Linear`` objects.
     """
     sig = inspect.signature(fn)
@@ -126,8 +133,12 @@ def transform_output_dim(fn):
             v for v in bound.arguments.values() if isinstance(v, Linear)
         )
         out_buckets = None
+        deferred_scalar: list[str] = []
 
         for kind in first.tensors:
+            if kind in _PER_TENSOR_KINDS:
+                deferred_scalar.append(kind)
+                continue
             was_1d = False
             fn_kwargs = {}
 
@@ -148,6 +159,10 @@ def transform_output_dim(fn):
                 out_buckets = [{} for _ in result]
             for i, item in enumerate(result):
                 out_buckets[i][kind] = item.squeeze(0) if was_1d else item
+
+        for kind in deferred_scalar:
+            for bucket in out_buckets or [{}]:
+                bucket[kind] = first.tensors[kind]
 
         outputs = tuple(
             Linear(ts, weight_format=first.weight_format) for ts in out_buckets

@@ -144,8 +144,9 @@ public:
     {
         (void)W;
         (void)Wdesc;
-        (void)global_scale;
-        (void)global_scale_desc;
+        // Per-tensor scale (NVFP4); null for every other family.
+        TM_CHECK(!global_scale
+                 || (global_scale_desc.type == kFloat && global_scale_desc.rows == 1 && global_scale_desc.cols == 1));
         MatrixLayout Adesc = _Adesc;
 
         const int m = Ddesc.rows;
@@ -209,6 +210,7 @@ public:
                                to_param((void*)workspace.partials, Pdesc),
                                (int*)workspace.barriers,
                                combin_mat,
+                               to_param((void*)global_scale, global_scale_desc),
                                silu_act};
 
         // std::cout << Adesc.offsets << " " << Adesc.idxs << "\n";

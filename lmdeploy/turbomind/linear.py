@@ -243,16 +243,25 @@ class Linear:
         result._shape_constraints = (minimum, alignment)
         return result
 
-    def _normalize_params(self, weight_format, weight, scales, zeros, bridge):
+    def _normalize_params(self, weight_format, weight, scales, zeros, bridge, global_scale=None):
         """Normalize source weight components into TurboMind logical layouts
-        and expand their quantization blocking to the kernel's."""
-        raw = {'weight': weight, 'scales': scales, 'zeros': zeros}
+        and expand their quantization blocking to the kernel's.
+
+        The format's ``finalize`` runs last, so callers pass raw
+        checkpoint-layout tensors end to end (per-channel FP8 scales are
+        expanded to the K-grouped layout and the NVFP4 per-tensor global
+        scale becomes the epilogue reciprocal here). The TM builder path
+        applies the same ``finalize`` on its side; the two entry points
+        share one convention.
+        """
+        raw = {'weight': weight, 'scales': scales, 'zeros': zeros, 'global_scale': global_scale}
         raw = {kind: tensor for kind, tensor in raw.items() if tensor is not None}
         normalized = {kind: weight_format.normalize(tensor, kind).contiguous() for kind, tensor in raw.items()}
         if weight_format.zeros_dtype != _tm.DataType.TYPE_INVALID and 'zeros' not in normalized:
             normalized['zeros'] = weight_format.synthesize_zeros(normalized['scales']).contiguous()
         if 'zeros' in normalized:
             normalized['zeros'] = normalized['zeros'].to(normalized['scales'].dtype).contiguous()
+        normalized = weight_format.finalize(normalized)
         output_dim = int(normalized['weight'].shape[-1])
         return {kind: _apply_bridge(tensor, kind, bridge, output_dim) for kind, tensor in normalized.items()}
 
@@ -328,15 +337,23 @@ class Linear:
         plan: WeightPlan,
         scales: torch.Tensor | Sequence[torch.Tensor] | None = None,
         zeros: torch.Tensor | Sequence[torch.Tensor] | None = None,
+        global_scale: torch.Tensor | Sequence[torch.Tensor] | None = None,
     ) -> Weight:
-        """Normalize and pack a dense weight or sequence of expert weights."""
+        """Normalize and pack a dense weight or sequence of expert weights.
+
+        Inputs are raw checkpoint-layout tensors; the format's ``finalize``
+        runs inside (per-channel FP8 scales expand to the kernel's K-grouped
+        layout, the NVFP4 per-tensor global scale becomes the epilogue
+        reciprocal).
+        """
         weight_format = plan._weight_format
         dtype = plan._dtype
         impl_plan = plan._impl
 
         if not plan._grouped:
             with self._activate() as stream:
-                normalized = self._normalize_params(weight_format, weight, scales, zeros, impl_plan.bridge)
+                normalized = self._normalize_params(weight_format, weight, scales, zeros, impl_plan.bridge,
+                                                    global_scale)
                 return self._prepare_one(
                     normalized,
                     weight_format=weight_format,
@@ -349,11 +366,13 @@ class Linear:
         weights = list(weight)
         expert_scales = [None] * len(weights) if scales is None else list(scales)
         expert_zeros = [None] * len(weights) if zeros is None else list(zeros)
+        expert_global_scales = ([None] * len(weights) if global_scale is None else list(global_scale))
 
         with self._activate() as stream:
             normalized_experts = [
-                self._normalize_params(weight_format, expert_weight, expert_scale, expert_zero, impl_plan.bridge)
-                for expert_weight, expert_scale, expert_zero in zip(weights, expert_scales, expert_zeros, strict=True)
+                self._normalize_params(weight_format, expert_weight, expert_scale, expert_zero, impl_plan.bridge,
+                                       expert_global_scale) for expert_weight, expert_scale, expert_zero,
+                expert_global_scale in zip(weights, expert_scales, expert_zeros, expert_global_scales, strict=True)
             ]
             return self._prepare_grouped(
                 normalized_experts,
@@ -378,9 +397,21 @@ class Linear:
         plan: WeightPlan,
         scales: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None,
         zeros: tuple[torch.Tensor | Sequence[torch.Tensor], torch.Tensor | Sequence[torch.Tensor]] | None = None,
+        global_scale: torch.Tensor | Sequence[torch.Tensor] | None = None,
     ) -> Weight:
         """Normalize, bridge, interleave, and pack gate/up weights for fused
-        SiLU execution."""
+        SiLU execution (raw checkpoint-layout inputs; see ``prepare_weight``).
+
+        ``global_scale`` is rejected: the fused-SiLU lane has a single
+        per-tensor scale slot, and one scalar cannot serve two
+        differently-scaled projections -- load gate/up through the split
+        path (``prepare_weight`` per projection) instead.
+        """
+        if global_scale is not None:
+            raise ValueError(
+                'fuse_weight cannot carry a per-tensor global scale: the fused-SiLU lane has one '
+                'scale slot for two projections. Use the split path (prepare_weight per '
+                'projection) for globally scaled formats.')
         weight_format = plan._weight_format
         dtype = plan._dtype
         impl_plan = plan._impl

@@ -30,9 +30,17 @@ def validate_replayssm_config(buffer_len: int, num_spec_tokens: int) -> None:
 
 
 def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
-    """Parse the pre-packed W4A16 metadata needed by the inference backend."""
-    if quant_config.get('format') != 'pack-quantized':
-        raise ValueError('Only compressed-tensors `pack-quantized` format is supported.')
+    """Parse the compressed-tensors metadata needed by the inference backend.
+
+    Returns ``(bits, group_size, ignored_layers, ct_format)``. The
+    ``pack-quantized`` branch keeps its historical W4A16 validation; the
+    ``nvfp4-pack-quantized`` branch validates the weight-only float layout
+    served through the TurboMind channel.
+    """
+    ct_format = quant_config.get('format')
+    if ct_format not in ('pack-quantized', 'nvfp4-pack-quantized'):
+        raise ValueError(f'Unsupported compressed-tensors `format`: {ct_format!r}. '
+                         'Supported formats: pack-quantized, nvfp4-pack-quantized.')
     if quant_config.get('quantization_status') != 'compressed':
         raise ValueError('Compressed-tensors checkpoint must have `compressed` status.')
 
@@ -42,10 +50,60 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
     group = config_groups['group_0']
     if not isinstance(group, Mapping) or group.get('targets') != ['Linear']:
         raise ValueError('Compressed-tensors `group_0` must target `Linear`.')
-    if group.get('input_activations') is not None or group.get('output_activations') is not None:
-        raise ValueError('Compressed-tensors activation quantization is not supported.')
+
+    ignored_layers = quant_config.get('ignore', [])
+    if not isinstance(ignored_layers, list) or not all(isinstance(rule, str) for rule in ignored_layers):
+        raise ValueError('Compressed-tensors `ignore` must be a list of strings.')
 
     weights = group.get('weights')
+    if not isinstance(weights, Mapping):
+        raise ValueError('Compressed-tensors `group_0.weights` must be an object.')
+
+    if ct_format == 'pack-quantized':
+        _validate_pack_quantized_group(group, weights)
+        return weights['num_bits'], weights['group_size'], ignored_layers, ct_format
+
+    # The nvfp4 lane is weight-only: activation quantization metadata may
+    # describe dynamic input quantization (applied inside the kernel), but a
+    # static input scheme or any output scheme has no serving path.
+    input_activations = group.get('input_activations')
+    if input_activations is not None:
+        if input_activations.get('dynamic') is not True:
+            raise ValueError('Compressed-tensors float formats support only dynamic input '
+                             'activation quantization; static scales are not supported.')
+    if group.get('output_activations') is not None:
+        raise ValueError('Compressed-tensors output activation quantization is not supported.')
+
+    expected_common = {
+        'dynamic': False,
+        'symmetric': True,
+        'type': 'float',
+    }
+    for key, expected in expected_common.items():
+        if weights.get(key) != expected:
+            raise ValueError(
+                f'Unsupported compressed-tensors `{key}`: expected {expected!r}, got {weights.get(key)!r}')
+
+    if ct_format == 'nvfp4-pack-quantized':
+        expected_nvfp4 = {
+            'num_bits': 4,
+            'group_size': 16,
+            'strategy': 'tensor_group',
+        }
+        for key, expected in expected_nvfp4.items():
+            if weights.get(key) != expected:
+                raise ValueError(f'Unsupported nvfp4-pack-quantized `{key}`: expected {expected!r}, '
+                                 f'got {weights.get(key)!r}.')
+        return 4, 16, ignored_layers, ct_format
+
+    raise ValueError(f'Unsupported compressed-tensors float format: {ct_format!r}. '
+                     'Supported: nvfp4-pack-quantized.')
+
+
+def _validate_pack_quantized_group(group: Mapping[str, Any], weights: Mapping[str, Any]):
+    """Validate the pre-packed W4A16 group (historical behavior)."""
+    if group.get('input_activations') is not None or group.get('output_activations') is not None:
+        raise ValueError('Compressed-tensors activation quantization is not supported.')
     expected_weights = {
         'num_bits': 4,
         # Group 32 is the pre-existing packed ct layout (MoE experts);
@@ -57,8 +115,6 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
         'dynamic': False,
         'type': 'int',
     }
-    if not isinstance(weights, Mapping):
-        raise ValueError('Compressed-tensors `group_0.weights` must be an object.')
     for key, expected in expected_weights.items():
         if key == 'group_size':
             if weights.get(key) not in (32, 128):
@@ -68,11 +124,6 @@ def _parse_compressed_tensors_config(quant_config: Mapping[str, Any]):
         if weights.get(key) != expected:
             raise ValueError(
                 f'Unsupported compressed-tensors `{key}`: expected {expected!r}, got {weights.get(key)!r}.')
-
-    ignored_layers = quant_config.get('ignore', [])
-    if not isinstance(ignored_layers, list) or not all(isinstance(rule, str) for rule in ignored_layers):
-        raise ValueError('Compressed-tensors `ignore` must be a list of strings.')
-    return weights['num_bits'], weights['group_size'], ignored_layers
 
 
 def _matches_compressed_tensors_ignore(rule: str, prefix: str) -> bool:
@@ -1054,6 +1105,7 @@ class QuantizationConfig:
     activation_scheme: str = None
     ignored_layers: list[str] = field(default_factory=list)
     fp8_quant_scope: str | None = None
+    ct_format: str | None = None
     hf_quant_config: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -1102,6 +1154,7 @@ class QuantizationConfig:
         bits = None
         group_size = None
         ignored_layers = None
+        ct_format = None
 
         if quant_method == 'awq':
             bits = quant_config.get('bits', 4)
@@ -1121,7 +1174,7 @@ class QuantizationConfig:
             else:
                 raise TypeError(f'Unsupported fp8 fmt: {fmt}')
         elif quant_method == 'compressed-tensors':
-            bits, group_size, ignored_layers = _parse_compressed_tensors_config(quant_config)
+            bits, group_size, ignored_layers, ct_format = _parse_compressed_tensors_config(quant_config)
         elif quant_method == 'gptq':
             # GPTQ dense linears load through the AWQ family: the load-time
             # repack absorbs pack axis, nibble order, and zero point offset
@@ -1163,6 +1216,7 @@ class QuantizationConfig:
             activation_scheme=activation_scheme,
             ignored_layers=ignored_layers,
             fp8_quant_scope=fp8_quant_scope,
+            ct_format=ct_format,
             hf_quant_config=quant_config,
         )
 
@@ -1203,9 +1257,15 @@ class QuantizationConfig:
                 # keeps the packed ct modules. Most model patches build
                 # linears without a prefix, so ignore-rule matching is
                 # skipped. Checkpoints with ignore rules must pass prefixes.
+                if self.ct_format == 'nvfp4-pack-quantized':
+                    return 'nvfp4'
                 if self.group_size == 128:
                     return 'awq'
                 return self.quant_method
+            if module_kind == 'moe' and self.ct_format == 'nvfp4-pack-quantized':
+                # Grouped expert routes consume the nvfp4 format through
+                # the TurboMind grouped channel.
+                return 'nvfp4'
             return self.quant_method
         if self.quant_method == 'fp8' and self.fp8_quant_scope == 'moe_only' and module_kind != 'moe':
             quant_method = None
@@ -1221,13 +1281,15 @@ class QuantizationConfig:
     def load_normalize(self) -> bool:
         """Whether weight streams need load-time quant repack.
 
-        Group-128 compressed-tensors checkpoints and gptq checkpoints normalize to the canonical AWQ layout (see
+        Group-128 packed compressed-tensors checkpoints and gptq checkpoints normalize to the canonical AWQ layout (see
         normalize_ct_weights and normalize_gptq_weights); group-32 packed ct keys (MoE experts) are consumed raw and
-        must pass through untouched.
+        must pass through untouched. The float lanes (nvfp4-pack-quantized, float-quantized) keep their checkpoint
+        suffixes: the float modules register matching parameter names.
         """
         if self.quant_method == 'gptq':
             return True
-        return self.quant_method == 'compressed-tensors' and self.group_size == 128
+        return (self.quant_method == 'compressed-tensors' and self.group_size == 128
+                and self.ct_format in (None, 'pack-quantized'))
 
     def get(self, key, default=None):
         """Get extra key from hf quant config."""

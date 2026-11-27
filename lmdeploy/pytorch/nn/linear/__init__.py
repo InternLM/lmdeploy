@@ -19,6 +19,7 @@ from .static_fp8 import (
     StaticF8Linear,
 )
 from .tm_gemm import MergedTmGemmLinear, QKVTmGemmLinear, TmGemmLinear
+from .tm_quant import MergedTmQuantLinear, QKVTmQuantLinear, TmQuantLinear
 from .w8a8 import MergedW8A8Linear, QKVW8A8Linear, StaticW8A8Linear, W8A8Linear
 
 
@@ -48,6 +49,22 @@ def _is_static_per_tensor_fp8(quant_config):
         quant_config.activation_scheme == 'static'
         and quant_config.weight_block_size is None
     )
+
+
+def _build_tm_quant_linear(quant_config, lane, *, merged=False, qkv_args=None, **common):
+    """Construct the TurboMind float-lane module family member.
+
+    ``lane`` is the dispatch result (``'nvfp4'``; the ct FP8 lane arrives
+    with the follow-up branch); the ct FP8 scale layout follows the parsed
+    group size (128 = blocked).
+    """
+    fp8_blocked = quant_config.group_size == 128
+    if qkv_args is not None:
+        return QKVTmQuantLinear(lane=lane, fp8_blocked=fp8_blocked, **qkv_args)
+    if merged:
+        return MergedTmQuantLinear(lane=lane, fp8_blocked=fp8_blocked, **common)
+    return TmQuantLinear(lane=lane, fp8_blocked=fp8_blocked, **common)
+
 
 def build_linear(
     in_features: int,
@@ -119,6 +136,20 @@ def build_linear(
             is_tp=is_tp,
             all_reduce=all_reduce,
             layer_type=layer_type,
+        )
+    if quant_method == 'nvfp4':
+        return _build_tm_quant_linear(
+            quant_config,
+            quant_method,
+            in_features=in_features,
+            out_features=out_features,
+            bias=bias,
+            device=device,
+            colwise=colwise,
+            is_tp=is_tp,
+            all_reduce=all_reduce,
+            layer_type=layer_type,
+            prefix=prefix,
         )
     if quant_method == 'smooth_quant':
         return W8A8Linear(in_features,
@@ -318,6 +349,20 @@ def build_merged_colwise_linear(
             is_tp=is_tp,
             layer_type=layer_type,
         )
+    if quant_method == 'nvfp4':
+        return _build_tm_quant_linear(
+            quant_config,
+            quant_method,
+            merged=True,
+            in_features=in_features,
+            all_out_features=all_out_features,
+            bias=bias,
+            device=device,
+            is_tp=is_tp,
+            out_names=out_names,
+            layer_type=layer_type,
+            prefix=prefix,
+        )
     if quant_method == 'smooth_quant':
         return MergedW8A8Linear(in_features=in_features,
                                 all_out_features=all_out_features,
@@ -420,6 +465,23 @@ def build_qkv_proj(in_features: int,
                             device=device,
                             is_tp=is_tp,
                             num_replicate_kv_heads=num_replicate_kv_heads)
+    if quant_method == 'nvfp4':
+        return _build_tm_quant_linear(
+            quant_config,
+            quant_method,
+            qkv_args=dict(
+                in_features=in_features,
+                num_q_heads=num_q_heads,
+                num_kv_heads=num_kv_heads,
+                head_size=head_size,
+                head_size_v=head_size_v,
+                bias=bias,
+                device=device,
+                is_tp=is_tp,
+                num_replicate_kv_heads=num_replicate_kv_heads,
+                prefix=prefix,
+            ),
+        )
     if quant_method == 'smooth_quant':
         return QKVW8A8Linear(in_features=in_features,
                              num_q_heads=num_q_heads,
