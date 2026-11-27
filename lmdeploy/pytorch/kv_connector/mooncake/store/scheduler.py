@@ -722,6 +722,7 @@ class MooncakeStoreScheduler:
             for save_id in connector_output.completed_save_ids or ()
             if save_id in self._inflight_saves
         )
+        num_failed_saves = sum(self._inflight_saves[save_id].failed for save_id in completed_save_ids)
         self._finish_saves(completed_save_ids, confirmed=True)
 
         self._failed_load_requests.update(
@@ -754,6 +755,7 @@ class MooncakeStoreScheduler:
         return KVConnectorResult(
             load_results=tuple(results),
             completed_save_ids=completed_save_ids,
+            num_failed_saves=num_failed_saves,
         )
 
     def request_finished(

@@ -136,10 +136,13 @@ class KVConnectorResult:
             operation's pinned logical blocks. There is no value because save
             completion is terminal whether the Store write succeeded or
             failed. One request may own several IDs during chunked prefill.
+        num_failed_saves: Number of completed save operations that failed on
+            at least one worker.
     """
 
     load_results: tuple[KVLoadResult, ...] = ()
     completed_save_ids: frozenset[KVOperationId] = frozenset()
+    num_failed_saves: int = 0
 
 
 class KVConnectorOutputAggregator:

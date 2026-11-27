@@ -177,6 +177,7 @@ class Scheduler:
         )
         # Keep save call sites uniform even when the producer role is disabled.
         self.kv_save_coordinator = KVSaveCoordinator(self.block_manager)
+        self._num_failed_kv_saves = 0
         self.decode_checkpoints = DecodeCheckpointCoordinator(
             block_manager=self.block_manager, block_trie=self.block_trie, state_manager=self.state_manager,
             connector=kv_connector, save_coordinator=self.kv_save_coordinator)
@@ -557,6 +558,7 @@ class Scheduler:
         if connector_output is None or self.kv_connector is None:
             return
         result = self.kv_connector.update_connector_output(connector_output)
+        self._num_failed_kv_saves += result.num_failed_saves
         self.kv_load_coordinator.apply_load_results(result.load_results)
         self.kv_save_coordinator.release_completed_leases(
             result.completed_save_ids)
@@ -718,4 +720,7 @@ class Scheduler:
             external_prefix_cache_queries=external_stats.num_query_tokens,
             external_prefix_cache_hits=external_stats.num_hit_tokens,
             num_evicted_blocks=self.block_trie.num_evicted_blocks,
+            external_prefix_cache_loaded_tokens=self.kv_load_coordinator.num_loaded_tokens,
+            external_prefix_cache_load_failures=self.kv_load_coordinator.num_failed_loads,
+            external_prefix_cache_save_failures=self._num_failed_kv_saves,
         )

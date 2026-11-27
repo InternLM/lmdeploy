@@ -24,11 +24,19 @@ remain available when local prefix caching is disabled. The local and external p
 
 The following Prometheus metrics carry `model_name` and `engine` labels:
 
-| Metric                                         | Type    | Meaning                                                                |
-| ---------------------------------------------- | ------- | ---------------------------------------------------------------------- |
-| `lmdeploy:external_prefix_cache_hit_rate`      | Gauge   | Cumulative external hit rate for this engine, from 0 to 1              |
-| `lmdeploy:external_prefix_cache_queries_total` | Counter | Cumulative externally queried tokens, excluding adopted local prefixes |
-| `lmdeploy:external_prefix_cache_hits_total`    | Counter | Cumulative externally matched tokens                                   |
+| Metric                                               | Type    | Meaning                                                                |
+| ---------------------------------------------------- | ------- | ---------------------------------------------------------------------- |
+| `lmdeploy:external_prefix_cache_hit_rate`            | Gauge   | Cumulative external hit rate for this engine, from 0 to 1              |
+| `lmdeploy:external_prefix_cache_queries_total`       | Counter | Cumulative externally queried tokens, excluding adopted local prefixes |
+| `lmdeploy:external_prefix_cache_hits_total`          | Counter | Cumulative externally matched tokens                                   |
+| `lmdeploy:external_prefix_cache_loaded_tokens_total` | Counter | Tokens published after successful KV loads on all workers              |
+| `lmdeploy:external_prefix_cache_load_failures_total` | Counter | Failed load operations that triggered local fallback                   |
+| `lmdeploy:external_prefix_cache_save_failures_total` | Counter | Completed save operations with a failure on any worker                 |
+
+The throughput log also reports the three cumulative transfer counters as
+`External KV (loaded tokens/load failures/save failures)`. Loaded tokens include
+block overlap and retry transfers. Load failures exclude cancelled requests.
+Each failed save operation counts once even if multiple workers report failures.
 
 For example, this PromQL expression computes the external token hit rate over five minutes, combining DP engines per model:
 
