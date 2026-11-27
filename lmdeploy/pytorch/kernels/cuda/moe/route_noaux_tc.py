@@ -19,6 +19,7 @@ def _fused_noaux_tc_kernel(
     bias_ptr,
     topk_weight_ptr,
     topk_idx_ptr,
+    forced_ids_ptr,
     batch_size,
     num_experts: tl.constexpr,
     n_group: tl.constexpr,
@@ -32,6 +33,7 @@ def _fused_noaux_tc_kernel(
     bias_stride_0,
     BLOCK_SIZE: tl.constexpr,
     TOPK_BLOCK_SIZE: tl.constexpr,
+    FORCE_IDS: tl.constexpr,
 ):
     pid = tl.program_id(0)
     if pid >= batch_size:
@@ -67,7 +69,10 @@ def _fused_noaux_tc_kernel(
     topk_weights = tl.zeros((TOPK_BLOCK_SIZE, ), dtype=tl.float32)
     topk_indices = tl.zeros((TOPK_BLOCK_SIZE, ), dtype=tl.int32)
     for rank in range(top_k):
-        expert_idx = tl.argmax(candidates, axis=0)
+        if FORCE_IDS:
+            expert_idx = tl.load(forced_ids_ptr + pid * top_k + rank).to(tl.int32)
+        else:
+            expert_idx = tl.argmax(candidates, axis=0)
         weight = tl.sum(tl.where(idx == expert_idx, scores, 0.0), axis=0)
         topk_weights += tl.where(output_idx == rank, weight, 0.0)
         topk_indices += tl.where(output_idx == rank, expert_idx, 0)
@@ -91,14 +96,23 @@ def fused_noaux_tc_routing(
     top_k: int = 8,
     renormalize: bool = True,
     routed_scaling_factor: float = 2.5,
+    forced_ids: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     batch_size = logits.shape[0]
     group_size = num_experts // n_group
     assert num_experts % n_group == 0, 'num_experts must be divisible by n_group'
     logits = logits.float().contiguous()
     bias = bias.float().contiguous()
+    if forced_ids is not None:
+        if forced_ids.shape != (batch_size, top_k) or forced_ids.dtype not in (torch.int32, torch.int64):
+            raise ValueError('forced_ids must contain one integer expert id per selected slot')
+        if forced_ids.device != logits.device:
+            raise ValueError('forced_ids and logits must be on the same device')
+        forced_ids = forced_ids.contiguous()
     topk_weight = torch.empty(batch_size, top_k, device=logits.device, dtype=torch.float32)
     topk_idx = torch.empty(batch_size, top_k, device=logits.device, dtype=torch.int64)
+    if batch_size == 0:
+        return topk_weight, topk_idx
     # Triton requires every ``tl.arange`` extent to be a power of two.  The
     # ungrouped GLM case has 288 experts, so pad its masked expert axis.
     block_size = (triton.next_power_of_2(num_experts)
@@ -110,6 +124,7 @@ def fused_noaux_tc_routing(
         bias,
         topk_weight,
         topk_idx,
+        forced_ids,
         batch_size,
         num_experts=num_experts,
         n_group=n_group,
@@ -123,5 +138,6 @@ def fused_noaux_tc_routing(
         bias_stride_0=bias.stride(0),
         BLOCK_SIZE=block_size,
         TOPK_BLOCK_SIZE=triton.next_power_of_2(top_k),
+        FORCE_IDS=forced_ids is not None,
     )
     return topk_weight, topk_idx

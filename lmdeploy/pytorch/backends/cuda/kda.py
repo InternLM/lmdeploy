@@ -54,6 +54,10 @@ class CudaKdaImpl(KdaImpl):
         self.causal_conv1d_fwd = causal_conv1d_fwd
         self.causal_conv1d_update = causal_conv1d_update
         self.chunk_kda = chunk_kda
+        from lmdeploy.pytorch.kernels.cuda.kda_gate_prefix import FIXED_PREFIX
+        if FIXED_PREFIX:
+            from lmdeploy.pytorch.kernels.cuda.kda_gate_prefix import fixed_chunk_kda
+            self.chunk_kda = fixed_chunk_kda
         from lmdeploy.pytorch.kernels.cuda.causal_conv1d import causal_conv1d_update as shared_conv_update
         from lmdeploy.pytorch.kernels.cuda.gated_delta_rule import fused_recurrent_gated_delta_rule
         self.shared_conv_update = shared_conv_update
