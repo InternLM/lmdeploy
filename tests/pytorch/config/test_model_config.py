@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 from lmdeploy.hf_configs import config_from_pretrained
 from lmdeploy.hf_configs.configuration_kimi_k2 import KimiK2Config
@@ -259,6 +260,54 @@ def test_kimi_compressed_tensors_metadata_uses_existing_quant_config():
         'language_model.model.layers.0.input_layernorm',
         module_kind='norm',
     ) is None
+
+
+def test_update_torch_dtype_scopes_ct_fp16_force_to_group_128(monkeypatch):
+    """Only group-128 ct checkpoints force fp16; group-32 keeps its dtype.
+
+    The group-32 packed-ct MoE path supports bf16 activations (DeepEP requires them), so forcing fp16 for every
+    compressed-tensors config broke existing deployments.
+    """
+    import lmdeploy.pytorch.config as pytorch_config
+    from lmdeploy.pytorch.config import _update_torch_dtype
+
+    # Pin bf16 support so the group-32 fall-through resolves bf16 on hosts
+    # without a bf16-capable device (mirrors test_fp8_quant_scope.py).
+    monkeypatch.setattr(pytorch_config, 'is_bf16_supported', lambda device_type='auto': True)
+
+    def _ct_config(group_size):
+        return SimpleNamespace(
+            hf_config=SimpleNamespace(
+                quantization_config={
+                    'quant_method': 'compressed-tensors',
+                    'config_groups': {
+                        'group_0': {
+                            'weights': {'group_size': group_size},
+                        }
+                    },
+                },
+                torch_dtype='bfloat16'),
+            dtype=torch.bfloat16)
+
+    # Group-128 normalizes into the fp16 AWQ family: forced.
+    config = _update_torch_dtype(_ct_config(128), 'auto')
+    assert config.dtype == torch.float16
+    assert config.hf_config.torch_dtype == 'float16'
+
+    # Group-32 packed ct keeps the configured dtype.
+    config = _update_torch_dtype(_ct_config(32), 'auto')
+    assert config.dtype == torch.bfloat16
+    assert config.hf_config.torch_dtype == 'bfloat16'
+
+    # AWQ still forces fp16.
+    config = _update_torch_dtype(
+        SimpleNamespace(
+            hf_config=SimpleNamespace(
+                quantization_config={'quant_method': 'awq'},
+                torch_dtype='bfloat16'),
+            dtype=torch.bfloat16),
+        'auto')
+    assert config.dtype == torch.float16
 
 
 @pytest.mark.parametrize(('block_size', 'kernel_block_size'), [

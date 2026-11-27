@@ -35,6 +35,137 @@ def default_weight_loader(param: torch.nn.Parameter, loaded_weight: torch.Tensor
         param.data.copy_(loaded_weight)
 
 
+# compressed-tensors pack-quantized checkpoint suffixes mapped to the
+# canonical AutoAWQ names the AWQ linear family consumes.
+_CT_TO_AWQ_SUFFIX = {
+    'weight_packed': 'qweight',
+    'weight_scale': 'scales',
+    'weight_zero_point': 'qzeros',
+}
+
+
+def new_ct_normalize_state() -> dict:
+    """Create staging state that lets one linear's tensors split across
+    streams.
+
+    Pass the returned dict to consecutive ``normalize_ct_weights`` calls so a
+    module whose ``weight_packed``/``weight_scale`` land in different
+    safetensors shards (or update buckets) still stages together. Finish the
+    sequence with ``finalize_ct_weights``; a state passed this way does NOT
+    validate leftovers at the end of a single stream.
+    """
+    return {'staged': {}, 'converted': {}}
+
+
+def finalize_ct_weights(state: dict):
+    """Reject staged leftovers once every stream of a state was consumed."""
+    if state['staged']:
+        raise ValueError('Incomplete compressed-tensors shards for: '
+                         f'{sorted(state["staged"])}; check the checkpoint integrity.')
+
+
+def _validate_weight_shape_expected(prefix: str, shape_tensor: torch.Tensor, expected: tuple):
+    """Check a ``weight_shape`` record against the unpacked geometry."""
+    try:
+        dims = (int(shape_tensor[0]), int(shape_tensor[1]))
+    except (IndexError, TypeError, ValueError) as e:
+        raise ValueError(f'{prefix}.weight_shape must hold the unpacked [k, n] geometry') from e
+    out_features, k_total = expected
+    if dims not in ((k_total, out_features), (out_features, k_total)):
+        raise ValueError(f'{prefix}: weight_shape {dims} does not match packed weights {expected}')
+
+
+def _validate_weight_shape(prefix: str, shape_tensor: torch.Tensor, packed: torch.Tensor):
+    """Reject a ``weight_shape`` record inconsistent with the packed tensor.
+
+    ct exports carry the unpacked weight geometry as ``weight_shape``; its
+    orientation varies by exporter, so either dimension order may match the
+    packed int32 layout ``[out_features, in_features // 8]``.
+    """
+    out_features, words = packed.shape
+    _validate_weight_shape_expected(prefix, shape_tensor, (out_features, words * 8))
+
+
+def normalize_ct_weights(iterator, state: dict | None = None):
+    """Normalize compressed-tensors W4A16 tensors to the canonical AWQ layout.
+
+    Detection works on checkpoint key suffixes, so checkpoints that carry no
+    ct keys pass through untouched. Tensors of one linear are staged until the
+    mandatory ``weight_packed``/``weight_scale`` pair is complete, then
+    converted in one ``convert_shard`` call. Peak staging memory stays at the
+    single-module bound documented in ``ct_repack``.
+
+    Per-linear ``weight_shape`` metadata is validated and consumed: the AWQ
+    modules have no such parameter, and forwarding it would fail the load.
+
+    A ``weight_zero_point`` that arrives after its module converted must
+    carry the symmetric constant; anything else means an asymmetric scheme
+    the conversion does not support. Staging leftovers at the end mean a
+    corrupt checkpoint and raise — with a locally owned state. Pass a shared
+    ``state`` (see ``new_ct_normalize_state``) to keep staging alive across
+    calls; the caller then owns validation through ``finalize_ct_weights``.
+    Staged tensors always own their storage: hot-update buckets may deliver
+    views into reused IPC buffers.
+    """
+    if state is None:
+        state = new_ct_normalize_state()
+        owns_state = True
+    else:
+        owns_state = False
+    staged = state['staged']
+    converted = state['converted']
+    # Import stays local: this module loads early during engine startup, and
+    # the ct path needs the conversion library only.
+    from lmdeploy.turbomind import ct_repack
+
+    for name, tensor in iterator:
+        suffix = next((s for s in _CT_TO_AWQ_SUFFIX if name.endswith(s)), None)
+        if suffix is None:
+            if name.endswith('weight_shape'):
+                prefix = name[:-len('weight_shape')]
+                if prefix in converted:
+                    # Metadata trailing a converted module must still match
+                    # the geometry recorded at conversion time.
+                    _validate_weight_shape_expected(prefix, tensor, converted[prefix])
+                    continue
+                if not owns_state:
+                    tensor = tensor.clone()
+                shard = staged.setdefault(prefix, {})
+                packed = shard.get('weight_packed')
+                if packed is not None:
+                    _validate_weight_shape(prefix, tensor, packed)
+                shard['weight_shape'] = tensor
+                continue
+            yield name, tensor
+            continue
+        prefix = name[:-len(suffix)]
+        if prefix in converted:
+            # The module already converted. The symmetric constant zero
+            # point carries no extra information, so it may still arrive.
+            if suffix == 'weight_zero_point' and bool((tensor == ct_repack.CT_SYMMETRIC_ZERO).all()):
+                continue
+            raise ValueError(f'Duplicate compressed-tensors key {name!r} after {prefix} converted.')
+        if not owns_state:
+            tensor = tensor.clone()
+        shard = staged.setdefault(prefix, {})
+        if suffix == 'weight_packed' and 'weight_shape' in shard:
+            _validate_weight_shape(prefix, shard['weight_shape'], tensor)
+        shard[suffix] = tensor
+        if 'weight_packed' not in shard or 'weight_scale' not in shard:
+            continue
+
+        shard.pop('weight_shape', None)
+        out_shard, _ = ct_repack.convert_shard(shard)
+        staged.pop(prefix)
+        out_features, words = shard['weight_packed'].shape
+        converted[prefix] = (out_features, words * 8)
+        for awq_name, awq_tensor in out_shard.items():
+            yield f'{prefix}{awq_name}', awq_tensor
+    if owns_state and staged:
+        raise ValueError('Incomplete compressed-tensors shards for: '
+                         f'{sorted(staged)}; check the checkpoint integrity.')
+
+
 def _get_weight_type(model_path: str, use_safetensors: bool = None):
     """Get weight type."""
     weight_type = None
@@ -163,6 +294,7 @@ class ModelWeightLoader:
         self,
         model: torch.nn.Module,
         device: torch.device = None,
+        normalize_ct: bool = False,
     ):
         """Load model weights implementation."""
         assert hasattr(model, 'load_weights')
@@ -179,12 +311,19 @@ class ModelWeightLoader:
         paths = sorted(paths)
         if _envs.random_load_weight:
             np.random.shuffle(paths)
+        # One staging state spans all shard files: a linear's weight_packed /
+        # weight_scale pair may split across shard boundaries.
+        ct_state = new_ct_normalize_state()
         for path in tqdm(paths, desc='Loading weights from safetensors', disable=disable_tqdm):
             weights_iterator = self._get_weights_iterator(path)
+            if normalize_ct:
+                weights_iterator = normalize_ct_weights(weights_iterator, ct_state)
             weights_iterator = self._rename_weights_iterator(weights_iterator, model)
             if len(dummy_prefix) > 0:
                 weights_iterator = self._skip_dummy_iterator(weights_iterator, dummy_prefix)
             model.load_weights(weights_iterator)
+        if normalize_ct:
+            finalize_ct_weights(ct_state)
         if device is not None:
             model.to(device)
 
@@ -207,9 +346,13 @@ def process_weights_after_loading(model: torch.nn.Module):
 
 
 @torch.inference_mode()
-def load_model_weights(model: torch.nn.Module, checkpoint_path: str, prefix: str = None, device: torch.device = None):
+def load_model_weights(model: torch.nn.Module,
+                       checkpoint_path: str,
+                       prefix: str = None,
+                       device: torch.device = None,
+                       normalize_ct: bool = False):
     """Loading model weights."""
     loader = ModelWeightLoader(checkpoint_path, prefix=prefix)
-    loader.load_model_weights(model, device=device)
+    loader.load_model_weights(model, device=device, normalize_ct=normalize_ct)
     model.eval()
     process_weights_after_loading(model)
