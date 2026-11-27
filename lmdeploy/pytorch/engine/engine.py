@@ -436,6 +436,12 @@ class Engine(EngineBase):
             if self.scheduler and self.scheduler.get_session(session_id) is None:
                 self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
                 continue
+            if self.specdecode_config is not None and self.specdecode_config.method in ('dflash', 'dspark'):
+                fmt = req_data['sampling_param'].response_format
+                if fmt and (not isinstance(fmt, dict) or fmt.get('type', 'text') != 'text'):
+                    self._response(req.resp, ResponseType.NOT_SUPPORTED,
+                                   err_msg=f'{self.specdecode_config.method} does not support guided decoding.')
+                    continue
             valid_reqs.append(req)
             if req_data.get('input_multimodals', None) is None:
                 continue

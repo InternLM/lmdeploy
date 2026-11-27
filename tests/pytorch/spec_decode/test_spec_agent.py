@@ -9,6 +9,7 @@ import torch
 
 from lmdeploy.pytorch.engine.logits_process import SamplingInputs
 from lmdeploy.pytorch.model_inputs import DPMeta, ModelInputs
+from lmdeploy.pytorch.spec_decode.base import BaseSpecModelAgent
 from lmdeploy.pytorch.spec_decode.guided_spec_helper import GuidedSpecHelper
 from lmdeploy.pytorch.spec_decode.proposers.base import (
     ProposalContext,
@@ -21,6 +22,26 @@ from lmdeploy.pytorch.spec_decode.spec_agent import SpecModelAgent
 from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
+@pytest.mark.parametrize('method,expected,owns_proposer', [
+    (None, None, False),
+    ('qwen3_5_mtp', ProposalMethod.AUTOREGRESSIVE, False),
+    ('dflash', ProposalMethod.DIFFUSION, False),
+    ('dspark', ProposalMethod.DIFFUSION, False),
+    ('test_block_proposer', ProposalMethod.DIFFUSION, False),
+    ('dspark', ProposalMethod.DIFFUSION, True),
+])
+def test_get_proposal_method_without_rank_local_dependency(monkeypatch, method, expected, owns_proposer):
+    from lmdeploy.pytorch.spec_decode.proposers.base import SPEC_PROPOSERS
+
+    # A new registered name inherits the protocol, without an algorithm allowlist.
+    monkeypatch.setitem(SPEC_PROPOSERS.module_dict, 'test_block_proposer', DFlash)
+    agent = BaseSpecModelAgent.__new__(BaseSpecModelAgent)
+    agent.method = method
+    agent.proposer = (SPEC_PROPOSERS.get(method).__new__(SPEC_PROPOSERS.get(method))
+                      if owns_proposer and method is not None else None)
+    assert agent.get_proposal_method() == expected
 
 
 def test_rejection_sampling_delegates_complete_logits(monkeypatch):
@@ -258,12 +279,6 @@ def test_guided_serial_bitmask_updates_inference_tensor():
     assert manager.seen_is_inference == [True, True, True]
     assert manager.seen_inference_mode == [True, True, True]
     assert manager.accepted == [10, 20, 11, 21]
-
-class _NoForkGuidedHelper:
-
-    def get_processors(self, session_ctx, response_formats):
-        return {0: object()}
-
 
 def test_prepare_inputs_from_main_dp_chunk_uses_lookahead_without_changing_lengths():
     """Target and MTP finish the same prefix on every DP rank."""
@@ -832,14 +847,14 @@ def test_dflash_diffusion_warmup_materializes_context_and_captures_only_block_qu
     agent.model_config = SimpleNamespace(vocab_size=11, dtype=torch.float32, hidden_size=4)
     agent.num_spec_tokens = 3
     agent.make_dummy_meta = None
-    dp_markers = []
+    dp_meta_calls = []
+    build_dp_meta = agent._build_warmup_dp_meta
 
-    def build_dp_meta(inputs):
-        marker = object()
-        inputs.dp_meta = marker
-        dp_markers.append(marker)
+    def record_build_dp_meta(inputs):
+        dp_meta_calls.append((inputs.seq_length.numel(), inputs.max_q_seqlen))
+        build_dp_meta(inputs)
 
-    agent._build_warmup_dp_meta = build_dp_meta
+    agent._build_warmup_dp_meta = record_build_dp_meta
     agent._forward_impl = lambda inputs: forward_graph_keys.append(
         (inputs.seq_length.numel(), inputs.max_q_seqlen, inputs.dp_meta)) or {}
 
@@ -852,7 +867,8 @@ def test_dflash_diffusion_warmup_materializes_context_and_captures_only_block_qu
         (False, 2, 4, (8, 8)),
     ]
     assert all(cache is agent.cache_engine for *_, cache in materialized)
-    assert forward_graph_keys == [(4, 4, dp_markers[1]), (2, 4, dp_markers[2])]
+    assert dp_meta_calls == [(1, 8), (4, 4), (2, 4)]
+    assert forward_graph_keys == [(4, 4, None), (2, 4, None)]
     assert len(sync_calls) == 3
     assert 'synchronize' not in inspect.getsource(DFlash.prepare_warmup_forward)
 
@@ -882,31 +898,20 @@ def _make_dflash_proposer():
     )
 
 
-def test_dflash_proposer_hook_rejects_guided_before_fork():
-    agent = object.__new__(SpecModelAgent)
-    agent.guided_helper = _NoForkGuidedHelper()
-    agent.proposer = _make_dflash_proposer()
-    agent.proposer.guided_helper = agent.guided_helper
-    agent.cache_engine = None
-    agent.rank = 0
-    agent.draft_context = lambda: nullcontext()
+@pytest.mark.parametrize('method', ['dflash', 'dspark'])
+def test_block_draft_rejects_guided_before_scheduling(method):
+    from unittest.mock import Mock
 
-    model_inputs = ModelInputs(
-        input_ids=torch.tensor([[1]]),
-        seq_length=torch.ones(1, dtype=torch.long),
-        history_lengths=torch.zeros(1, dtype=torch.long),
-        block_offsets=torch.ones((1, 1), dtype=torch.int32),
-        is_decoding=False,
-        num_ignored_history=torch.zeros(1, dtype=torch.long),
-        max_q_seqlen=1,
-        max_kv_seqlen=1,
-        sum_kv_seqlen=1,
-    )
-    extra_inputs = ARSpecExtraInputs(next_token_ids=torch.tensor([2]))
-    sampling_inputs = SimpleNamespace(session_ctx=object(), response_formats=object())
+    from lmdeploy.messages import ResponseType
+    from lmdeploy.pytorch.engine.engine import Engine
 
-    with pytest.raises(NotImplementedError, match='DFlash guided decoding'):
-        asyncio.run(agent.async_model_forward(model_inputs, extra_inputs, sampling_inputs))
+    engine = SimpleNamespace(specdecode_config=SimpleNamespace(method=method), scheduler=Mock(),
+                             _response=Mock(), _add_message=Mock())
+    requests = [SimpleNamespace(resp=i, data=dict(session_id=i, sampling_param=SimpleNamespace(response_format=fmt)))
+                for i, fmt in enumerate([None, {'type': 'json_schema'}, {'type': 'text'}])]
+    Engine._on_add_message(engine, requests)
+    engine._add_message.assert_called_once_with([requests[0], requests[2]])
+    assert engine._response.call_args.args == (1, ResponseType.NOT_SUPPORTED)
 
 
 def test_dflash_proposer_hook_materializes_non_last_chunk_without_drafting(monkeypatch):

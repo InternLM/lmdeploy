@@ -14,8 +14,10 @@ class ARSpecEngineStrategy(EngineStrategy):
 
     def get_prealloc_size(self, is_decoding: bool):
         """Get prealloc_size."""
-        return self.scheduler_config.prefill_interval * (1 +
-                                                         self.num_spec_tokens) if is_decoding else self.num_spec_tokens
+        if not is_decoding:
+            return self.num_spec_tokens
+        prealloc = self.scheduler_config.prefill_interval * self.get_num_decode_tokens()
+        return max(prealloc, self.get_num_required_tokens())
 
     def get_num_loops(self, is_decoding: bool) -> int:
         """Get num_loops."""
@@ -27,4 +29,5 @@ class ARSpecEngineStrategy(EngineStrategy):
 
     def get_num_required_tokens(self) -> int:
         """Get num_required_tokens."""
-        return 2 * self.num_spec_tokens + 1
+        # Verifier and draft each write up to N+1 rows through the same page table.
+        return 2 * self.get_num_decode_tokens()

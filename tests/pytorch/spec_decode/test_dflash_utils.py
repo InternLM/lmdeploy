@@ -24,9 +24,8 @@ from lmdeploy.pytorch.models.qwen3_dflash import (
 )
 from lmdeploy.pytorch.spec_decode.dflash_utils import (
     parse_dflash_config,
-    validate_dflash_cache_config,
-    validate_dflash_dist_config,
-    validate_dflash_runtime_config,
+    validate_block_draft_cache_config,
+    validate_block_draft_dist_config,
 )
 from lmdeploy.pytorch.spec_decode.proposers.dflash import DFlash
 
@@ -356,34 +355,21 @@ def test_parse_dflash_config_rejects_non_default_scheduler_patterns():
         _parse_dflash(noncausal_swa, num_speculative_tokens=3)
 
 
-def test_validate_dflash_dist_rejects_dp_and_ep_allows_tp():
-    validate_dflash_dist_config(DistConfig(tp=2))
-
-    with pytest.raises(ValueError, match='dp=1'):
-        validate_dflash_dist_config(DistConfig(dp=2, tp=2))
-
-    with pytest.raises(ValueError, match='ep=1'):
-        validate_dflash_dist_config(DistConfig(ep=2))
+def test_validate_dflash_dist_allows_dp_ep_rejects_eplb():
+    for config in (DistConfig(tp=2), DistConfig(dp=2, tp=2), DistConfig(ep=2), DistConfig(dp=2, ep=2)):
+        validate_block_draft_dist_config(config, 'dflash')
+    with pytest.raises(ValueError, match='EPLB'):
+        validate_block_draft_dist_config(DistConfig(dp=2, ep=2, enable_eplb=True), 'dflash')
 
 
 def test_validate_dflash_cache_rejects_prefix_cache_and_kv_quant():
-    validate_dflash_cache_config(SimpleNamespace(enable_prefix_caching=False, quant_policy=0))
+    validate_block_draft_cache_config(SimpleNamespace(enable_prefix_caching=False, quant_policy=0), 'dflash')
 
     with pytest.raises(ValueError, match='prefix-cache'):
-        validate_dflash_cache_config(SimpleNamespace(enable_prefix_caching=True, quant_policy=0))
+        validate_block_draft_cache_config(SimpleNamespace(enable_prefix_caching=True, quant_policy=0), 'dflash')
 
     with pytest.raises(ValueError, match='KV-cache quantization'):
-        validate_dflash_cache_config(SimpleNamespace(enable_prefix_caching=False, quant_policy=8))
-
-
-def test_validate_dflash_runtime_rejects_non_cuda_and_allows_cudagraph():
-    validate_dflash_runtime_config(cache_config=SimpleNamespace(device_type='cuda'),
-                                   backend_config=SimpleNamespace(device_type='cuda', eager_mode=True))
-    validate_dflash_runtime_config(cache_config=SimpleNamespace(device_type='cuda'),
-                                   backend_config=SimpleNamespace(device_type='cuda', eager_mode=False))
-
-    with pytest.raises(ValueError, match='requires CUDA'):
-        validate_dflash_runtime_config(cache_config=SimpleNamespace(device_type='ascend'))
+        validate_block_draft_cache_config(SimpleNamespace(enable_prefix_caching=False, quant_policy=8), 'dflash')
 
 
 @pytest.mark.parametrize('model_cls', [Qwen3ForCausalLM, Qwen3_5ForConditionalGeneration])
@@ -558,7 +544,7 @@ def test_dflash_specdecode_builder_preserves_tp(monkeypatch):
         captured.update(kwargs)
         return SimpleNamespace(dist_config=kwargs['dist_config'])
 
-    monkeypatch.setattr('lmdeploy.pytorch.engine.config_builder.SpecDecodeConfig.from_config', _fake_from_config)
+    monkeypatch.setattr('lmdeploy.pytorch.spec_decode.config.SpecDecodeConfig.from_config', _fake_from_config)
 
     cache_config = CacheConfig(
         max_batches=1,
@@ -596,7 +582,8 @@ def test_dflash_target_model_config_uses_ar_spec_not_dllm():
     assert not hasattr(model_config, 'dflash_config')
 
 
-def test_qwen3_dflash_uses_only_resolved_build_context_metadata(monkeypatch):
+@pytest.mark.parametrize('target_hidden_size', [8, None, 'missing'])
+def test_qwen3_dflash_uses_only_resolved_build_context_metadata(monkeypatch, target_hidden_size):
     import lmdeploy.pytorch.models.qwen3_dflash as dflash_model_mod
 
     class FakeAttention(torch.nn.Module):
@@ -622,10 +609,12 @@ def test_qwen3_dflash_uses_only_resolved_build_context_metadata(monkeypatch):
 
     # Raw checkpoint values deliberately disagree with the resolved metadata.
     hf_config = _draft_config(
-        target_hidden_size=8,
+        target_hidden_size=target_hidden_size,
         rms_norm_eps=1e-6,
         dflash_config=dict(mask_token_id=32001, target_layer_ids=[0]),
     )
+    if target_hidden_size == 'missing':
+        del hf_config.target_hidden_size
     resolved_ctx = BuildModelContext(
         spec_model_ctx=SpecModelBuildContext(target_aux_hidden_state_layers=(1, 6, 11),
                                              speculative_mask_token_id=99))
@@ -644,7 +633,8 @@ def test_qwen3_dflash_uses_only_resolved_build_context_metadata(monkeypatch):
     assert model.target_layer_ids == (1, 6, 11)
     assert model.mask_token_id == 99
     assert model.num_context_features == 3
-    assert model.fc.in_features == 24
+    expected_hidden_size = hf_config.hidden_size if target_hidden_size in (None, 'missing') else target_hidden_size
+    assert model.fc.in_features == expected_hidden_size * 3
 
 
 def test_dflash_module_map_keeps_only_supported_architecture_name():

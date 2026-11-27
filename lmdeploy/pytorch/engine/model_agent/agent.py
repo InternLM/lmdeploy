@@ -37,6 +37,7 @@ from lmdeploy.pytorch.memdecode import build_memdecode_agent
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, step_ctx_manager
 from lmdeploy.pytorch.models.patch import BuildModelContext, add_adapters, build_patched_model, update_custom_module_map
 from lmdeploy.pytorch.spec_decode import build_spec_agent
+from lmdeploy.pytorch.spec_decode.proposers.base import ProposalMethod
 from lmdeploy.pytorch.strategies import build_strategy_factory
 from lmdeploy.pytorch.strategies.base.model_agent import ExtraInputs, ExtraOutputs, StoppingCriteria
 from lmdeploy.pytorch.utils import get_gpu_memory, monkey_patch_hf_modules_cache, wait_for_async_tasks
@@ -819,6 +820,7 @@ class BaseModelAgent:
         # gather dp forward metadata
         batch_size = inputs.seq_length.numel()
         is_sleeping = self.state.is_sleeping
+        is_block_spec_enabled = self.spec_agent.get_proposal_method() == ProposalMethod.DIFFUSION
         draft_num_tokens = num_tokens if is_spec_enabled else None
 
         dp_forward_meta = DPForwardMeta(is_decoding=is_decoding,
@@ -826,7 +828,10 @@ class BaseModelAgent:
                                         num_tokens=num_tokens,
                                         is_sleeping=is_sleeping,
                                         batch_size=batch_size,
-                                        draft_num_tokens=draft_num_tokens)
+                                        draft_num_tokens=draft_num_tokens,
+                                        block_query_ready=(not is_dummy
+                                                           and not self._is_prefill_input_logprobs(inputs)
+                                                           and (not inputs.is_chunk or inputs.is_last_chunk)))
         # check enable_microbatch
         if is_microbatch_enabled:
             tokens_num = inputs.input_ids.numel()
@@ -844,6 +849,7 @@ class BaseModelAgent:
             dp_forward_meta.values(
                 is_spec_enabled=is_spec_enabled,
                 is_microbatch_enabled=is_microbatch_enabled,
+                is_block_spec_enabled=is_block_spec_enabled,
             ),
             world_size,
             device=device,
@@ -853,6 +859,7 @@ class BaseModelAgent:
             (await gathered_meta.async_wait()).cpu(),
             is_spec_enabled=is_spec_enabled,
             is_microbatch_enabled=is_microbatch_enabled,
+            is_block_spec_enabled=is_block_spec_enabled,
         )
 
         # check is_decoding
@@ -885,6 +892,11 @@ class BaseModelAgent:
         inputs.dp_meta.dp_is_decoding = global_is_decoding
         if is_spec_enabled:
             inputs.dp_meta.dp_draft_num_tokens = gathered_meta.all_draft_num_tokens
+        if is_block_spec_enabled:
+            from lmdeploy.pytorch.spec_decode.block_parallel import BlockDraftStepPlan
+            inputs.dp_meta.block_plan = BlockDraftStepPlan(
+                tuple(all_batch_sizes),
+                tuple(gathered_meta.block_query_ready.tolist()), global_is_decoding)
         inputs = self.patched_model.update_inputs(inputs)
         return inputs, is_all_sleeping
 
@@ -1221,9 +1233,16 @@ class BaseModelAgent:
             cursor = self.ssm_state_cursor
             if cursor is not None and inputs.ssm_state_meta is not None:
                 cursor.advance(inputs.ssm_state_meta, inputs.state_offsets, (inputs.seq_length > 0).long(), width=1)
-            # Scoring-only forwards do not run the speculative model.  Record
-            # the target KV writes here instead of waiting for a postprocess
-            # hook that is intentionally skipped on this path.
+            if inputs.dp_meta is not None and self.spec_agent.get_proposal_method() == ProposalMethod.DIFFUSION:
+                from lmdeploy.pytorch.strategies.ar_spec.model_agent import ARSpecExtraInputs
+                dummy_extra = ARSpecExtraInputs(
+                    next_token_ids=inputs.input_ids.new_zeros(inputs.seq_length.numel()),
+                    # Scoring returns before update_main_model_outputs swaps in aux.
+                    target_hidden_states=output['aux_hidden_states'])
+                await self.spec_agent.async_model_forward(inputs.clone(is_dummy=True), dummy_extra, None)
+            # Scoring-only requests do not publish proposals. Collective-only
+            # dummy participation above still bypasses normal postprocessing,
+            # so record target KV writes here rather than in that hook.
             start_kv_connector_save(self.kv_connector, connector_step)
             model_metas = output.get('model_metas')
             connector_output = finish_kv_connector_step(self.kv_connector, connector_step)
@@ -2253,6 +2272,7 @@ class BaseModelAgent:
         self.cache_engine = None
         self.block_cache_plan = None
         self.state_cache_engine = None
+        self.spec_agent.cache_engine = None
         self.compact_state_plan = None
         self.ssm_state_cursor = None
         if self.cache_config.compact_state_capacity is not None:

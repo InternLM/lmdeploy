@@ -148,35 +148,20 @@ def parse_dflash_config(draft_hf_config: Any, num_speculative_tokens: int,
     return target_layer_ids, mask_token_id
 
 
-def validate_dflash_dist_config(dist_config: Any):
-    """Validate the initially supported DFlash distribution shape."""
+def validate_block_draft_dist_config(dist_config: Any, method: str):
+    """Validate distributed topology shared by DFlash and DSpark."""
     if dist_config is None:
         return
     if getattr(dist_config, 'dcp', 1) > 1:
-        raise ValueError('DFlash does not support dcp > 1: draft cache writes and non-causal '
+        raise ValueError(f'{method} does not support dcp > 1: draft cache writes and non-causal '
                          'block attention require an unsharded cache. Set dcp=1.')
-    if getattr(dist_config, 'dp', 1) != 1:
-        raise ValueError('DFlash V1 does not support data parallelism. Set dp=1.')
-    if getattr(dist_config, 'ep', 1) != 1:
-        raise ValueError('DFlash V1 does not support expert parallel draft execution. Set ep=1.')
+    if getattr(dist_config, 'enable_eplb', False):
+        raise ValueError('DFlash-family distributed drafting does not support EPLB.')
 
 
-def validate_dflash_cache_config(cache_config: Any):
-    """Validate cache options that affect DFlash draft KV correctness."""
-    if cache_config is None:
-        return
-    if getattr(cache_config, 'enable_prefix_caching', False):
+def validate_block_draft_cache_config(cache_config: Any, method: str):
+    """Reject quantized draft KV, and prefix reuse for DFlash."""
+    if method == 'dflash' and cache_config.enable_prefix_caching:
         raise ValueError('DFlash V1 does not support prefix-cache reuse yet. Disable enable_prefix_caching.')
-    quant_policy = getattr(cache_config, 'quant_policy', 0)
-    if int(quant_policy) != 0:
-        raise ValueError('DFlash V1 does not support KV-cache quantization yet. Set quant_policy=0.')
-
-
-def validate_dflash_runtime_config(cache_config: Any = None, backend_config: Any = None):
-    """Validate the currently supported DFlash runtime envelope."""
-    device_type = getattr(backend_config, 'device_type', None)
-    if device_type is None:
-        device_type = getattr(cache_config, 'device_type', 'cuda')
-    if device_type != 'cuda':
-        raise ValueError('DFlash V1 requires CUDA because draft context K/V materialization uses CUDA kernels. '
-                         f'Got device_type={device_type!r}.')
+    if int(cache_config.quant_policy) != 0:
+        raise ValueError(f'{method} does not support KV-cache quantization yet. Set quant_policy=0.')

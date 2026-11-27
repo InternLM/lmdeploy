@@ -26,6 +26,22 @@ from lmdeploy.pytorch.strategies.ar_spec.sequence import (
     SchedulerSequenceARSpec,
 )
 
+
+@pytest.mark.parametrize('method,query_len', [('mtp', None), ('dflash', 4), ('dspark', 3), ('dspark', 4)])
+@pytest.mark.parametrize('prefill_interval', [1, 16])
+def test_speculative_decode_budget_is_shared_by_block_drafts_and_mtp(method, query_len, prefill_interval):
+    from lmdeploy.pytorch.config import SpecDecodeConfig
+    from lmdeploy.pytorch.strategies.ar_spec import ARSpecStrategyFactory
+
+    spec = SpecDecodeConfig(model='draft', method=method, num_speculative_tokens=3,
+                            dspark=SimpleNamespace(draft_query_len=query_len) if method == 'dspark' else None)
+    factory = ARSpecStrategyFactory(SimpleNamespace(bos_token_id=0), spec)
+    strategy = factory.build_engine_strategy(
+        SimpleNamespace(block_size=64), SimpleNamespace(prefill_interval=prefill_interval))
+    assert strategy.get_num_required_tokens() == 8
+    assert strategy.get_prealloc_size(True) == max(prefill_interval * 4, 8)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

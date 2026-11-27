@@ -157,7 +157,7 @@ def test_unsupported_selection_rejects_before_worker_creation(case):
     elif case == 'capacity':
         cache.compact_state_capacity = SSMStateCapacity(3, 4)
     elif case == 'method':
-        spec.method = 'dflash'
+        spec.method = 'eagle3'
     elif case == 'draft_state':
         spec.model_config.states_shapes = [((2,), torch.float32)]
     elif case == 'draft_layers':
@@ -562,3 +562,20 @@ def test_config_update_hook_cannot_change_retained_compact_capacity(monkeypatch,
     with pytest.raises(ValueError, match='preserve configured M/B/S'):
         executor.update_configs()
     assert cache.compact_state_capacity is capacity
+
+
+@pytest.mark.parametrize(('method', 'architecture'), [('dflash', 'DFlashDraftModel'),
+                                                    ('dspark', 'Qwen3DSparkModel')])
+def test_compact_target_accepts_stateless_block_draft(method, architecture):
+    model, cache, spec = _configs(4)
+    spec.method = method
+    spec.model_config.num_layers = 5
+    spec.model_config.hf_config = SimpleNamespace(architectures=[architecture])
+    executor = ExecutorBase.__new__(ExecutorBase)
+    executor.cache_config, executor.model_config = cache, model
+    executor.specdecode_config, executor.device_type = spec, 'cuda'
+    executor.misc_config = MiscConfig()
+    executor._validate_compact_state_config()
+    spec.model_config.states_shapes = [((2,), torch.float32)]
+    with pytest.raises(NotImplementedError, match='stateless draft'):
+        executor._validate_compact_state_config()
