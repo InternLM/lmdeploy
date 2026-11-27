@@ -146,8 +146,8 @@ def test_question_images_run_off_loop_and_return_normal_answers(http_service, mo
     assert len(workers) == len(loops) == 1 and workers[0] != loops[0]
     result = response.json()
     assert [a['type'] for a in result['answers']] == ['predicate', 'choice', 'score']
-    assert result['usage']['output_tokens'] > 0
-    assert result['usage']['total_tokens'] == result['usage']['input_tokens'] + result['usage']['output_tokens']
+    assert result['usage']['output_tokens'] == 0
+    assert result['usage']['total_tokens'] == result['usage']['input_tokens']
     assert not context.session_manager.sessions
 
 

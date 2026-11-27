@@ -51,31 +51,6 @@ def test_request_rng_preserves_target_distribution():
 def test_sampling_progress_counts_accepted_outputs_not_verification_steps():
     delta = SamplingInputsDelta(num_ignore_eos=torch.tensor([5, 5]),
                                 random_offsets=torch.tensor([65, 65]))
-    step_sampling_delta(delta, torch.tensor([10, 11]), torch.tensor([6, 2]))
+    step_sampling_delta(delta, torch.tensor([10, 11]), random_offset_step=torch.tensor([6, 2]))
     assert delta.random_offsets.tolist() == [71, 67]
     assert delta.num_ignore_eos.tolist() == [-1, 3]
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
-def test_greedy_proposals_preserve_ar_samples_across_verification_boundaries():
-    from lmdeploy.pytorch.engine.logits_process import FusedLogitsProcessor, SamplingInputs
-    from lmdeploy.pytorch.spec_decode.reject_sampler import RejectionSampler
-
-    torch.manual_seed(19)
-    logits = torch.randn(12, 127, device='cuda')
-    policy = SamplingInputs(batch_size=12, max_top_k=40, top_p=torch.full((12,), 0.95, device='cuda'),
-                            random_seeds=torch.full((12,), 42, device='cuda', dtype=torch.long),
-                            random_offsets=torch.arange(65, 77, device='cuda'))
-    expected = FusedLogitsProcessor(policy).sampling(logits)
-    sampler = RejectionSampler('cuda')
-    for mismatch in (0, 1, 4, None):
-        drafts = expected.view(2, 6)[:, :-1].clone()
-        if mismatch is not None:
-            drafts[:, mismatch] = (drafts[:, mismatch] + 1) % 127
-        actual, _, _ = sampler(logits.view(2, 6, -1), drafts, policy)
-        committed = 6 if mismatch is None else mismatch + 1
-        torch.testing.assert_close(actual[:, :committed], expected.view(2, 6)[:, :committed])
-    # A later verification packet must sample the same absolute positions.
-    later_policy = policy.select_sampling_rows(slice(3, 9))
-    later, _, _ = sampler(logits[3:9].view(1, 6, -1), expected[3:8].view(1, 5), later_policy)
-    torch.testing.assert_close(later.flatten(), expected[3:9])

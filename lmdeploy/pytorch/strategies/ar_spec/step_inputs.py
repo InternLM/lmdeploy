@@ -149,7 +149,7 @@ class ARSpecStepInputs(StepInputs):
             output_ids = output_ids.masked_fill(output_ids < 0, self._pad_token_id)
         else:
             output_ids = next_token_ids
-        sampling_delta = step_sampling_delta(sampling_delta, output_ids, num_new_tokens)
+        sampling_delta = step_sampling_delta(sampling_delta, output_ids, random_offset_step=num_new_tokens)
 
         if self.model_inputs is None:
             self.model_inputs = inputs
@@ -207,4 +207,4 @@ class ARSpecStepInputs(StepInputs):
             output_ids = next_token_ids
         else:
             output_ids = output_ids.masked_fill(output_ids < 0, self._pad_token_id)
-        self.sampling_delta = step_sampling_delta(sampling_delta, output_ids, step_seqlens)
+        self.sampling_delta = step_sampling_delta(sampling_delta, output_ids, random_offset_step=step_seqlens)

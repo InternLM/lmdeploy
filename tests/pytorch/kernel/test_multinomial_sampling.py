@@ -63,3 +63,13 @@ class TestMultinomialSampling:
         from lmdeploy.pytorch.kernels.cuda import multinomial_sampling
         output = multinomial_sampling(scores, seeds, offsets, indices)
         torch.testing.assert_close(output, gt)
+
+    def test_strided_rng_inputs(self):
+        from lmdeploy.pytorch.kernels.cuda import multinomial_sampling
+
+        scores = torch.linspace(2, -2, 32, device='cuda').softmax(0).expand(8, -1)
+        seeds = torch.arange(100, 116, device='cuda')[::2]
+        offsets = torch.arange(200, 224, device='cuda')[::3]
+        expected = multinomial_sampling(scores, seeds.contiguous(), offsets.contiguous())
+        actual = multinomial_sampling(scores, seeds, offsets)
+        torch.testing.assert_close(actual, expected)

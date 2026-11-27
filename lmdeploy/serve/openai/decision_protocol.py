@@ -347,12 +347,21 @@ class DecisionScoreAnswer(_OpenAIDecisionSchema):
     probabilities: list[DecisionScoreProbability]
 
 
+class DecisionInputTokensDetails(_OpenAIDecisionSchema):
+    cached_tokens: int
+    cache_write_tokens: int
+
+
+class DecisionOutputTokensDetails(_OpenAIDecisionSchema):
+    reasoning_tokens: int
+
+
 class DecisionTokenUsage(_OpenAIDecisionSchema):
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    input_tokens_details: dict[str, int]
-    output_tokens_details: dict[str, int]
+    input_tokens_details: DecisionInputTokensDetails
+    output_tokens_details: DecisionOutputTokensDetails
 
 
 class OpenAIDecisionResponse(_OpenAIDecisionSchema):

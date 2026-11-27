@@ -6,6 +6,8 @@
 请注意，这是lmdeploy中的实验性功能。
 :::
 
+在 PyTorch CUDA 后端，`GenerationConfig.random_seed`（或 OpenAI API 的 `seed`）控制 draft 接受判定、拒绝后的重采样和 bonus token 采样。随机数由每个请求的 seed 和 token 位置确定，不受其他请求影响。logits 和 draft tokens 相同时，同 seed 可复现采样结果；batch、硬件或模型计算变化仍可能改变输出。开启投机解码不保证与相同 seed 的普通自回归解码逐 token 一致。
+
 ## 示例
 
 请参考如下使用示例。

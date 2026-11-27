@@ -2,10 +2,25 @@
 import torch
 import triton
 import triton.language as tl
+from triton.language.extra import libdevice
 
 from lmdeploy.pytorch.backends.rejection_sampling import PLACEHOLDER_TOKEN_ID
 
 _PLACEHOLDER_TOKEN_ID = tl.constexpr(PLACEHOLDER_TOKEN_ID)
+
+
+@triton.jit
+def _rejection_uniform(seed, position, lane, stream: tl.constexpr, dtype: tl.constexpr):
+    # Philox counters separate token positions, vocabulary lanes, and RNG uses.
+    # Stream 0 is reserved for AR sampling; 1 is acceptance and 2 is recovery.
+    bits, _, _, _ = tl.philox(seed, lane.to(tl.uint32), position.to(tl.uint32),
+                             (position.to(tl.uint64) >> 32).to(tl.uint32),
+                             tl.full((), stream, tl.uint32))
+    uniform = (bits.to(dtype) + 0.5) * 2.3283064365386963e-10
+    if dtype == tl.float32:
+        # Rounding uint32 to fp32 can produce 1, making the exponential infinite.
+        uniform = tl.minimum(uniform, 1.0 - 5.960464477539063e-8)
+    return uniform
 
 
 @triton.jit(do_not_specialize=['num_spec_tokens'])
@@ -83,10 +98,10 @@ def _rejection_random_sample_kernel(
     draft_probs_ptr,
     target_probs_ptr,
     bonus_token_ids_ptr,
-    recovered_token_ids_ptr,
-    uniform_probs_ptr,
     random_seeds_ptr,
     random_offsets_ptr,
+    seed_stride,
+    offset_stride,
     is_greedy_ptr,
     num_spec_tokens,
     vocab_size,
@@ -101,6 +116,8 @@ def _rejection_random_sample_kernel(
 
     out_stride = num_spec_tokens + 1
     draft_stride = num_spec_tokens
+    seed = tl.load(random_seeds_ptr + req_idx * seed_stride)
+    offset = tl.load(random_offsets_ptr + req_idx * offset_stride)
     rejected = False
     num_accepted = 0
     last_token_id = tl.full((), 0, tl.int64)
@@ -120,19 +137,13 @@ def _rejection_random_sample_kernel(
                 target_probs_ptr
                 + (req_idx * draft_stride + pos) * vocab_size
                 + draft_token_id)
-            if random_seeds_ptr is not None:
-                seed = tl.load(random_seeds_ptr + req_idx).to(tl.uint64)
-                offset = tl.load(random_offsets_ptr + req_idx) + pos
-                uniform_prob = tl.rand(seed ^ 0xA0761D6478BD642F, offset.to(tl.uint32))
-            else:
-                uniform_prob = tl.load(uniform_probs_ptr + req_idx * draft_stride + pos)
+            uniform_prob = _rejection_uniform(seed, offset + pos, tl.full((), 0, tl.uint32), 1, tl.float64)
 
             if draft_prob > 0 and target_prob / draft_prob >= uniform_prob:
                 token_id = draft_token_id
             else:
                 rejected = True
-                token_id = tl.load(
-                    recovered_token_ids_ptr + req_idx * draft_stride + pos)
+                token_id = tl.full((), _PLACEHOLDER_TOKEN_ID, tl.int64)
             tl.store(output_ptr, token_id)
             last_token_id = token_id
             num_accepted += 1
@@ -157,72 +168,84 @@ def _rejection_random_sample_kernel(
 
 @triton.jit
 def _sample_recovered_tokens_kernel(
-    output_token_ids_ptr,
+    partial_scores_ptr,
+    partial_tokens_ptr,
+    num_rejected_tokens_ptr,
     draft_token_ids_ptr,
     draft_probs_ptr,
     target_probs_ptr,
-    inv_q_ptr,
     random_seeds_ptr,
     random_offsets_ptr,
+    is_greedy_ptr,
+    seed_stride,
+    offset_stride,
     num_spec_tokens,
     vocab_size,
+    num_vocab_blocks,
     BLOCK_SIZE: tl.constexpr,
     NO_DRAFT_PROBS: tl.constexpr,
 ):
-    """Sample recovered tokens with the Gumbel-max trick."""
+    """Sample only the first rejected position, in parallel vocabulary
+    blocks."""
     req_idx = tl.program_id(0)
-    pos = tl.program_id(1)
-    if pos >= num_spec_tokens:
+    block_idx = tl.program_id(1)
+    num_rejected = tl.load(num_rejected_tokens_ptr + req_idx)
+    if num_rejected == 0:
         return
+    if is_greedy_ptr is not None:
+        if tl.load(is_greedy_ptr + req_idx):
+            return
 
-    draft_stride = num_spec_tokens
-    token_idx = req_idx * draft_stride + pos
+    pos = num_spec_tokens - num_rejected
+    token_idx = req_idx * num_spec_tokens + pos
+    seed = tl.load(random_seeds_ptr + req_idx * seed_stride)
+    position = tl.load(random_offsets_ptr + req_idx * offset_stride) + pos
+    vocab_offset = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    vocab_mask = vocab_offset < vocab_size
+    target_prob = tl.load(target_probs_ptr + token_idx * vocab_size + vocab_offset,
+                          mask=vocab_mask, other=0.0)
     if NO_DRAFT_PROBS:
         draft_token_id = tl.load(draft_token_ids_ptr + token_idx)
+        prob = tl.where(vocab_offset == draft_token_id, 0.0, target_prob)
+    else:
+        draft_prob = tl.load(draft_probs_ptr + token_idx * vocab_size + vocab_offset,
+                             mask=vocab_mask, other=0.0)
+        prob = tl.maximum(target_prob - draft_prob, 0.0)
 
-    max_val = float('-inf')
-    recovered_id = 0
-    for v in range(0, vocab_size, BLOCK_SIZE):
-        vocab_offset = v + tl.arange(0, BLOCK_SIZE)
-        vocab_mask = vocab_offset < vocab_size
+    uniform = _rejection_uniform(seed, position, vocab_offset, 2, tl.float32)
+    score = tl.where(vocab_mask, prob * (-1.0 / libdevice.log1p(-uniform)), float('-inf'))
+    value, index = tl.max(score, axis=0, return_indices=True)
+    tl.store(partial_scores_ptr + req_idx * num_vocab_blocks + block_idx, value)
+    tl.store(partial_tokens_ptr + req_idx * num_vocab_blocks + block_idx, block_idx * BLOCK_SIZE + index)
 
-        if NO_DRAFT_PROBS:
-            prob = tl.load(
-                target_probs_ptr + token_idx * vocab_size + vocab_offset,
-                mask=(vocab_mask & (vocab_offset != draft_token_id)),
-                other=0.0,
-            )
-        else:
-            draft_prob = tl.load(
-                draft_probs_ptr + token_idx * vocab_size + vocab_offset,
-                mask=vocab_mask,
-                other=0.0,
-            )
-            target_prob = tl.load(
-                target_probs_ptr + token_idx * vocab_size + vocab_offset,
-                mask=vocab_mask,
-                other=0.0,
-            )
-            prob = tl.maximum(target_prob - draft_prob, 0.0)
 
-        if random_seeds_ptr is not None:
-            # Recovery has its own stream for each absolute output position.
-            # Neither batch order nor unrelated CUDA RNG draws affect it.
-            seed = tl.load(random_seeds_ptr + req_idx).to(tl.uint64)
-            position = (tl.load(random_offsets_ptr + req_idx) + pos).to(tl.uint64)
-            key = (seed | (position << 32)) ^ 0xE7037ED1A0B428DB
-            uniform = tl.maximum(tl.rand(key, vocab_offset.to(tl.uint32)), 1.0e-7)
-            inv_q = -1.0 / tl.log(uniform)
-        else:
-            inv_q = tl.load(inv_q_ptr + req_idx * vocab_size + vocab_offset,
-                            mask=vocab_mask, other=0.0)
-        score = prob * inv_q
-        local_max, local_id = tl.max(score, axis=0, return_indices=True)
-        if local_max > max_val:
-            max_val = local_max
-            recovered_id = v + local_id
-
-    tl.store(output_token_ids_ptr + token_idx, recovered_id)
+@triton.jit
+def _store_recovered_tokens_kernel(
+    output_token_ids_ptr,
+    last_token_ids_ptr,
+    partial_scores_ptr,
+    partial_tokens_ptr,
+    num_rejected_tokens_ptr,
+    is_greedy_ptr,
+    num_spec_tokens,
+    num_vocab_blocks,
+    BLOCK_SIZE: tl.constexpr,
+):
+    req_idx = tl.program_id(0)
+    num_rejected = tl.load(num_rejected_tokens_ptr + req_idx)
+    if num_rejected == 0:
+        return
+    if is_greedy_ptr is not None:
+        if tl.load(is_greedy_ptr + req_idx):
+            return
+    blocks = tl.arange(0, BLOCK_SIZE)
+    scores = tl.load(partial_scores_ptr + req_idx * num_vocab_blocks + blocks,
+                     mask=blocks < num_vocab_blocks, other=float('-inf'))
+    block_idx = tl.argmax(scores, axis=0)
+    token_id = tl.load(partial_tokens_ptr + req_idx * num_vocab_blocks + block_idx)
+    pos = num_spec_tokens - num_rejected
+    tl.store(output_token_ids_ptr + req_idx * (num_spec_tokens + 1) + pos, token_id)
+    tl.store(last_token_ids_ptr + req_idx, token_id)
 
 
 def greedy_rejection_sample(
@@ -264,12 +287,9 @@ def random_rejection_sample(
     draft_probs: torch.Tensor | None,
     target_probs: torch.Tensor,
     bonus_token_ids: torch.LongTensor,
-    recovered_token_ids: torch.LongTensor,
-    uniform_probs: torch.Tensor | None,
+    random_seeds: torch.Tensor,
+    random_offsets: torch.Tensor,
     is_greedy: torch.Tensor | None,
-    *,
-    random_seeds: torch.Tensor | None = None,
-    random_offsets: torch.Tensor | None = None,
 ):
     """Launch probabilistic rejection for non-greedy rows."""
     batch_size, num_spec_tokens = draft_token_ids.shape
@@ -282,10 +302,10 @@ def random_rejection_sample(
         draft_probs,
         target_probs,
         bonus_token_ids,
-        recovered_token_ids,
-        uniform_probs,
         random_seeds,
         random_offsets,
+        random_seeds.stride(0),
+        random_offsets.stride(0),
         is_greedy,
         num_spec_tokens,
         vocab_size,
@@ -295,28 +315,48 @@ def random_rejection_sample(
 
 def sample_recovered_tokens(
     output_token_ids: torch.LongTensor,
+    num_rejected_tokens: torch.LongTensor,
+    last_token_ids: torch.LongTensor,
     draft_token_ids: torch.LongTensor,
     draft_probs: torch.Tensor | None,
     target_probs: torch.Tensor,
-    inv_q: torch.Tensor | None,
-    *,
-    random_seeds: torch.Tensor | None = None,
-    random_offsets: torch.Tensor | None = None,
+    random_seeds: torch.Tensor,
+    random_offsets: torch.Tensor,
+    is_greedy: torch.Tensor | None,
 ):
-    """Launch recovered-token sampling."""
+    """Fill the first rejected token after prefix verification."""
     batch_size, num_spec_tokens = draft_token_ids.shape
     vocab_size = target_probs.shape[-1]
-    block_size = 8192
-    _sample_recovered_tokens_kernel[(batch_size, num_spec_tokens)](
-        output_token_ids,
+    block_size = 1024
+    num_vocab_blocks = triton.cdiv(vocab_size, block_size)
+    partial_scores = target_probs.new_empty((batch_size, num_vocab_blocks))
+    partial_tokens = draft_token_ids.new_empty((batch_size, num_vocab_blocks))
+    _sample_recovered_tokens_kernel[(batch_size, num_vocab_blocks)](
+        partial_scores,
+        partial_tokens,
+        num_rejected_tokens,
         draft_token_ids,
         draft_probs,
         target_probs,
-        inv_q,
         random_seeds,
         random_offsets,
+        is_greedy,
+        random_seeds.stride(0),
+        random_offsets.stride(0),
         num_spec_tokens,
         vocab_size,
-        block_size,
+        num_vocab_blocks,
+        BLOCK_SIZE=block_size,
         NO_DRAFT_PROBS=draft_probs is None,
+    )
+    _store_recovered_tokens_kernel[(batch_size,)](
+        output_token_ids,
+        last_token_ids,
+        partial_scores,
+        partial_tokens,
+        num_rejected_tokens,
+        is_greedy,
+        num_spec_tokens,
+        num_vocab_blocks,
+        BLOCK_SIZE=triton.next_power_of_2(num_vocab_blocks),
     )

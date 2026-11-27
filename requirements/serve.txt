@@ -1,7 +1,24 @@
 aiohttp
-opentelemetry-exporter-otlp-proto-grpc>=1.27,<2
-opentelemetry-exporter-otlp-proto-http>=1.27,<2
-opentelemetry-sdk>=1.27,<2
+certifi>=2023.5.7
+charset-normalizer>=2,<4
+# protobuf 7 support is required when upgrading images with --no-deps.
+googleapis-common-protos>=1.73.1,<2
+grpcio>=1.66.2,<2
+idna>=2.5,<4
+# Explicit OTLP runtime dependencies for image builds using pip --no-deps.
+# Keep the OpenTelemetry stable and beta packages on matching release versions.
+opentelemetry-api==1.45.2
+opentelemetry-exporter-http-transport==0.66b2
+opentelemetry-exporter-otlp-common==0.66b2
+opentelemetry-exporter-otlp-proto-common==1.45.2
+opentelemetry-exporter-otlp-proto-grpc==1.45.2
+opentelemetry-exporter-otlp-proto-http==1.45.2
+opentelemetry-proto==1.45.2
+opentelemetry-sdk==1.45.2
+opentelemetry-semantic-conventions==0.66b2
 prometheus_client
-protobuf
+protobuf>=6.33.5,<8
+requests>=2.25,<3
 timm!=1.0.23
+typing-extensions>=4.12,<5
+urllib3>=1.26,<3

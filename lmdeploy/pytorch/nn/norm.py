@@ -5,6 +5,7 @@ from torch import nn
 
 from lmdeploy.pytorch.distributed import get_dist_group, get_tp_world_rank
 from lmdeploy.pytorch.models.patch import get_build_model_context
+from lmdeploy.pytorch.weight_loader.model_weight_loader import default_weight_loader
 
 from ..backends import get_backend
 from ..backends.norm import LayerNormBuildSpec, RMSNormBuildSpec, RMSNormGatedBuildSpec
@@ -72,7 +73,14 @@ class RMSNormGated(nn.Module):
 
 
 class RMSNorm(nn.Module):
-    """RMS Norm with add residual."""
+    """RMS Norm with add residual.
+
+    Args:
+        offset_weight: If True, the checkpoint stores the RMSNorm scale as an
+            offset from 1. The loader folds and stores the scale in FP32.
+            Ascend folds in the checkpoint dtype and stores the scale in the
+            model dtype for its native RMSNorm operators.
+    """
 
     def __init__(
         self,
@@ -85,6 +93,7 @@ class RMSNorm(nn.Module):
         align: int = 1,
         prefix: str = '',
         all_reduce_group: str | None = None,
+        offset_weight: bool = False,
     ):
         super().__init__()
         backend = get_backend()
@@ -100,6 +109,10 @@ class RMSNorm(nn.Module):
             world_size, rank = get_tp_world_rank('attn')
             hidden_size = get_distribute_size(hidden_size, world_size, rank, align=align)
 
+        # Ascend's fused residual RMSNorm requires the scale and activations to have the same dtype.
+        self._fold_offset_in_fp32 = offset_weight and backend.get_name() != 'ascend'
+        if self._fold_offset_in_fp32:
+            dtype = torch.float32
         self.register_parameter('weight', self.create_weight(hidden_size, dtype, device))
         if w8a8_flag:
             spec = RMSNormW8A8BuildSpec(hidden_size, eps, quant_dtype=quant_config.quant_dtype)
@@ -110,8 +123,10 @@ class RMSNorm(nn.Module):
             enable_deterministic=get_build_model_context().enable_deterministic,
         )
 
-        if tp:
+        if tp or offset_weight:
             self.weight.weight_loader = self.weight_loader
+        self.tp = tp
+        self.offset_weight = offset_weight
         self.align = align
         self.eps = eps
         self._all_reduce_group = None
@@ -128,9 +143,14 @@ class RMSNorm(nn.Module):
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         """Weight loader."""
-        world_size, rank = get_tp_world_rank('attn')
-        loaded_weight = chunk_aligned(loaded_weight, world_size, 0, self.align)[rank]
-        param.copy_(loaded_weight)
+        if self.offset_weight:
+            if self._fold_offset_in_fp32:
+                loaded_weight = loaded_weight.float()
+            loaded_weight = loaded_weight + 1
+        if self.tp:
+            world_size, rank = get_tp_world_rank('attn')
+            loaded_weight = chunk_aligned(loaded_weight, world_size, 0, self.align)[rank]
+        default_weight_loader(param, loaded_weight)
 
     @staticmethod
     def create_weight(hidden_size: int, dtype: torch.dtype | None = None, device: torch.device | None = None):

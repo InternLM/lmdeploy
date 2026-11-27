@@ -34,14 +34,16 @@ class RejectionSamplingImpl(ABC):
         bonus_token_ids: torch.LongTensor,
         *,
         is_greedy: torch.Tensor | None,
+        random_seeds: torch.Tensor,
+        random_offsets: torch.Tensor,
         draft_probs: torch.Tensor | None = None,
-        random_seeds: torch.Tensor | None = None,
-        random_offsets: torch.Tensor | None = None,
     ) -> tuple[torch.LongTensor, torch.LongTensor, torch.LongTensor]:
         """Verify processed target logits against draft tokens.
 
         ``is_greedy`` is a per-request mask for a mixed batch and ``None``
         for an all-random batch. All-greedy batches use ``forward_greedy``.
+        ``random_seeds`` and ``random_offsets`` have one entry per request;
+        offsets identify the first draft's output position, excluding uncommitted drafts.
         """
         raise NotImplementedError
 

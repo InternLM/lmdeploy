@@ -6,6 +6,8 @@ Speculative decoding is an optimization technique that introcude a lightweight d
 This is an experimental feature in lmdeploy.
 :::
 
+On the PyTorch CUDA backend, `GenerationConfig.random_seed` (or `seed` in the OpenAI API) controls draft acceptance, rejected-token recovery, and bonus-token sampling. Random numbers are tied to each request's seed and token position, independently of other requests. Repeating the same seed reproduces sampling when logits and draft tokens are identical; changes in batching, hardware, or model computation can still change the output. Enabling speculative decoding does not guarantee the same token sequence as ordinary autoregressive decoding with the same seed.
+
 ## Examples
 
 Here are some examples.
