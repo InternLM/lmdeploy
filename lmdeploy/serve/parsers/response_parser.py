@@ -832,7 +832,19 @@ class BaseResponseParser(ResponseParser):
                         raise ValueError(f'Missing reasoning token: {tag!r}')
                     vocab[tag] = token_id
         else:
-            vocab = tokenizer.get_vocab()
+            backend = getattr(tokenizer, 'backend_tokenizer', None)
+            if backend is None:
+                vocab = tokenizer.get_vocab()
+            else:
+                # Building the whole vocabulary map per parser instance is O(vocab);
+                # only the two reasoning ids are needed.
+                vocab = {}
+                for tag in (self._reasoning_open_tag, self._reasoning_close_tag):
+                    if tag:
+                        token_id = backend.token_to_id(tag)
+                        if token_id is None:
+                            raise ValueError(f'Missing reasoning token: {tag!r}')
+                        vocab[tag] = token_id
         if self._reasoning_open_tag:
             self._reasoning_start_token_id = vocab[self._reasoning_open_tag]
         assert self._reasoning_close_tag is not None
