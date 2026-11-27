@@ -1,6 +1,8 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 
+from lmdeploy.pytorch.kernels.default.random import rejection_uniform
+
 from ..rejection_sampling import (
     PLACEHOLDER_TOKEN_ID,
     RejectionSamplingImpl,
@@ -16,7 +18,7 @@ def _format_rejection_outputs(
     batch_size, num_spec_tokens = selected_token_ids.shape
     prefix_before = torch.ones_like(accepted, dtype=torch.bool)
     if num_spec_tokens > 1:
-        prefix_before[:, 1:] = accepted[:, :-1].cumprod(dim=1).bool()
+        prefix_before[:, 1:] = accepted[:, :-1].to(torch.int32).cumprod(dim=1).bool()
 
     placeholder = selected_token_ids.new_full((), PLACEHOLDER_TOKEN_ID)
     output_token_ids = selected_token_ids.new_full(
@@ -74,6 +76,8 @@ class DefaultRejectionSamplingImpl(RejectionSamplingImpl):
         bonus_token_ids: torch.LongTensor,
         *,
         is_greedy: torch.Tensor | None,
+        random_seeds: torch.Tensor,
+        random_offsets: torch.Tensor,
         draft_probs: torch.Tensor | None = None,
     ):
         target_token_ids = None
@@ -85,37 +89,32 @@ class DefaultRejectionSamplingImpl(RejectionSamplingImpl):
         batch_size, num_spec_tokens = draft_token_ids.shape
         vocab_size = target_logits.shape[-1]
         target_probs = target_logits.softmax(dim=-1, dtype=torch.float32)
-        uniform_probs = torch.rand(
-            (batch_size, num_spec_tokens),
-            dtype=torch.float64,
-            device=target_logits.device,
-        )
-        q = torch.empty(
-            (batch_size, vocab_size),
-            dtype=torch.float32,
-            device=target_logits.device,
-        )
-        q.exponential_()
-        inv_q = q.reciprocal()
+        positions = random_offsets[:, None] + torch.arange(num_spec_tokens, device=target_logits.device)
+        uniform_probs = rejection_uniform(random_seeds[:, None], positions, torch.zeros_like(positions), 1)
 
         draft_indices = draft_token_ids.unsqueeze(-1)
         target_draft_probs = target_probs.gather(-1, draft_indices).squeeze(-1)
         if draft_probs is None:
             random_accepted = target_draft_probs >= uniform_probs
-            recovered_scores = target_probs * inv_q[:, None, :]
-            recovered_scores.scatter_(-1, draft_indices, 0.0)
         else:
             draft_token_probs = draft_probs.gather(-1, draft_indices).squeeze(-1)
             random_accepted = (
                 (draft_token_probs > 0)
                 & (target_draft_probs / draft_token_probs >= uniform_probs)
             )
-            recovered_scores = (
-                (target_probs - draft_probs).clamp_min_(0)
-                * inv_q[:, None, :]
-            )
 
-        recovered_token_ids = recovered_scores.argmax(dim=-1)
+        # Only the first rejection can contribute a recovered token.
+        rejected_pos = (~random_accepted).int().argmax(dim=-1)
+        rows = torch.arange(batch_size, device=target_logits.device)
+        recovered_probs = target_probs[rows, rejected_pos]
+        if draft_probs is None:
+            recovered_probs.scatter_(1, draft_token_ids[rows, rejected_pos, None], 0.0)
+        else:
+            recovered_probs = (recovered_probs - draft_probs[rows, rejected_pos]).clamp_min_(0)
+        uniform = rejection_uniform(random_seeds[:, None], (random_offsets + rejected_pos)[:, None],
+                                    torch.arange(vocab_size, device=target_logits.device), 2, dtype=torch.float32)
+        recovered_scores = recovered_probs * (-torch.log1p(-uniform)).reciprocal()
+        recovered_token_ids = recovered_scores.argmax(dim=-1, keepdim=True)
         random_token_ids = torch.where(
             random_accepted,
             draft_token_ids,

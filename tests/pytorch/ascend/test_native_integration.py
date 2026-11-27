@@ -390,7 +390,8 @@ def test_rejection_greedy_and_mixed_torch_path(monkeypatch):
     assert rejected.tolist() == [1, 0] and last.tolist() == [2, 4]
     logits = torch.full((2, 2, 5), -1000.0)
     logits.scatter_(-1, targets[:, :2, None], 1000.0)
-    output, rejected, last = impl.forward(logits, draft, targets[:, -1], is_greedy=torch.tensor([True, False]))
+    output, rejected, last = impl.forward(logits, draft, targets[:, -1], is_greedy=torch.tensor([True, False]),
+                                         random_seeds=torch.tensor([42, 43]), random_offsets=torch.tensor([10, 20]))
     assert output.tolist() == [[1, 2, -1], [2, 3, 4]]
     assert rejected.tolist() == [1, 0] and last.tolist() == [2, 4]
 
