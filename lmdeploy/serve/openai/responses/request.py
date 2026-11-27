@@ -308,6 +308,7 @@ def _reasoning_from_input(item: dict[str, Any], index: int) -> str:
 def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
     system_parts: list[str] = []
     messages: list[dict[str, Any]] = []
+    assistant_turn: dict[str, Any] | None = None
     if request.instructions:
         system_parts.append(request.instructions)
 
@@ -324,11 +325,10 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
         if item_type == 'reasoning':
             reasoning = _reasoning_from_input(item, idx)
             if reasoning:
-                if messages and messages[-1]['role'] == 'assistant':
-                    message = messages[-1]
-                    message['reasoning_content'] = message.get('reasoning_content', '') + reasoning
-                else:
-                    messages.append(dict(role='assistant', content=None, reasoning_content=reasoning))
+                if assistant_turn is None:
+                    assistant_turn = dict(role='assistant', content=None)
+                    messages.append(assistant_turn)
+                assistant_turn['reasoning_content'] = assistant_turn.get('reasoning_content', '') + reasoning
             continue
         if item_type == 'function_call':
             call_id = item.get('call_id') or item.get('id')
@@ -341,10 +341,10 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
             call = dict(id=call_id, type='function', function=dict(name=name, arguments=arguments))
             # Keep reasoning, visible text, and all calls of the assistant turn
             # in one message so templates can associate the tool results by ID.
-            if messages and messages[-1]['role'] == 'assistant':
-                messages[-1].setdefault('tool_calls', []).append(call)
-            else:
-                messages.append(dict(role='assistant', content=None, tool_calls=[call]))
+            if assistant_turn is None:
+                assistant_turn = dict(role='assistant', content=None)
+                messages.append(assistant_turn)
+            assistant_turn.setdefault('tool_calls', []).append(call)
             continue
         if item_type == 'function_call_output':
             call_id = item.get('call_id')
@@ -356,6 +356,7 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
                     tool_call_id=call_id,
                     content=_content_from_input(item.get('output', ''), f'input[{idx}].output', allow_images=True),
                 ))
+            assistant_turn = None
             continue
         if item_type != 'message':
             raise ValueError(f'Unsupported Responses input item type: {item_type!r}.')
@@ -368,11 +369,14 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
         content = _content_from_input(item.get('content', ''), f'input[{idx}].content', allow_images=role == 'user')
         if role == 'system':
             system_parts.append(content)
-        elif (role == 'assistant' and messages and messages[-1]['role'] == 'assistant'
-              and messages[-1]['content'] is None and 'reasoning_content' in messages[-1]):
-            messages[-1]['content'] = content
+            assistant_turn = None
+        elif (role == 'assistant' and assistant_turn is not None
+              and assistant_turn['content'] is None and 'reasoning_content' in assistant_turn):
+            assistant_turn['content'] = content
         else:
-            messages.append(dict(role=role, content=content))
+            message = dict(role=role, content=content)
+            messages.append(message)
+            assistant_turn = message if role == 'assistant' else None
     return ([dict(role='system', content='\n\n'.join(system_parts))] if system_parts else []) + messages
 
 

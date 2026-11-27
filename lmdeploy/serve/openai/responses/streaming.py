@@ -91,6 +91,8 @@ async def stream_response(parsed_stream,
         return [
             _reasoning_event('response.reasoning_text.done', index, item_id=item_id, content_index=0,
                              text=reasoning_text),
+            _reasoning_event('response.content_part.done', index, item_id=item_id, content_index=0,
+                             part={'type': 'reasoning_text', 'text': reasoning_text}),
             _reasoning_event('response.output_item.done', index, item=item.model_dump(exclude_none=True)),
         ]
 
@@ -196,6 +198,8 @@ async def stream_response(parsed_stream,
                 next_output_index += 1
                 yield _reasoning_event('response.output_item.added', reasoning_state[0],
                                        item=item.model_dump(exclude_none=True))
+                yield _reasoning_event('response.content_part.added', reasoning_state[0], item_id=item.id,
+                                       content_index=0, part={'type': 'reasoning_text', 'text': ''})
             index, item_id = reasoning_state
             reasoning_parts.append(reasoning_delta)
             yield _reasoning_event('response.reasoning_text.delta', index, item_id=item_id, content_index=0,

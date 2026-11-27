@@ -546,6 +546,24 @@ def test_responses_replays_reasoning_with_its_assistant_turn():
     ]
 
 
+@pytest.mark.parametrize('role', ['developer', 'system'])
+def test_responses_reasoning_starts_new_turn_after_instruction(role):
+    request = ResponsesRequest(input=[
+        {'role': 'user', 'content': 'Start.'},
+        {'role': 'assistant', 'content': 'First answer.'},
+        {'role': role, 'content': 'Continue to the next step.'},
+        {'type': 'reasoning', 'summary': [{'type': 'summary_text', 'text': 'Consider the second step.'}]},
+        {'role': 'assistant', 'content': 'Second answer.'},
+    ])
+
+    assert messages_from_input(request) == [
+        {'role': 'system', 'content': 'Continue to the next step.'},
+        {'role': 'user', 'content': 'Start.'},
+        {'role': 'assistant', 'content': 'First answer.'},
+        {'role': 'assistant', 'content': 'Second answer.', 'reasoning_content': 'Consider the second step.'},
+    ]
+
+
 @pytest.mark.parametrize(('fields', 'error'), [
     ({'content': 'invalid'}, 'Expected an array of text parts'),
     ({'summary': [{'text': 123}]}, r'input\[0\]\.summary\[0\]\.text'),

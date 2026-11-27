@@ -111,9 +111,12 @@ def test_low_budget_responses(responses_endpoint, hf_media_template, sse_payload
 
 
 @pytest.mark.parametrize('stream', [False, True])
-def test_responses_reasoning_tool_round_trip(responses_endpoint, hf_media_template, sse_payloads, stream):
+@pytest.mark.parametrize('template_name', ['glm5_3_flash', 'gpt_oss'])
+def test_responses_reasoning_tool_round_trip(
+    responses_endpoint, hf_media_template, sse_payloads, stream, template_name,
+):
     _, context = responses_endpoint
-    template = hf_media_template('glm5_3_flash')
+    template = hf_media_template(template_name)
     reasoning = 'Check the current status before deciding.'
 
     class Parser(BaseResponseParser):
@@ -151,10 +154,19 @@ def test_responses_reasoning_tool_round_trip(responses_endpoint, hf_media_templa
             events = sse_payloads([response.text])
             assert events[-1]['type'] == 'response.completed'
             assert [event['sequence_number'] for event in events] == list(range(len(events)))
-            assert ''.join(event['delta'] for event in events
-                           if event['type'] == 'response.reasoning_text.delta') == reasoning
+            deltas = [event for event in events if event['type'] == 'response.reasoning_text.delta']
+            assert ''.join(event['delta'] for event in deltas) == reasoning
+            part_added = next(event for event in events if event['type'] == 'response.content_part.added')
+            assert part_added['part'] == {'type': 'reasoning_text', 'text': ''}
+            assert all(delta['content_index'] == part_added['content_index'] == 0
+                       and delta['item_id'] == part_added['item_id']
+                       and delta['output_index'] == part_added['output_index'] == 0
+                       and delta['sequence_number'] > part_added['sequence_number'] for delta in deltas)
             done = next(event for event in events if event['type'] == 'response.reasoning_text.done')
             assert done['text'] == reasoning
+            part_done = next(event for event in events if event['type'] == 'response.content_part.done')
+            assert part_done['part'] == {'type': 'reasoning_text', 'text': reasoning}
+            assert part_done['item_id'] == part_added['item_id']
             reasoning_end = next(i for i, event in enumerate(events)
                                  if event['type'] == 'response.output_item.done'
                                  and event['item']['type'] == 'reasoning')
@@ -162,6 +174,7 @@ def test_responses_reasoning_tool_round_trip(responses_endpoint, hf_media_templa
                               if event['type'] == 'response.output_item.added'
                               and event['item']['type'] == 'function_call')
             assert reasoning_end < tool_start
+            assert done['sequence_number'] < part_done['sequence_number'] < reasoning_end
             output = events[-1]['response']['output']
             assert events[reasoning_end]['item'] == output[0]
             assert done['item_id'] == output[0]['id'] and done['output_index'] == 0
@@ -182,5 +195,7 @@ def test_responses_reasoning_tool_round_trip(responses_endpoint, hf_media_templa
     assert messages[1]['reasoning_content'] == reasoning
     assert messages[1]['tool_calls'][0]['id'] == messages[2]['tool_call_id'] == call['call_id']
     prompt = template.messages2prompt(messages, reasoning_effort='max')
-    assert f'<think>{reasoning}</think>' in prompt
+    marker = (f'<think>{reasoning}</think>' if template_name == 'glm5_3_flash'
+              else f'<|channel|>analysis<|message|>{reasoning}<|end|>')
+    assert marker in prompt
     assert prompt.index(reasoning) < prompt.index('get_status') < prompt.index('READY')
