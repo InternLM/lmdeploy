@@ -58,7 +58,7 @@ def output(tokens=(), timestamp=0, events=(), status='SUCCESS'):
     return NS(token_ids=list(tokens), req_metrics=NS(token_timestamp=timestamp, engine_events=list(events),
                                                    cached_tokens=2), status=status,
               logprobs=None, logits=None, last_hidden_state=None, routed_experts=None,
-              cache_block_ids=None, pd_handoff=None)
+              cache_block_ids=None, pd_handoff=None, input_multimodals_request=None)
 
 
 def event(name, timestamp):
@@ -370,7 +370,7 @@ def load_engine():
     path = SOURCE / 'lmdeploy/serve/core/async_engine.py'
     tree = ast.parse(path.read_text())
     engine = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'AsyncEngine')
-    methods = ('generate', 'safe_run', '_request_error_from_status')
+    methods = ('generate', 'safe_run', '_stream_with_multimodal_recompute', '_request_error_from_status')
     engine.body = [n for n in engine.body if getattr(n, 'name', '') in methods]
     nodes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name in ('GenOut', 'PreprocessedRequest')]
     module = ast.Module(body=[ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')], level=0)]

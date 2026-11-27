@@ -214,7 +214,7 @@ def test_named_call_cannot_complete_with_only_literal_tokens(vocabulary, stream,
         for text, part, final in native_chunks(v, ids, 1):
             yield SimpleNamespace(response=text, token_ids=part, finish_reason='stop' if final else None,
                                    input_token_len=1, generate_token_len=len(ids), cached_tokens=0,
-                                   logprobs=None, routed_experts=None, cache_block_ids=None)
+                                   logprobs=None, routed_experts=None, cache_block_ids=None, pd_handoff=None)
 
     async def run():
         runner = ChatRunner(parser.request, parser, config, object(), generate(),
@@ -292,7 +292,7 @@ def test_named_grammar_preserves_literal_arguments(vocabulary, named_grammar_con
         for text, part, final in native_chunks(v, ids, 1):
             yield SimpleNamespace(response=text, token_ids=part, finish_reason='stop' if final else None,
                                    input_token_len=1, generate_token_len=len(ids), cached_tokens=0,
-                                   logprobs=None, routed_experts=None, cache_block_ids=None)
+                                   logprobs=None, routed_experts=None, cache_block_ids=None, pd_handoff=None)
 
     async def run():
         runner = ChatRunner(parser.request, parser, config, object(), generate(),
@@ -377,7 +377,7 @@ def test_named_constrained_value_rejects_control_token(
         for text, part, final in native_chunks(v, ordinary, 1):
             yield SimpleNamespace(response=text, token_ids=part, finish_reason='stop' if final else None,
                                    input_token_len=1, generate_token_len=len(ordinary), cached_tokens=0,
-                                   logprobs=None, routed_experts=None, cache_block_ids=None)
+                                   logprobs=None, routed_experts=None, cache_block_ids=None, pd_handoff=None)
 
     async def run():
         runner = ChatRunner(parser.request, parser, GenerationConfig(), object(), generate(),

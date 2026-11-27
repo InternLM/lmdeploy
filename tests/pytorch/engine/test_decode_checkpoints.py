@@ -226,7 +226,7 @@ def test_compact_decode_snapshot_survives_cancel_until_forward_completion(cancel
     scheduler.block_manager.allocate(seq)
     access = owner.submit_prefill((owner.bank_for(seq),))
     batch_id, plan = scheduler.decode_checkpoints.prepare(
-        [seq], SimpleNamespace(is_dummy=False, is_chunk=False), None, access_id=access.access_id)
+        [seq], SimpleNamespace(is_dummy=False, is_chunk=False, is_decoding=False), None, access_id=access.access_id)
     unit = int(plan[3].item())
     seq.update_token_ids([50], draft_token_ids=[], mode=UpdateTokenMode.PREFILL)
     if cancel == 'new_turn':
@@ -546,7 +546,7 @@ def test_first_checkpoint_can_use_final_prefill_but_not_an_intermediate_chunk(sp
     scheduler.block_manager.allocate(seq, prealloc_size=4)
     scheduler.state_manager.allocate(seq)
     coordinator = scheduler.decode_checkpoints
-    inputs = SimpleNamespace(is_dummy=False, is_chunk=True, is_last_chunk=False)
+    inputs = SimpleNamespace(is_dummy=False, is_chunk=True, is_last_chunk=False, is_decoding=False)
     assert coordinator.prepare([seq], inputs, None) is None
     inputs.is_last_chunk = True
     batch_id, plan = coordinator.prepare([seq], inputs, None)
@@ -576,7 +576,7 @@ def test_recomputed_prefill_saves_only_its_retained_final_state(compact, specula
     scheduler.block_manager.allocate(seq)
     access = owner.submit_prefill((owner.bank_for(seq),)) if compact else None
     reserved = scheduler.decode_checkpoints.prepare(
-        [seq], SimpleNamespace(is_dummy=False, is_chunk=False), None,
+        [seq], SimpleNamespace(is_dummy=False, is_chunk=False, is_decoding=False), None,
         access_id=access.access_id if access is not None else None)
     if access is not None:
         owner.acknowledge(access.access_id)
@@ -611,7 +611,7 @@ def test_embedding_inputs_skip_store_decode_snapshot(compact, local, prefill):
     owner = scheduler.state_manager
     owner.allocate(seq)
     if prefill:
-        inputs, delta = SimpleNamespace(is_dummy=False, is_chunk=False), None
+        inputs, delta = SimpleNamespace(is_dummy=False, is_chunk=False, is_decoding=False), None
         access = owner.submit_prefill((owner.bank_for(seq),)) if compact else None
     else:
         seq.update_token_ids([50], draft_token_ids=[51, 52, 53], mode=UpdateTokenMode.PREFILL)
@@ -684,7 +684,7 @@ def test_first_checkpoint_retries_after_state_capacity_recovers():
     scheduler.block_manager.allocate(seq)
     held = [states.allocate_checkpoint_state() for _ in range(states.get_num_free_checkpoint())]
     assert scheduler.decode_checkpoints.prepare(
-        [seq], SimpleNamespace(is_dummy=False, is_chunk=False), None) is None
+        [seq], SimpleNamespace(is_dummy=False, is_chunk=False, is_decoding=False), None) is None
     assert seq.prefix_cache.last_decode_save_step == -1
     states.free_checkpoint_state(held.pop())
     seq.update_token_ids([50], draft_token_ids=[51, 52, 53], mode=UpdateTokenMode.PREFILL)
@@ -707,7 +707,7 @@ def test_queued_checkpoint_does_not_advance_a_new_input_turn():
     scheduler.state_manager.allocate(seq)
     scheduler.block_manager.allocate(seq)
     batch_id, plan = scheduler.decode_checkpoints.prepare(
-        [seq], SimpleNamespace(is_dummy=False, is_chunk=False), None)
+        [seq], SimpleNamespace(is_dummy=False, is_chunk=False, is_decoding=False), None)
     seq.update_token_ids([50], draft_token_ids=[], mode=UpdateTokenMode.PREFILL)
     seq.update_token_ids([99], mode=UpdateTokenMode.INPUTS)
     scheduler.decode_checkpoints.finish(batch_id, torch.ones(plan.size(1), dtype=torch.bool))
@@ -789,7 +789,7 @@ def test_provisional_decode_copy_owns_slots_across_session_end(drain):
     scheduler.block_manager.allocate(seq)
     source_slot = seq.logical_state
     batch_id, plan = scheduler.decode_checkpoints.prepare(
-        [seq], SimpleNamespace(is_dummy=False, is_chunk=False), None)
+        [seq], SimpleNamespace(is_dummy=False, is_chunk=False, is_decoding=False), None)
     scheduler.end_session(0)
     assert seq.logical_state == -1
     assert scheduler.state_manager.get_num_runtime_states() == 1
@@ -816,7 +816,7 @@ def test_decode_publication_failure_releases_provisional_resources(monkeypatch, 
     owner = scheduler.state_manager
     access = owner.submit_prefill((owner.bank_for(seq),)) if compact else None
     batch_id, plan = scheduler.decode_checkpoints.prepare(
-        [seq], SimpleNamespace(is_dummy=False, is_chunk=False), None,
+        [seq], SimpleNamespace(is_dummy=False, is_chunk=False, is_decoding=False), None,
         access_id=access.access_id if compact else None)
     if compact:
         owner.acknowledge(access.access_id)
