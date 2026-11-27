@@ -80,7 +80,7 @@ def build_linear(
     dp_gather: bool = False,
     layer_type: str = 'attn',
     prefix: str = '',
-    release_torch_weights: bool = True,
+    cpu_resident: bool = True,
 ) -> nn.Module:
     """Build linear."""
     if layer_type is None:
@@ -123,7 +123,7 @@ def build_linear(
                 all_reduce=all_reduce,
                 layer_type=layer_type,
                 prefix=prefix,
-                release_torch_weights=release_torch_weights,
+                cpu_resident=cpu_resident,
             )
         return AwqLinear(
             in_features,
@@ -220,7 +220,7 @@ def build_colwise_linear(
     check_dist: bool = True,
     layer_type: str = 'attn',
     prefix: str = '',
-    release_torch_weights: bool = True,
+    cpu_resident: bool = True,
 ) -> nn.Module:
     """Build columnwise parallel linear layer."""
     if check_dist:
@@ -248,7 +248,7 @@ def build_colwise_linear(
         dp_gather=dp_gather,
         layer_type=layer_type,
         prefix=prefix,
-        release_torch_weights=release_torch_weights,
+        cpu_resident=cpu_resident,
     )
 
 
@@ -302,7 +302,7 @@ def build_merged_colwise_linear(
     check_dist: bool = True,
     layer_type: str = 'attn',
     prefix: str = '',
-    release_torch_weights: bool = True,
+    cpu_resident: bool = True,
 ):
     """Merge linear."""
     if check_dist and is_tp:
@@ -337,7 +337,7 @@ def build_merged_colwise_linear(
                 is_tp=is_tp,
                 layer_type=layer_type,
                 prefix=prefix,
-                release_torch_weights=release_torch_weights,
+                cpu_resident=cpu_resident,
             )
         return MergedAwqLinear(
             in_features,
@@ -416,7 +416,7 @@ def build_qkv_proj(in_features: int,
                    is_tp: bool = True,
                    num_replicate_kv_heads: int = 1,
                    prefix: str = '',
-                   release_torch_weights: bool = True):
+                   cpu_resident: bool = True):
     """Build qkv proj."""
     dist_config = get_dist_manager().current_config()
     is_tp = is_tp if dist_config.attn_tp > 1 else False
@@ -453,7 +453,7 @@ def build_qkv_proj(in_features: int,
                                    is_tp=is_tp,
                                    num_replicate_kv_heads=num_replicate_kv_heads,
                                    prefix=prefix,
-                                   release_torch_weights=release_torch_weights)
+                                   cpu_resident=cpu_resident)
         return QKVAwqLinear(in_features=in_features,
                             num_q_heads=num_q_heads,
                             num_kv_heads=num_kv_heads,

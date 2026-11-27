@@ -35,6 +35,25 @@ from lmdeploy.pytorch.backends.cuda.tm_moe_modules import TurbomindMoeW4A16Impl
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from test_tm_moe_mxfp4 import (  # noqa: E402
+    FFN as MX_FFN,
+)
+from test_tm_moe_mxfp4 import (  # noqa: E402
+    GROUP as MX_GROUP,
+)
+from test_tm_moe_mxfp4 import (  # noqa: E402
+    HIDDEN as MX_HIDDEN,
+)
+from test_tm_moe_mxfp4 import (  # noqa: E402
+    NUM_EXPERTS as MX_NUM_EXPERTS,
+)
+from test_tm_moe_mxfp4 import (  # noqa: E402
+    TOP_K as MX_TOP_K,
+)
+from test_tm_moe_mxfp4 import (  # noqa: E402
+    _Mxfp4ExpertSet,
+    _silu_mul,
+)
 from test_tm_moe_w4a16 import _ExpertSet, _fused_gate_up  # noqa: E402
 
 NUM_EXPERTS = 8
@@ -289,3 +308,84 @@ def test_piecewise_prepare_warmup_orders_caller_stream_inputs():
     manager.prepare('descriptor', {'input': input})
     torch.cuda.synchronize()
     assert torch.equal(runtime.warmup_copy, torch.ones_like(input))
+
+
+# ---------------------------------------------------------------------------
+# MXFP4 route (gpt-oss): same in-piece contract, with bias + act_func —
+# the P4 regression: a sync inside the captured region (tensor-repeat
+# without a static output_size) invalidated every capture.
+# ---------------------------------------------------------------------------
+
+
+def _mxfp4_impl(seed: int = 7):
+    """One packed mxfp4 impl with bias and a python-side activation."""
+    device = torch.device('cuda')
+    gate = _Mxfp4ExpertSet(MX_FFN, MX_HIDDEN, device, seed)
+    up = _Mxfp4ExpertSet(MX_FFN, MX_HIDDEN, device, seed + 3)
+    down = _Mxfp4ExpertSet(MX_HIDDEN, MX_FFN, device, seed + 1)
+    gen = torch.Generator().manual_seed(seed + 5)
+    gate_up_bias = (torch.randn(MX_NUM_EXPERTS, 2 * MX_FFN, generator=gen) * 0.02).to(device)
+    down_bias = (torch.randn(MX_NUM_EXPERTS, MX_HIDDEN, generator=gen) * 0.02).to(device)
+    from lmdeploy.pytorch.backends.cuda.tm_moe_modules import TurbomindMoeMXFP4Impl
+
+    impl = TurbomindMoeMXFP4Impl(
+        top_k=MX_TOP_K,
+        num_experts=MX_NUM_EXPERTS,
+        hidden_dim=MX_HIDDEN,
+        ffn_dim=MX_FFN,
+        group_size=MX_GROUP,
+        renormalize=True,
+        output_dtype=torch.bfloat16,
+        act_func=_silu_mul,
+    )
+    gate_up_blocks = torch.cat((gate.blocks, up.blocks), dim=1).to(device)
+    gate_up_scales = torch.cat((gate.scales, up.scales), dim=1).to(device)
+    impl.update_weights(gate_up_blocks, gate_up_scales, gate_up_bias, down.blocks.to(device), down.scales.to(device),
+                        down_bias)
+    return impl
+
+
+def _mx_routing(num_tokens: int, sentinel: bool):
+    gen = torch.Generator().manual_seed(13)
+    logits = torch.randn(num_tokens, MX_NUM_EXPERTS, generator=gen)
+    weights, ids = logits.topk(MX_TOP_K, dim=-1)
+    weights = torch.softmax(weights, dim=-1)
+    if sentinel:
+        ids = ids.clone()
+        ids[:, 0] = -1
+        weights[:, 0] = 0.0
+    return weights.cuda(), ids.cuda()
+
+
+@torch.inference_mode()
+def test_mxfp4_capture_replay_is_bitwise_identical():
+    """P4 regression: capture + bitwise replay on the mxfp4 route with bias
+    and act_func. Sentinel routing rides the same captured graph."""
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    impl = _mxfp4_impl()
+    inputs = (torch.randn(6, MX_HIDDEN, dtype=torch.bfloat16, device='cuda'), *_mx_routing(6, sentinel=False))
+    eager = impl.forward(*inputs)
+
+    stream = torch.cuda.Stream()
+    _warm_on_stream(impl, stream, inputs)
+    graph, static_inputs, captured = _capture(impl, inputs, stream)
+    torch.cuda.synchronize()
+
+    for static, value in zip(static_inputs, inputs):
+        static.copy_(value)
+    graph.replay()
+    torch.cuda.synchronize()
+    assert torch.equal(captured, eager)
+
+    # Sentinel routing inside the same capture: the skip block (B1) must be
+    # part of the captured work, bitwise-equal to fresh eager execution.
+    sentinel = (inputs[0], *_mx_routing(6, sentinel=True))
+    eager_sentinel = impl.forward(*(v.clone() for v in sentinel))
+    for static, value in zip(static_inputs, sentinel):
+        static.copy_(value)
+    graph.replay()
+    torch.cuda.synchronize()
+    assert torch.equal(captured, eager_sentinel)
+    impl._release()
+    torch.cuda.empty_cache()
