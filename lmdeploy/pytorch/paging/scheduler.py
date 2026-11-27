@@ -370,8 +370,15 @@ class Scheduler:
         waiting = self.seq_manager.get_sequences(MessageStatus.WAITING).values()
         candidates = list(islice(waiting, self.scheduler_config.max_batches))
         self.kv_connector.prefetch_lookups([
-            seq for seq in candidates if not self.kv_load_coordinator.is_remote_ready(seq)
+            seq for seq in candidates
+            if not seq.pd_metadata_only and not self.kv_load_coordinator.is_remote_ready(seq)
         ])
+
+    def take_multimodal_requests(self) -> SeqList:
+        """Drain admission's media requests, dropping cancelled sequences."""
+        pending = self._prefill_scheduler.multimodal_requests
+        self._prefill_scheduler.multimodal_requests = []
+        return [seq for seq in pending if seq.status == MessageStatus.WAITING_FOR_MULTIMODALS]
 
     def schedule(self,
                  is_prefill: bool,
@@ -392,9 +399,7 @@ class Scheduler:
             prefer_long_prefill,
         )
         running = self._prefill_scheduler.schedule(
-            # A decode turn can preempt an import before falling back to prefill
-            # in the same turn. EngineLoop requests its media before admission.
-            waiting=[seq for seq in self.waiting if not seq.pd_metadata_only],
+            waiting=self.waiting,
             stopped=self.hanging,
             num_ready=self.num_ready(),
             num_running=self.num_running(),

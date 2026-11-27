@@ -319,7 +319,7 @@ class MooncakeStoreScheduler:
 
         block_extras = {}
         lookahead = self._cache_config.prefix_cache_token_lookahead
-        if not request.history_multimodals.empty():
+        if request.prefix_cache.multimodal_spans:
             for block_index in range(len(tracker.block_hashes), num_blocks):
                 start = block_index * block_size
                 end = start + block_size

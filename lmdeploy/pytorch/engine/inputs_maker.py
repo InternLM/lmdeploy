@@ -1589,7 +1589,13 @@ class InputsMakerAsync:
         to_evict_seqs = self.to_evict_seqs
         if len(to_evict_seqs) == 0:
             return
-        self.scheduler.preempt_seqs(to_evict_seqs)
+        # A prefill fallback can already have readmitted a rejected decode or
+        # moved it to media/remote I/O in this same prefetch turn. Its new owner
+        # must not be evicted by the old decode rejection list.
+        self.scheduler.preempt_seqs([
+            seq for seq in to_evict_seqs
+            if seq.status in (MessageStatus.RUNNING, MessageStatus.WAITING, MessageStatus.STOPPED)
+        ])
         self.to_evict_seqs.clear()
 
     @torch.inference_mode()

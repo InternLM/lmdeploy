@@ -190,19 +190,30 @@ def test_receive_completion_wakes_idle_migration_loop_without_spinning():
     asyncio.run(run())
 
 
-def test_preempted_metadata_only_decode_waits_for_media_without_holding_blocks():
+@pytest.mark.parametrize('prefetch', [False, True])
+def test_preempted_metadata_only_decode_waits_for_media_without_holding_blocks(prefetch):
     async def run():
         async def migrate(batch):
             return [PDTransferResult(transfer_id=batch.receives[0].handoff.transfer_id, status='completed')]
 
         loop, prefill, seq, responses = make_transfer(migrate)
+        from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+        seq.prefix_cache.multimodal_spans = seq._make_multimodal_spans(
+            dict(image=[MultiModalData(data=[], start=2, end=6, content_hash='pixels')]))
         seq.pd_metadata_only = True
         await loop._receive_handoff(seq)
         await asyncio.gather(*loop._pd_control_tasks)
         loop.scheduler.schedule_pd_decode()
         loop.scheduler.preempt_seqs([seq])
-        assert not loop.scheduler.schedule(is_prefill=True).running
-        loop._request_pd_media_recompute()
+        seq.state.release_paging_resources()
+
+        async def schedule_inputs():
+            assert not loop.scheduler.schedule(is_prefill=True).running
+            return None, None
+
+        loop.inputs_maker = SimpleNamespace(send_next_inputs=schedule_inputs, prefetch_next_inputs=schedule_inputs)
+        send_inputs = loop._prefetch_next_inputs if prefetch else loop._main_loop_try_send_next_inputs
+        assert await send_inputs() == (None, None)
         assert responses == []
         from lmdeploy.pytorch.messages import MessageStatus
         assert seq.status == MessageStatus.WAITING_FOR_MULTIMODALS
@@ -244,6 +255,8 @@ def test_deferred_media_resume_validates_sequence_and_survives_a_second_preempti
         await asyncio.gather(*loop._pd_control_tasks)
         loop.scheduler.schedule_pd_decode()
         loop.scheduler.preempt_seqs([seq])
+        seq.state.release_paging_resources()
+        assert not loop.scheduler.schedule(is_prefill=True).running
         loop._request_pd_media_recompute()
         engine = Engine.__new__(Engine)
         engine.scheduler = loop.scheduler

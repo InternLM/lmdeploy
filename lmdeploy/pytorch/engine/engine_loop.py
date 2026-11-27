@@ -520,17 +520,15 @@ class EngineLoop:
         replay."""
         if self.config.role != EngineRole.Decode:
             return
-        for seq in list(self.scheduler.waiting):
-            if seq.pd_metadata_only:
-                seq.state.begin_multimodal_load()
-                logger.info('PD multimodal recompute requested: session=%s seq=%s generated=%s',
-                            seq.session_id, seq.seq_id, seq.num_new_tokens)
-                # Queue after earlier decode outputs so coalescing preserves their tokens and logprobs.
-                output = InferOutput(session_id=seq.session_id, resp=seq.resp,
-                                     token_ids=seq.generated_ids.copy(), input_multimodals_request=seq.seq_id,
-                                     req_metrics=RequestMetrics(time.time(), seq.engine_events,
-                                                                cached_tokens=seq.remote_prefill_cached_tokens))
-                self.resp_queue.put_nowait({seq.session_id: output})
+        for seq in self.scheduler.take_multimodal_requests():
+            logger.info('PD multimodal recompute requested: session=%s seq=%s generated=%s',
+                        seq.session_id, seq.seq_id, seq.num_new_tokens)
+            # Queue after earlier decode outputs so coalescing preserves their tokens and logprobs.
+            output = InferOutput(session_id=seq.session_id, resp=seq.resp,
+                                 token_ids=seq.generated_ids.copy(), input_multimodals_request=seq.seq_id,
+                                 req_metrics=RequestMetrics(time.time(), seq.engine_events,
+                                                            cached_tokens=seq.remote_prefill_cached_tokens))
+            self.resp_queue.put_nowait({seq.session_id: output})
         self.has_runable_event.set()
 
     async def _main_loop_try_send_next_inputs(self):
@@ -540,18 +538,18 @@ class EngineLoop:
         if self._sleep_requested:
             return None, None
 
-        self._request_pd_media_recompute()
         self.forward_started_at = time.monotonic()
         result = await self.inputs_maker.send_next_inputs()
         self.forward_started_at = None
+        self._request_pd_media_recompute()
         return result
 
     async def _prefetch_next_inputs(self):
         """Prefetch the next batch unless sleep has started."""
         if self._sleep_requested:
             return None, None
-        self._request_pd_media_recompute()
         result = await self.inputs_maker.prefetch_next_inputs()
+        self._request_pd_media_recompute()
         # Refill after selection, while the already queued forward executes.
         self.scheduler.prefetch_kv_lookups()
         return result

@@ -495,7 +495,7 @@ class _PrefillAdmissionAttempt:
             # including a folded checkpoint. Drop the entire private cache tuple.
             self.seq.state.release_paging_resources()
             self.seq.replayssm_recompute_pending = False
-        if self.load_coordinator.lookup_enabled and not self._load_ready:
+        if self.load_coordinator.lookup_enabled and not self._load_ready and not self.seq.pd_metadata_only:
             if self.load_coordinator.is_lookup_pending(self.seq):
                 self.prefill_scheduler.last_schedule_had_pending_lookup = True
                 return _PrefillAdmissionResult.skip()
@@ -509,12 +509,32 @@ class _PrefillAdmissionAttempt:
         if resource_result is not None:
             return resource_result
 
+        # Resource admission may have rolled back a hit to release its pinned
+        # state. Only the final replay boundary can authorize media-free input.
+        media_result = self._defer_missing_pd_media()
+        if media_result is not None:
+            return media_result
         return self._allocate_and_commit()
+
+    def _defer_missing_pd_media(self):
+        """Materialize media only if replay still crosses an imported span."""
+        seq = self.seq
+        if not seq.pd_metadata_only:
+            return None
+        if all(span.end <= seq.num_history_ids for span in seq.prefix_cache.multimodal_spans):
+            return None
+        self._prefix_match.rollback('PD replay requires uncached media')
+        seq.state.begin_multimodal_load()
+        self.prefill_scheduler.multimodal_requests.append(seq)
+        return _PrefillAdmissionResult.load_started()
 
     def _admit_resources(self):
         if self.prefill_scheduler.block_trie.enabled:
             return self._admit_prefix_cache_resources()
-        if self.load_coordinator.lookup_enabled:
+        media_result = self._defer_missing_pd_media()
+        if media_result is not None:
+            return media_result
+        if self.load_coordinator.lookup_enabled and not self.seq.pd_metadata_only:
             load_result = self._try_external_load()
             if load_result is not None:
                 return load_result
@@ -537,7 +557,12 @@ class _PrefillAdmissionAttempt:
             if not self._load_ready and not self._has_private_local_tail():
                 self._prefix_match.match()
 
-        if self.load_coordinator.lookup_enabled:
+        media_result = self._defer_missing_pd_media()
+        if media_result is not None:
+            return media_result
+        # Metadata-only replay reuses local cache only. Keep external lookup
+        # behind media restoration, including its asynchronous failure path.
+        if self.load_coordinator.lookup_enabled and not self.seq.pd_metadata_only:
             return self._try_external_load()
         return None
 
@@ -789,6 +814,9 @@ class _PrefillAdmissionAttempt:
             # sequence to input_end_pos.
             self.load_coordinator.mark_prefill_scheduled(seq)
         self._prefix_match.commit()
+        if seq.pd_metadata_only:
+            logger.info('PD multimodal recompute reuses cached media: session=%s seq=%s cached_tokens=%s',
+                        seq.session_id, seq.seq_id, seq.num_history_ids)
         return _PrefillAdmissionResult.admit(prefill_token_count)
 
 
@@ -821,6 +849,9 @@ class _PrefillScheduler:
         self.eviction_helper = eviction_helper
         self.load_coordinator = load_coordinator
         self.last_schedule_had_pending_lookup = False
+        # Admission owns the transition; EngineLoop drains notifications once,
+        # including when this turn has no runnable model inputs.
+        self.multimodal_requests: SeqList = []
         self._long_prefill_policy = _envs.opt_ttft_policy
         self._long_prefill_aging_seconds_per_chunk = max(
             0.001,
@@ -956,8 +987,8 @@ class _PrefillScheduler:
             ).run()
 
             if admission.action is _PrefillAdmissionAction.LOAD_STARTED:
-                # The request left WAITING for asynchronous load without using
-                # a model-batch slot or prefill token budget.
+                # Remote KV or frontend media loading leaves WAITING without
+                # using a model-batch slot or prefill token budget.
                 continue
             if admission.action is _PrefillAdmissionAction.SKIP:
                 skipped_waiting.append(seq)
