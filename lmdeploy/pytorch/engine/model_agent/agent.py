@@ -1214,6 +1214,8 @@ class BaseModelAgent:
                 self._push_output(BatchedOutputs.connector_only(connector_output))
             return
 
+        all_routed_experts = output.get('all_routed_experts') if self.need_output and return_routed_experts else None
+
         # input-logprob mode is scoring-only: this branch emits compact
         # logprob rows, and falling through would wrongly run sampling /
         # sequence-update on a max_tokens=0 request.
@@ -1231,6 +1233,7 @@ class BaseModelAgent:
                 output = self._get_outputs_with_logprobs(output.get('logits'), inputs,
                                                          sampling_inputs.max_num_logprobs, model_metas,
                                                          logprob_extra_token_ids=sampling_inputs.logprob_extra_token_ids)
+                output.all_routed_experts = all_routed_experts
             else:
                 output = BatchedOutputs(next_token_ids=None, stopped=None)
             if self.need_output or connector_output is not None or ssm_state_access_id is not None:
@@ -1250,11 +1253,6 @@ class BaseModelAgent:
 
         if self.need_output:
             logger.debug(f'<ForwardTask> rank[{rank}]: Sampling.')
-            # for router replay
-            if return_routed_experts:
-                all_routed_experts = output.get('all_routed_experts', None)
-            else:
-                all_routed_experts = None
 
             (
                 inputs,

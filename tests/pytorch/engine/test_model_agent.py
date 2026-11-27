@@ -231,6 +231,35 @@ def test_async_forward_disabled_path_keeps_one_sampling_projection():
     assert 'input_logits' not in output
 
 
+@pytest.mark.parametrize('return_routed_experts', [False, True])
+def test_scoring_step_keeps_requested_routed_experts(monkeypatch, return_routed_experts):
+    from lmdeploy.pytorch.engine.model_agent import agent as agent_module
+
+    dist_context = SimpleNamespace(dist_config=SimpleNamespace(attn_tp=1, dp=1))
+    monkeypatch.setattr(agent_module, 'get_dist_manager', lambda: SimpleNamespace(current_context=lambda: dist_context))
+    inputs = _input_logprob_model_inputs([0, 1, 2], [0, 1])
+    routes = torch.arange(6).reshape(3, 1, 2)
+    agent = BaseModelAgent.__new__(BaseModelAgent)
+    agent.rank = 0
+    agent.need_output = True
+    agent.cache_engine = agent.kv_connector = agent.memdecode_agent = agent.ssm_state_cursor = None
+    agent.misc_config = SimpleNamespace(logprobs_mode='raw_logprobs')
+    agent._prepare_inputs_prefill = lambda inputs, _: inputs
+
+    async def forward(inputs, **kwargs):
+        return {'logits': torch.zeros(2, 3), 'all_routed_experts': routes}
+
+    outputs = []
+    agent._async_model_forward = forward
+    agent._push_output = outputs.append
+    sampling_inputs = SimpleNamespace(max_num_logprobs=0, logprob_extra_token_ids=None)
+    asyncio.run(agent._async_step(inputs, sampling_inputs=sampling_inputs, return_routed_experts=return_routed_experts))
+
+    output, = outputs
+    assert output.logprobs.indices.flatten().tolist() == [1, 2]
+    assert output.all_routed_experts is (routes if return_routed_experts else None)
+
+
 @pytest.mark.parametrize('mode', ['raw_logits', 'raw_logprobs'])
 @pytest.mark.parametrize('num_logprobs', [0, 1, 2])
 def test_input_compaction_matches_shared_reference(mode, num_logprobs):

@@ -287,6 +287,11 @@ placeholder expansion. At least one token must follow the boundary; otherwise
 the endpoint rejects the request. Both streaming and non-streaming forms return
 one terminal payload; streaming then emits `[DONE]`.
 
+For supported MoE models served with `--enable-return-routed-experts`, set
+`return_routed_experts: true` to request `meta_info.routed_experts` in the same
+response. The expert rows follow the existing `routed_experts_start_len` offset,
+independently of the logprob start position.
+
 This direct route requires `max_tokens=0` and speculative decoding disabled.
 Input scoring is not available for TurboMind, DistServe, proxy `/generate`, or
 the OpenAI/Anthropic/Responses schemas.

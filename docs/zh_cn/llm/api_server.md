@@ -248,6 +248,10 @@ curl http://{server_ip}:{server_port}/generate \
 检查边界。边界后必须至少有一个 token，否则端点会拒绝该请求。流式和非流式都只返回一个终止
 payload，流式随后发送 `[DONE]`。
 
+对于通过 `--enable-return-routed-experts` 启动且支持该功能的 MoE 模型，设置
+`return_routed_experts: true` 可在同一个响应中获取 `meta_info.routed_experts`。
+专家路由行沿用 `routed_experts_start_len` 偏移，独立于输入 logprob 的起始位置。
+
 此直接接口要求设置 `max_tokens=0` 并禁用推测解码。TurboMind、DistServe、代理
 `/generate` 以及 OpenAI、Anthropic 和 Responses 协议暂不支持输入 logprob。
 
