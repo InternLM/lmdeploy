@@ -9,7 +9,7 @@ from lmdeploy.pytorch.engine.guided_process import GuidedDecodingManager
 
 @pytest.fixture
 def tokenizer():
-    vocab = {'<unk>': 0, '<eos>': 1, '<user>': 2, '<observation>': 3, 'ok': 4}
+    vocab = {'<unk>': 0, '<eos>': 1, '<user>': 2, '<observation>': 3, 'ok': 4, 'bad': 5}
     return PreTrainedTokenizerFast(tokenizer_object=Tokenizer(models.WordLevel(vocab, unk_token='<unk>')),
                                   unk_token='<unk>', eos_token='<eos>',
                                   additional_special_tokens=['<user>', '<observation>'])
@@ -24,7 +24,7 @@ def allowed(manager, matcher, token):
 @pytest.mark.parametrize('stop_token', [1, 2, 3])
 def test_model_eos_is_allowed_only_after_complete_output(tokenizer, stop_token):
     manager = GuidedDecodingManager(tokenizer, len(tokenizer), stop_token_ids=[1, 2, 3])
-    matcher = manager.get_processor(1, 1, {'type': 'regex_schema', 'regex_schema': 'ok'})
+    matcher = manager.get_or_create_processor(1, 1, {'type': 'regex_schema', 'regex_schema': 'ok'})
     assert not allowed(manager, matcher, stop_token)
     assert matcher.accept_string('ok')
     assert allowed(manager, matcher, stop_token)
@@ -42,7 +42,7 @@ def test_model_eos_preserves_distinct_tokenizer_eos(tokenizer, stop_token, respo
     model_eos = [2, 3]
     manager = GuidedDecodingManager(tokenizer, len(tokenizer), stop_token_ids=model_eos)
     assert model_eos == [2, 3]
-    matcher = manager.get_processor(1, 1, response_format)
+    matcher = manager.get_or_create_processor(1, 1, response_format)
     assert not allowed(manager, matcher, stop_token)
     assert matcher.accept_string(output)
     assert allowed(manager, matcher, stop_token)
@@ -52,11 +52,33 @@ def test_model_eos_preserves_distinct_tokenizer_eos(tokenizer, stop_token, respo
 
 def test_default_stop_detection_is_preserved(tokenizer):
     manager = GuidedDecodingManager(tokenizer, len(tokenizer))
-    matcher = manager.get_processor(1, 1, {'type': 'regex_schema', 'regex_schema': 'ok'})
+    matcher = manager.get_or_create_processor(1, 1, {'type': 'regex_schema', 'regex_schema': 'ok'})
     assert matcher.accept_string('ok')
     assert allowed(manager, matcher, 1)
     assert not allowed(manager, matcher, 2)
     assert not allowed(manager, matcher, 3)
+
+
+@pytest.mark.parametrize('session_id', [1, 2])
+@pytest.mark.parametrize('initial_token_id', [1, 5], ids=['premature_eos', 'invalid_text'])
+def test_rejected_initial_token_preserves_existing_matchers_and_allows_retry(tokenizer, session_id, initial_token_id):
+    manager = GuidedDecodingManager(tokenizer, len(tokenizer))
+    response_format = {'type': 'regex_schema', 'regex_schema': 'okok'}
+    existing = manager.get_or_create_processor(1, 1, response_format, initial_token_id=4)
+
+    with pytest.raises(ValueError, match=f'Initial output token {initial_token_id} does not match the grammar'):
+        manager.get_or_create_processor(session_id, 2, response_format, initial_token_id=initial_token_id)
+
+    assert manager.processors == {1: {1: existing}}
+    assert not allowed(manager, existing, 1)
+    assert existing.accept_token(4)
+    assert allowed(manager, existing, 1)
+
+    matcher = manager.get_or_create_processor(session_id, 2, response_format, initial_token_id=4)
+    assert matcher is not existing
+    assert not allowed(manager, matcher, 1)
+    assert matcher.accept_token(4)
+    assert allowed(manager, matcher, 1)
 
 
 def test_pd_recompute_initializes_grammar_once_from_prefill_token(tokenizer):
@@ -81,6 +103,7 @@ def test_pd_recompute_initializes_grammar_once_from_prefill_token(tokenizer):
     inputs = ARSamplingStrategy(0).make_sampling_inputs([seq])
     manager = GuidedDecodingManager(tokenizer, len(tokenizer))
     matcher = manager.get_processors(inputs.session_ctx, inputs.response_formats)[0]
+    assert not allowed(manager, matcher, 1)
     assert matcher.accept_token(4)
     assert allowed(manager, matcher, 1)
     # A later preemption reuses the advanced matcher instead of replaying y1 or resetting it.
