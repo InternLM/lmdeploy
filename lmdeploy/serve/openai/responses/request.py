@@ -284,6 +284,27 @@ def _content_from_input(content: Any,
     return parts if has_images else ''.join(part['text'] for part in parts)
 
 
+def _reasoning_from_input(item: dict[str, Any], index: int) -> str:
+    # Prefer the full text for replay when a client sends both representations.
+    for field in ('content', 'summary'):
+        parts = item.get(field)
+        if parts is None:
+            continue
+        if not isinstance(parts, list):
+            raise ValueError(f'Unsupported reasoning {field} at input[{index}]. Expected an array of text parts.')
+        text = []
+        for part_index, part in enumerate(parts):
+            value = _as_dict(part).get('text')
+            if not isinstance(value, str):
+                raise ValueError(f'Expected a text string at input[{index}].{field}[{part_index}].text.')
+            text.append(value)
+        if any(text):
+            return ''.join(text)
+    if item.get('encrypted_content'):
+        raise ValueError(f'Encrypted reasoning at input[{index}] is unsupported. Supply reasoning text in content.')
+    return ''
+
+
 def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
     system_parts: list[str] = []
     messages: list[dict[str, Any]] = []
@@ -300,6 +321,15 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
             raise ValueError(f'Unsupported Responses input item at index {idx}.')
 
         item_type = item.get('type', 'message')
+        if item_type == 'reasoning':
+            reasoning = _reasoning_from_input(item, idx)
+            if reasoning:
+                if messages and messages[-1]['role'] == 'assistant':
+                    message = messages[-1]
+                    message['reasoning_content'] = message.get('reasoning_content', '') + reasoning
+                else:
+                    messages.append(dict(role='assistant', content=None, reasoning_content=reasoning))
+            continue
         if item_type == 'function_call':
             call_id = item.get('call_id') or item.get('id')
             name = item.get('name')
@@ -309,12 +339,8 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
             if not isinstance(arguments, str):
                 raise ValueError(f'Unsupported `arguments` in function_call item at index {idx}. Expected string.')
             call = dict(id=call_id, type='function', function=dict(name=name, arguments=arguments))
-            # One assistant turn is reported as several output items: text
-            # first, then its calls. Every call that continues that turn joins
-            # the same message, so adjacent calls stay one parallel invocation
-            # and a call after assistant text does not open a second turn.
-            # Keep all IDs visible to templates associating the following tool
-            # results.
+            # Keep reasoning, visible text, and all calls of the assistant turn
+            # in one message so templates can associate the tool results by ID.
             if messages and messages[-1]['role'] == 'assistant':
                 messages[-1].setdefault('tool_calls', []).append(call)
             else:
@@ -342,6 +368,9 @@ def messages_from_input(request: ResponsesRequest) -> list[dict[str, Any]]:
         content = _content_from_input(item.get('content', ''), f'input[{idx}].content', allow_images=role == 'user')
         if role == 'system':
             system_parts.append(content)
+        elif (role == 'assistant' and messages and messages[-1]['role'] == 'assistant'
+              and messages[-1]['content'] is None and 'reasoning_content' in messages[-1]):
+            messages[-1]['content'] = content
         else:
             messages.append(dict(role=role, content=content))
     return ([dict(role='system', content='\n\n'.join(system_parts))] if system_parts else []) + messages

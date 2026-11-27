@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, Literal
 
 import shortuuid
 from openai.types.responses import (
     ResponseFunctionToolCall as ResponseOutputFunctionCall,
 )
 from openai.types.responses import (
+    ResponseOutputItem,
     ResponseOutputMessage,
 )
 
@@ -21,7 +22,7 @@ from lmdeploy.serve.openai.responses.protocol import (
     ResponsesRequest,
     ResponsesResponse,
 )
-from lmdeploy.serve.openai.responses.response import make_response, response_metadata_kwargs
+from lmdeploy.serve.openai.responses.response import make_reasoning_item, make_response, response_metadata_kwargs
 from lmdeploy.serve.openai.utils import filter_parallel_tool_call_deltas
 
 
@@ -64,8 +65,34 @@ async def stream_response(parsed_stream,
     text_output_index = None
     text = ''
     tool_states: dict[int, dict[str, Any]] = {}
+    reasoning_state: tuple[int, str] | None = None
+    reasoning_parts: list[str] = []
+    reasoning_items: dict[int, ResponseOutputItem] = {}
     final_chunk = None
     runtime_error = None
+
+    def _reasoning_event(event: str, output_index: int, **payload: Any) -> str:
+        nonlocal sequence_number
+        frame = _sse(event, dict(type=event, sequence_number=sequence_number, response_id=request.request_id,
+                                 output_index=output_index, **payload))
+        sequence_number += 1
+        return frame
+
+    def _finish_reasoning_item(status: Literal['completed', 'incomplete']) -> list[str]:
+        nonlocal reasoning_state
+        if reasoning_state is None:
+            return []
+        index, item_id = reasoning_state
+        reasoning_text = ''.join(reasoning_parts)
+        item = make_reasoning_item(reasoning_text, item_id=item_id, status=status)
+        reasoning_items[index] = item
+        reasoning_state = None
+        reasoning_parts.clear()
+        return [
+            _reasoning_event('response.reasoning_text.done', index, item_id=item_id, content_index=0,
+                             text=reasoning_text),
+            _reasoning_event('response.output_item.done', index, item=item.model_dump(exclude_none=True)),
+        ]
 
     def _start_text_item() -> list[str]:
         nonlocal next_output_index, sequence_number, text_output_index, text_started
@@ -160,7 +187,23 @@ async def stream_response(parsed_stream,
         final_chunk = chunk
         delta_message = chunk.delta_message
         content_delta = delta_message.content or ''
-        tool_deltas = delta_message.tool_calls
+        tool_deltas = filter_parallel_tool_call_deltas(delta_message.tool_calls or [], request.parallel_tool_calls)
+        reasoning_delta = delta_message.reasoning_content
+        if reasoning_delta:
+            if reasoning_state is None:
+                item = make_reasoning_item('', status='in_progress')
+                reasoning_state = (next_output_index, item.id)
+                next_output_index += 1
+                yield _reasoning_event('response.output_item.added', reasoning_state[0],
+                                       item=item.model_dump(exclude_none=True))
+            index, item_id = reasoning_state
+            reasoning_parts.append(reasoning_delta)
+            yield _reasoning_event('response.reasoning_text.delta', index, item_id=item_id, content_index=0,
+                                   delta=reasoning_delta)
+
+        if content_delta or tool_deltas:
+            for event in _finish_reasoning_item('completed'):
+                yield event
 
         if content_delta:
             for event in _start_text_item():
@@ -180,7 +223,7 @@ async def stream_response(parsed_stream,
             )
             sequence_number += 1
         if tool_deltas:
-            for tool_delta in filter_parallel_tool_call_deltas(tool_deltas, request.parallel_tool_calls):
+            for tool_delta in tool_deltas:
                 for event in _start_tool_item(tool_delta):
                     yield event
                 function_delta = tool_delta.function
@@ -209,7 +252,10 @@ async def stream_response(parsed_stream,
     output_tokens = 0 if final_chunk is None else final_chunk.generate_token_len
     finish_reason = ('error' if runtime_error is not None else
                      None if final_chunk is None else final_chunk.finish_reason)
-    if not text and not tool_states:
+    reasoning_status = 'incomplete' if finish_reason in ('length', 'error', 'abort') else 'completed'
+    for event in _finish_reasoning_item(reasoning_status):
+        yield event
+    if not (text or tool_states or reasoning_items):
         for event in _start_text_item():
             yield event
     tool_calls = [
@@ -237,7 +283,7 @@ async def stream_response(parsed_stream,
         error_code=None if runtime_error is None else runtime_error.code.value,
         error_message=None if runtime_error is None else runtime_error.message,
     )
-    output_by_index: dict[int, ResponseOutputMessage | ResponseOutputFunctionCall] = {}
+    output_by_index = reasoning_items.copy()
     text_item = next((item for item in final_response.output if isinstance(item, ResponseOutputMessage)), None)
     if text_started and text_output_index is not None and text_item is not None:
         output_by_index[text_output_index] = text_item

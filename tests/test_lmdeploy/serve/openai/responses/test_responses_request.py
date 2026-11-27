@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from openai.types.responses import ResponseFunctionToolCall
 
 from lmdeploy.serve.openai.responses import ResponsesRequest
@@ -516,19 +517,42 @@ def test_responses_rejects_unsupported_input_items():
         raise AssertionError('input_audio should be rejected')
 
 
-def test_responses_rejects_reasoning_input_items():
+def test_responses_replays_reasoning_with_its_assistant_turn():
     request = ResponsesRequest(
         model='fake-model',
-        input=[{
-            'type': 'reasoning',
-            'summary': [],
-        }],
+        input=[
+            {'role': 'user', 'content': 'Check the status.'},
+            {'type': 'reasoning', 'id': 'rs_1',
+             'content': [{'type': 'reasoning_text', 'text': 'Use the '},
+                         {'type': 'reasoning_text', 'text': 'status tool.'}],
+             'summary': [{'type': 'summary_text', 'text': 'Look up the status.'}]},
+            {'role': 'assistant', 'content': 'Checking.'},
+            {'type': 'function_call', 'call_id': 'call_1', 'name': 'get_status', 'arguments': '{}'},
+            {'type': 'reasoning', 'id': 'rs_2', 'summary': [{'type': 'summary_text', 'text': ' Wait for its result.'}]},
+            {'type': 'function_call_output', 'call_id': 'call_1', 'output': 'ready'},
+            {'type': 'reasoning', 'id': 'rs_empty', 'summary': []},
+            {'role': 'assistant', 'content': 'It is ready.'},
+        ],
     )
 
-    try:
+    assert messages_from_input(request) == [
+        {'role': 'user', 'content': 'Check the status.'},
+        {'role': 'assistant', 'content': 'Checking.',
+         'reasoning_content': 'Use the status tool. Wait for its result.',
+         'tool_calls': [{'id': 'call_1', 'type': 'function',
+                         'function': {'name': 'get_status', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'call_1', 'content': 'ready'},
+        {'role': 'assistant', 'content': 'It is ready.'},
+    ]
+
+
+@pytest.mark.parametrize(('fields', 'error'), [
+    ({'content': 'invalid'}, 'Expected an array of text parts'),
+    ({'summary': [{'text': 123}]}, r'input\[0\]\.summary\[0\]\.text'),
+    ({'summary': [], 'encrypted_content': 'opaque'}, 'Encrypted reasoning'),
+])
+def test_responses_rejects_unusable_reasoning_items(fields, error):
+    request = ResponsesRequest(input=[{'type': 'reasoning', 'id': 'rs_1', **fields}])
+
+    with pytest.raises(ValueError, match=error):
         messages_from_input(request)
-    except ValueError as err:
-        assert 'reasoning' in str(err)
-    else:
-        raise AssertionError(
-            'reasoning input items should be rejected by Text V1')
