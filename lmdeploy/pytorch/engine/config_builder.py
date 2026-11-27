@@ -104,6 +104,7 @@ class ConfigBuilder:
     def build_backend_config(engine_config: PytorchEngineConfig):
         """Build backend config."""
         backend_config = BackendConfig(
+            specialized_executor=engine_config.specialized_executor,
             eager_mode=engine_config.eager_mode,
             device_type=engine_config.device_type,
             piecewise_cudagraph_max_tokens=engine_config.piecewise_cudagraph_max_tokens,
