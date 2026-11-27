@@ -115,6 +115,8 @@ class RecomputeEvictionHelper:
         # Keep soft admission accounting aligned with released resources.
         self.load_coordinator.release_tracking(seq)
         seq.state.release_paging_resources()
+        if seq.prefill_trace is not None:
+            seq.prefill_trace.preempt()
         return True
 
     def _try_make_block_capacity(self, num_required_blocks: int) -> bool:

@@ -498,6 +498,12 @@ class KVLoadCoordinator:
         if seq.prefix_cache.match_start_step < 0:
             seq.prefix_cache.match_start_step = record.match_start_step
         self.block_trie.finalize_match(seq)
+        trace = seq.prefill_trace
+        if trace is not None and not trace.dispatched:
+            # One accepted interval per admission, after all TP ranks complete.
+            # Initial reuse excludes later reloads after prefill dispatch.
+            trace.external_start = record.load_start_step
+            trace.external_end = record.remote_step
         seq.state.finish_remote_load()
         record.phase = _LoadPhase.READY
 

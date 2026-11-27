@@ -50,6 +50,7 @@ class SchedulerSequenceDefault(SchedulerSequence):
         self.append_routed_experts(routed_experts)
 
         if mode == UpdateTokenMode.INPUTS:
+            self.reset_prefill_trace()
             self.cached_tokens = 0
             self.prefix_cache.suppress_match_stats = False
             self.prefix_cache.match_start_step = -1

@@ -29,10 +29,7 @@ def test_trace_keeps_oversized_terminal_response_success(responses_endpoint, mon
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     monkeypatch.setattr(otel_trace, '_tracer', provider.get_tracer('large-responses'))
     monkeypatch.setattr(request_trace, 'ENABLED', True)
-    monkeypatch.setattr(request_trace, 'LOG_ENABLED', True)
-    monkeypatch.setattr(request_trace, 'get_writer', lambda: None)
-    records = []
-    monkeypatch.setattr(request_trace, 'emit', lambda event, rid, **kw: records.append(kw))
+    monkeypatch.setattr(otel_trace, 'initialize', lambda: None)
     if not structured:
         monkeypatch.setattr(streaming, 'trace_frame', lambda frame, payload: frame)
     else:
@@ -59,7 +56,7 @@ def test_trace_keeps_oversized_terminal_response_success(responses_endpoint, mon
         assert len(response.content) > 1024 * 1024
         span, = exporter.get_finished_spans()
         assert span.status.status_code == StatusCode.OK
-        assert records[-1]['status'] == 'success'
+        assert span.attributes['lmdeploy.outcome'] == 'success'
     finally:
         provider.shutdown()
 

@@ -29,6 +29,8 @@ from lmdeploy.pytorch.long_context import (
 )
 from lmdeploy.pytorch.messages import MessageStatus
 from lmdeploy.pytorch.model_inputs import ModelInputs, ModelInputsDelta, VisionModelInputs
+from lmdeploy.pytorch.trace import begin_prefill, discard_prefill
+from lmdeploy.trace import ENABLED as TRACE_ENABLED
 from lmdeploy.utils import get_logger
 
 from .cache_inputs import CacheCheckpointInputs, StateCacheCopyPlan
@@ -1649,16 +1651,22 @@ class InputsMakerAsync:
             if snapshot is not None:
                 batch_id, plan = snapshot
                 forward_inputs['cache_inputs'] = replace(carrier, decode_save_plan=plan, decode_save_id=batch_id)
+        trace_batch = begin_prefill(next_running, inputs) if TRACE_ENABLED else None
         try:
             await self.executor.forward_async(forward_inputs)
-        except BaseException:
+        except BaseException as exc:
             # Failed/cancelled dispatch cannot establish a retained table.
             # Its physical holds still require the existing worker drain.
             self._last_compact_decode_banks = None
+            discard_prefill(trace_batch, 'submit', type(exc).__name__)
             raise
         self._last_forward_kind = self._forward_kind(inputs, forward_inputs['delta'])
         self.scheduler.tick()
         self.forward_inputs = forward_inputs
+        if trace_batch is not None:
+            # Do not mutate the payload retained by the executor or send
+            # observer state to model workers.
+            forward_inputs = dict(forward_inputs, prefill_trace=trace_batch)
         return forward_inputs, next_running
 
     async def send_next_inputs(self):

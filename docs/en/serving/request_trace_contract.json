@@ -55,7 +55,19 @@
     "lmdeploy.token_counts_complete",
     "lmdeploy.preprocess_seconds",
     "lmdeploy.choice_index",
-    "lmdeploy.base_model"
+    "lmdeploy.base_model",
+    "lmdeploy.prefill.chunk_count",
+    "lmdeploy.prefill.computed_tokens",
+    "lmdeploy.prefill.computed_input_tokens",
+    "lmdeploy.prefill.recomputed_tokens",
+    "lmdeploy.prefill.min_chunk_tokens",
+    "lmdeploy.prefill.max_chunk_tokens",
+    "lmdeploy.prefill.local_cached_tokens",
+    "lmdeploy.prefill.external_cached_tokens",
+    "lmdeploy.prefill.inter_chunk_wait_seconds",
+    "lmdeploy.prefill.max_inter_chunk_wait_seconds",
+    "lmdeploy.prefill.preemption_count",
+    "lmdeploy.prefill.reschedule_count"
   ],
   "events": [
     "request.received",
@@ -82,6 +94,7 @@
     "model.prefill": "propagated parent, otherwise local llm_request",
     "model.decode": "propagated parent, otherwise local llm_request"
   },
+  "prefill_diagnostics_span": "model.prefill",
   "batch_phase_correlation": "lmdeploy.prompt_index and optional lmdeploy.choice_index",
   "service_configuration": "lmdeploy-full by default; register any configured service.name in the platform exact allowlist before deployment"
 }

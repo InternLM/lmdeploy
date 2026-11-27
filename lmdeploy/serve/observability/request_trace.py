@@ -5,30 +5,18 @@ No model inputs or generated text are recorded.
 """
 
 import asyncio
-import atexit
 import contextvars
 import functools
 import json
-import logging
 import math
-import os
-import queue
-import re
-import socket
-import threading
 import time
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
+from dataclasses import asdict
 
 from lmdeploy.serve.observability import otel_trace, output_trace
-from lmdeploy.trace import ENABLED, LOG_ENABLED
+from lmdeploy.trace import ENABLED
 
-logger = logging.getLogger(__name__)
 request_outcome_context = contextvars.ContextVar('observability_request_outcome', default=None)
 HEADER = 'x-request-id'
-_HOSTNAME = socket.gethostname()
-_TRACEPARENT_V0 = re.compile(r'00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}')
 _decode_json = json.JSONDecoder().decode
 
 
@@ -58,205 +46,6 @@ def supported_engine(backend, config):
     opt-in."""
     role = getattr(config, 'role', None)
     return backend != 'pytorch' or role is None or getattr(role, 'name', role) == 'Hybrid'
-
-
-def _http_log_context(span, headers):
-    context = otel_trace.correlation(span)
-    if context:
-        return context
-    # Local-only mode stays stdlib-only while preserving the platform's v00 parent.
-    parent = _TRACEPARENT_V0.fullmatch(headers.get('traceparent', ''))
-    if parent and int(parent[1], 16) and int(parent[2], 16):
-        return dict(trace_id=parent[1], span_id=uuid.uuid4().hex[:16], parent_span_id=parent[2])
-    return dict(trace_id=uuid.uuid4().hex, span_id=uuid.uuid4().hex[:16])
-
-
-class JsonlWriter:
-    """Bounded background writer; batch up to 64 records per flush."""
-
-    def __init__(self, root, max_bytes=256 * 1024 * 1024, capacity=8192):
-        root = Path(root).expanduser()
-        if not root.is_absolute():
-            raise ValueError('LMDEPLOY_TRACE_LOG_DIR must be an absolute writable directory')
-        if max_bytes <= 0 or capacity <= 0:
-            raise ValueError('observability size and queue capacity must be positive')
-        self.directory = root / 'lmdeploy' / _HOSTNAME
-        self.directory.mkdir(parents=True, exist_ok=True)
-        self.max_bytes = max_bytes
-        self.queue = queue.Queue(maxsize=capacity)
-        self.dropped = self.io_errors = 0
-        self.closed = False
-        self.pid = os.getpid()
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._file = None
-        self._size = 0
-        self._day = None
-        self._reported_dropped = self._reported_errors = 0
-        self._last_warning = float('-inf')
-        self._retry_at = 0.0
-        self._retry_delay = 1.0
-        self._reported_emit_errors = 0
-        self._open()  # Fail at startup for an invalid destination.
-        self.thread = threading.Thread(target=self._run, name='request-jsonl', daemon=True)
-        self.thread.start()
-
-    def _open(self):
-        now = datetime.now(timezone.utc)
-        stem = f'{now:%Y%m%dT%H%M%S.%fZ}.{os.getpid()}'
-        for collision in range(10000):
-            suffix = f'.{collision}' if collision else ''
-            try:
-                self._file = (self.directory / f'{stem}{suffix}.jsonl').open('x', encoding='utf-8')
-                break
-            except FileExistsError:
-                continue
-        else:
-            raise FileExistsError('observability filename collision limit reached')
-        self._day = now.date()
-        self._size = 0
-
-    def submit(self, record):
-        with self._lock:
-            if self.closed:
-                self.dropped += 1
-                return
-            try:
-                self.queue.put_nowait(record)
-            except queue.Full:
-                self.dropped += 1
-
-    def _report_errors(self):
-        if ((self.dropped != self._reported_dropped or self.io_errors != self._reported_errors
-             or _emit_failures != self._reported_emit_errors)
-                and time.monotonic() - self._last_warning >= 60):
-            logger.warning('Request trace writer: dropped=%d io_errors=%d emit_errors=%d',
-                           self.dropped, self.io_errors, _emit_failures)
-            self._reported_dropped = self.dropped
-            self._reported_errors = self.io_errors
-            self._reported_emit_errors = _emit_failures
-            self._last_warning = time.monotonic()
-
-    def _discard_file(self):
-        if self._file is not None:
-            try:
-                self._file.close()
-            except OSError:
-                pass
-            self._file = None
-
-    def _io_failure(self):
-        self.io_errors += 1
-        self._retry_at = time.monotonic() + self._retry_delay
-        self._retry_delay = min(60.0, self._retry_delay * 2)
-        self._discard_file()
-
-    def _run(self):
-        while not self._stop.is_set() or not self.queue.empty():
-            self._report_errors()
-            try:
-                record = self.queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            batch = [record]
-            for _ in range(63):
-                try:
-                    batch.append(self.queue.get_nowait())
-                except queue.Empty:
-                    break
-            for record in batch:
-                try:
-                    if time.monotonic() < self._retry_at:
-                        with self._lock:
-                            self.dropped += 1
-                        continue
-                    line = json.dumps(record, ensure_ascii=True, allow_nan=False) + '\n'
-                    # ensure_ascii makes character count equal to UTF-8 byte count.
-                    size = len(line)
-                    if self._file is None:
-                        self._open()
-                    if self._size and (self._size + size > self.max_bytes
-                                       or self._day != datetime.now(timezone.utc).date()):
-                        self._file.close()
-                        self._file = None
-                        self._open()
-                    self._file.write(line)
-                    self._size += size
-                except (OSError, ValueError, TypeError):
-                    self._io_failure()
-                finally:
-                    self.queue.task_done()
-            try:
-                if self._file is not None:
-                    self._file.flush()
-                    self._retry_delay = 1.0
-                    self._retry_at = 0.0
-            except (OSError, ValueError):
-                self._io_failure()
-        self._report_errors()
-        self._discard_file()
-
-    def close(self):
-        if self.pid != os.getpid():
-            return
-        with self._lock:
-            self.closed = True
-            self._stop.set()
-        self.thread.join(timeout=5)
-        if self.thread.is_alive():
-            logger.warning('Request trace drain timed out; buffered records may be lost')
-
-
-_emit_failures = 0
-_writer = None
-_writer_pid = None
-_writer_lock = threading.Lock()
-
-
-def get_writer():
-    global _writer, _writer_pid
-    if not enabled():
-        return None
-    otel_trace.initialize()
-    if not LOG_ENABLED:
-        return None
-    with _writer_lock:
-        if _writer is None or _writer_pid != os.getpid():
-            root = os.getenv('LMDEPLOY_TRACE_LOG_DIR', '')
-            if not root:
-                raise ValueError('LMDEPLOY_TRACE_LOG_DIR is required when observability is enabled')
-            _writer = JsonlWriter(root, int(os.getenv('LMDEPLOY_TRACE_LOG_MAX_MB', '256')) * 1024 * 1024)
-            _writer_pid = os.getpid()
-            atexit.register(_writer.close)
-        return _writer
-
-
-def _after_fork():
-    global _writer, _writer_pid, _writer_lock, _emit_failures
-    _emit_failures = 0
-    _writer = None
-    _writer_pid = None
-    _writer_lock = threading.Lock()
-
-
-if hasattr(os, 'register_at_fork'):
-    os.register_at_fork(after_in_child=_after_fork)
-
-
-def emit(event, request_id, **fields):
-    # Startup calls get_writer() directly and validates configuration eagerly.
-    # Runtime logging must never replace a request result or its original error.
-    global _emit_failures
-    if not LOG_ENABLED:
-        return
-    try:
-        writer = get_writer()
-        if writer is not None:
-            writer.submit(dict(event=event, request_id=request_id, component='lmdeploy',
-                               hostname=_HOSTNAME, pid=os.getpid(),
-                               timestamp=datetime.now(timezone.utc).isoformat(), **fields))
-    except Exception:
-        _emit_failures += 1
 
 
 def interval(start, end):
@@ -291,8 +80,6 @@ class RequestTrace:
         self.otel_span = None
         self.preprocessed = self.generate_start = self.handle_ready = None
         self.queued = self.scheduled = self.first_token = self.last_token = None
-        self.delivery_delay = self.previous_delivery = None
-        self.max_delivery_gap = None
         self.lookup_start = self.lookup_seconds = self.store_matched_tokens = None
         self.kv_start = self.kv_seconds = self.kv_loaded_tokens = None
         self.kv_pending_tokens = None
@@ -300,9 +87,9 @@ class RequestTrace:
         self.kv_failed = False
         self.kv_active = False
         self.prompt_tokens = self.cached_tokens = None
+        self.prefill_metrics = None
         self.generated_tokens = 0  # Native count, including stop tokens; used for timing.
         self.output_tokens = None  # API count from GenOut, after stop-token filtering.
-        self.max_output_tokens = None
         self.finish_reason = None
         self.finished = False
         self.engine_status = None
@@ -311,6 +98,7 @@ class RequestTrace:
         self.event_cursor = 0
         self.last_event_key = None
         self.engine_events_trusted = True
+        self._native_failed = False
         self.prompt_index = None
         self.choice_index = choice_index if self.outcome is not None else None
         self.output_observation = None
@@ -328,13 +116,6 @@ class RequestTrace:
             self.outcome.get('otel_span') if self.outcome is not None else None,
             self.start_ns, self.prompt_index, self.request_id)
         otel_trace.attributes(self.otel_span, {'lmdeploy.choice_index': self.choice_index})
-        self.log_context = otel_trace.correlation(self.otel_span)
-        if not self.log_context:
-            http_context = self.outcome.get('log_context', {}) if self.outcome is not None else {}
-            self.log_context = dict(trace_id=http_context.get('trace_id') or uuid.uuid4().hex,
-                                    span_id=uuid.uuid4().hex[:16])
-        if self.outcome is not None and self.outcome.get('log_context'):
-            self.log_context['parent_span_id'] = self.outcome['log_context']['span_id']
 
     @property
     def token_counts_complete(self):
@@ -342,37 +123,43 @@ class RequestTrace:
                 and all(value is not None for value in (self.prompt_tokens, self.output_tokens, self.cached_tokens)))
 
     def observe(self, output):
-        metrics = output.req_metrics
-        status = getattr(output, 'status', None)
-        status = getattr(status, 'name', status)
-        token_count = len(output.token_ids)
-        self.terminal |= status == 'FINISH'
-        if metrics is not None:
-            self._observe_events(metrics.engine_events)
-        if token_count:
-            # A missing timestamp on the newest batch invalidates the last-token
-            # boundary; an older valid timestamp must not understate Decode.
-            self.last_token = None
-            now = time.monotonic()
-            if self.previous_delivery is not None:
-                gap = now - self.previous_delivery
-                if self.max_delivery_gap is None or gap > self.max_delivery_gap:
-                    self.max_delivery_gap = gap
-            self.previous_delivery = now
-            if (metrics is not None and math.isfinite(metrics.token_timestamp)
-                    and metrics.token_timestamp > 0):
-                # A final-only multi-token batch supplies no first-token boundary.
-                # Preserve backend mode and leave the split unknown in that case.
-                if self.generated_tokens == 0:
-                    first = getattr(metrics, 'first_token_timestamp', 0)
-                    if math.isfinite(first) and 0 < first <= metrics.token_timestamp:
-                        self.first_token = first
-                    elif token_count == 1:
-                        self.first_token = metrics.token_timestamp
-                    if self.first_token is not None:
-                        self.delivery_delay = interval(self.first_token, time.time())
-                self.last_token = metrics.token_timestamp
-        self.generated_tokens += token_count
+        if self._native_failed:
+            return
+        try:
+            metrics = output.req_metrics
+            status = getattr(output, 'status', None)
+            status = getattr(status, 'name', status)
+            token_count = len(output.token_ids)
+            self.terminal |= status == 'FINISH'
+            if metrics is not None:
+                self._observe_events(metrics.engine_events)
+                prefill = getattr(metrics, 'prefill', None)
+                if prefill is not None and self.prefill_metrics is None:
+                    self.prefill_metrics = asdict(prefill)
+            if token_count:
+                # A missing timestamp on the newest batch invalidates the last-token
+                # boundary; an older valid timestamp must not understate Decode.
+                self.last_token = None
+                if (metrics is not None and math.isfinite(metrics.token_timestamp)
+                        and metrics.token_timestamp > 0):
+                    # A final-only multi-token batch supplies no first-token boundary.
+                    # Preserve backend mode and leave the split unknown in that case.
+                    if self.generated_tokens == 0:
+                        first = getattr(metrics, 'first_token_timestamp', 0)
+                        if math.isfinite(first) and 0 < first <= metrics.token_timestamp:
+                            self.first_token = first
+                        elif token_count == 1:
+                            self.first_token = metrics.token_timestamp
+                    self.last_token = metrics.token_timestamp
+            self.generated_tokens += token_count
+        except Exception:
+            # This input's native metrics are incomplete. Preserve API output
+            # and counters, and keep later requests fully observable.
+            self._native_failed = True
+            self._invalidate_events()
+            self.first_token = self.last_token = None
+            self.prefill_metrics = None
+            otel_trace.report_failure()
 
     def _invalidate_events(self):
         self.engine_events_trusted = False
@@ -442,42 +229,36 @@ class RequestTrace:
             self.event_cursor = count
             self.last_event_key = _event_key(events[count - 1])
 
+    @otel_trace.fail_open
     def finish(self, status):
         if self.finished:
             return
         self.finished = True
+        self.engine_status = status
         if self.outcome is not None and status in ('error', 'cancelled'):
             self.outcome[status] = True
-        decode = interval(self.first_token, self.last_token)
         self.elapsed_seconds = interval(self.start, time.monotonic())
         self.end_ns = (self.start_ns + int(self.elapsed_seconds * 1e9)
                        if self.otel_span is not None and self.elapsed_seconds is not None else None)
-        self.engine_status = status
         otel_trace.finish_engine(self, status)
-        emit('engine_request_finished', self.request_id, **self.log_context, prompt_index=self.prompt_index,
-             choice_index=self.choice_index, model=self.model, base_model=self.base_model,
-             status=status, backend=self.backend,
-             engine_events_trusted=self.engine_events_trusted,
-             finish_reason=self.finish_reason,
-             preprocess_seconds=interval(self.start, self.preprocessed),
-             handle_wait_seconds=interval(self.generate_start, self.handle_ready),
-             queue_seconds=interval(self.queued, self.scheduled),
-             prefill_seconds=interval(self.scheduled, self.first_token),
-             decode_seconds=decode,
-             engine_ttft_seconds=interval(self.queued, self.first_token),
-             tpot_seconds=decode / (self.generated_tokens - 1)
-             if decode is not None and self.generated_tokens > 1 else None,
-             token_delivery_delay_seconds=self.delivery_delay,
-             max_engine_output_gap_seconds=self.max_delivery_gap,
-             store_lookup_seconds=self.lookup_seconds, store_matched_tokens=self.store_matched_tokens,
-             kv_load_seconds=self.kv_seconds, kv_loaded_tokens=self.kv_loaded_tokens,
-             kv_load_status=self.kv_status,
-             total_seconds=self.elapsed_seconds,
-             engine_timestamps=dict(queued=self.queued, scheduled=self.scheduled,
-                                    first_token=self.first_token, last_token=self.last_token),
-             input_tokens=self.prompt_tokens, output_tokens=self.output_tokens,
-             cached_tokens=self.cached_tokens, max_output_tokens=self.max_output_tokens,
-             token_counts_complete=self.token_counts_complete)
+
+
+@otel_trace.fail_open
+def _create_trace(engine, prompt_index, choice_index, model):
+    trace = RequestTrace(prompt_index=prompt_index, choice_index=choice_index)
+    trace.backend = getattr(engine, 'backend', None)
+    trace.base_model = otel_trace.metadata_string(getattr(engine, 'model_name', None))
+    trace.model = otel_trace.metadata_string(model or trace.base_model)
+    return trace
+
+
+@otel_trace.fail_open
+def _finish_prompt(trace, status, http_status):
+    if not trace.finished:
+        trace.finish('error' if status == 'error' else 'cancelled')
+    observed = trace.output_observation
+    otel_trace.finish(trace.otel_span, trace.engine_status, end_ns=trace.end_ns,
+                      http_status=http_status, output=observed.summary() if observed is not None else None)
 
 
 def trace_preprocess(func):
@@ -490,11 +271,10 @@ def trace_preprocess(func):
         if (not enabled() or (args and not getattr(args[0], 'request_trace_enabled', True))
                 or (outcome is not None and outcome.get('observe') is False)):
             return await func(*args, **kwargs)
-        trace = RequestTrace(prompt_index=prompt_index, choice_index=choice_index)
         engine = args[0] if args else None
-        trace.backend = getattr(engine, 'backend', None)
-        trace.base_model = otel_trace.metadata_string(getattr(engine, 'model_name', None))
-        trace.model = otel_trace.metadata_string(model or kwargs.get('adapter_name') or trace.base_model)
+        trace = _create_trace(engine, prompt_index, choice_index, model or kwargs.get('adapter_name'))
+        if trace is None:
+            return await func(*args, **kwargs)
         try:
             request = await func(*args, **kwargs)
         except BaseException as exc:
@@ -504,7 +284,6 @@ def trace_preprocess(func):
         if model is None:
             trace.model = otel_trace.metadata_string(getattr(request, 'adapter_name', None) or trace.model)
         trace.prompt_tokens = request.input_token_len
-        trace.max_output_tokens = getattr(getattr(request, 'gen_config', None), 'max_new_tokens', None)
         request.trace = trace
         return request
     return wrapped
@@ -560,7 +339,7 @@ class RequestTraceMiddleware:
 
     def __init__(self, app):
         self.app = app
-        get_writer()
+        otel_trace.initialize()
 
     async def __call__(self, scope, receive, send):
         path = scope.get('path', '')
@@ -576,7 +355,6 @@ class RequestTraceMiddleware:
         start = time.monotonic()
         received_ns = time.time_ns()
         outcome['start'], outcome['start_ns'] = start, received_ns
-        received_unix = received_ns / 1e9
         wanted = {b'traceparent', b'x-request-id', b'x-session-id', b'x-session-affinity', b'x-openclaw-session-key'}
         # Match Router's HeaderMap::get: the first field wins, even if it is invalid.
         headers = {}
@@ -589,7 +367,7 @@ class RequestTraceMiddleware:
         outcome['request_id'] = otel_trace.request_id(headers)
         outcome['otel_span'] = otel_trace.begin_http(headers, path, received_ns, outcome)
         span = outcome['otel_span']
-        outcome['observe'] = LOG_ENABLED or (span is not None and span.is_recording())
+        outcome['observe'] = span is not None and span.is_recording()
         if not outcome['observe']:
             # Keep correlation and the decision in child tasks without allocating prompt
             # observers or inspecting any response body for an unsampled request.
@@ -608,11 +386,9 @@ class RequestTraceMiddleware:
             finally:
                 outcome['closed'] = True
                 request_outcome_context.reset(token)
-        outcome['log_context'] = _http_log_context(outcome['otel_span'], headers)
         outcome_token = request_outcome_context.set(outcome)
-        first_body = None
         status_code = None
-        complete = disconnected = False
+        complete = False
         def observe_output(index, reasoning, content, tool, observed_at):
             if index is None:
                 trace = outcome['traces'][0] if len(outcome['traces']) == 1 else None
@@ -626,15 +402,8 @@ class RequestTraceMiddleware:
         observation = OutputObservation(start, observe_output)
         status = 'cancelled'
 
-        async def traced_receive():
-            nonlocal disconnected
-            message = await receive()
-            if message['type'] == 'http.disconnect':
-                disconnected = True
-            return message
-
         async def traced_send(message):
-            nonlocal first_body, status_code, complete
+            nonlocal status_code, complete
             if message['type'] == 'http.response.start':
                 message = dict(message)
                 message['headers'] = list(message.get('headers', []))
@@ -648,8 +417,6 @@ class RequestTraceMiddleware:
                 return
             await send(message)
             if message['type'] == 'http.response.body':
-                if message.get('body') and first_body is None:
-                    first_body = time.monotonic()
                 if observation.sse:
                     observation.feed(message.get('body', b''))
                 if not message.get('more_body', False):
@@ -666,7 +433,7 @@ class RequestTraceMiddleware:
             return 'cancelled'
 
         try:
-            await self.app(scope, traced_receive, traced_send)
+            await self.app(scope, receive, traced_send)
             status = result()
         except (asyncio.CancelledError, GeneratorExit, OSError):
             status = result()
@@ -676,32 +443,8 @@ class RequestTraceMiddleware:
             raise
         finally:
             try:
-                traces = outcome['traces']
-                # A rejected HTTP request can fail before any prompt is prepared.
-                # It still gets one record and the same ID returned in its header.
-                if not traces:
-                    emit('request_finished', outcome['request_id'],
-                         **outcome['log_context'], path=scope['path'],
-                         prompt_index=None, status=status, http_status=status_code,
-                         disconnected=disconnected, http_received_unix_seconds=received_unix,
-                         http_first_body_seconds=interval(start, first_body),
-                         http_total_seconds=time.monotonic() - start, **observation.summary())
-                else:
-                    http_total = time.monotonic() - start
-                    for trace in traces:
-                        if not trace.finished:
-                            trace.finish('error' if status == 'error' else 'cancelled')
-                        observed = trace.output_observation
-                        otel_trace.finish(trace.otel_span,
-                                          trace.engine_status, end_ns=trace.end_ns,
-                                          http_status=status_code,
-                                          output=observed.summary() if observed is not None else None)
-                        emit('request_finished', trace.request_id, **trace.log_context, path=scope['path'],
-                             prompt_index=trace.prompt_index, choice_index=trace.choice_index,
-                             status=status, http_status=status_code,
-                             disconnected=disconnected, http_received_unix_seconds=received_unix,
-                             http_first_body_seconds=interval(start, first_body), http_total_seconds=http_total,
-                             **(observed.summary() if observed is not None else _EMPTY_OUTPUT_SUMMARY))
+                for trace in outcome['traces']:
+                    _finish_prompt(trace, status, status_code)
             finally:
                 otel_trace.finish_http(outcome, status, status_code, time.monotonic() - start, observation)
                 outcome['closed'] = True
@@ -720,10 +463,12 @@ class OutputObservation:
         self.sse = self.terminal = self.error = self.cancelled = False
         self.buffer = bytearray()
         self.skipping = False
-        self.event_failed = False
+        self.event_failed = self.event_terminal = self.event_data = False
+        self.pending_terminal = self.pending_error = self.pending_cancelled = False
         self.first_output = self.reasoning_first = self.reasoning_last = self.content_first = None
         self.previous_output = self.max_output_gap = None
 
+    @otel_trace.fail_open
     def feed(self, body):
         # One accepted ASGI body has one observation time, even if it carries
         # many SSE records. Avoid splitlines() allocations and repeated copying
@@ -739,6 +484,7 @@ class OutputObservation:
                 and body.startswith(b'data:') and body.endswith(b'\n\n')
                 and body.find(b'\n') == len(body) - 2):
             self._line(body[:-2], observed_at)
+            self._line(b'', observed_at)
             return
         offset = 0
         while offset < len(body):
@@ -746,16 +492,19 @@ class OutputObservation:
             end = len(body) if newline < 0 else newline + 1
             size = end - offset
             if len(self.buffer) + size > 1024 * 1024:
+                # Retain only the presence of data for an oversized event. SSE
+                # dispatch requires data and a blank line, not just event:.
+                prefix = (self.buffer[:5] + body[offset:offset + 5])[:5]
+                self.event_data |= prefix == b'data:'
                 self.buffer.clear()
                 self.skipping = True
-                self.error |= self.event_failed
             if not self.skipping:
                 if not self.buffer and newline >= 0:
-                    self._line(body[offset:end].strip(), observed_at)
+                    self._line(body[offset:end].rstrip(b'\r\n'), observed_at)
                 else:
                     self.buffer.extend(memoryview(body)[offset:end])
                     if newline >= 0:
-                        self._line(self.buffer.strip(), observed_at)
+                        self._line(self.buffer.rstrip(b'\r\n'), observed_at)
             if newline >= 0:
                 self.buffer.clear()
                 self.skipping = False
@@ -763,34 +512,46 @@ class OutputObservation:
 
     def _line(self, line, observed_at):
         if not line:
-            self.event_failed = False
+            if self.event_data:
+                self.terminal |= self.event_terminal or self.pending_terminal
+                self.error |= self.pending_error or (self.event_failed and not self.pending_cancelled)
+                self.cancelled |= self.pending_cancelled
+            self.event_failed = self.event_terminal = self.event_data = False
+            self.pending_terminal = self.pending_error = self.pending_cancelled = False
             return
         if line.startswith(b'event:'):
             event = line[6:].strip()
-            self.terminal |= event in (b'response.completed', b'response.incomplete',
-                                       b'response.failed', b'message_stop')
+            self.event_terminal = event in (b'response.completed', b'response.incomplete',
+                                            b'response.failed', b'message_stop')
             self.event_failed = event in (b'response.failed', b'error')
             return
         if not line.startswith(b'data:'):
             return
+        self.event_data = True
         data = line[5:].strip()
         if data == b'[DONE]':
-            self.terminal = True
+            self.pending_terminal = True
             return
         try:
             # SSE is UTF-8; avoid json.loads(bytes)' repeated encoding detection.
             obj = _decode_json(data.decode('utf-8'))
         except (ValueError, UnicodeError, RecursionError):
-            self.error |= self.event_failed
             return
         if not isinstance(obj, dict):
             return
-        self.observe_metadata(output_trace.summarize(obj), observed_at)
+        self.observe_metadata(output_trace.summarize(obj), observed_at, defer_outcome=True)
 
-    def observe_metadata(self, metadata, observed_at):
-        self.terminal |= metadata.terminal
-        self.error |= metadata.error
-        self.cancelled |= metadata.cancelled
+    def observe_metadata(self, metadata, observed_at, defer_outcome=False):
+        if defer_outcome:
+            # Raw SSE may end between a data line and the dispatch delimiter.
+            # Adapter metadata already describes complete accepted frames.
+            self.pending_terminal |= metadata.terminal
+            self.pending_error |= metadata.error
+            self.pending_cancelled |= metadata.cancelled
+        else:
+            self.terminal |= metadata.terminal
+            self.error |= metadata.error
+            self.cancelled |= metadata.cancelled
         reasoning = content = tool = False
         for index, has_reasoning, has_content, has_tool in metadata.outputs:
             reasoning |= has_reasoning
@@ -816,6 +577,7 @@ class OutputObservation:
                     self.max_output_gap = gap
             self.previous_output = now
 
+    @otel_trace.fail_open
     def summary(self):
         return dict(first_output_seconds=interval(self.start, self.first_output),
                     max_output_gap_seconds=self.max_output_gap,
@@ -823,6 +585,3 @@ class OutputObservation:
                     reasoning_last_seconds=interval(self.start, self.reasoning_last),
                     content_first_seconds=interval(self.start, self.content_first),
                     reasoning_to_content_seconds=interval(self.reasoning_first, self.content_first))
-
-
-_EMPTY_OUTPUT_SUMMARY = OutputObservation(0).summary()

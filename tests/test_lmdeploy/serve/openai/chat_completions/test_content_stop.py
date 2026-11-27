@@ -109,16 +109,12 @@ def _replay_app(context, outputs=None):
 @pytest.mark.parametrize('options', [{}, {'return_token_ids': True}, {'stream': True, 'return_token_ids': True}],
                          ids=['qa-request', 'output-ids', 'stream-output-ids'])
 @pytest.mark.parametrize('traced', [False, True])
-def test_multi_token_stop_in_content_only(chat_endpoint, options, traced, monkeypatch):
+def test_multi_token_stop_in_content_only(chat_endpoint, options, traced, monkeypatch, trace_sdk):
     _, context = chat_endpoint
     app, cancel = _replay_app(context)
-    records = []
+    from lmdeploy.serve.observability import request_trace
+    monkeypatch.setattr(request_trace, 'ENABLED', traced)
     if traced:
-        from lmdeploy.serve.observability import request_trace
-        monkeypatch.setattr(request_trace, 'ENABLED', True)
-        monkeypatch.setattr(request_trace, 'LOG_ENABLED', True)
-        monkeypatch.setattr(request_trace, 'get_writer', lambda: None)
-        monkeypatch.setattr(request_trace, 'emit', lambda event, rid, **kw: records.append(kw))
         context.async_engine.preprocess = request_trace.trace_preprocess(context.async_engine.preprocess)
         app = request_trace.RequestTraceMiddleware(app)
     prompt = 'Output exactly this line and nothing else: </think> STOP_HERE tail-text'
@@ -148,9 +144,9 @@ def test_multi_token_stop_in_content_only(chat_endpoint, options, traced, monkey
     assert finish == 'stop'
     cancel.assert_awaited_once()
     if traced:
-        engine_record = next(record for record in records if 'token_counts_complete' in record)
-        assert engine_record['token_counts_complete']
-        assert engine_record['finish_reason'] == 'stop'
+        span = next(s for s in trace_sdk.get_finished_spans() if s.name == 'inference')
+        assert span.attributes['lmdeploy.token_counts_complete']
+        assert span.attributes['lmdeploy.finish_reason'] == 'stop'
 
 
 def test_nonstream_stop_miss_preserves_custom_parse_complete(chat_endpoint):

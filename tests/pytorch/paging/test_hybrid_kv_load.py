@@ -176,7 +176,8 @@ def test_mooncake_producer_reports_zero_external_hit_rate_without_lookup(make_sc
 @pytest.mark.parametrize('local_step', [4, 6, 10])
 @pytest.mark.parametrize('remote_hit', [0, 16])
 def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary(
-        make_scheduler, local_step, remote_hit, mtp):
+        make_scheduler, local_step, remote_hit, mtp, monkeypatch):
+    monkeypatch.setattr('lmdeploy.pytorch.messages.TRACE_ENABLED', True)
     scheduler, connector = make_scheduler(remote_hit=remote_hit, mtp=mtp)
     checkpoint = _publish_local_checkpoint(scheduler, local_step)
     seq = scheduler.add_session(1).add_sequence(torch.arange(21))
@@ -189,6 +190,12 @@ def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary
         assert scheduler.schedule_metrics.prefix_cache_hit_rate == pytest.approx(local_step / 21)
         assert scheduler.schedule_metrics.external_prefix_cache_queries == 21 - local_step
         assert scheduler.schedule_metrics.external_prefix_cache_hits == 0
+        trace = seq.prefill_trace
+        record = trace.dispatch(seq, seq.num_history_ids, seq.num_token_ids, 1)
+        trace.complete(*record[1:], now=2)
+        trace.accept()
+        assert trace.summary.local_cached_tokens == local_step
+        assert trace.summary.external_cached_tokens == 0
         return
 
     assert output.running == []
@@ -214,7 +221,16 @@ def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary
     assert metrics.external_prefix_cache_hits == 16 - local_tokens
     assert metrics.external_prefix_cache_hit_rate == pytest.approx((16 - local_tokens) / (21 - local_tokens))
 
-    scheduler.update_connector_output(KVConnectorOutput(finished_receiving={seq.seq_id}))
+    aggregator = KVConnectorOutputAggregator(world_size=2)
+    finished = KVConnectorOutput(finished_receiving={seq.seq_id})
+    scheduler.update_connector_output(aggregator.aggregate([finished, None]))
+    assert seq.status == MessageStatus.WAITING_FOR_REMOTE_KVS
+    assert seq.prefill_trace.external_end == 0
+    scheduler.update_connector_output(aggregator.aggregate([None, finished]))
+    assert (seq.prefill_trace.external_start, seq.prefill_trace.external_end) == (local_tokens, 16)
+    # Repeated terminal progress must neither publish nor count a second load.
+    scheduler.update_connector_output(finished)
+    assert (seq.prefill_trace.external_start, seq.prefill_trace.external_end) == (local_tokens, 16)
     assert seq.num_history_ids == seq.cached_tokens == 16
     assert scheduler.schedule_metrics.prefix_cache_hit_rate == pytest.approx(local_tokens / 21)
     assert seq.logical_state == load.state_slot
@@ -223,6 +239,13 @@ def test_hybrid_load_preserves_exact_local_hit_or_restores_exact_remote_boundary
     # There is no spare runtime capacity. Remote-ready admission must reuse D.
     assert scheduler.schedule(is_prefill=True).running == [seq]
     assert seq.num_history_ids == 16
+    trace = seq.prefill_trace
+    record = trace.dispatch(seq, seq.num_history_ids, seq.num_token_ids, 1)
+    trace.complete(*record[1:], now=2)
+    trace.accept()
+    assert trace.summary.local_cached_tokens == local_tokens
+    assert trace.summary.external_cached_tokens == 16 - local_tokens
+    assert trace.summary.computed_input_tokens == 5
     assert scheduler.block_trie.stats.num_query_tokens == 21
     assert scheduler.block_trie.stats.num_hit_tokens == local_tokens
     assert scheduler.schedule_metrics.external_prefix_cache_queries == metrics.external_prefix_cache_queries
@@ -319,7 +342,8 @@ def test_hybrid_load_reuses_existing_runtime_and_private_partial_block(make_sche
 
 
 @pytest.mark.parametrize('retain_checkpoint', [False, True])
-def test_failed_hybrid_load_waits_for_all_ranks_then_rematches(make_scheduler, retain_checkpoint):
+def test_failed_hybrid_load_waits_for_all_ranks_then_rematches(make_scheduler, retain_checkpoint, monkeypatch):
+    monkeypatch.setattr('lmdeploy.pytorch.messages.TRACE_ENABLED', True)
     scheduler, connector = make_scheduler()
     checkpoint = _publish_local_checkpoint(scheduler, 6)
     seq = scheduler.add_session(1).add_sequence(torch.arange(21))
@@ -351,6 +375,12 @@ def test_failed_hybrid_load_waits_for_all_ranks_then_rematches(make_scheduler, r
     assert output.running == [seq]
     assert seq.num_history_ids == (6 if retain_checkpoint else 0)
     assert seq.prefix_cache.restore.is_selected == retain_checkpoint
+    trace = seq.prefill_trace
+    record = trace.dispatch(seq, seq.num_history_ids, seq.num_token_ids, 1)
+    trace.complete(*record[1:], now=2)
+    trace.accept()
+    assert trace.summary.external_cached_tokens == 0
+    assert trace.summary.local_cached_tokens == (6 if retain_checkpoint else 0)
     assert connector.build_connector_meta(output) is None
     connector.client.lookup.assert_called_once()
     # Failed I/O does not undo an admitted lookup hit. The rematch is a new

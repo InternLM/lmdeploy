@@ -12,26 +12,6 @@ pytest.importorskip('torch')
 pytest.importorskip('opentelemetry.sdk')
 
 
-@pytest.fixture
-def trace_sdk(monkeypatch):
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
-    from lmdeploy.serve.observability import otel_trace, request_trace
-
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    monkeypatch.setattr(otel_trace, '_tracer', provider.get_tracer('review'))
-    monkeypatch.setattr(request_trace, 'ENABLED', True)
-    monkeypatch.setattr(request_trace, 'LOG_ENABLED', False)
-    monkeypatch.setattr(request_trace, 'get_writer', lambda: None)
-    monkeypatch.setattr(request_trace, 'emit', lambda *a, **kw: None)
-    yield exporter
-    provider.shutdown()
-
-
 def test_native_coalescing_preserves_first_token_and_request_reset(monkeypatch, trace_sdk):
     from lmdeploy.messages import EngineOutput, ResponseType
     from lmdeploy.pytorch.engine import engine_loop
@@ -191,7 +171,7 @@ def test_explicit_engine_opt_in_obeys_full_engine_scope(monkeypatch, role, expec
         raise StopBeforeModelLoad
 
     monkeypatch.setattr(async_engine, 'get_chat_template', stop)
-    monkeypatch.setattr(async_engine, 'get_writer', lambda: None)
+    monkeypatch.setattr(async_engine.otel_trace, 'initialize', lambda: None)
     engine = async_engine.AsyncEngine.__new__(async_engine.AsyncEngine)
     with pytest.raises(StopBeforeModelLoad):
         engine.__init__('unused', backend='pytorch', enable_request_trace=True,
