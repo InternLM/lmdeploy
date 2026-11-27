@@ -5,7 +5,7 @@ import time
 from typing import Any, Literal
 
 import shortuuid
-from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field, model_serializer
 
 
 class ErrorResponse(BaseModel):
@@ -69,6 +69,11 @@ class CompletionTokensDetails(BaseModel):
     accepted_prediction_tokens: int | None = None
     rejected_prediction_tokens: int | None = None
     audio_tokens: int | None = None
+
+    @model_serializer(mode='wrap')
+    def _omit_unavailable_counts(self, handler):
+        """Optional OpenAI counters are integers when present, never null."""
+        return {key: value for key, value in handler(self).items() if value is not None}
 
 
 class UsageInfo(BaseModel):

@@ -102,6 +102,7 @@ class ResponsesResponse(BaseModel):
     Reference: https://developers.openai.com/api/reference/resources/responses/methods/create
     """
 
+    access_programs: dict[str, Any] | None = None
     id: str
     created_at: int
     error: ResponseError | None = None
@@ -138,3 +139,22 @@ class ResponsesResponse(BaseModel):
 
     # Existing compatibility echo for clients that expect the request store flag.
     store: bool = False
+
+    def to_api_dict(self) -> dict[str, Any]:
+        """Keep required nullable fields while omitting absent optional fields.
+
+        The Responses schema requires these keys even when no value is
+        available. A blanket ``exclude_none=True`` drops them from both JSON
+        responses and streaming lifecycle events.
+        """
+        data = self.model_dump(mode='json', exclude_none=True)
+        for field in ('access_programs', 'error', 'incomplete_details',
+                      'instructions', 'metadata', 'temperature', 'top_p'):
+            data.setdefault(field, None)
+        for tool in data['tools']:
+            if tool.get('type') == 'function':
+                # Request fields may be omitted, but the returned FunctionTool
+                # requires both keys, with null allowed for unspecified values.
+                tool.setdefault('strict', None)
+                tool.setdefault('parameters', None)
+        return data

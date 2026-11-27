@@ -49,7 +49,7 @@ async def stream_response(parsed_stream,
         model=model_name,
         status='in_progress',
         **response_metadata_kwargs(request),
-    ).model_dump(exclude_none=True)
+    ).to_api_dict()
     yield _sse('response.created', {'type': 'response.created', 'sequence_number': 0, 'response': initial_response})
     yield _sse('response.in_progress', {
         'type': 'response.in_progress',
@@ -135,6 +135,7 @@ async def stream_response(parsed_stream,
                         'type': 'output_text',
                         'text': '',
                         'annotations': [],
+                        'logprobs': [],
                     },
                 },
             ))
@@ -223,6 +224,7 @@ async def stream_response(parsed_stream,
                     'output_index': text_output_index,
                     'content_index': content_index,
                     'delta': content_delta,
+                    'logprobs': [],
                 },
             )
             sequence_number += 1
@@ -307,6 +309,7 @@ async def stream_response(parsed_stream,
             'type': 'output_text',
             'text': text,
             'annotations': [],
+            'logprobs': [],
         }
         assert text_output_index is not None
         assert text_item is not None
@@ -320,6 +323,7 @@ async def stream_response(parsed_stream,
                 'output_index': text_output_index,
                 'content_index': content_index,
                 'text': text,
+                'logprobs': [],
             },
         )
         sequence_number += 1
@@ -391,6 +395,6 @@ async def stream_response(parsed_stream,
         {
             'type': terminal_event,
             'sequence_number': sequence_number,
-            'response': final_response.model_dump(exclude_none=True),
+            'response': final_response.to_api_dict(),
         },
     )
