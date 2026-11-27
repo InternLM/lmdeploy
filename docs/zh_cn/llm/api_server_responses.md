@@ -18,6 +18,7 @@ LMDeploy 提供了轻量级的 OpenAI Responses 兼容接口，方便接入使�
 
 - `POST /v1/responses` 支持文本输入，以及视觉模型的 user 消息图片和工具结果图片输入。
 - `input` 可以是字符串，也可以是 Responses input item 列表。
+- 配置思考解析器后，生成的思考会作为 `type="reasoning"` 的条目返回在 `output` 中，`content` 包含 `reasoning_text`。多轮请求时，将完整的思考条目、同轮助手消息或工具调用及其结果一并回填到下一次的 `input`。LMDeploy 优先回放完整 `content`，必要时使用 `summary` 中的文本。仅含加密内容的思考条目会返回 HTTP 400。
 - 使用默认响应解析器时，`text.format` 的 `json_object` 和 `json_schema` 约束整个生成序列。模板会关闭思考，JSON 答案返回到 `output_text`，流式文本增量同样如此。
 - user 的 content 数组可以混合 `input_text` 和 `input_image`。图片通过 `image_url` 指定 HTTP(S) URL 或 base64 图片 data URL；流式和非流式请求均支持多图，并保留图文顺序。
 - 图片的 `detail` 和 `min_dynamic_patch` / `max_dynamic_patch` 扩展参数按 Chat 图片参数方式传递，实际效果取决于模型的图片处理器。 图片 `detail` 省略或为 `null` 时均使用默认行为，不向内部图片参数传递该字段。
@@ -119,6 +120,8 @@ curl http://{server_ip}:{server_port}/v1/responses \
 - `response.in_progress`
 - `response.output_item.added`
 - `response.content_part.added`
+- `response.reasoning_text.delta`
+- `response.reasoning_text.done`
 - `response.output_text.delta`
 - `response.output_text.done`
 - `response.function_call_arguments.delta`

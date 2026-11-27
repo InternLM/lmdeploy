@@ -852,6 +852,18 @@ class HFChatTemplate(BaseChatTemplate):
             kwargs.pop('enable_thinking')
         if 'reasoning_effort' in kwargs and kwargs['reasoning_effort'] is None:
             kwargs.pop('reasoning_effort')
+        if self.is_gpt_oss:
+            gpt_oss_messages = []
+            for message in messages:
+                reasoning = message.get('reasoning_content')
+                if message['role'] == 'assistant' and reasoning and 'thinking' not in message:
+                    content = message.get('content') or ''
+                    if message.get('tool_calls') and content:
+                        # The GPT-OSS template uses one analysis slot for a tool-call turn.
+                        reasoning, content = f'{reasoning}\n\n{content}', ''
+                    message = {**message, 'content': content, 'thinking': reasoning}
+                gpt_oss_messages.append(message)
+            messages = gpt_oss_messages
         add_generation_prompt = messages[-1]['role'] != 'assistant'
         prompt = self.tokenizer.apply_chat_template(messages,
                                                     tokenize=False,
