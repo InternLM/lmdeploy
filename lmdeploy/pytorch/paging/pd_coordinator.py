@@ -29,6 +29,8 @@ def prompt_digest(seq, tokens) -> str:
 
 @dataclass
 class PDExport:
+    """Track cache holds and the receiver grant for one published handoff."""
+
     sequence: object
     handoff: PDHandoff
     logical_blocks: np.ndarray
@@ -42,6 +44,9 @@ class PDExport:
 
 @dataclass
 class PDReceive:
+    """Track pinned receive destinations and cancellation or quarantine
+    state."""
+
     sequence: object
     request: PDReceiveRequest
     logical_blocks: np.ndarray
@@ -52,6 +57,7 @@ class PDReceive:
 
     @property
     def quarantined(self):
+        """Whether a failed receive is held pending completion or expiry."""
         return self.failed_at is not None
 
 
@@ -75,6 +81,7 @@ class PDCoordinator:
         self.notifications: list[tuple[str, PDControlRequest]] = []
 
     def validate_receive(self, seq, cache_schema):
+        """Reject handoffs that mismatch the prompt or execution schema."""
         handoff = seq.migration_request.handoff
         if (handoff.cache_schema != cache_schema or handoff.block_size != seq.block_size
                 or handoff.prompt_token_count != seq.num_valid_ids
@@ -135,6 +142,7 @@ class PDCoordinator:
         return receive.cancelled or 'error'
 
     def quarantine_receive(self, seq, reason):
+        """Record the first receive failure while retaining its cache holds."""
         receive = self.receives[seq.seq_id]
         if receive.failed_at is None:
             receive.failed_at = monotonic()
@@ -152,6 +160,7 @@ class PDCoordinator:
         return True
 
     def _release_receive(self, receive, *, success):
+        """Finalize the state load and release this receive's cache holds."""
         if receive.state_access is not None:
             self.state_manager.complete(receive.state_access, success=success)
         elif receive.request.legacy_state_id is not None:
@@ -160,6 +169,11 @@ class PDCoordinator:
         del self.receives[receive.sequence.seq_id]
 
     def publish(self, seq, cache_schema, state_ids, *, draft_token_ids=(), first_token_logprobs=None) -> PDHandoff:
+        """Pin the completed prompt cache and publish its decode handoff.
+
+        Repeated calls for the same sequence return its existing handoff without acquiring additional holds. Compact
+        state IDs must belong to the frozen request bank.
+        """
         existing = self._export_by_sequence.get(seq.seq_id)
         if existing is not None:
             return self.exports[existing].handoff
@@ -245,6 +259,8 @@ class PDCoordinator:
         return self._release_export(export)
 
     def holds(self, seq) -> bool:
+        """Whether an export or receive holds this sequence's cache
+        resources."""
         return seq.seq_id in self._export_by_sequence or seq.seq_id in self.receives
 
     def defer_end(self, seq, *, stop=False) -> bool:
@@ -263,6 +279,7 @@ class PDCoordinator:
         return bool(export.receiver_epoch)
 
     def has_pending(self) -> bool:
+        """Whether any export or receive still owns cache holds."""
         return bool(self.exports or self.receives)
 
     def expire_exports(self, now: float) -> list:
@@ -274,15 +291,20 @@ class PDCoordinator:
         return [self._release_export(export) for export in expired]
 
     def require_drained(self):
+        """Reject cache teardown while exports or receives still hold
+        resources."""
         if self.has_pending():
             raise RuntimeError('PD cache is still owned by exports or receives; refusing cache release.')
 
     def reset(self):
+        """Start a new engine incarnation after all PD cache holds are
+        released."""
         self.require_drained()
         self.epoch = uuid4().hex
         self.notifications.clear()
 
     def snapshot(self):
+        """Report PD holds, quarantine age in seconds and forced releases."""
         now = monotonic()
         failures = [r.failed_at for r in self.receives.values() if r.quarantined]
         return dict(exports=len(self.exports), grants=sum(bool(x.receiver_epoch) for x in self.exports.values()),
@@ -292,6 +314,7 @@ class PDCoordinator:
                     pinned_blocks=sum(len(x.logical_blocks) for x in (*self.exports.values(), *self.receives.values())))
 
     def _release_export(self, export):
+        """Release this export's cache holds and return its sequence."""
         self.block_manager.release_logical_blocks(export.logical_blocks)
         if export.state_access is not None:
             self.state_manager.complete(export.state_access)

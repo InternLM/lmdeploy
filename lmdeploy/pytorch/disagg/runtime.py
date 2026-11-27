@@ -40,6 +40,8 @@ class PDWorkerRuntime:
         self.remote_endpoints = {}
 
     def p2p_initialize(self, request):
+        """Register local cache pools and return the worker's transfer
+        endpoint."""
         request = request.model_copy(update=dict(rank=self.rank))
         self.backend.p2p_initialize(request)
         for key, pool in enumerate(self.pools):
@@ -54,12 +56,19 @@ class PDWorkerRuntime:
         return self.local_endpoint
 
     def p2p_connect(self, remote_engine_id, endpoints):
+        """Validate and connect to the peer endpoint for this attention TP
+        rank."""
         remote = endpoints[self.tp_rank]
         validate_pd_peer(self.local_endpoint, remote)
         self.backend.p2p_connect(remote_engine_id, remote)
         self.remote_endpoints[remote_engine_id] = remote
 
     async def migrate(self, batch):
+        """Transfer cache pools into destinations assigned by the scheduler.
+
+        Return one transfer result per receive, preserving failed or unknown completion statuses for the coordinator.
+        Legacy requests support only target cache pools and raise if a transfer does not complete successfully.
+        """
         results = []
         for receive in batch.receives:
             handoff = receive.handoff
@@ -104,6 +113,10 @@ class PDWorkerRuntime:
         return results
 
     def close(self):
+        """Release transport resources after native transfers have drained.
+
+        Peer layouts are cleared only after backend cleanup succeeds.
+        """
         self.backend.close()
         self.remote_endpoints.clear()
 
