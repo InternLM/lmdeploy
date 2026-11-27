@@ -16,7 +16,6 @@ from lmdeploy.serve.utils.streaming_response import ManagedStreamingResponse
 
 from ..adapter import (
     build_message_content_blocks,
-    chat_template_kwargs_from_thinking,
     map_finish_reason,
     normalize_tool_choice,
     to_openai_messages,
@@ -65,6 +64,7 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             model=request.model,
             messages=parser_messages or [],
             max_tokens=request.max_tokens,
+            stream=request.stream,
             temperature=request.temperature,
             top_p=request.top_p,
             top_k=request.top_k,
@@ -79,7 +79,7 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
             return_routed_experts=bool(request.return_routed_experts),
             routed_experts_start_len=request.routed_experts_start_len,
             include_stop_str_in_output=bool(request.include_stop_str_in_output),
-            chat_template_kwargs=chat_template_kwargs_from_thinking(request.thinking),
+            thinking=request.thinking,
         )
         try:
             chat_runner = await ChatRunner.prepare(
@@ -88,6 +88,7 @@ def register(router: APIRouter, server_context, *, merge_inline_system: bool = F
                 ChatRunnerOptions(
                     input_ids=resolved_input_ids,
                     do_preprocess=resolved_input_ids is None,
+                    stop_on_visible_text=bool(request.stop_sequences),
                 ),
             )
         except RequestError as error:

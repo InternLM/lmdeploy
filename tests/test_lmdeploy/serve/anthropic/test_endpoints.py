@@ -1697,3 +1697,9 @@ def test_count_tokens_keeps_assistant_tool_calls_structured():
     assert tool_call['function']['name'] == 'get_weather'
     assert json.loads(tool_call['function']['arguments']) == {'city': 'Beijing'}
     assert lm_messages[-1]['content'] == 'checking'
+
+
+def test_stop_sequences_rejects_empty_string():
+    assert MessagesRequest(**_messages_payload(stop_sequences=['END'])).stop_sequences == ['END']
+    with pytest.raises(ValidationError):
+        MessagesRequest(**_messages_payload(stop_sequences=['END', '']))

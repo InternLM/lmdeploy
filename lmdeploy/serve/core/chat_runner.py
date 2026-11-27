@@ -11,6 +11,7 @@ from typing import Any
 from lmdeploy.messages import GenerationConfig
 from lmdeploy.serve.core.generation_config import build_generation_config
 from lmdeploy.serve.openai.protocol import ChatCompletionRequest, DeltaMessage, ToolChoice
+from lmdeploy.serve.parsers.response_parser import BaseResponseParser
 from lmdeploy.serve.parsers.tool_parser.tool_parser import ToolParser
 from lmdeploy.serve.utils.request_cleanup import cleanup_result_generators
 
@@ -28,6 +29,9 @@ class ChatRunnerOptions:
     gen_config_kwargs: dict[str, Any] = field(default_factory=dict)
     preprocess_kwargs: dict[str, Any] = field(default_factory=dict)
     match_glm_content_stop: bool = False
+    # Match stop strings against parsed visible content instead of engine
+    # tokens, so a stop inside the thinking phase cannot hide the answer.
+    stop_on_visible_text: bool = False
 
 
 @dataclass
@@ -95,6 +99,15 @@ class ChatRunner:
         consumption."""
         options = options or ChatRunnerOptions()
         parser_cls = server_context.response_parser_cls
+        if request.thinking is not None and request.enable_thinking is None:
+            # The parser and the chat template both read `enable_thinking`; map
+            # the OpenAI-style `thinking` object once, before either is built.
+            request = request.model_copy(update={
+                'chat_template_kwargs': {
+                    'enable_thinking': request.thinking.type != 'disabled',
+                    **(request.chat_template_kwargs or {}),
+                }
+            })
 
         try:
             if isinstance(request.tool_choice, ToolChoice):
@@ -116,7 +129,18 @@ class ChatRunner:
             options.gen_config_kwargs,
         )
         content_stop = None
-        if (options.match_glm_content_stop and gen_config.stop_words and not gen_config.ignore_eos
+        parser_class = type(response_parser)
+        if (options.stop_on_visible_text and gen_config.stop_words and not gen_config.ignore_eos
+                and parser_class.stream_chunk is BaseResponseParser.stream_chunk
+                and (parsed_request.stream or parser_class.parse_complete is BaseResponseParser.parse_complete)):
+            # Engine token matching fires inside the thinking phase of reasoning
+            # models and can leave the visible answer empty; match parsed visible
+            # content instead, like the GLM multi-token stop path.
+            words = [word for word in gen_config.stop_words if word]
+            if words:
+                gen_config.stop_words = None
+                content_stop = ChatContentStop(words, gen_config.include_stop_str_in_output)
+        elif (options.match_glm_content_stop and gen_config.stop_words and not gen_config.ignore_eos
                 and getattr(response_parser, 'supports_glm_content_stop', False)):
             engine_words = []
             multi_token_words = []
