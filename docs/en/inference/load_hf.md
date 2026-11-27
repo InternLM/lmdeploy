@@ -22,7 +22,7 @@ model_name=llama2-chat-70b
 # repo_id=/path/to/downloaded_model
 
 # Inference by TurboMind
-lmdeploy chat $repo_id --model-name $model_name
+lmdeploy chat $repo_id
 
 # Serving with Restful API
 lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
@@ -39,7 +39,7 @@ model_name=qwen2.5-7b
 # repo_id=/path/to/Qwen2.5-7B-Instruct/local_path
 
 # Inference by TurboMind
-lmdeploy chat $repo_id --model-name $model_name
+lmdeploy chat $repo_id
 
 # Serving with Restful API
 lmdeploy serve api_server $repo_id --model-name $model_name --tp 1
