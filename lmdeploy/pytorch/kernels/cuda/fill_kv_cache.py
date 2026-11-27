@@ -95,6 +95,8 @@ def _quant_int8(val):
     val_min = tl.min(val, 1)
     val_max = tl.max(val, 1)
     scales = (val_max - val_min) / 255
+    # A constant c uses code=0, scale=1, zero=-c: (code - zero) * scale == c.
+    scales = tl.where(val_min == val_max, 1.0, scales)
     zeros = -val_min / scales
     q_val = (val / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
     return q_val, scales, zeros
@@ -107,6 +109,8 @@ def _quant_int4(val1, val2):
     val_min = tl.min(tl.minimum(val1, val2), 1)
     val_max = tl.max(tl.maximum(val1, val2), 1)
     scales = (val_max - val_min) / 15
+    # Keep the same exact constant representation as the int8 cache.
+    scales = tl.where(val_min == val_max, 1.0, scales)
     zeros = -val_min / scales
     q_val1 = (val1 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
     q_val2 = (val2 / scales[:, None] + zeros[:, None] + 0.5).to(tl.uint8)
