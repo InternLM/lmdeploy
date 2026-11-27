@@ -723,6 +723,7 @@ def test_engine_loop_uses_short_yield_only_for_pending_lookup(monkeypatch):
     scheduler = _Scheduler()
     loop = EngineLoop.__new__(EngineLoop)
     loop.scheduler = scheduler
+    loop.has_runable_event = SimpleNamespace(has_unfinished=lambda: True)
     monkeypatch.setattr(engine_loop_module.asyncio, 'sleep', record_sleep)
 
     asyncio.run(loop._wait_for_schedulable_prefill())
@@ -733,6 +734,9 @@ def test_engine_loop_uses_short_yield_only_for_pending_lookup(monkeypatch):
     asyncio.run(loop._wait_for_schedulable_prefill())
     assert sleeps == [0.001, 0.1]
     assert scheduler.reads == 1
+    loop.has_runable_event = SimpleNamespace(has_unfinished=lambda: False)
+    asyncio.run(loop._wait_for_schedulable_prefill())
+    assert sleeps == [0.001, 0.1]
 
 
 def test_engine_loop_reset_runtime_state_delegates_to_inputs_maker():

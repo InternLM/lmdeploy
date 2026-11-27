@@ -102,7 +102,7 @@ Set `LMDEPLOY_PD_TRANSFER_THREADS` to a positive integer before starting the API
 export LMDEPLOY_PD_TRANSFER_THREADS=8
 ```
 
-With the Rust lmdeploy-router's full-prefill PD path, only Prefill preprocesses media. Decode receives the expanded prompt token IDs, media span identities, and continuation positions, together with the complete prompt KV/state cache and first output token. It does not download or preprocess the images again. This uses handoff version 4; update Prefill, Decode, and the router together. No additional deployment flag is required. If a metadata-only multimodal request is preempted on Decode, it fails and must be retried through Prefill because Decode has no image data for recomputation.
+With the Rust lmdeploy-router's full-prefill PD path, Prefill processes images and transfers the complete prompt KV/state cache, first output token, expanded token IDs, media identities, and continuation positions. Decode retains the original multimodal request without downloading or preprocessing images during normal decode. If preemption requires local recomputation, Decode asynchronously loads and preprocesses the media, verifies its content and positions against Prefill, and resumes the original request. The materialized inputs remain available until the request ends, including for subsequent recomputations. Image URLs/paths must remain accessible and unchanged until the first recomputation; base64 images are retained with the request. The handoff does not transfer images or vision embeddings. This uses handoff version 4; update Prefill, Decode, and the router together. No additional deployment flag is required.
 
 ## Dispatch Strategy
 

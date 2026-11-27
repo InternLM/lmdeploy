@@ -331,6 +331,7 @@ class EngineLoop:
                                 req_metrics=out.req_metrics,
                                 routed_experts=out.routed_experts,
                                 logprobs=logprobs,
+                                input_multimodals_request=out.input_multimodals_request,
                                 ce_loss=out.ce_loss))
 
     @staticmethod
@@ -514,16 +515,23 @@ class EngineLoop:
                 outputs[session_id].logits = logit
         return outputs
 
-    def _reject_pd_media_recompute(self):
-        """A metadata-only receive cannot replay its image prompt after
-        preemption."""
+    def _request_pd_media_recompute(self):
+        """Ask the frontend to materialize media only when an import needs
+        replay."""
         if self.config.role != EngineRole.Decode:
             return
         for seq in list(self.scheduler.waiting):
             if seq.pd_metadata_only:
-                response_reqs(self.req_manager, seq.resp, ResponseType.INTERNAL_ENGINE_ERROR,
-                              err_msg='PD multimodal cache was preempted; retry the request through Prefill.')
-                self.scheduler.end_session(seq.session_id)
+                seq.state.begin_multimodal_load()
+                logger.info('PD multimodal recompute requested: session=%s seq=%s generated=%s',
+                            seq.session_id, seq.seq_id, seq.num_new_tokens)
+                # Queue after earlier decode outputs so coalescing preserves their tokens and logprobs.
+                output = InferOutput(session_id=seq.session_id, resp=seq.resp,
+                                     token_ids=seq.generated_ids.copy(), input_multimodals_request=seq.seq_id,
+                                     req_metrics=RequestMetrics(time.time(), seq.engine_events,
+                                                                cached_tokens=seq.remote_prefill_cached_tokens))
+                self.resp_queue.put_nowait({seq.session_id: output})
+        self.has_runable_event.set()
 
     async def _main_loop_try_send_next_inputs(self):
         """Try send next inputs."""
@@ -532,7 +540,7 @@ class EngineLoop:
         if self._sleep_requested:
             return None, None
 
-        self._reject_pd_media_recompute()
+        self._request_pd_media_recompute()
         self.forward_started_at = time.monotonic()
         result = await self.inputs_maker.send_next_inputs()
         self.forward_started_at = None
@@ -542,7 +550,7 @@ class EngineLoop:
         """Prefetch the next batch unless sleep has started."""
         if self._sleep_requested:
             return None, None
-        self._reject_pd_media_recompute()
+        self._request_pd_media_recompute()
         result = await self.inputs_maker.prefetch_next_inputs()
         # Refill after selection, while the already queued forward executes.
         self.scheduler.prefetch_kv_lookups()
@@ -551,6 +559,8 @@ class EngineLoop:
     async def _wait_for_schedulable_prefill(self):
         """Yield briefly for lookup I/O or back off for cache pressure."""
         scheduler = self.scheduler
+        if not self.has_runable_event.has_unfinished():
+            return
         if scheduler.last_schedule_had_pending_lookup:
             # A pending remote lookup is normal transient I/O, not cache
             # exhaustion. Poll promptly without emitting the misleading cache

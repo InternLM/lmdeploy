@@ -102,8 +102,8 @@ class PDHandoff(BaseModel):
     belong to the request, not the block table. P has computed the entire prompt and sampled the first output. D's first
     forward consumes that output and verifies the drafts; drafts are not committed output tokens.
 
-    Only P preprocesses media. D receives the expanded prompt IDs through MigrationRequest and restores the content
-    identities and continuation positions below. Media tensors never travel in the handoff.
+    D initially uses the expanded prompt IDs, content identities and continuation positions below. Its frontend retains
+    the original request and materializes media only for local recomputation. Media tensors never travel in the handoff.
     """
 
     version: Literal[4] = 4

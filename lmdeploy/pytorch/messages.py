@@ -189,6 +189,7 @@ class MessageStatus(enum.Enum):
 
     WAITING = enum.auto()
     WAITING_FOR_REMOTE_KVS = enum.auto()
+    WAITING_FOR_MULTIMODALS = enum.auto()
     READY = enum.auto()
     STOPPED = enum.auto()
     RUNNING = enum.auto()
@@ -1038,14 +1039,39 @@ class SchedulerSequence:
         # PD handoffs must bind image content even when prefix reuse is disabled.
         if (self._seq_meta.enable_prefix_caching or self._seq_meta.enable_mooncake_store
                 or self.preserve_cache or self.migration_request is not None):
-            self._update_prefix_cache_spans(multimodals)
+            self.prefix_cache.multimodal_spans.extend(self._make_multimodal_spans(multimodals))
         self.history_multimodals.add_inputs(multimodals)
         if self._seq_meta.use_mrope:
             # Rebuild at the input boundary: old draft positions may overlap a new image.
             self.history_mrope_pos_ids.resize(0)
 
-    def _update_prefix_cache_spans(self, multimodals: MultiModalInputs):
-        """Record multimodal span identities for future trie keying."""
+    def restore_pd_multimodals(self, token_ids, multimodals: MultiModalInputs):
+        """Attach the original prompt's media without appending a new turn or
+        resetting sampling."""
+        prompt_len = self.input_end_pos
+        if not np.array_equal(token_ids, self.valid_ids[:prompt_len]) or not multimodals:
+            raise ValueError('PD recompute inputs do not match the original prompt.')
+        expected_spans = self.prefix_cache.multimodal_spans
+        expected_delta = (int(self.history_mrope_pos_ids[prompt_len - 1].max()) + 1 - prompt_len
+                          if self._seq_meta.use_mrope else None)
+        actual_spans = self._make_multimodal_spans(multimodals)
+        if sorted(actual_spans) != sorted(expected_spans):
+            raise ValueError('PD recompute image content does not match Prefill.')
+        self.history_multimodals = HistoryMultiModals(multimodals)
+        if self._seq_meta.use_mrope:
+            self.history_mrope_pos_ids.resize(0)
+            self._update_mrope_pos_ids()
+            actual_delta = int(self.history_mrope_pos_ids[prompt_len - 1].max()) + 1 - prompt_len
+            if actual_delta != expected_delta:
+                raise ValueError('PD recompute positions do not match Prefill.')
+        self.pd_metadata_only = False
+        self.pd_decode_pending = False
+
+    @staticmethod
+    def _make_multimodal_spans(multimodals: MultiModalInputs):
+        """Describe media independently for cache keys and deferred-input
+        validation."""
+        spans = []
         for modal_datas in multimodals.values():
             for modal_data in modal_datas:
                 modality = modal_data.modality
@@ -1058,11 +1084,12 @@ class SchedulerSequence:
                     # defensive correctness if a processor omits it.
                     content_hash = make_multimodal_content_hash(modal_data.data, modal_data.meta,
                                                                 modal_data.mrope_pos_ids)
-                self.prefix_cache.multimodal_spans.append(
+                spans.append(
                     MultimodalSpan(start=modal_data.start,
                                    end=modal_data.end,
                                    modality=str(modality),
                                    content_hash=str(content_hash)))
+        return spans
 
     def _index_prefix_cache_spans(self):
         """Build the lazy block -> multimodal identity index.

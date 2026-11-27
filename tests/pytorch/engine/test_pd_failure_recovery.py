@@ -33,7 +33,7 @@ def make_transfer(migrate, logprobs=None):
     migration = MigrationRequest(protocol=MigrationProtocol.RDMA, remote_engine_id='prefill',
                                  remote_session_id=1, handoff=handoff)
     target = decode.add_session(2).add_sequence(np.arange(8), migration_request=migration)
-    target.resp = SimpleNamespace(type=ResponseType.SUCCESS)
+    target.resp = SimpleNamespace(type=ResponseType.SUCCESS, data=None, is_done=False)
     assert decode.schedule_migration() == [target]
 
     async def control(peer, request):
@@ -190,7 +190,7 @@ def test_receive_completion_wakes_idle_migration_loop_without_spinning():
     asyncio.run(run())
 
 
-def test_preempted_metadata_only_decode_fails_without_replaying_images():
+def test_preempted_metadata_only_decode_waits_for_media_without_holding_blocks():
     async def run():
         async def migrate(batch):
             return [PDTransferResult(transfer_id=batch.receives[0].handoff.transfer_id, status='completed')]
@@ -202,13 +202,69 @@ def test_preempted_metadata_only_decode_fails_without_replaying_images():
         loop.scheduler.schedule_pd_decode()
         loop.scheduler.preempt_seqs([seq])
         assert not loop.scheduler.schedule(is_prefill=True).running
-        loop._reject_pd_media_recompute()
-        assert responses == [ResponseType.INTERNAL_ENGINE_ERROR]
-        assert 'retry the request through Prefill' in seq.resp.err_msg
+        loop._request_pd_media_recompute()
+        assert responses == []
+        from lmdeploy.pytorch.messages import MessageStatus
+        assert seq.status == MessageStatus.WAITING_FOR_MULTIMODALS
+        first = loop.resp_queue.get_nowait()[seq.session_id]
+        assert first.input_multimodals_request is None
+        output = loop.resp_queue.get_nowait()[seq.session_id]
+        assert output.input_multimodals_request == seq.seq_id
+        assert output.token_ids.tolist() == [8]
+        loop._request_pd_media_recompute()
+        assert loop.resp_queue.empty()
+        loop._send_resps([first, output])
+        assert responses == [ResponseType.SUCCESS]
+        assert seq.resp.data['input_multimodals_request'] == seq.seq_id
         assert not loop.scheduler.waiting
         assert not prefill.pd_coordinator.has_pending()
         assert loop.scheduler.block_manager.get_num_free_gpu_blocks() == 8
         replacement = loop.scheduler.add_session(3).add_sequence(np.arange(9))
         assert loop.scheduler.schedule(is_prefill=True).running == [replacement]
+
+    asyncio.run(run())
+
+
+def test_deferred_media_resume_validates_sequence_and_survives_a_second_preemption():
+    from lmdeploy.pytorch.engine.engine import Engine
+    from lmdeploy.pytorch.engine.input_process import PreprocessInputResult
+    from lmdeploy.pytorch.engine.request import Request, RequestType
+    from lmdeploy.pytorch.messages import MessageStatus
+    from lmdeploy.pytorch.multimodal.data_type import MultiModalData
+
+    async def run():
+        async def migrate(batch):
+            return [PDTransferResult(transfer_id=batch.receives[0].handoff.transfer_id, status='completed')]
+
+        loop, _, seq, _ = make_transfer(migrate)
+        images = dict(image=[MultiModalData(data=[], start=2, end=6, content_hash='pixels')])
+        seq.prefix_cache.multimodal_spans = seq._make_multimodal_spans(images)
+        seq.pd_metadata_only = True
+        await loop._receive_handoff(seq)
+        await asyncio.gather(*loop._pd_control_tasks)
+        loop.scheduler.schedule_pd_decode()
+        loop.scheduler.preempt_seqs([seq])
+        loop._request_pd_media_recompute()
+        engine = Engine.__new__(Engine)
+        engine.scheduler = loop.scheduler
+        engine.req_manager = loop.req_manager
+        engine.input_processor = SimpleNamespace(preprocess_input=lambda ids, mm: PreprocessInputResult(ids, mm))
+        resp = SimpleNamespace(type=ResponseType.SUCCESS)
+        req = Request(RequestType.RESUME_MULTIMODAL,
+                      sender_id=0, resp=resp, data=dict(session_id=seq.session_id, seq_id=seq.seq_id,
+                                                      input_ids=np.arange(8), multimodal=images))
+        engine._on_resume_multimodal([req])
+        assert resp.type == ResponseType.SUCCESS and seq.status == MessageStatus.WAITING
+        assert seq.generated_ids.tolist() == [8] and seq.num_new_tokens == 1
+        assert not seq.pd_metadata_only and seq.get_input_multimodals() == images
+        assert loop.scheduler.schedule(is_prefill=True).running == [seq]
+        loop.scheduler.activate_seqs([seq])
+        loop.scheduler.preempt_seqs([seq])
+        assert loop.scheduler.schedule(is_prefill=True).running == [seq]
+        loop.scheduler.end_session(seq.session_id)
+        replacement = loop.scheduler.add_session(seq.session_id).add_sequence(np.arange(8))
+        engine._on_resume_multimodal([req])
+        assert resp.type == ResponseType.SESSION_NOT_EXIST
+        assert replacement.history_multimodals.empty()
 
     asyncio.run(run())

@@ -251,6 +251,12 @@ class EngineWorkerBase:
         """End the given session."""
         return await self.instance_pool.async_end(session_id)
 
+    async def instance_resume_multimodal(self, session_id: int, seq_id: int, inputs: dict):
+        # Streaming requests may occupy every pooled instance while waiting for media.
+        # A short-lived control sender must not wait for one of those requests to finish.
+        instance = self.engine.create_instance()
+        return await instance.async_resume_multimodal(session_id, seq_id, inputs)
+
     async def instance_async_cancel(self, session_id: int):
         """Stop current streaming inference."""
         return await self.instance_pool.async_cancel(session_id)

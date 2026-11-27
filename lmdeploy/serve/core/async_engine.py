@@ -99,6 +99,8 @@ class PreprocessedRequest:
     adapter_name: str | None
     consumed: bool = False
     trace: RequestTrace | None = None
+    # Frontend-owned processor arguments, used only if PD loses its prompt cache.
+    recompute_prompt: dict[str, Any] | None = None
 
 
 # class AsyncEngine(LogitsMixin):
@@ -459,11 +461,30 @@ class AsyncEngine:
             gen_config.max_new_tokens = max(0, self.session_len - len(input_ids))
         return gen_config
 
+    async def _stream_with_multimodal_recompute(self, generator, handle, session, prompt):
+        """Consume internal media requests before parser lookahead or output
+        buffering."""
+        async for output in generator:
+            seq_id = output.input_multimodals_request
+            if seq_id is None:
+                yield output
+                continue
+            # A slow frontend may receive accepted tokens and the control event together.
+            # Deliver those tokens before waiting for media I/O.
+            if output.token_ids:
+                yield dataclasses.replace(output, input_multimodals_request=None)
+            if prompt is None:
+                raise ValueError('PD recomputation requires the original multimodal request.')
+            inputs = await self.prompt_processor.get_prompt_input(**prompt)
+            await handle.async_resume_multimodal(session.session_id, seq_id, inputs)
+            prompt = None
+
     @asynccontextmanager
-    async def safe_run(self, handle, session, **kwargs):
+    async def safe_run(self, handle, session, recompute_prompt=None, **kwargs):
         generator = handle.async_stream_infer(session.session_id, **kwargs)
         # async_stream_infer captured its own kwargs; do not retain large multimodal data here.
         kwargs.pop('multimodal', None)
+        resumed_generator = self._stream_with_multimodal_recompute(generator, handle, session, recompute_prompt)
 
         async def cleanup_after_exception():
             # Use asyncio.shield to protect cleanup coroutines from being cancelled.
@@ -478,7 +499,7 @@ class AsyncEngine:
 
         try:
             metrics_processor.increase_api_routed_requests()
-            yield generator
+            yield resumed_generator
         except (asyncio.CancelledError, GeneratorExit) as e:
             logger.info(f'[safe_run] session {session.session_id} cancelled: {type(e).__name__}')
             metrics_processor.increase_failed_requests('cancel')
@@ -495,6 +516,7 @@ class AsyncEngine:
             await cleanup_after_exception()
             raise RequestError(ErrorCode.INTERNAL_ERROR) from e
         finally:
+            await resumed_generator.aclose()
             await generator.aclose()
             metrics_processor.decrease_api_routed_requests()
 
@@ -534,8 +556,12 @@ class AsyncEngine:
             if session is not None and remove_session_on_error:
                 self.session_mgr.remove(session)
 
+        migration = gen_config.migration_request if gen_config is not None else None
+        deferred_media = (migration is not None and migration.handoff is not None
+                          and bool(migration.handoff.multimodal_spans))
         try:
-            if (messages is not None) ^ (input_ids is None):
+            if ((messages is not None) ^ (input_ids is None)) and not (
+                    deferred_media and messages is not None and input_ids is not None):
                 raise RequestError(ErrorCode.INVALID_REQUEST,
                                    'You must specify exactly one of messages or input_ids.')
             if gen_config is not None and gen_config.response_format is not None:
@@ -572,9 +598,10 @@ class AsyncEngine:
                     logger.warning('chat_template_kwargs["enable_thinking"] is already set, '
                                    'the value will not be overwritten by enable_thinking')
 
+            recompute_prompt = None
             if messages is not None:
                 self.request_logger.log_prompt(session, prompt=messages)
-                prompt_input = await self.prompt_processor.get_prompt_input(
+                processor_args = dict(
                     prompt=messages,
                     do_preprocess=do_preprocess,
                     adapter_name=adapter_name,
@@ -584,9 +611,14 @@ class AsyncEngine:
                     media_io_kwargs=media_io_kwargs,
                     mm_processor_kwargs=mm_processor_kwargs,
                     **kwargs)
-                prompt = prompt_input.get('prompt')
-                input_ids = prompt_input.get('input_ids')
-            else:
+                if deferred_media:
+                    # Keep raw IDs/placeholders and media options; never expand P's IDs again.
+                    recompute_prompt = deepcopy(processor_args)
+                else:
+                    prompt_input = await self.prompt_processor.get_prompt_input(**processor_args)
+                    prompt = prompt_input.get('prompt')
+                    input_ids = prompt_input.get('input_ids')
+            if messages is None or deferred_media:
                 prompt = None
                 if gen_config is not None and gen_config.migration_request is not None:
                     prompt = gen_config.migration_request.prompt_text
@@ -639,7 +671,8 @@ class AsyncEngine:
                                        inputs=prompt_input,
                                        input_token_len=input_len,
                                        gen_config=gen_config,
-                                       adapter_name=adapter_name)
+                                       adapter_name=adapter_name,
+                                       recompute_prompt=recompute_prompt)
         except (asyncio.CancelledError, GeneratorExit):
             metrics_processor.increase_total_requests()
             metrics_processor.increase_failed_requests('cancel')
@@ -772,6 +805,7 @@ class AsyncEngine:
             text_stop = None
             async with self.safe_run(handle,
                                      session=session,
+                                     recompute_prompt=request.recompute_prompt,
                                      **prompt_input,
                                      gen_config=gen_config,
                                      adapter_name=adapter_name,

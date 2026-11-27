@@ -87,6 +87,23 @@ def test_multimodal_handoff_checks_content_and_resumes_positions(prefix_cache, s
     assert target.get_input_multimodals() == {}
     assert target.model_meta == source.model_meta
     np.testing.assert_array_equal(target.mrope_pos_ids, source.mrope_pos_ids)
+    # Hydration happens after accepted output exists; prompt offsets must remain absolute.
+    before = target.generated_ids.copy()
+    seed = target.sampling_param.random_seed
+    target.set_step(0)
+    with pytest.raises(ValueError, match='image content'):
+        target.restore_pd_multimodals(tokens, images(value=99))
+    with pytest.raises(ValueError, match='original prompt'):
+        target.restore_pd_multimodals(tokens + 1, images())
+    target.restore_pd_multimodals(tokens, images())
+    assert not target.pd_metadata_only
+    np.testing.assert_array_equal(target.generated_ids, before)
+    assert target.sampling_param.random_seed == seed
+    np.testing.assert_array_equal(target.history_mrope_pos_ids[:target.num_valid_ids],
+                                  source.history_mrope_pos_ids[:target.num_valid_ids])
+    assert len(target.get_input_multimodals()['image']) == len(spans)
+    target.set_step(len(tokens))
+    assert target.get_input_multimodals() == {}
     for seq in [source, target]:
         seq.update_token_ids(np.array([104, 105]), draft_token_ids=np.array([106, 107]), mode=UpdateTokenMode.DECODE)
     np.testing.assert_array_equal(target.mrope_pos_ids, source.mrope_pos_ids)

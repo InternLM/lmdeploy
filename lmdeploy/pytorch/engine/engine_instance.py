@@ -190,6 +190,13 @@ class EngineInstance(EngineInstanceBase):
         """
         return try_add_session(self.req_sender, session_id)
 
+    async def async_resume_multimodal(self, session_id: int, seq_id: int, inputs: dict):
+        resp = await self.req_sender.async_send(RequestType.RESUME_MULTIMODAL,
+                                               dict(session_id=session_id, seq_id=seq_id,
+                                                    input_ids=inputs['input_ids'], multimodal=inputs['multimodal']))
+        if resp.type == ResponseType.INTERNAL_ENGINE_ERROR:
+            raise ValueError(resp.err_msg)
+
     async def async_stream_infer(self,
                                  session_id: int,
                                  input_ids: list[int],
@@ -262,6 +269,7 @@ class EngineInstance(EngineInstanceBase):
                     logger.debug(f'session[{session_id}] success: num_out_ids={num_ids}.')
                     yield EngineOutput(resp.type,
                                        token_ids[output_offset:].tolist(),
+                                       input_multimodals_request=resp.data.get('input_multimodals_request'),
                                        cache_block_ids=cache_block_ids,
                                        pd_handoff=pd_handoff,
                                        req_metrics=req_metrics,

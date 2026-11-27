@@ -57,3 +57,32 @@ def test_default_stop_detection_is_preserved(tokenizer):
     assert allowed(manager, matcher, 1)
     assert not allowed(manager, matcher, 2)
     assert not allowed(manager, matcher, 3)
+
+
+def test_pd_recompute_initializes_grammar_once_from_prefill_token(tokenizer):
+    import numpy as np
+
+    from lmdeploy.pytorch.config import CacheConfig, SchedulerConfig
+    from lmdeploy.pytorch.messages import SequenceMeta, UpdateTokenMode
+    from lmdeploy.pytorch.paging.scheduler import Scheduler
+    from lmdeploy.pytorch.strategies.ar.sampling import ARSamplingStrategy
+    from lmdeploy.pytorch.strategies.ar_spec.sequence import ARSpecSequenceStrategy
+
+    scheduler = Scheduler(SchedulerConfig(max_batches=2, max_session_len=32),
+                          CacheConfig(max_batches=2, block_size=4, num_gpu_blocks=8, num_cpu_blocks=0),
+                          SequenceMeta(4, strategy=ARSpecSequenceStrategy()))
+    seq = scheduler.add_session(1).add_sequence(np.arange(8))
+    seq.sampling_param.response_format = {'type': 'regex_schema', 'regex_schema': 'okok'}
+    seq.update_token_ids(np.array([4]), draft_token_ids=np.array([], dtype=np.int64), mode=UpdateTokenMode.PREFILL)
+    # PDCoordinator releases migration_request after installing the accepted first token.
+    assert seq.migration_request is None
+    # The first D forward can be a recompute prefill, without the PD decode carrier.
+    seq.set_step(0)
+    inputs = ARSamplingStrategy(0).make_sampling_inputs([seq])
+    manager = GuidedDecodingManager(tokenizer, len(tokenizer))
+    matcher = manager.get_processors(inputs.session_ctx, inputs.response_formats)[0]
+    assert matcher.accept_token(4)
+    assert allowed(manager, matcher, 1)
+    # A later preemption reuses the advanced matcher instead of replaying y1 or resetting it.
+    assert manager.get_processors(inputs.session_ctx, inputs.response_formats)[0] is matcher
+    assert allowed(manager, matcher, 1)

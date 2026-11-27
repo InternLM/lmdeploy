@@ -53,12 +53,13 @@ class GuidedDecodingManager:
             if isinstance(_format, dict) and _format.get('type', 'text') != 'text':
                 session_id = session_ctx[i]['session_id']
                 seq_id = session_ctx[i]['seq_id']
-                processors[i] = self.get_processor(session_id, seq_id, _format)
+                processors[i] = self.get_processor(session_id, seq_id, _format,
+                                                    initial_token_id=session_ctx[i].get('initial_token_id'))
 
         return processors
 
     def get_processor(self, session_id: int, seq_id: int,
-                      response_format: dict[str, Any]) -> xgr.GrammarMatcher:
+                      response_format: dict[str, Any], initial_token_id: int | None = None) -> xgr.GrammarMatcher:
         if session_id in self.processors:
             session_dict = self.processors[session_id]
             if seq_id in session_dict:
@@ -69,6 +70,10 @@ class GuidedDecodingManager:
             self.compiler, response_format, tokenizer_info=self.tokenizer_info, tokenizer=self.tokenizer)
 
         processor = xgr.GrammarMatcher(compiled)
+        # An imported request may start with local recomputation, before its first decode forward.
+        # Seed the new matcher once; later preemptions keep its already accepted output state.
+        if initial_token_id is not None:
+            self.accept_token(processor, initial_token_id)
         self.processors.setdefault(session_id, {})[seq_id] = processor
         logger.info(f'create guided processor for session_id={session_id}, seq_id={seq_id}, and '
                     f'total_processors={len(self.processors)}')

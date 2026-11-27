@@ -188,6 +188,10 @@ class ARSamplingStrategy(SamplingStrategy):
             'session_id': seq.session.session_id,
             'seq_id': seq.seq_id,
         } for seq in seqs]
+        for ctx, seq in zip(session_ctx, seqs):
+            if seq.sampling_param.response_format is not None and seq.num_new_tokens:
+                # PD has accepted y1 before the local grammar matcher exists; receive metadata is already released.
+                ctx['initial_token_id'] = int(seq.generated_ids[0])
 
         # repetition ngram
         max_repetition_ngram_size = max(repetition_ngram_sizes)

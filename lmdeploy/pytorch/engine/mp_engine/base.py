@@ -144,6 +144,9 @@ class MPEngineInstance(EngineInstanceBase):
     async def trim_routed_experts(self, key: str, num_rows: int) -> str:
         return await self.engine._collective_rpc_async('trim_routed_experts', key, num_rows)
 
+    async def async_resume_multimodal(self, session_id: int, seq_id: int, inputs: dict):
+        return await self.engine._collective_rpc_async('instance_resume_multimodal', session_id, seq_id, inputs)
+
     async def async_end(self, session_id: int):
         """End the given session."""
         if session_id not in self.session_states:

@@ -146,7 +146,7 @@ def register(router: APIRouter, server_context) -> None:
                 return create_error_response(HTTPStatus.BAD_REQUEST,
                                              'Multimodal PD requires the expanded prompt_token_ids from Prefill.')
             if (migration_request.handoff is not None and migration_request.prompt_token_ids is not None
-                    and not request.messages):
+                    and not request.messages and request.image_data is None):
                 # Validate processed raw-ID requests without requiring their original media payload.
                 request = request.model_copy(update=dict(input_ids=migration_request.prompt_token_ids, image_data=None))
         error_check_ret = validate_request(

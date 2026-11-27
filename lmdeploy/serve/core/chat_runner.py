@@ -139,6 +139,11 @@ class ChatRunner:
             adapter_name = parsed_request.model
 
         engine_messages = None if options.input_ids is not None else parsed_request.messages
+        do_preprocess = options.do_preprocess
+        migration = gen_config.migration_request
+        if migration is not None and migration.handoff is not None and migration.handoff.multimodal_spans:
+            engine_messages = parsed_request.messages
+            do_preprocess = True
         session = server_context.create_session(parsed_request.session_id)
         try:
             preprocessed = await server_context.async_engine.preprocess(
@@ -147,7 +152,7 @@ class ChatRunner:
                 gen_config=gen_config,
                 tools=parsed_request.tools,
                 reasoning_effort=parsed_request.reasoning_effort,
-                do_preprocess=options.do_preprocess,
+                do_preprocess=do_preprocess,
                 adapter_name=adapter_name,
                 trace_model=parsed_request.model,
                 chat_template_kwargs=_chat_template_kwargs_from_request(parsed_request),

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lmdeploy.messages import GenerationConfig
+from lmdeploy.messages import EngineOutput, GenerationConfig, ResponseType
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationProtocol, MigrationRequest
 from lmdeploy.serve.core.async_engine import AsyncEngine, PreprocessedRequest
 from lmdeploy.serve.core.exceptions import ErrorCode, RequestError
@@ -66,6 +66,86 @@ def test_pd_prompt_reuse_never_calls_media_processor():
                                           gen_config=GenerationConfig(max_new_tokens=8, migration_request=migration))
         assert request.inputs == {'input_ids': [1, 2, 2, 3], 'prompt': 'rendered <image> prompt'}
         assert request.gen_config.migration_request.prompt_text is None
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('recompute', [False, True])
+def test_pd_media_is_materialized_only_on_recompute_without_losing_buffered_output(recompute):
+    async def run():
+        calls, resumed = [], []
+        original = [dict(role='user', content=[dict(type='image_url', image_url=dict(url='stable.png'))])]
+
+        class Processor:
+            async def get_prompt_input(self, **kwargs):
+                calls.append(kwargs)
+                return dict(input_ids=[1, 2, 2, 3], multimodal=['processed pixels'])
+
+        async def resume(session_id, seq_id, inputs):
+            resumed.append((session_id, seq_id, inputs))
+
+        migration = MigrationRequest.model_validate(dict(
+            protocol=2, remote_engine_id='prefill', remote_session_id=1,
+            handoff=dict(transfer_id='transfer', engine_epoch='epoch', cache_schema='schema',
+                         prompt_digest='digest', prompt_token_count=4, valid_token_count=4,
+                         multimodal_spans=[(1, 3, 'image', 'hash')], first_token_id=9,
+                         random_seed=42, random_offset=5, block_size=64, block_ids=[1])))
+        engine = _engine(Processor())
+        request = await engine.preprocess(original, 7, input_ids=[1, 2, 2, 3],
+                                          mm_processor_kwargs={'image': {'max_pixels': 1024}},
+                                          gen_config=GenerationConfig(max_new_tokens=8, migration_request=migration))
+        assert calls == [] and request.inputs == {'input_ids': [1, 2, 2, 3]}
+
+        async def outputs():
+            yield EngineOutput(ResponseType.SUCCESS, [9])
+            if recompute:
+                yield EngineOutput(ResponseType.SUCCESS, [10], logprobs=[{10: -0.5}],
+                                   input_multimodals_request=13)
+            yield EngineOutput(ResponseType.FINISH, [11])
+
+        stream = engine._stream_with_multimodal_recompute(
+            outputs(), SimpleNamespace(async_resume_multimodal=resume), request.session, request.recompute_prompt)
+        assert (await anext(stream)).token_ids == [9]
+        assert not calls
+        if recompute:
+            buffered = await anext(stream)
+            assert buffered.token_ids == [10] and buffered.logprobs == [{10: -0.5}]
+            assert buffered.input_multimodals_request is None and not calls
+        assert (await anext(stream)).token_ids == [11]
+        await stream.aclose()
+        assert len(calls) == int(recompute)
+        if recompute:
+            assert calls[0]['prompt'] == original
+            assert calls[0]['mm_processor_kwargs'] == {'image': {'max_pixels': 1024}}
+            assert resumed == [(7, 13, dict(input_ids=[1, 2, 2, 3], multimodal=['processed pixels']))]
+
+    asyncio.run(run())
+
+
+def test_cancellation_during_deferred_media_does_not_resume_request():
+    async def run():
+        started = asyncio.Event()
+
+        class Processor:
+            async def get_prompt_input(self, **kwargs):
+                started.set()
+                await asyncio.Future()
+
+        async def resume(*args):
+            pytest.fail('Cancelled preprocessing must not resume the request')
+
+        async def outputs():
+            yield EngineOutput(ResponseType.SUCCESS, [], input_multimodals_request=13)
+
+        engine = _engine(Processor())
+        stream = engine._stream_with_multimodal_recompute(
+            outputs(), SimpleNamespace(async_resume_multimodal=resume), SimpleNamespace(session_id=7), dict(prompt=[]))
+        task = asyncio.create_task(anext(stream))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await stream.aclose()
 
     asyncio.run(run())
 

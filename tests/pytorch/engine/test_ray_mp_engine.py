@@ -51,6 +51,20 @@ def test_trimming_a_legacy_store_does_not_lease_an_engine_instance(monkeypatch):
     put.assert_awaited_once_with([10, 20])
 
 
+def test_multimodal_resume_does_not_wait_for_a_free_streaming_instance():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from lmdeploy.pytorch.engine.mp_engine.base_worker import EngineWorkerBase
+
+    resume = AsyncMock()
+    worker = EngineWorkerBase.__new__(EngineWorkerBase)
+    worker.engine = SimpleNamespace(create_instance=lambda: SimpleNamespace(async_resume_multimodal=resume))
+    inputs = dict(input_ids=[1], multimodal=['pixels'])
+    asyncio.run(worker.instance_resume_multimodal(7, 13, inputs))
+    resume.assert_awaited_once_with(7, 13, inputs)
+
+
 def _make_worker(stream=None):
     worker = RayEngineWorker.__new__(RayEngineWorker)
     worker._stream_id = 0

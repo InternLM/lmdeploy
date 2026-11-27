@@ -52,6 +52,10 @@ class EngineBase:
 
 class EngineInstanceBase:
 
+    async def async_resume_multimodal(self, session_id: int, seq_id: int, inputs: dict):
+        """Supply the original media for a preempted PD request."""
+        raise NotImplementedError('This method is not implemented.')
+
     async def async_end(self, session_id: int):
         """End the given session."""
         raise NotImplementedError('This method is not implemented.')

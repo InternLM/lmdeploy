@@ -929,6 +929,8 @@ class EngineOutput:
     req_metrics: RequestMetrics | None = None
     routed_experts: torch.Tensor = None
     ce_loss: float = None
+    # Internal request to materialize a PD prompt for this sequence before recomputation.
+    input_multimodals_request: int | None = None
 
 
 @dataclass

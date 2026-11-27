@@ -67,6 +67,7 @@ class InferOutput:
 
     # summed, unnormalized cross-entropy (NLL) of the input prompt
     ce_loss: float = None
+    input_multimodals_request: int | None = None
 
 
 def _build_seq_meta(model_config: ModelConfig, cache_config: CacheConfig, seq_strategy: Any, sampling_strategy: Any):
@@ -322,6 +323,7 @@ class Engine(EngineBase):
         req_manager.bind_func(RequestType.STOP_SESSION, self._on_stop_session)
         req_manager.bind_func(RequestType.END_SESSION, self._on_end_session)
         req_manager.bind_func(RequestType.ADD_MESSAGE, self._on_add_message)
+        req_manager.bind_func(RequestType.RESUME_MULTIMODAL, self._on_resume_multimodal)
         return req_manager
 
     def _response(self, resp: Response, resp_type: ResponseType, data: Any = None, err_msg: str = ''):
@@ -469,6 +471,29 @@ class Engine(EngineBase):
 
         if len(valid_reqs) > 0:
             self._add_message(valid_reqs)
+
+    def _on_resume_multimodal(self, reqs: list[Request], **kwargs):
+        """Install deferred PD media on the original sequence, then allow local
+        recomputation."""
+        for req in reqs:
+            data = req.data
+            session = self.scheduler.get_session(data['session_id'])
+            seq = session.sequences.get(data['seq_id']) if session is not None else None
+            if seq is None or seq.status != MessageStatus.WAITING_FOR_MULTIMODALS:
+                self._response(req.resp, ResponseType.SESSION_NOT_EXIST)
+                continue
+            try:
+                result = self.input_processor.preprocess_input(data['input_ids'], data['multimodal'])
+                seq.restore_pd_multimodals(result.input_ids, result.input_multimodals)
+            except (ValueError, RuntimeError) as error:
+                self._response(seq.resp, ResponseType.INTERNAL_ENGINE_ERROR, err_msg=str(error))
+                self.scheduler.end_session(seq.session_id)
+                self._response(req.resp, ResponseType.INTERNAL_ENGINE_ERROR, err_msg=str(error))
+                continue
+            seq.state.activate()
+            logger.info('PD multimodal recompute ready: session=%s seq=%s generated=%s',
+                        seq.session_id, seq.seq_id, seq.num_new_tokens)
+            self._response(req.resp, ResponseType.SUCCESS)
 
     def _add_message(self, reqs: list[Request]):
 

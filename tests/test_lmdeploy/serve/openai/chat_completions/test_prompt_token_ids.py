@@ -133,9 +133,9 @@ def test_pd_reuses_prompt_ids_and_preserves_parser_messages(chat_endpoint, migra
             super().__init__(request)
 
     async def preprocess(messages, session, **kwargs):
-        assert (messages is None) is migrating
+        assert (messages is None) is (migrating and not image)
         assert kwargs['input_ids'] == (ids if migrating else None)
-        assert kwargs['do_preprocess'] is not migrating
+        assert kwargs['do_preprocess'] is (not migrating or image)
         if migrating:
             assert kwargs['gen_config'].migration_request.prompt_token_ids is None
             assert kwargs['gen_config'].migration_request.handoff.multimodal_spans == (

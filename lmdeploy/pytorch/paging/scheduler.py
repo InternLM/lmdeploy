@@ -392,8 +392,8 @@ class Scheduler:
             prefer_long_prefill,
         )
         running = self._prefill_scheduler.schedule(
-            # A decode turn can preempt a metadata-only import before falling
-            # back to prefill in the same turn. EngineLoop reports its failure.
+            # A decode turn can preempt an import before falling back to prefill
+            # in the same turn. EngineLoop requests its media before admission.
             waiting=[seq for seq in self.waiting if not seq.pd_metadata_only],
             stopped=self.hanging,
             num_ready=self.num_ready(),
