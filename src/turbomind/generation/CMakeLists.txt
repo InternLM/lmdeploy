@@ -22,6 +22,7 @@ set_property(TARGET guided_decoding PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 add_library(generation STATIC
     generation.cc
+    target_verification.cc
     logits_processor.cc
     sampling.cc
     stop_criteria.cc)
@@ -37,3 +38,6 @@ target_link_libraries(generation PUBLIC
     guided_decoding
     memory_utils
     CUDA::cudart)
+target_link_libraries(generation PRIVATE
+    speculative_sampling_kernels
+    speculative_sequence_kernels)

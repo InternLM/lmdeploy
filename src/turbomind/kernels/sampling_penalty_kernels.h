@@ -27,6 +27,7 @@ void ApplyRepetitionPenalty(Tensor&               logits,
                             const Buffer_<float>& penalties,
                             const Buffer_<int*>&  token_ids_ptrs,
                             const Buffer_<int>&   sequence_length,
+                            const bool*           logits_active,
                             cudaStream_t          stream);
 
 template<typename T>
