@@ -84,8 +84,8 @@ class _RawRequest:
 
 
 class _Engine:
-    """Yields ``chunks`` of (token_ids, rows); rows are arrays or dicts per
-    the request."""
+    """Yields ``chunks`` of (token_ids, rows); rows are arrays or dicts per the
+    request."""
 
     def __init__(self, chunks, k):
         self.backend_config = PytorchEngineConfig(logprobs_mode='raw_logprobs', role=EngineRole.Hybrid)

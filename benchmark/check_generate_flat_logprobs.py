@@ -1,4 +1,5 @@
-"""Check and measure ``top_logprobs_format='flat'`` on a live ``POST /generate``.
+"""Check and measure ``top_logprobs_format='flat'`` on a live ``POST
+/generate``.
 
 Needs a GPU server; nothing here runs in CI. Start a PyTorch api_server with
 raw logprobs on a small model, for example::
@@ -55,7 +56,8 @@ def decode_flat(meta: dict) -> tuple[np.ndarray, np.ndarray]:
 
 
 async def generate(session, url, payload):
-    """POST /generate; return (output_ids, token_logprobs, metas, body_bytes)."""
+    """POST /generate; return (output_ids, token_logprobs, metas,
+    body_bytes)."""
     async with session.post(f'{url}/generate', json=payload) as resp:
         if resp.status != 200:
             raise RuntimeError(f'HTTP {resp.status}: {await resp.text()}')
