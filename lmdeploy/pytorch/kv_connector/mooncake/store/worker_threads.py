@@ -10,7 +10,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from lmdeploy.pytorch.kv_connector.base import RequestId
+import numpy as np
+import torch
+
 from lmdeploy.utils import get_logger
 
 from .data import (
@@ -24,6 +26,17 @@ from .data import (
 )
 
 logger = get_logger('lmdeploy')
+
+
+class _GPUFenceError(RuntimeError):
+    """GPU ownership could not be proven terminal; keep scheduler leases."""
+
+
+def _wait_for_gpu(event) -> None:
+    try:
+        event.synchronize()
+    except RuntimeError as error:
+        raise _GPUFenceError('Mooncake transfer GPU fence failed') from error
 
 
 @dataclass(frozen=True)
@@ -45,7 +58,7 @@ class _SaveEntry:
     """A Store key bound to a physical FA block or linear-state snapshot."""
 
     key: str
-    cache_kind: Literal['full_attention', 'linear_attention']
+    cache_kind: Literal['full_attention', 'linear_attention', 'routed_experts']
     source_index: int
 
 
@@ -132,6 +145,7 @@ class KVCacheStoreSendingThread(threading.Thread):
         completion_callback: Callable[[int, bool], None],
         replicate_config: Any = None,
         state_registrations: tuple[MooncakeStoreStateRegistration, ...] = (),
+        routed_experts_cache: torch.Tensor | None = None,
     ) -> None:
         super().__init__(name='MooncakeKVCacheStoreSender', daemon=True)
         if not registrations or len(registrations) != len(row_block_sizes):
@@ -153,11 +167,13 @@ class KVCacheStoreSendingThread(threading.Thread):
         self.replica_rank = tp_rank % key_metadata.kv_head_replica_num
         self.completion_callback = completion_callback
         self.replicate_config = replicate_config
+        self.routed_experts_cache = routed_experts_cache
         self.state_rows = _state_row_layout(state_registrations)
         self.num_state_slots = state_registrations[0].slot_count if state_registrations else 0
         self.request_queue: queue.Queue[_SaveTask | object] = queue.Queue()
         self._state_lock = threading.Lock()
         self._closed = False
+        self.fatal_error: _GPUFenceError | None = None
 
     def add_request(
         self,
@@ -207,6 +223,12 @@ class KVCacheStoreSendingThread(threading.Thread):
                 cache_kind='full_attention',
                 source_index=block_id,
             ))
+        if self.routed_experts_cache is not None:
+            # The output rank owns every R3 block, even when replicated KV
+            # heads assign that block's KV write to a different rank.
+            entries.extend(_SaveEntry(build_store_key(self.key_metadata, 0, digest, group_id=2),
+                                      'routed_experts', block_id)
+                           for block_id, digest in zip(request.block_ids, request.block_hashes, strict=True))
         if request.state is not None:
             # State uses every attention TP rank. It must not inherit FA's
             # replicated-KV-head ownership rule.
@@ -299,6 +321,9 @@ class KVCacheStoreSendingThread(threading.Thread):
             if entry.cache_kind == 'full_attention':
                 block_addresses, block_sizes = _scatter_block(
                     self.registrations, self.row_block_sizes, self.num_gpu_blocks, entry.source_index)
+            elif entry.cache_kind == 'routed_experts':
+                block = self.routed_experts_cache[entry.source_index]
+                block_addresses, block_sizes = [block.data_ptr()], [block.numel() * block.element_size()]
             else:
                 block_addresses, block_sizes = _scatter_state(
                     self.state_rows, self.num_state_slots, entry.source_index)
@@ -376,15 +401,15 @@ class KVCacheStoreSendingThread(threading.Thread):
 
     def _save(self, task: _SaveTask) -> bool:
         request = task.request
-        entries = self._owned_entries(request)
-        keys = [entry.key for entry in entries]
         missing = None
         try:
+            entries = self._owned_entries(request)
+            keys = [entry.key for entry in entries]
             missing = self._find_missing(request, keys) if keys else []
         finally:
             # Waiting also on lookup failure keeps completion ordering tied to
             # this model step, which makes lease release deterministic.
-            task.ready_event.synchronize()
+            _wait_for_gpu(task.ready_event)
 
         # The query does not touch KV memory and can overlap the forward. The
         # direct GPU read must wait until all preceding compute-stream writes
@@ -411,9 +436,14 @@ class KVCacheStoreSendingThread(threading.Thread):
                     request.request_id,
                     (time.perf_counter() - item.enqueue_time) * 1000,
                 )
+                if self.fatal_error is not None:
+                    continue
                 success = False
                 try:
                     success = self._save(item)
+                except _GPUFenceError as error:
+                    self.fatal_error = error
+                    continue
                 except Exception:
                     logger.exception(
                         'Mooncake KV save reached terminal failure: '
@@ -441,12 +471,16 @@ class KVCacheStoreSendingThread(threading.Thread):
         """Drain accepted saves and stop the sender exactly once."""
         with self._state_lock:
             if self._closed:
+                if self.fatal_error is not None:
+                    raise self.fatal_error
                 return
             self._closed = True
         self.request_queue.join()
         self.request_queue.put(self._STOP)
         self.request_queue.join()
         self.join()
+        if self.fatal_error is not None:
+            raise self.fatal_error
 
 
 class KVCacheStoreRecvingThread(threading.Thread):
@@ -465,8 +499,9 @@ class KVCacheStoreRecvingThread(threading.Thread):
         global_rank: int,
         tp_rank: int,
         tp_size: int,
-        completion_callback: Callable[[RequestId, bool], None],
+        completion_callback: Callable[..., None],
         state_registrations: tuple[MooncakeStoreStateRegistration, ...] = (),
+        routed_experts_cache: torch.Tensor | None = None,
     ) -> None:
         super().__init__(name='MooncakeKVCacheStoreReceiver', daemon=True)
         if not registrations or len(registrations) != len(row_block_sizes):
@@ -486,11 +521,13 @@ class KVCacheStoreRecvingThread(threading.Thread):
         self.tp_size = tp_size
         self.key_rank = tp_rank // key_metadata.kv_head_replica_num
         self.completion_callback = completion_callback
+        self.routed_experts_cache = routed_experts_cache
         self.state_rows = _state_row_layout(state_registrations)
         self.num_state_slots = state_registrations[0].slot_count if state_registrations else 0
         self.request_queue: queue.Queue[_LoadTask | object] = queue.Queue()
         self._state_lock = threading.Lock()
         self._closed = False
+        self.fatal_error: _GPUFenceError | None = None
 
     def add_request(self, request: MooncakeStoreLoadRequest, ready_event: Any = None) -> None:
         """Enqueue a load without waiting for Store I/O."""
@@ -519,7 +556,7 @@ class KVCacheStoreRecvingThread(threading.Thread):
             block_id,
         )
 
-    def _load(self, request: MooncakeStoreLoadRequest, ready_event: Any = None) -> bool:
+    def _load_entries(self, request: MooncakeStoreLoadRequest):
         keys = [
             build_store_key(self.key_metadata, self.key_rank, block_hash)
             for block_hash in request.block_hashes
@@ -530,6 +567,13 @@ class KVCacheStoreRecvingThread(threading.Thread):
             block_addresses, block_sizes = self._scatter_block(block_id)
             addresses.append(block_addresses)
             sizes.append(block_sizes)
+
+        if self.routed_experts_cache is not None:
+            for block_id, digest in zip(request.block_ids, request.block_hashes, strict=True):
+                block = self.routed_experts_cache[block_id]
+                keys.append(build_store_key(self.key_metadata, 0, digest, group_id=2))
+                addresses.append([block.data_ptr()])
+                sizes.append([block.numel() * block.element_size()])
 
         if request.state_destination is not None:
             if (request.state_unit_id is not None) != (self.key_metadata.state_schema is not None):
@@ -542,6 +586,18 @@ class KVCacheStoreRecvingThread(threading.Thread):
             addresses.append(state_addresses)
             sizes.append(state_sizes)
 
+        return keys, addresses, sizes
+
+    def _load(self, request: MooncakeStoreLoadRequest, ready_event: Any = None) -> bool:
+        ready_wait_ms = 0.0
+        try:
+            keys, addresses, sizes = self._load_entries(request)
+        finally:
+            # Failed preparation must also drain previous users of these blocks.
+            if ready_event is not None:
+                start = time.perf_counter()
+                _wait_for_gpu(ready_event)
+                ready_wait_ms = (time.perf_counter() - start) * 1000
         total_bytes = sum(sum(block_sizes) for block_sizes in sizes)
         logger.info(
             'Mooncake Store interaction before: operation=load_batch_get_into_multi_buffers '
@@ -556,13 +612,6 @@ class KVCacheStoreRecvingThread(threading.Thread):
             total_bytes,
             request.state_destination,
         )
-        # Key/address preparation only touches CPU metadata. Wait after it,
-        # before Store can overwrite bytes still in use by earlier GPU work.
-        ready_wait_ms = 0.0
-        if ready_event is not None:
-            ready_wait_start = time.perf_counter()
-            ready_event.synchronize()
-            ready_wait_ms = (time.perf_counter() - ready_wait_start) * 1000
         start = time.perf_counter()
         try:
             results = self.store.batch_get_into_multi_buffers(keys, addresses, sizes)
@@ -590,11 +639,8 @@ class KVCacheStoreRecvingThread(threading.Thread):
             )
             return False
 
-        failed = [result < 0 for result in results]
-        if self.key_metadata.state_schema is not None:
-            # Mooncake returns bytes read, not merely a success status. A short
-            # object can otherwise leave the direct destination partly stale.
-            failed = [result != sum(parts) for result, parts in zip(results, sizes, strict=True)]
+        # A short object leaves part of the destination stale, for every group.
+        failed = [result != sum(parts) for result, parts in zip(results, sizes, strict=True)]
         num_failed = sum(failed)
         state_failed = request.state_destination is not None and failed[-1]
         log = logger.info if not num_failed else logger.error
@@ -616,6 +662,25 @@ class KVCacheStoreRecvingThread(threading.Thread):
         )
         return num_failed == 0
 
+    def _copy_routes(self, request: MooncakeStoreLoadRequest) -> np.ndarray:
+        """Finish the API history copy before releasing the load's blocks.
+
+        This runs on the receiver thread and its own stream. The returned NumPy array owns a CPU tensor; no view into
+        the GPU pool escapes.
+        """
+        cache = self.routed_experts_cache
+        with torch.cuda.device(cache.device):
+            stream = torch.cuda.Stream()
+            routes = torch.empty((len(request.block_ids), *cache.shape[1:]),
+                                 dtype=cache.dtype, device='cpu', pin_memory=True)
+            with torch.cuda.stream(stream):
+                try:
+                    for index, block_id in enumerate(request.block_ids):
+                        routes[index].copy_(cache[block_id], non_blocking=True)
+                finally:
+                    _wait_for_gpu(stream)
+        return routes.view(-1, *cache.shape[-2:]).numpy()
+
     def run(self) -> None:
         while True:
             item = self.request_queue.get()
@@ -633,8 +698,16 @@ class KVCacheStoreRecvingThread(threading.Thread):
                     request.request_id,
                     (time.perf_counter() - item.enqueue_time) * 1000,
                 )
+                if self.fatal_error is not None:
+                    continue
                 try:
                     success = self._load(request, item.ready_event)
+                    routes = None
+                    if success and request.return_routed_experts and self.routed_experts_cache is not None:
+                        routes = self._copy_routes(request)
+                except _GPUFenceError as error:
+                    self.fatal_error = error
+                    continue
                 except Exception:
                     success = False
                     logger.exception(
@@ -644,7 +717,10 @@ class KVCacheStoreRecvingThread(threading.Thread):
                         self.tp_rank,
                         request.request_id,
                     )
-                self.completion_callback(request.request_id, success)
+                if success and routes is not None:
+                    self.completion_callback(request.request_id, success, routes)
+                else:
+                    self.completion_callback(request.request_id, success)
                 logger.info(
                     'Mooncake KV load completed: global_rank=%d tp_rank=%d tp_size=%d '
                     'request_id=%s status=%s',
@@ -661,9 +737,13 @@ class KVCacheStoreRecvingThread(threading.Thread):
         """Drain accepted loads and stop the receiver exactly once."""
         with self._state_lock:
             if self._closed:
+                if self.fatal_error is not None:
+                    raise self.fatal_error
                 return
             self._closed = True
         self.request_queue.join()
         self.request_queue.put(self._STOP)
         self.request_queue.join()
         self.join()
+        if self.fatal_error is not None:
+            raise self.fatal_error

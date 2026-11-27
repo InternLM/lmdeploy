@@ -1563,7 +1563,8 @@ def _finish_store_maker(maker):
 def test_store_chunk_prefetch_exports_next_checkpoint_before_previous_ack(width, tokens):
     from lmdeploy.pytorch.kv_connector.base import KVConnectorOutput
 
-    maker = _maker(width, budget=1024, requests=1, block_size=64,
+    # Keep all three saves outstanding for reverse completion (limit: 2 * max_batches).
+    maker = _maker(width, budget=1024, requests=2, block_size=64,
                    store_role='kv_producer', store_credits=8)
     scheduler, owner = maker.scheduler, maker.compact_state_manager
     seq = scheduler.add_session(0).add_sequence([1] * tokens)

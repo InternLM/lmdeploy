@@ -466,6 +466,18 @@ class KVLoadCoordinator:
                 self._rollback(record)
                 self._finish_cancelled_or_failed(record)
             else:
+                if record.seq.return_routed_experts:
+                    routes = result.routed_experts
+                    start = record.load_start_step
+                    if (routes is None or routes.ndim != 3 or len(routes) != record.remote_step - start
+                            or len(record.seq.all_routed_experts) < start):
+                        if self.connector is not None:
+                            self.connector.reject_load_result(result.request_id)
+                        self._rollback(record)
+                        self._finish_cancelled_or_failed(record)
+                        continue
+                    record.seq.all_routed_experts.resize(start)
+                    record.seq.append_routed_experts(routes)
                 self._publish(record)
                 if TRACE_ENABLED:
                     record.seq.record_event(EventType.KV_LOAD_FINISHED)

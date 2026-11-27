@@ -71,7 +71,8 @@ if __name__ == '__main__':
 ### 配置限制
 
 - 缓存块大小为 64 tokens。手动设置 `num_gpu_blocks` 时按此计数，而不是按 KPool 条目计数。
-- MTP 下保持 `prefix_cache_decode_state_interval=0`；非 MTP 的正值必须是 64 的倍数。
+- `prefix_cache_decode_state_interval` 取正值时必须是 64 的倍数。
+  使用 `deepseek_mtp` 保存 decode checkpoint 时，draft 模型必须只有一层，且不使用状态缓存。
 - 暂不支持 PD 迁移。
 
 原生 FP8 CUDA 路径也支持 DP/EP 服务，例如 `--tp 2 --dp 2 --ep 4`。
@@ -83,3 +84,40 @@ prefill 走 eager，包含视觉输入的 chunk 也回退到 eager。MTP draft p
 用 `Response.cached_tokens` 检查实际命中，本地和 Store 的累计命中率见[缓存命中指标](./metrics.md)。
 Prefill 分块、PCG padding、batch 形状或并行拓扑变化可能改变 FP8 的生成轨迹；
 应同时检查任务 accuracy、MTP accept rate 和缓存命中，不能默认逐 token 完全相同或一定获得性能收益。
+
+## 多实例共享 Mooncake Store
+
+启动一个 [Mooncake master](https://kvcache-ai.github.io/Mooncake/deployment/mooncake-store-deployment-guide.html)。
+在每个节点将 `MOONCAKE_CONFIG_PATH` 指向各 worker 可读的 JSON 文件。以 RDMA 为例：
+
+```json
+{
+  "master_server_address": "store-master:50051",
+  "metadata_server": "P2PHANDSHAKE",
+  "protocol": "rdma",
+  "global_segment_size": "4GB",
+  "local_buffer_size": "4GB"
+}
+```
+
+各节点填写同一个可达的 master 地址（不要用 `127.0.0.1`）。启用 Mooncake 的 RDMA 自动发现时可省略 `device_name`；手动选卡时填写本机的 RDMA 设备名。
+两项容量均按**每个 Store worker** 计算。按示例默认值，单节点 8 个 worker 共贡献 32 GiB 共享缓存，另需为本地传输缓冲区预留 32 GiB。
+权重和缓存布局相同的副本，在启动 PyTorch 服务时使用相同的 connector 参数：
+
+```shell
+--kv-transfer-config '{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_connector_extra_config":{"model_name":"my-model","cache_prefix":"run-42"}}'
+```
+
+### RL 权重更新
+
+训练与推理共卡时，在 `kv_connector_extra_config` 中按需添加：
+
+- 设置 `rl_weight_versioning=True`，并为初始权重指定非空的 `weight_version`。不同权重不能共用版本号。
+- 跨副本复用缓存时，设置 `rl_share_across_engines=True`，并让各副本使用相同的权重版本。引擎休眠后，须先提交权重更新，再唤醒 KV 缓存。
+- 若模型支持返回路由专家 ID，可设置 `store_routed_experts=True`，将这些 ID 与 KV 一起缓存。这会额外占用输出 rank 的显存。
+
+按 [Ray 权重更新流程](./update_weights.md)更新权重时，保持 `cache_prefix` 不变。
+每轮只在最后一个 bucket 的 `/update_weights` 请求（`finished=True`）中传入新权重的
+`weight_version`（如 `step-1`）。共享缓存的所有 rank 和副本使用同一版本号。
+如果同一引擎的所有 rank 都省略版本号，引擎会生成新的私有版本，不会沿用上一轮版本。
+版本号校验失败不会回滚已加载的权重。

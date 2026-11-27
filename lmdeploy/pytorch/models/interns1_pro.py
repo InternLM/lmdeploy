@@ -76,6 +76,7 @@ class InternS1ProForConditionalGeneration(nn.Module, DeployModelMixinV1, CudaGra
 
         # for router replay
         bm_ctx = get_build_model_context()
+        self.routed_experts_shape = (config.text_config.num_hidden_layers, config.text_config.num_experts_per_tok)
         self.enable_return_routed_experts = bm_ctx.enable_return_routed_experts
 
     def forward(

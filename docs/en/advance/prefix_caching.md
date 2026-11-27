@@ -84,8 +84,8 @@ if __name__ == '__main__':
 
 - Cache blocks contain 64 tokens. If setting `num_gpu_blocks` manually, count
   these blocks rather than KPool entries.
-- With MTP, keep `prefix_cache_decode_state_interval=0`. Without MTP, positive
-  values must be multiples of 64.
+- Positive values of `prefix_cache_decode_state_interval` must be multiples of 64.
+  With `deepseek_mtp`, decode checkpoints require one draft layer without state caches.
 - PD migration is not supported.
 
 The native FP8 CUDA path also supports DP/EP serving, for example `--tp 2 --dp 2 --ep 4`. Enable text-prefill PCG with `--piecewise-cudagraph-max-tokens 512`
@@ -99,3 +99,44 @@ and Store hit rates, see [cache hit metrics](./metrics.md).
 Changing prefill, PCG padding, batch shapes or parallel topology can change
 FP8 generation trajectories; compare task accuracy and MTP acceptance as well
 as cache hits rather than assuming bitwise-identical outputs or a guaranteed speedup.
+
+## Sharing Mooncake Store across instances
+
+Start one [Mooncake master](https://kvcache-ai.github.io/Mooncake/deployment/mooncake-store-deployment-guide.html).
+On each node, point `MOONCAKE_CONFIG_PATH` to a JSON file readable by every worker. For example, with RDMA:
+
+```json
+{
+  "master_server_address": "store-master:50051",
+  "metadata_server": "P2PHANDSHAKE",
+  "protocol": "rdma",
+  "global_segment_size": "4GB",
+  "local_buffer_size": "4GB"
+}
+```
+
+Use the same reachable master address (not `127.0.0.1`). With Mooncake RDMA auto-discovery enabled, omit `device_name`; for manual selection, set it to the local RDMA device name(s).
+Both sizes are **per Store worker**. With eight workers on one node, these defaults contribute 32 GiB to the shared cache and budget another 32 GiB for local transfer buffers.
+For replicas with the same weights and cache layout, pass the same connector settings to each PyTorch server:
+
+```shell
+--kv-transfer-config '{"kv_connector":"MooncakeStoreConnector","kv_role":"kv_both","kv_connector_extra_config":{"model_name":"my-model","cache_prefix":"run-42"}}'
+```
+
+### RL weight updates
+
+For colocated RL, add these options to `kv_connector_extra_config`:
+
+- Set `rl_weight_versioning=True` and give the initial weights a nonempty
+  `weight_version`. Never reuse a version for different weights.
+- For cross-replica reuse, set `rl_share_across_engines=True` and use the same
+  version on all replicas. After sleep, commit the update before waking the KV cache.
+- To cache routed-expert IDs alongside KV, set `store_routed_experts=True` on
+  a model that supports returning them. This uses extra GPU memory on the output rank.
+
+Keep `cache_prefix` fixed across [Ray weight updates](./update_weights.md).
+For each new set of weights, pass its `weight_version` (e.g., `step-1`) only in the
+final `/update_weights` request (`finished=True`). Use the same version on all
+ranks and replicas that share the cache. If all ranks in an engine omit it,
+the engine generates a fresh private version instead of reusing the previous one.
+A rejected version does not roll back weights already loaded.

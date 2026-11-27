@@ -202,7 +202,7 @@ def test_fp32_lm_head(model_name, enabled):
 
     model_cls = DeepseekV32ForCausalLM if model_name == 'deepseek' else GlmMoeDsaForCausalLM
     # Zero decoder layers exercise real embedding/head construction on CPU.
-    config = SimpleNamespace(vocab_size=128, hidden_size=64, pad_token_id=0, num_hidden_layers=0,
+    config = SimpleNamespace(vocab_size=128, hidden_size=64, pad_token_id=0, num_hidden_layers=0, num_experts_per_tok=2,
                              rms_norm_eps=1e-6, qk_rope_head_dim=8, max_position_embeddings=128,
                              rope_theta=10000., index_topk=8, tie_word_embeddings=False)
     with build_model_context(BuildModelContext(fp32_lm_head=enabled, tie_word_embeddings=False)):
