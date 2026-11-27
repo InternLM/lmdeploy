@@ -125,6 +125,7 @@ def set_envs():
 # ---------------------------------------------------------------------------
 _TM_KERNEL_CLASS_LEGACY_ENVS = {
     'w4a16': 'LMDEPLOY_W4A16_GEMM_BACKEND',
+    'moe_grouped': 'LMDEPLOY_W4A16_GEMM_BACKEND',
 }
 _TM_KERNEL_CLASSES = tuple(_TM_KERNEL_CLASS_LEGACY_ENVS)
 _TM_KERNEL_STATES = ('auto', 'on', 'off')
@@ -202,8 +203,8 @@ def parse_tm_kernels(env_value=None):
 def _tm_kernel_legacy_state(cls):
     """State the legacy env of a class asks for.
 
-    The lookup goes through the module attribute, the value the consumers and the routing tests read. Classes without a
-    legacy env default to auto.
+    w4a16 and moe_grouped share LMDEPLOY_W4A16_GEMM_BACKEND. The lookup goes through the module attribute, the value the
+    consumers and the routing tests read. Classes without a legacy env default to auto.
     """
     legacy_env = _TM_KERNEL_CLASS_LEGACY_ENVS[cls]
     if legacy_env is None:
