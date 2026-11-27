@@ -8,8 +8,10 @@ from typing import Any, Literal
 import shortuuid
 from openai.types.responses import (
     ResponseError,
+    ResponseOutputItem,
     ResponseOutputMessage,
     ResponseOutputText,
+    ResponseReasoningItem,
     ResponseUsage,
 )
 from openai.types.responses import (
@@ -84,12 +86,28 @@ def _response_error_from_finish_reason(finish_reason: str | None,
     return None
 
 
+def make_reasoning_item(
+    text: str,
+    *,
+    item_id: str | None = None,
+    status: Literal['in_progress', 'completed', 'incomplete'] = 'completed',
+) -> ResponseReasoningItem:
+    return ResponseReasoningItem(
+        id=item_id or f'rs_{shortuuid.random()}',
+        type='reasoning',
+        status=status,
+        summary=[],
+        content=[{'type': 'reasoning_text', 'text': text}] if text else [],
+    )
+
+
 def make_response(*,
                   request: ResponsesRequest,
                   model_name: str,
                   created_time: int,
                   text: str | None,
                   tool_calls: list[Any] | None = None,
+                  reasoning_content: str | None = None,
                   input_tokens: int,
                   output_tokens: int,
                   reasoning_tokens: int,
@@ -105,8 +123,11 @@ def make_response(*,
     incomplete_details = None
     if status == 'incomplete':
         incomplete_details = ResponseIncompleteDetails(reason='max_output_tokens')
-    output: list[ResponseOutputMessage | ResponseOutputFunctionCall] = []
-    if text or not tool_calls:
+    output: list[ResponseOutputItem] = []
+    if reasoning_content:
+        reasoning_status = 'completed' if status == 'completed' or text or tool_calls else 'incomplete'
+        output.append(make_reasoning_item(reasoning_content, status=reasoning_status))
+    if text or not (output or tool_calls):
         output.append(
             ResponseOutputMessage(
                 id=message_id or f'msg_{shortuuid.random()}',

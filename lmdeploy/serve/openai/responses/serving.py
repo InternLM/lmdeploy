@@ -78,6 +78,7 @@ class OpenAIServingResponses:
             created_time=created_time,
             text=res.text,
             tool_calls=res.tool_calls,
+            reasoning_content=res.reasoning_content,
             input_tokens=res.input_token_len,
             cached_tokens=res.cached_tokens,
             output_tokens=res.generate_token_len,

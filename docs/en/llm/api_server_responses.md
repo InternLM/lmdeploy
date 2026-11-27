@@ -18,6 +18,7 @@ For `POST /v1/responses`, include:
 
 - `POST /v1/responses` supports text, user-message images, and tool-result images with a vision-capable model.
 - `input` may be a string or a list of Responses input items.
+- With a reasoning parser configured, generated reasoning is returned in an `output` item of type `reasoning`. Its `content` contains `reasoning_text` parts. Replay the complete item in the next request's `input` alongside its assistant message or function calls and their results. LMDeploy uses the full `content` for replay and falls back to `summary` text when needed. Encrypted-only reasoning items return HTTP 400.
 - With the default response parser, `text.format` values `json_object` and `json_schema` constrain the entire generated sequence. Thinking is disabled through the template and the JSON answer is returned in `output_text`, including streaming text deltas.
 - User content arrays can mix `input_text` and `input_image` blocks. Images use `image_url` with an HTTP(S) URL or a base64 image data URL. Multiple images and their order are preserved in both streaming and non-streaming requests.
 - Image `detail` and the `min_dynamic_patch` / `max_dynamic_patch` extensions are forwarded like Chat image parameters; their effect depends on the model's image processor. An omitted or `null` image `detail` uses the default behavior; no `detail` value is forwarded in either case.
@@ -119,6 +120,8 @@ When `stream=true`, the endpoint returns `text/event-stream` events such as:
 - `response.in_progress`
 - `response.output_item.added`
 - `response.content_part.added`
+- `response.reasoning_text.delta`
+- `response.reasoning_text.done`
 - `response.output_text.delta`
 - `response.output_text.done`
 - `response.function_call_arguments.delta`
