@@ -608,6 +608,34 @@ def test_messages_count_tokens_renders_gpt_oss_tool_wrappers(hf_media_template):
     assert expected > without_tools.json()['input_tokens']
 
 
+@pytest.mark.skipif(GptOssResponseParser is None, reason='openai_harmony is not installed')
+def test_messages_count_tokens_renders_gpt_oss_tool_without_description(hf_media_template):
+    # `description` is optional on an Anthropic tool, but GPT-OSS templates
+    # concatenate it into the tool namespace comment without a guard, so a
+    # tool declared without one must not reach them as `None`.
+    template = hf_media_template('gpt_oss')
+    context = _FakeServerContext(chat_template=template, response_parser_cls=GptOssResponseParser)
+    client = _make_client(server_context=context)
+    undescribed = {key: value for key, value in SEARCH_TOOL.items() if key != 'description'}
+
+    without_tools = _post_count_tokens(client)
+    response = _post_count_tokens(client, tools=[undescribed])
+
+    assert response.status_code == 200, response.text
+    wrapped = [{
+        'type': 'function',
+        'function': {
+            'name': SEARCH_TOOL['name'],
+            'description': '',
+            'parameters': SEARCH_TOOL['input_schema'],
+        },
+    }]
+    expected_prompt = template.messages2prompt(DEFAULT_MESSAGES, tools=wrapped)
+    expected = len(context.async_engine.tokenizer.encode(expected_prompt, add_bos=True))
+    assert response.json()['input_tokens'] == expected
+    assert expected > without_tools.json()['input_tokens']
+
+
 def test_messages_count_tokens_combines_tools_and_thinking(hf_media_template):
     # Tools and the thinking switch travel to the template in one call, so
     # neither may swallow the other (PR review).

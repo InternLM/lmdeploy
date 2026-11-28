@@ -176,9 +176,41 @@ class TestGptOssResponseParser:
                         }
                     },
                 },
-                'description': None,
+                'description': '',
             },
             }]
+
+    def test_adjust_request_renders_tool_without_description(self, hf_media_template):
+        # `description` is optional in the protocol, but GPT-OSS templates
+        # concatenate it into the tool namespace comment without a guard, so
+        # dumping it as `None` turns a valid request into a server error.
+        request = ChatCompletionRequest(
+            model='openai/gpt-oss-20b',
+            messages=[{
+                'role': 'user',
+                'content': 'hi'
+            }],
+            tools=[{
+                'type': 'function',
+                'function': {
+                    'name': 'get_time',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'tz': {
+                                'type': 'string'
+                            }
+                        },
+                    },
+                },
+            }],
+        )
+        parser = gpt_oss_mod.GptOssResponseParser(request=request)
+
+        # the rendering the generation path performs with these tools
+        prompt = hf_media_template('gpt_oss').messages2prompt(request.messages, tools=parser.request.tools)
+        assert 'get_time' in prompt
+        assert parser.request.tools[0]['function']['description'] == ''
 
     def test_parse_complete_full_sequence(self, monkeypatch):
         monkeypatch.setattr(
