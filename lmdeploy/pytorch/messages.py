@@ -10,7 +10,11 @@ from torch import Tensor
 
 from lmdeploy.messages import EngineEvent, EventType, GenerationConfig, LogitsProcessor
 from lmdeploy.pytorch.disagg.conn.protocol import MigrationRequest
-from lmdeploy.pytorch.multimodal.data_type import MultiModalInputs, make_multimodal_content_hash
+from lmdeploy.pytorch.multimodal.data_type import (
+    MultiModalInputs,
+    make_embedding_content_hash,
+    make_multimodal_content_hash,
+)
 
 # Re-export prefix-cache state types from their state-only owner.
 from lmdeploy.pytorch.prefix_cache_state import (  # noqa: F401
@@ -919,7 +923,7 @@ class SchedulerSequence:
 
         The common caller asks for a full block, but partial ranges are used when verifying sparse SSM checkpoint
         candidates.  Returning only overlapping spans keeps text-only blocks unchanged while making blocks that touch
-        multimodal placeholders content-aware.
+        multimodal placeholders or input embeddings content-aware.
         """
         prefix_cache = self.prefix_cache
         if len(prefix_cache.multimodal_spans) == 0:
@@ -1016,6 +1020,8 @@ class SchedulerSequence:
         new_embeddings = [emb.move_position(self._num_history_ids) for emb in embeddings]
         self._num_images = len(new_embeddings)
         self.history_embeddings.append(new_embeddings)
+        if self._seq_meta.enable_prefix_caching:
+            self._update_prefix_cache_embedding_spans(new_embeddings)
 
     def _update_multimodals(self, multimodals: MultiModalInputs):
         """Update input multimodals."""
@@ -1028,6 +1034,15 @@ class SchedulerSequence:
         if self._seq_meta.use_mrope:
             # Rebuild at the input boundary: old draft positions may overlap a new image.
             self.history_mrope_pos_ids.resize(0)
+
+    def _update_prefix_cache_embedding_spans(self, embeddings: list[InputEmbeddings]):
+        """Record embedding span identities for future trie keying."""
+        for emb in embeddings:
+            self.prefix_cache.multimodal_spans.append(
+                MultimodalSpan(start=emb.start,
+                               end=emb.end,
+                               modality='embedding',
+                               content_hash=make_embedding_content_hash(emb.embeddings)))
 
     def _update_prefix_cache_spans(self, multimodals: MultiModalInputs):
         """Record multimodal span identities for future trie keying."""
