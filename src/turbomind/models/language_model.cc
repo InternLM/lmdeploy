@@ -117,8 +117,12 @@ struct LanguageModel::Impl {
         }
     }
 
-    Impl(
-        CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases);
+    Impl(CacheRegistry&         registry,
+         const ObjectCachePlan& cache_plan,
+         const EngineParam&     engine,
+         const Context&         ctx,
+         const ModelWeight&     weights,
+         int                    phases);
 
     Tensor LookupEmbedding(const Buffer_<int>& input_ids, Buffer symm_buf);
     Tensor PostEmbedding(const Tensor& features, Buffer symm_buf);
@@ -133,8 +137,12 @@ struct LanguageModel::Impl {
     void Fetch(int phase, TensorMap& env);
 };
 
-LanguageModel::Impl::Impl(
-    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases):
+LanguageModel::Impl::Impl(CacheRegistry&         registry,
+                          const ObjectCachePlan& cache_plan,
+                          const EngineParam&     engine,
+                          const Context&         ctx,
+                          const ModelWeight&     weights,
+                          int                    phases):
     comm_{ctx.comm},
     weights_{weights},
     linear_{*ctx.linear},
@@ -171,7 +179,7 @@ LanguageModel::Impl::Impl(
 
     input_processor_.emplace(engine, weights_.hidden_units, weights_.data_type, phases);
 
-    unified_decoder_ = std::make_unique<UnifiedDecoder>(registry, engine, ctx, phases, weights_);
+    unified_decoder_ = std::make_unique<UnifiedDecoder>(registry, cache_plan, engine, ctx, phases, weights_);
 
     const int vocab_size = weights_.output->output_dim * tp_size_;
 
@@ -574,10 +582,14 @@ LanguageModel::~LanguageModel() = default;
 
 LanguageModel::LanguageModel(LanguageModel&&) noexcept = default;
 
-LanguageModel::LanguageModel(
-    CacheRegistry& registry, const EngineParam& engine, const Context& ctx, const ModelWeight& weights, int phases)
+LanguageModel::LanguageModel(CacheRegistry&         registry,
+                             const ObjectCachePlan& cache_plan,
+                             const EngineParam&     engine,
+                             const Context&         ctx,
+                             const ModelWeight&     weights,
+                             int                    phases)
 {
-    impl_ = std::make_unique<Impl>(registry, engine, ctx, weights, phases);
+    impl_ = std::make_unique<Impl>(registry, cache_plan, engine, ctx, weights, phases);
 }
 
 void LanguageModel::Run(BatchOp op, int phase, TensorMap& env)

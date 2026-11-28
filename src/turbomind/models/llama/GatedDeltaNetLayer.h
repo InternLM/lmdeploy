@@ -16,6 +16,8 @@
 
 namespace turbomind {
 
+struct GdnCachePlan;
+
 class GatedDeltaNetLayer {
 public:
     struct ForwardParam {
@@ -28,6 +30,7 @@ public:
 
     GatedDeltaNetLayer(std::vector<DeltaNetWeight*> weights,
                        CacheRegistry&               registry,
+                       const GdnCachePlan&          cache_plan,
                        const EngineParam&           engine,
                        const Context&               context,
                        int                          phases);

@@ -140,6 +140,14 @@ pipe = pipeline('your-model', backend_config=backend_config)
 - `cache_prompt_boundary_skip`：将 prompt 末尾的若干 token 视为易变的生成前缀后缀（例如 chat 模板的 `<think>\n`），从可复用的 prompt 边界节点中排除，使节点移动到 `prompt_len - cache_prompt_boundary_skip`。当 `cache_prompt` 为 `'all'` 或 `'auto'` 时生效。默认 1（仅排除最后一个 token）。对于 chat 模板会追加多 token 后缀、且下一轮历史会丢弃该后缀的思考型模型，可调大该值。
 - `cache_generation`：生成块缓存模式，取 `'all'`、`'auto'`（默认）或 `'none'`。`'all'` 索引完整生成块及末端非整块，并采用末端循环 frontier checkpoint（精确多轮恢复）。`'auto'` 仅索引完整生成块。`'none'` 不索引任何生成块。当 `'all'` 索引末端非整块时，代价是一个非整块缓存块（partial 块）。无论该设置如何，块边界处的整块 checkpoint 始终会发布。
 
+### LMCache 外部 KV 缓存
+
+将 `TurbomindEngineConfig.lmcache_addr` 设置为 LMCache 多进程服务地址，例如
+`'tcp://127.0.0.1:5558'`，即可开启 KV cache 的 LOOKUP、STORE 和 RETRIEVE。
+默认值为 `None`，即关闭 LMCache。启动 API server 时使用 `--lmcache-addr`；
+`enable_prefix_caching` 独立控制本地 GPU 前缀缓存。
+服务端版本要求、安装、启动命令和配置说明详见 [LMCache 使用指南](../advance/lmcache.md)。
+
 ### kv 量化推理开关
 
 `quant_policy`是 kv 量化和推理开关。
