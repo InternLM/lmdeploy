@@ -69,7 +69,7 @@ class ARSamplingStrategy(SamplingStrategy):
         min_p = [None] * batch_size
         bad_words = [None] * batch_size
         stop_words = [None] * batch_size
-        random_seeds = [np.random.randint(0xffffffff)] * batch_size
+        random_seeds = [np.random.randint(0xffffffff, dtype=np.int64)] * batch_size
         random_offsets = [None] * batch_size
         response_formats = [None] * batch_size
         logits_processors = [None] * batch_size
