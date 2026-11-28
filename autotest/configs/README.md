@@ -14,9 +14,7 @@ Use this workflow when adding any new model:
 2. Add header: `# HF model id: <org>/<model>`.
 3. Start with one minimal row in one environment.
 4. Add extra rows only when behavior differs.
-5. Run:
-   - `python autotest/tools/normalize_model_configs.py`
-6. Verify model selection under your target `TEST_ENV` (and optional `DEPS_PROFILE`).
+5. Verify model selection under your target `TEST_ENV` (and optional `DEPS_PROFILE`). For `interface` entries, see [Validation](#validation) to inspect the generated rows.
 
 ## Minimal Template
 
@@ -281,10 +279,10 @@ Filtering behavior:
 
 ## Validation
 
-Run after any model edit:
+For changes to an `interface` entry, inspect the REST interface matrix from the repository root in an LMDeploy development environment:
 
 ```bash
-python autotest/tools/normalize_model_configs.py
+CONFIG_COMPARE_SKIP_MKDIRS=1 TEST_ENV=h python autotest/tools/gen_interface_matrix.py --pretty
 ```
 
-This keeps formatting stable and validates schema consistency.
+Replace `h` with the environment for the entry you changed. The command prints the selected interface test rows as JSON.
