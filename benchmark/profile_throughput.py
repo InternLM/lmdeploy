@@ -80,7 +80,7 @@ def sample_random_requests(
         size=num_prompts,
     )
     output_lens = np.random.randint(
-        int(output_len * range_ratio),
+        max(int(output_len * range_ratio), 1),
         output_len + 1,
         size=num_prompts,
     )
