@@ -128,6 +128,39 @@ def test_deepseek_v4_task_and_latest_reminder_rendering():
     assert '<｜Assistant｜>' not in prompt
 
 
+def test_deepseek_v4_thinking_drop_keeps_developer_message():
+    messages = [
+        {'role': 'system', 'content': 'You are helpful.'},
+        {'role': 'developer', 'content': 'Always answer in French.'},
+        {'role': 'user', 'content': 'Real question'},
+    ]
+
+    prompt = encode_messages(messages, thinking_mode='thinking')
+
+    assert '<｜User｜>Always answer in French.' in prompt
+    assert '<｜User｜>Real question' in prompt
+    assert prompt.endswith('<｜Assistant｜><think>')
+
+
+def test_deepseek_v4_thinking_drop_keeps_developer_in_multiturn():
+    messages = [
+        {'role': 'user', 'content': 'First question'},
+        {
+            'role': 'assistant',
+            'content': 'First answer',
+            'reasoning_content': 'private chain of thought',
+        },
+        {'role': 'developer', 'content': 'Now answer in French.'},
+        {'role': 'user', 'content': 'Second question'},
+    ]
+
+    prompt = encode_messages(messages, thinking_mode='thinking')
+
+    assert '<｜User｜>Now answer in French.' in prompt
+    assert '<｜User｜>Second question' in prompt
+    assert 'private chain of thought' not in prompt
+
+
 def test_deepseek_v4_parse_completion_text():
     completion = (
         'I should call a tool.</think>\n\n'
