@@ -81,7 +81,7 @@ class HuggingFaceTokenizer:
         if self.model.eos_token_id is None:
             generation_config_file = osp.join(model_dir, 'generation_config.json')
             if osp.exists(generation_config_file):
-                with open(generation_config_file) as f:
+                with open(generation_config_file, encoding='utf-8') as f:
                     cfg = json.load(f)
                     self.model.eos_token_id = cfg['eos_token_id']
             elif hasattr(self.model, 'eod_id'):  # Qwen remote

@@ -287,7 +287,7 @@ class MemDecodeFusion(nn.Module):
     def _router_config_from_file(config_path: Path) -> dict[str, Any]:
         if not config_path.exists():
             return {}
-        with config_path.open() as f:
+        with config_path.open(encoding='utf-8') as f:
             config = json.load(f)
         if not isinstance(config, dict):
             raise ValueError('router_config.json must contain a JSON object.')

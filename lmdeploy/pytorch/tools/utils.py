@@ -234,5 +234,5 @@ def dump_tilelang_source(kernel, path: str = 'sources/tvm_kernels.cu'):
     if sources is not None:
         return
     sources = kernel.get_kernel_source()
-    with open(path, 'w') as f:
+    with open(path, 'w', encoding='utf-8') as f:
         f.write(sources)

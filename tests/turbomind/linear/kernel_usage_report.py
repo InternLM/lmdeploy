@@ -33,7 +33,7 @@ def pattern_for_type(type_name: str) -> re.Pattern[str]:
 
 def parse_log(path: Path, pattern: re.Pattern[str]) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding='utf-8').splitlines():
         m = pattern.match(line.strip())
         if not m:
             continue

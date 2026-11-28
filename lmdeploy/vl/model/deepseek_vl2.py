@@ -54,7 +54,7 @@ class DeepSeek2VisionModel(VisionModel):
         from deepseek_vl2.models.processing_deepseek_vl_v2 import DeepseekVLV2Processor
 
         # suppress deepseek-vl2 processor initialization print logs
-        with open(os.devnull, 'w') as devnull:
+        with open(os.devnull, 'w', encoding='utf-8') as devnull:
             with redirect_stdout(devnull):
                 self.image_processor = DeepseekVLV2Processor.from_pretrained(self.model_path,
                                                                              image_token='<IMAGE_TOKEN>',

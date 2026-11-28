@@ -227,7 +227,7 @@ class EPLBMetadata:
                                              device=device).flip(dims=(0, )).expand(num_hidden_layers, -1)
         else:
             try:
-                with open(weight_path) as f:
+                with open(weight_path, encoding='utf-8') as f:
                     experts_statistic = torch.tensor(json.load(f), dtype=torch.float32, device=device)
             except Exception as exc:
                 raise RuntimeError(f'Load eplb experts statistic data failed, path: {weight_path}') from exc
