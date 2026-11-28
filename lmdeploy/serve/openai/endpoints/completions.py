@@ -173,6 +173,8 @@ def check_request(request: CompletionRequest, server_context) -> str:
         return f'The top_k {request.top_k!r} must be -1, 0, or a positive integer.'
     if request.temperature is not None and not (0 <= request.temperature <= 2):
         return f'The temperature {request.temperature!r} must be in [0, 2]'
+    if request.min_p is not None and not (0 <= request.min_p <= 1):
+        return f'The min_p {request.min_p!r} must be in [0, 1].'
 
     return ''
 
