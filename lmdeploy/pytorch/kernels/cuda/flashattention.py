@@ -436,8 +436,20 @@ def _kernel_meta_sm9x(BLOCK_DK: int, shared_kv: bool):
     return BLOCK_M, BLOCK_N, num_warps, num_stages
 
 
-def _kernel_meta_sm12x(BLOCK_DK: int, shared_kv: bool):
-    # Blackwell (sm_120, cc 12.x) + B200/B100 variants
+def _kernel_meta_sm12x(
+    BLOCK_DK: int,
+    shared_kv: bool,
+    *,
+    nv_cap: tuple[int, int],
+    head_dim_k: int,
+    head_dim_v: int,
+):
+    if nv_cap == (12, 0) and head_dim_k == head_dim_v == 256 and not shared_kv:
+        # The default BF16 kernel can require 168 KiB per block on SM120 GPUs,
+        # exceeding the 99 KiB limit.
+        return 64, 32, 4, 2
+
+    # Default Blackwell configurations
     if BLOCK_DK <= 128:
         BLOCK_M = 128
         BLOCK_N = 128 if shared_kv else 64
@@ -567,7 +579,8 @@ def flash_attn_varlen_func(
         elif nv_cap[0] < 10:
             BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm9x(BLOCK_DK, shared_kv)
         else:
-            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm12x(BLOCK_DK, shared_kv)
+            BLOCK_M, BLOCK_N, num_warps, num_stages = _kernel_meta_sm12x(
+                BLOCK_DK, shared_kv, nv_cap=nv_cap, head_dim_k=head_dim_k, head_dim_v=head_dim_v)
 
     BLOCK_M = min(128, BLOCK_M)
     _flash_prefill_fwd_kernel[grid](
