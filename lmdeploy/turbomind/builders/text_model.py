@@ -9,31 +9,38 @@ class TextModelBuilder(Builder):
 
     Constructs a ModelWeight via ``_tm.create_module(ModelWeightConfig)``
     on each context (inherited Builder machinery), then attaches it to
-    externally-owned ``ModelRoot`` sentinel handles as their
-    ``text_model`` child during ``build()``.
+    externally-owned ``ModelRoot`` sentinel handles as the configured
+    root child during ``build()``.
 
     Owns ``tok_embeddings`` (Tensor param) and ``output`` (LinearWeight
     child) commits on the ModelWeight via ``add_token_embeds`` /
     ``add_lm_head``.
     """
 
-    def __init__(self, config, ctx, *, root_handles,
-                 tp: ParallelGroup, vocab_size):
+    def __init__(self,
+                 config,
+                 ctx,
+                 *,
+                 root_handles,
+                 tp: ParallelGroup,
+                 vocab_size,
+                 root_child: str = 'text_model'):
         super().__init__(config, ctx)
         self.tp = tp
         self.config.tp_size = tp.size
         self._root_handles = root_handles
         self._vocab_size = vocab_size
+        self._root_child = root_child
 
     def build(self) -> BuiltModule:
-        """Create ModelWeight via _tm.create_module (via super), then attach
-        each per-GPU ModelWeight handle to its sentinel root via
-        add_child_raw."""
+        """Build and attach each ModelWeight to the configured root child."""
         built = super().build()
-        for i, (root, text_model) in enumerate(
+        for i, (root, model_weight) in enumerate(
                 zip(self._root_handles, built.handles)):
             with self._ctx.devices[i]:
-                root.add_child_raw('text_model', text_model)
+                root.add_child_raw(
+                    self._root_child,
+                    model_weight)
         return built
 
     def add_token_embeds(self, tensor):

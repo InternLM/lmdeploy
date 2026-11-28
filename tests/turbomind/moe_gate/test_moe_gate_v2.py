@@ -146,3 +146,39 @@ def test_moe_gate_v2_masked_nan_tokens_route_nowhere():
     # Masked tokens keep the -1 skip sentinel so combine never touches them.
     neg1 = torch.full((NAN_TOP_K, len(NAN_INVALID_ROWS)), -1, dtype=torch.int32)
     assert torch.equal(en2f[:, list(NAN_INVALID_ROWS)].cpu(), neg1)
+
+
+NAN_VALID_ROW = 5
+
+
+@cuda_required
+def test_moe_gate_v2_valid_nan_token_route_nowhere():
+    """A valid (unmasked) token with NaN logits routes nowhere instead of going
+    OOB.
+
+    Regression for the base-upstream gate bug: a valid token that selects fewer than ``top_k`` experts left
+    uninitialized routing slots, and the routing write used them as expert ids, indexing ``masks[]`` out of range.
+    """
+    if not turbomind_moe_gate.is_available():
+        pytest.skip('TurboMind moe_gate_v2 bridge is unavailable')
+
+    torch.manual_seed(5)
+    logits = torch.randn(NAN_TOKENS, NAN_EXPERTS, device='cuda', dtype=torch.float32)
+    logits[NAN_VALID_ROW] = float('nan')
+
+    # No token_mask: the NaN row is a valid token and must not crash the gate.
+    f2n, f2E, en2f, offsets, scales = turbomind_moe_gate.moe_gate_v2(logits, NAN_TOP_K)
+    torch.cuda.synchronize()  # surfaces any async CUDA error here, not in a later test
+
+    valid = [t for t in range(NAN_TOKENS) if t != NAN_VALID_ROW]
+    total = int(offsets[-1])
+    assert total == len(valid) * NAN_TOP_K
+    assert ((f2E[:total].cpu() >= 0) & (f2E[:total].cpu() < NAN_EXPERTS)).all()
+
+    e_f2n, e_f2E, e_en2f, e_offsets, e_scales = moe_gate_v2_reference(logits[valid], NAN_TOP_K)
+    valid_lut = torch.tensor(valid, dtype=torch.int32)
+    assert torch.equal(f2n[:total].cpu(), valid_lut[e_f2n.cpu()])
+    assert torch.equal(f2E[:total].cpu(), e_f2E.cpu())
+    assert torch.equal(offsets.cpu(), e_offsets.cpu())
+    assert torch.equal(en2f[:, valid].cpu(), e_en2f.cpu())
+    torch.testing.assert_close(scales[:, valid].cpu(), e_scales.cpu(), rtol=1e-4, atol=1e-5)

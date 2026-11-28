@@ -93,12 +93,14 @@ def get_speculative_config(args):
     from lmdeploy.messages import SpeculativeConfig
     speculative_config = None
     dflash_block_size = getattr(args, 'speculative_dflash_block_size', None)
+    dflash_ctx_kv_int4 = getattr(args, 'speculative_draft_ctx_kv_int4', False) or None
     if args.speculative_algorithm is not None:
         speculative_config = SpeculativeConfig(
             method=args.speculative_algorithm,
             model=args.speculative_draft_model,
             num_speculative_tokens=args.speculative_num_draft_tokens,
             dflash_block_size=dflash_block_size,
+            dflash_ctx_kv_int4=dflash_ctx_kv_int4,
         )
     elif dflash_block_size is not None:
         raise ValueError('--speculative-dflash-block-size requires --speculative-algorithm dflash.')
@@ -906,7 +908,7 @@ class ArgumentHelper:
         spec_group.add_argument('--speculative-algorithm',
                                 type=str,
                                 default=None,
-                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'hy3_mtp', 'qwen3_5_mtp', 'dflash'],
+                                choices=['eagle', 'eagle3', 'deepseek_mtp', 'hy3_mtp', 'qwen3_5_mtp', 'dflash', 'dflash2'],
                                 help='The speculative algorithm to use. `None` means speculative decoding is disabled')
 
         spec_group.add_argument('--speculative-draft-model',
@@ -926,6 +928,12 @@ class ArgumentHelper:
             help='DFlash only. Runtime draft block length, including the current target token. '
             'Overrides --speculative-num-draft-tokens with block_size - 1 proposed tokens and must not exceed '
             'the DFlash checkpoint block_size.')
+
+        spec_group.add_argument('--speculative-draft-ctx-kv-int4',
+                                action='store_true',
+                                default=False,
+                                help='DFlash2 only. Store the draft context KV in int4 to reduce VRAM. '
+                                'Default: off.')
 
         return spec_group
 

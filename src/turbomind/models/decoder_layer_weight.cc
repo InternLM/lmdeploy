@@ -6,6 +6,7 @@
 #include "src/turbomind/models/ffn_weight.h"
 #include "src/turbomind/models/moe_weight.h"
 #include "src/turbomind/models/norm_weight.h"
+#include "src/turbomind/models/speculative/dflash2/dflash2_weight.h"
 
 #include "src/turbomind/core/registry.h"
 

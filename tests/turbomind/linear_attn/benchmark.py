@@ -4,6 +4,7 @@ import argparse
 import importlib
 import math
 import random
+import statistics
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from types import ModuleType, SimpleNamespace
@@ -27,6 +28,7 @@ from .cases import (
 )
 
 VALID_BACKENDS = ('reference', 'turbomind', 'fla', 'flashqla')
+VALID_GDR_MODES = ('auto', 'recurrent', 'chunked', 'verify')
 VALID_CP_LEVELS = ('all', 'exact', 'off')
 VALID_CP_PATTERNS = ('auto', 'warmup', 'fallback', 'alternating')
 CP_FALLBACK_SEGMENT_LOG_DECAY = -5.0
@@ -41,6 +43,8 @@ class BenchmarkRequest:
     backend: str
     state_dtype: str
     chunk_size: int | None
+    gdr_mode: str
+    suppress_state_store: bool
     cp_level: str
     cp_pattern: str
     validate_outputs: bool
@@ -251,7 +255,7 @@ def time_task(task: BenchmarkTask, request: BenchmarkRequest, device: torch.devi
     flusher = L2CacheFlusher(device) if request.l2_flush else None
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
-    elapsed_ms = 0.0
+    latency_samples_ms = []
 
     for _ in range(request.iters):
         task.prepare()
@@ -263,10 +267,11 @@ def time_task(task: BenchmarkTask, request: BenchmarkRequest, device: torch.devi
             task.run()
             end_event.record(stream)
         end_event.synchronize()
-        elapsed_ms += start_event.elapsed_time(end_event)
+        latency_samples_ms.append(start_event.elapsed_time(end_event))
 
     row = dict(task.row)
-    row['latency_ms'] = elapsed_ms / max(request.iters, 1)
+    row['latency_ms'] = sum(latency_samples_ms) / len(latency_samples_ms)
+    row['latency_median_ms'] = statistics.median(latency_samples_ms)
     row['l2_flush_bytes'] = 0 if flusher is None else flusher.bytes
     if request.print_diffs and validation_row is not None:
         row.update(validation_row)
@@ -894,6 +899,8 @@ def request_from_args(args, *, backend: str, run: RunCase) -> BenchmarkRequest:
         backend=backend,
         state_dtype=run.state_dtype,
         chunk_size=args.chunk_size,
+        gdr_mode=args.gdr_mode,
+        suppress_state_store=args.suppress_state_store,
         cp_level=args.cp_level,
         cp_pattern=args.cp_pattern,
         validate_outputs=not args.skip_validate,
@@ -910,9 +917,9 @@ def parse_chunk_size(value: str) -> int | None:
     try:
         chunk_size = int(value)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError('chunk size must be auto, 1, 16, 32, or 64') from exc
-    if chunk_size not in (1, 16, 32, 64):
-        raise argparse.ArgumentTypeError('chunk size must be auto, 1, 16, 32, or 64')
+        raise argparse.ArgumentTypeError('chunk size must be auto, 1, 8, 16, 32, or 64') from exc
+    if chunk_size not in (1, 8, 16, 32, 64):
+        raise argparse.ArgumentTypeError('chunk size must be auto, 1, 8, 16, 32, or 64')
     return chunk_size
 
 
@@ -954,6 +961,8 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--backend', default='reference')
     parser.add_argument('--chunk-size', type=parse_chunk_size, default='auto')
+    parser.add_argument('--gdr-mode', choices=VALID_GDR_MODES, default='auto')
+    parser.add_argument('--suppress-state-store', action='store_true')
     parser.add_argument('--cp-level', choices=VALID_CP_LEVELS, default='all')
     parser.add_argument('--cp-pattern', choices=VALID_CP_PATTERNS, default='auto')
     parser.add_argument('--print-diffs', action='store_true')
